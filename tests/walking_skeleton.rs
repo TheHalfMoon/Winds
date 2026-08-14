@@ -78,7 +78,10 @@ fn verifies_blocks_and_promotes_without_touching_primary_checkout() {
     assert_eq!(passing_json["eligibility"], "ELIGIBLE");
     assert_eq!(passing_json["base_oid"], base_oid);
     assert_eq!(passing_json["candidate_oid"], passing_oid);
+    assert!(passing_json.get("run_branch").is_none());
     let run_id = passing_json["run_id"].as_str().unwrap().to_owned();
+    let passing_worktree = PathBuf::from(passing_json["worktree_path"].as_str().unwrap());
+    assert!(git_text(&passing_worktree, ["branch", "--show-current"]).is_empty());
 
     let promotion = winds(
         &winds_home,
@@ -91,11 +94,33 @@ fn verifies_blocks_and_promotes_without_touching_primary_checkout() {
         ],
     );
     assert_success(&promotion);
+    let promotion_json: Value = serde_json::from_slice(&promotion.stdout).unwrap();
+    assert_eq!(promotion_json["authority"], "CALLER_REQUESTED");
     let selected = git_text(
         &repo,
         ["rev-parse", &format!("refs/heads/winds/selected/{run_id}")],
     );
     assert_eq!(selected, passing_oid);
+
+    let db = rusqlite::Connection::open(winds_home.join("winds.db")).unwrap();
+    let decision_authority: String = db
+        .query_row(
+            "SELECT authority FROM events WHERE run_id = ?1 AND kind = 'DecisionRecorded' ORDER BY event_id DESC LIMIT 1",
+            rusqlite::params![&run_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(decision_authority, "CALLER_REQUESTED");
+    let recheck_payload: String = db
+        .query_row(
+            "SELECT payload_json FROM events WHERE run_id = ?1 AND kind = 'PromotionRecheckObserved' ORDER BY event_id DESC LIMIT 1",
+            rusqlite::params![&run_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let recheck_json: Value = serde_json::from_str(&recheck_payload).unwrap();
+    assert_eq!(recheck_json["status"], "PASS");
+    drop(db);
 
     let failing = winds(
         &winds_home,
