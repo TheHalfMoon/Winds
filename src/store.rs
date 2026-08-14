@@ -3,7 +3,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
 use std::error::Error;
 use std::fs::{self, OpenOptions};
-use std::io::{ErrorKind, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
@@ -116,8 +116,7 @@ impl Store {
                 file.sync_all()?;
             }
             Err(error) if error.kind() == ErrorKind::AlreadyExists => {
-                let existing = fs::read(&path)?;
-                if existing.as_slice() != bytes {
+                if !existing_blob_matches(&path, bytes)? {
                     return Err(format!(
                         "existing evidence blob does not match its content-addressed path: {}",
                         path.display()
@@ -297,6 +296,31 @@ impl Store {
         tx.commit()?;
         Ok(())
     }
+}
+
+fn existing_blob_matches(path: &Path, expected: &[u8]) -> Result<bool> {
+    let metadata = fs::metadata(path)?;
+    if metadata.len() != u64::try_from(expected.len())? {
+        return Ok(false);
+    }
+
+    let mut file = OpenOptions::new().read(true).open(path)?;
+    let mut offset = 0_usize;
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        let end = offset
+            .checked_add(count)
+            .ok_or("existing evidence blob comparison overflow")?;
+        if end > expected.len() || expected[offset..end] != buffer[..count] {
+            return Ok(false);
+        }
+        offset = end;
+    }
+    Ok(offset == expected.len())
 }
 
 fn insert_event(
