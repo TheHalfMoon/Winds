@@ -26,12 +26,6 @@ jobs:
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - name: Test
-        run: cargo test --all-targets --all-features
-      - name: Emit generated lockfile for bootstrap
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          echo '---BEGIN WINDS CARGO LOCK---'
-          cat Cargo.lock
-          echo '---END WINDS CARGO LOCK---'
+        run: cargo test --locked --all-targets --all-features
