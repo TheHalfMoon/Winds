@@ -202,6 +202,21 @@ fn verifies_blocks_and_promotes_without_touching_primary_checkout() {
     assert!(!stale_promotion.status.success());
     assert!(String::from_utf8_lossy(&stale_promotion.stderr).contains("changed after verification"));
 
+    let recovery = winds(
+        &winds_home,
+        ["recover", "--repo", repo.to_str().unwrap()],
+    );
+    assert_success(&recovery);
+    let recovery_json: Value = serde_json::from_slice(&recovery.stdout).unwrap();
+    let stale_recovery = recovery_json["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|run| run["run_id"] == stale_run_id)
+        .unwrap();
+    assert_eq!(stale_recovery["status"], "MANUAL_RECOVERY_REQUIRED");
+    assert!(stale_worktree.join("manual.txt").exists());
+
     assert_eq!(
         git_text(&repo, ["branch", "--show-current"]),
         primary_branch_before
