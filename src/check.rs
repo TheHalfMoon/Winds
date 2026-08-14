@@ -62,6 +62,12 @@ pub fn run_check(cwd: &Path, command: &str, timeout: Duration) -> Result<CheckRu
         }
     };
 
+    // A successful shell may leave background children holding stdout/stderr open.
+    // Verification checks are bounded units of work, so no descendant may outlive the check.
+    if !timed_out {
+        terminate_process_group(child.id());
+    }
+
     let stdout = stdout_reader
         .join()
         .map_err(|_| "stdout reader thread panicked".to_owned())?
