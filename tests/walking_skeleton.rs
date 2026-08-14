@@ -119,11 +119,13 @@ fn verifies_blocks_and_promotes_without_touching_primary_checkout() {
     let mutating_json: Value = serde_json::from_slice(&mutating.stdout).unwrap();
     assert_eq!(mutating_json["check"]["status"], "PASS");
     assert_eq!(mutating_json["eligibility"], "BLOCKED");
-    assert!(mutating_json["warnings"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|warning| warning.as_str().unwrap().contains("mutated candidate")));
+    assert!(
+        mutating_json["warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|warning| warning.as_str().unwrap().contains("mutated candidate"))
+    );
 
     assert_eq!(
         git_text(&repo, ["branch", "--show-current"]),
