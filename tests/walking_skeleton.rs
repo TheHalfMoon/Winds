@@ -2,7 +2,7 @@ use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[test]
 fn verifies_blocks_and_promotes_without_touching_primary_checkout() {
@@ -126,6 +126,28 @@ fn verifies_blocks_and_promotes_without_touching_primary_checkout() {
             .iter()
             .any(|warning| warning.as_str().unwrap().contains("mutated candidate"))
     );
+
+    let background_started = Instant::now();
+    let background = winds(
+        &winds_home,
+        [
+            "verify",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--base",
+            &base_oid,
+            "--candidate",
+            &passing_oid,
+            "--check",
+            "sleep 5 & true",
+            "--timeout-secs",
+            "5",
+        ],
+    );
+    assert_success(&background);
+    assert!(background_started.elapsed() < Duration::from_secs(2));
+    let background_json: Value = serde_json::from_slice(&background.stdout).unwrap();
+    assert_eq!(background_json["eligibility"], "ELIGIBLE");
 
     assert_eq!(
         git_text(&repo, ["branch", "--show-current"]),
