@@ -3,10 +3,12 @@ use std::io::{Read, Result as IoResult};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
 const OUTPUT_CAP_BYTES: usize = 1_048_576;
+const STREAM_CLOSE_GRACE: Duration = Duration::from_secs(1);
 
 #[derive(Debug)]
 pub struct CapturedStream {
@@ -42,8 +44,15 @@ pub fn run_check(cwd: &Path, command: &str, timeout: Duration) -> Result<CheckRu
         .stderr
         .take()
         .ok_or("failed to capture check stderr")?;
-    let stdout_reader = thread::spawn(move || read_capped(stdout));
-    let stderr_reader = thread::spawn(move || read_capped(stderr));
+
+    let (stdout_tx, stdout_rx) = mpsc::sync_channel(1);
+    let (stderr_tx, stderr_rx) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let _ = stdout_tx.send(read_capped(stdout));
+    });
+    thread::spawn(move || {
+        let _ = stderr_tx.send(read_capped(stderr));
+    });
 
     let mut timed_out = false;
     let exit = loop {
@@ -68,14 +77,8 @@ pub fn run_check(cwd: &Path, command: &str, timeout: Duration) -> Result<CheckRu
         terminate_process_group(child.id());
     }
 
-    let stdout = stdout_reader
-        .join()
-        .map_err(|_| "stdout reader thread panicked".to_owned())?
-        .map_err(|error| format!("failed reading check stdout: {error}"))?;
-    let stderr = stderr_reader
-        .join()
-        .map_err(|_| "stderr reader thread panicked".to_owned())?
-        .map_err(|error| format!("failed reading check stderr: {error}"))?;
+    let stdout = receive_stream(stdout_rx, "stdout")?;
+    let stderr = receive_stream(stderr_rx, "stderr")?;
 
     let status = if timed_out {
         CheckStatus::Timeout
@@ -92,6 +95,20 @@ pub fn run_check(cwd: &Path, command: &str, timeout: Duration) -> Result<CheckRu
         stdout,
         stderr,
     })
+}
+
+fn receive_stream(
+    receiver: mpsc::Receiver<IoResult<CapturedStream>>,
+    name: &str,
+) -> Result<CapturedStream, String> {
+    receiver
+        .recv_timeout(STREAM_CLOSE_GRACE)
+        .map_err(|_| {
+            format!(
+                "check {name} did not close after process termination; a descendant may have escaped the check process group"
+            )
+        })?
+        .map_err(|error| format!("failed reading check {name}: {error}"))
 }
 
 fn read_capped<R: Read>(mut reader: R) -> IoResult<CapturedStream> {
