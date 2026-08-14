@@ -67,8 +67,8 @@ After reviewing evidence, the maintainer explicitly promotes one eligible candid
 - **FR-002**: Winds MUST reject a dirty primary checkout by default for the walking skeleton.
 - **FR-003**: Winds MUST create candidate workspaces using system Git and MUST NOT modify the primary checkout.
 - **FR-004**: Winds MUST execute explicit repository-owned checks with a timeout and capture observed exit status, duration, and bounded output metadata.
-- **FR-005**: Winds MUST distinguish `WINDS_OBSERVED`, `AGENT_REPORTED`, and `INFERRED` evidence authority.
-- **FR-006**: Winds MUST persist task/run/evidence/promotion state transactionally using SQLite WAL and store large/raw streams outside SQLite.
+- **FR-005**: Winds MUST distinguish `WINDS_OBSERVED`, `AGENT_REPORTED`, and `INFERRED` evidence authority. The walking skeleton has no real agent source, so only authorities actually observed in the slice need persisted records.
+- **FR-006**: Winds MUST persist run/evidence/promotion state using SQLite WAL, keep event/projection transitions transactional, and store large/raw streams outside SQLite. A standalone `Task` persistence entity is intentionally deferred until multi-candidate task behavior exists; in this slice the run carries the pinned base/contract identity directly.
 - **FR-007**: Winds MUST invalidate eligibility when required checks fail, time out, are not run, or evidence no longer matches the candidate snapshot.
 - **FR-008**: Winds MUST NOT compute an overall winner score or automatically select a candidate.
 - **FR-009**: Promotion MUST require explicit human action and MUST bind the Evidence Report to the exact promoted commit/tree.
@@ -78,11 +78,12 @@ After reviewing evidence, the maintainer explicitly promotes one eligible candid
 
 ### Key Entities
 
-- **Task**: Pinned base, immutable brief/contract identity, lifecycle status.
-- **CandidateRun**: Candidate source/ref, worktree identity, process/check disposition, snapshot identity.
+- **CandidateRun**: Pinned base/contract identity, candidate source/ref, worktree identity, process/check disposition, snapshot identity.
 - **EvidenceReport**: Exact candidate snapshot plus observed check/Git/process evidence and completeness warnings.
 - **Decision**: Human-selected candidate and optional rationale/override.
 - **Promotion**: Dedicated selected ref bound to an exact verified snapshot.
+
+A standalone **Task** entity is deferred by design. Ponytail review found that the original walking-skeleton schema made `Task` an alias for `run_id` with no independent behavior. It must not return until a second concrete caller (for example, multi-candidate comparison under one immutable brief) proves the boundary.
 
 ## Success Criteria
 

@@ -32,44 +32,7 @@ impl Store {
         let connection = Connection::open(home.join("winds.db"))?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
-        connection.execute_batch(
-            "
-            CREATE TABLE IF NOT EXISTS candidate_runs (
-                run_id TEXT PRIMARY KEY,
-                repo_path TEXT NOT NULL,
-                base_oid TEXT NOT NULL,
-                candidate_ref TEXT NOT NULL,
-                candidate_oid TEXT NOT NULL,
-                candidate_tree TEXT NOT NULL,
-                run_branch TEXT NOT NULL,
-                worktree_path TEXT NOT NULL,
-                check_command TEXT NOT NULL,
-                timeout_secs INTEGER NOT NULL,
-                state TEXT NOT NULL,
-                created_unix_ms INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS events (
-                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                run_id TEXT NOT NULL,
-                kind TEXT NOT NULL,
-                authority TEXT NOT NULL,
-                payload_json TEXT NOT NULL,
-                created_unix_ms INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS evidence_reports (
-                run_id TEXT PRIMARY KEY REFERENCES candidate_runs(run_id),
-                eligibility TEXT NOT NULL,
-                report_json TEXT NOT NULL,
-                created_unix_ms INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS promotions (
-                run_id TEXT PRIMARY KEY REFERENCES candidate_runs(run_id),
-                branch TEXT NOT NULL,
-                commit_oid TEXT NOT NULL,
-                created_unix_ms INTEGER NOT NULL
-            );
-            ",
-        )?;
+        connection.execute_batch(include_str!("../migrations/0001_init.sql"))?;
         Ok(Self {
             connection,
             home: home.to_path_buf(),
@@ -110,19 +73,21 @@ impl Store {
         Ok(())
     }
 
-    pub fn mark_workspace_ready(&self, run_id: &str, now_ms: i64) -> Result<()> {
-        self.connection.execute(
+    pub fn mark_workspace_ready(&mut self, run_id: &str, now_ms: i64) -> Result<()> {
+        let tx = self.connection.transaction()?;
+        tx.execute(
             "UPDATE candidate_runs SET state = 'READY' WHERE run_id = ?1",
             params![run_id],
         )?;
         insert_event(
-            &self.connection,
+            &tx,
             run_id,
             "WorkspaceReady",
             "WINDS_OBSERVED",
             "{}",
             now_ms,
         )?;
+        tx.commit()?;
         Ok(())
     }
 
