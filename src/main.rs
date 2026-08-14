@@ -7,6 +7,7 @@ use crate::check::run_check;
 use crate::domain::{CheckEvidence, CheckStatus, Eligibility, EvidenceReport, PromotionReport};
 use crate::git::Repo;
 use crate::store::{NewRun, Store};
+use serde_json::json;
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
@@ -37,6 +38,7 @@ fn run() -> Result<()> {
     match command.as_str() {
         "verify" => verify(flags),
         "promote" => promote(flags),
+        "recover" => recover(flags),
         _ => Err(usage().into()),
     }
 }
@@ -223,6 +225,66 @@ fn promote(flags: HashMap<String, String>) -> Result<()> {
     Ok(())
 }
 
+fn recover(flags: HashMap<String, String>) -> Result<()> {
+    let repo_arg = required(&flags, "repo")?;
+    let home = winds_home(flags.get("home").map(String::as_str))?;
+    let mut store = Store::open(&home)?;
+    let repo = Repo::open(Path::new(repo_arg))?;
+    let repo_path = repo.root().to_string_lossy().into_owned();
+    let inventory = repo.worktree_paths()?;
+    let runs = store.runs_for_repo(&repo_path)?;
+    let mut outcomes = Vec::new();
+
+    for run in runs {
+        let path = PathBuf::from(&run.worktree_path);
+        let registered = inventory.iter().any(|known| known == &path);
+        let exact_head = registered
+            && path.exists()
+            && repo
+                .worktree_head(&path)
+                .map(|head| head == run.candidate_oid)
+                .unwrap_or(false);
+        let clean = exact_head && repo.worktree_is_clean(&path).unwrap_or(false);
+
+        let status = if exact_head && clean {
+            if run.state == "PROVISIONING" {
+                store.mark_recovered_ready(&run.run_id, unix_ms()?)?;
+                "RECOVERED_READY"
+            } else {
+                "PRESENT"
+            }
+        } else {
+            let reason = if !registered {
+                "worktree is not registered in Git inventory"
+            } else if !path.exists() {
+                "registered worktree path is missing"
+            } else if !exact_head {
+                "worktree HEAD does not match the recorded candidate"
+            } else {
+                "worktree contains unverified changes"
+            };
+            store.mark_recovery_required(&run.run_id, reason, unix_ms()?)?;
+            "MANUAL_RECOVERY_REQUIRED"
+        };
+
+        outcomes.push(json!({
+            "run_id": run.run_id,
+            "status": status,
+            "worktree_path": run.worktree_path,
+        }));
+    }
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "authority": "WINDS_OBSERVED",
+            "repo_path": repo_path,
+            "runs": outcomes,
+        }))?
+    );
+    Ok(())
+}
+
 fn parse_flags(args: Vec<String>) -> Result<HashMap<String, String>> {
     let mut result = HashMap::new();
     let mut index = 0;
@@ -252,14 +314,19 @@ fn required<'a>(flags: &'a HashMap<String, String>, name: &str) -> Result<&'a st
 }
 
 fn winds_home(explicit: Option<&str>) -> Result<PathBuf> {
-    if let Some(path) = explicit {
-        return Ok(PathBuf::from(path));
+    let path = if let Some(path) = explicit {
+        PathBuf::from(path)
+    } else if let Some(path) = env::var_os("WINDS_HOME") {
+        PathBuf::from(path)
+    } else {
+        let home = env::var_os("HOME").ok_or("HOME is not set; pass --home or WINDS_HOME")?;
+        PathBuf::from(home).join(".winds")
+    };
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(env::current_dir()?.join(path))
     }
-    if let Some(path) = env::var_os("WINDS_HOME") {
-        return Ok(PathBuf::from(path));
-    }
-    let home = env::var_os("HOME").ok_or("HOME is not set; pass --home or WINDS_HOME")?;
-    Ok(PathBuf::from(home).join(".winds"))
 }
 
 fn new_run_id() -> Result<String> {
@@ -272,5 +339,5 @@ fn unix_ms() -> Result<i64> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  winds verify --repo PATH --base REF --candidate REF --check COMMAND [--timeout-secs N] [--home PATH]\n  winds promote --repo PATH --run RUN_ID [--home PATH]"
+    "usage:\n  winds verify --repo PATH --base REF --candidate REF --check COMMAND [--timeout-secs N] [--home PATH]\n  winds promote --repo PATH --run RUN_ID [--home PATH]\n  winds recover --repo PATH [--home PATH]"
 }

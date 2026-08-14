@@ -25,6 +25,13 @@ pub struct NewRun<'a> {
     pub timeout_secs: u64,
 }
 
+pub struct RecoverableRun {
+    pub run_id: String,
+    pub candidate_oid: String,
+    pub worktree_path: String,
+    pub state: String,
+}
+
 impl Store {
     pub fn open(home: &Path) -> Result<Self> {
         fs::create_dir_all(home)?;
@@ -183,6 +190,64 @@ impl Store {
             timeout_secs: u64::try_from(row.6)?,
             eligibility,
         })
+    }
+
+    pub fn runs_for_repo(&self, repo_path: &str) -> Result<Vec<RecoverableRun>> {
+        let mut statement = self.connection.prepare(
+            "SELECT run_id, candidate_oid, worktree_path, state
+             FROM candidate_runs WHERE repo_path = ?1 ORDER BY created_unix_ms, run_id",
+        )?;
+        let rows = statement.query_map(params![repo_path], |row| {
+            Ok(RecoverableRun {
+                run_id: row.get(0)?,
+                candidate_oid: row.get(1)?,
+                worktree_path: row.get(2)?,
+                state: row.get(3)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn mark_recovered_ready(&mut self, run_id: &str, now_ms: i64) -> Result<()> {
+        let tx = self.connection.transaction()?;
+        tx.execute(
+            "UPDATE candidate_runs SET state = 'READY' WHERE run_id = ?1",
+            params![run_id],
+        )?;
+        insert_event(
+            &tx,
+            run_id,
+            "WorkspaceRecovered",
+            "WINDS_OBSERVED",
+            "{\"state\":\"READY\"}",
+            now_ms,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn mark_recovery_required(
+        &mut self,
+        run_id: &str,
+        reason: &str,
+        now_ms: i64,
+    ) -> Result<()> {
+        let payload = serde_json::to_string(&serde_json::json!({ "reason": reason }))?;
+        let tx = self.connection.transaction()?;
+        tx.execute(
+            "UPDATE candidate_runs SET state = 'MANUAL_RECOVERY_REQUIRED' WHERE run_id = ?1",
+            params![run_id],
+        )?;
+        insert_event(
+            &tx,
+            run_id,
+            "RecoveryRequired",
+            "WINDS_OBSERVED",
+            &payload,
+            now_ms,
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn record_promotion(

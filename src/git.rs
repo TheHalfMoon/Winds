@@ -1,6 +1,7 @@
 use std::error::Error;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs::{File, OpenOptions};
+use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -111,6 +112,20 @@ impl Repo {
 
     pub fn worktree_is_clean(&self, path: &Path) -> Result<bool> {
         Ok(run_git_bytes(path, ["status", "--porcelain=v1", "-z"])?.is_empty())
+    }
+
+    pub fn worktree_paths(&self) -> Result<Vec<PathBuf>> {
+        let output = run_git_bytes(
+            &self.root,
+            ["worktree", "list", "--porcelain", "-z"],
+        )?;
+        let mut paths = Vec::new();
+        for field in output.split(|byte| *byte == 0) {
+            if let Some(path) = field.strip_prefix(b"worktree ") {
+                paths.push(PathBuf::from(OsString::from_vec(path.to_vec())));
+            }
+        }
+        Ok(paths)
     }
 
     pub fn create_selected_branch(&self, branch: &str, commit_oid: &str) -> Result<()> {
