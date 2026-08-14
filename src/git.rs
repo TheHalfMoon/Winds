@@ -1,0 +1,152 @@
+use std::error::Error;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
+
+#[derive(Debug, Clone)]
+pub struct Repo {
+    root: PathBuf,
+}
+
+impl Repo {
+    pub fn open(path: &Path) -> Result<Self> {
+        let root = run_git_text(path, ["rev-parse", "--show-toplevel"])?;
+        let root = PathBuf::from(root.trim()).canonicalize()?;
+        Ok(Self { root })
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn require_clean_primary(&self) -> Result<()> {
+        let status = run_git_bytes(&self.root, ["status", "--porcelain=v1", "-z"])?;
+        if !status.is_empty() {
+            return Err("primary checkout is dirty; Winds refuses to provision a candidate".into());
+        }
+        Ok(())
+    }
+
+    pub fn resolve_commit(&self, value: &str) -> Result<String> {
+        let spec = format!("{value}^{{commit}}");
+        Ok(run_git_text(&self.root, ["rev-parse", "--verify", spec.as_str()])?
+            .trim()
+            .to_owned())
+    }
+
+    pub fn tree_oid(&self, commit_oid: &str) -> Result<String> {
+        let spec = format!("{commit_oid}^{{tree}}");
+        Ok(run_git_text(&self.root, ["rev-parse", "--verify", spec.as_str()])?
+            .trim()
+            .to_owned())
+    }
+
+    pub fn add_locked_worktree(
+        &self,
+        path: &Path,
+        commit_oid: &str,
+        branch: &str,
+        reason: &str,
+    ) -> Result<()> {
+        if path.exists() {
+            return Err(format!("candidate worktree path already exists: {}", path.display()).into());
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        run_git_os(
+            &self.root,
+            [
+                OsStr::new("worktree"),
+                OsStr::new("add"),
+                OsStr::new("-b"),
+                OsStr::new(branch),
+                path.as_os_str(),
+                OsStr::new(commit_oid),
+            ],
+        )?;
+
+        run_git_os(
+            &self.root,
+            [
+                OsStr::new("worktree"),
+                OsStr::new("lock"),
+                OsStr::new("--reason"),
+                OsStr::new(reason),
+                path.as_os_str(),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn worktree_head(&self, path: &Path) -> Result<String> {
+        Ok(run_git_text(path, ["rev-parse", "HEAD"])?.trim().to_owned())
+    }
+
+    pub fn worktree_is_clean(&self, path: &Path) -> Result<bool> {
+        Ok(run_git_bytes(path, ["status", "--porcelain=v1", "-z"])?.is_empty())
+    }
+
+    pub fn create_selected_branch(&self, branch: &str, commit_oid: &str) -> Result<()> {
+        let full_ref = format!("refs/heads/{branch}");
+        let existing = Command::new("git")
+            .arg("-C")
+            .arg(&self.root)
+            .args(["show-ref", "--verify", "--hash", full_ref.as_str()])
+            .output()?;
+
+        if existing.status.success() {
+            let current = String::from_utf8(existing.stdout)?.trim().to_owned();
+            if current == commit_oid {
+                return Ok(());
+            }
+            return Err(format!("selected branch already exists at different commit: {current}").into());
+        }
+
+        run_git_text(&self.root, ["branch", branch, commit_oid])?;
+        Ok(())
+    }
+}
+
+fn run_git_bytes<I, S>(cwd: &Path, args: I) -> Result<Vec<u8>>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let output = Command::new("git").arg("-C").arg(cwd).args(args).output()?;
+    if output.status.success() {
+        return Ok(output.stdout);
+    }
+    Err(format!(
+        "git command failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    )
+    .into())
+}
+
+fn run_git_text<I, S>(cwd: &Path, args: I) -> Result<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    Ok(String::from_utf8(run_git_bytes(cwd, args)?)?)
+}
+
+fn run_git_os<I, S>(cwd: &Path, args: I) -> Result<()>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let output = Command::new("git").arg("-C").arg(cwd).args(args).output()?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(format!(
+        "git command failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    )
+    .into())
+}
