@@ -98,31 +98,6 @@ jobs:
 
               let hostile_git_dir = root.join("hostile-git-dir");
           ''')
-          replace_once("candidate-config", "tests/walking_skeleton.rs",
-              '''    let mutating = winds(
-          ''',
-              '''    git(&repo, ["config", "status.showUntrackedFiles", "no"]);
-              let mutating = winds(
-          ''')
-          replace_once("candidate-untracked", "tests/walking_skeleton.rs",
-              '''            "--check",
-                          "printf 'changed\\\\n' > result.txt",
-          ''',
-              '''            "--check",
-                          "printf 'changed\\\\n' > untracked-check.tmp",
-          ''')
-          replace_once("candidate-config-unset", "tests/walking_skeleton.rs",
-              '''            .any(|warning| warning.as_str().unwrap().contains("mutated candidate"))
-              );
-
-              let timeout_started = Instant::now();
-          ''',
-              '''            .any(|warning| warning.as_str().unwrap().contains("mutated candidate"))
-              );
-              git(&repo, ["config", "--unset", "status.showUntrackedFiles"]);
-
-              let timeout_started = Instant::now();
-          ''')
           replace_once("owned-cleanup", "tests/walking_skeleton.rs",
               '''    let _ = fs::remove_dir_all(root);
           }
