@@ -103,17 +103,19 @@ impl Store {
         bytes: &[u8],
         truncated: bool,
     ) -> Result<BlobEvidence> {
+        let digest = Sha256::digest(bytes);
+        let sha256: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
         let dir = self.home.join("blobs").join(run_id);
         fs::create_dir_all(&dir)?;
-        let path = dir.join(name);
-        fs::write(&path, bytes)?;
+        let path = dir.join(format!("{name}.{sha256}"));
+        if !path.exists() {
+            fs::write(&path, bytes)?;
+        }
         let relative = path.strip_prefix(&self.home)?;
         let relative_path = relative
             .to_str()
             .ok_or("evidence blob path is not valid UTF-8")?
             .to_owned();
-        let digest = Sha256::digest(bytes);
-        let sha256: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
         Ok(BlobEvidence {
             relative_path,
             sha256,
