@@ -34,15 +34,10 @@ impl Store {
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.execute_batch(
             "
-            CREATE TABLE IF NOT EXISTS tasks (
-                task_id TEXT PRIMARY KEY,
-                base_oid TEXT NOT NULL,
-                created_unix_ms INTEGER NOT NULL
-            );
             CREATE TABLE IF NOT EXISTS candidate_runs (
                 run_id TEXT PRIMARY KEY,
-                task_id TEXT NOT NULL REFERENCES tasks(task_id),
                 repo_path TEXT NOT NULL,
+                base_oid TEXT NOT NULL,
                 candidate_ref TEXT NOT NULL,
                 candidate_oid TEXT NOT NULL,
                 candidate_tree TEXT NOT NULL,
@@ -85,17 +80,14 @@ impl Store {
         let timeout_secs = i64::try_from(run.timeout_secs)?;
         let tx = self.connection.transaction()?;
         tx.execute(
-            "INSERT INTO tasks(task_id, base_oid, created_unix_ms) VALUES (?1, ?2, ?3)",
-            params![run.run_id, run.base_oid, now_ms],
-        )?;
-        tx.execute(
             "INSERT INTO candidate_runs(
-                run_id, task_id, repo_path, candidate_ref, candidate_oid, candidate_tree,
+                run_id, repo_path, base_oid, candidate_ref, candidate_oid, candidate_tree,
                 run_branch, worktree_path, check_command, timeout_secs, state, created_unix_ms
-             ) VALUES (?1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'PROVISIONING', ?10)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'PROVISIONING', ?11)",
             params![
                 run.run_id,
                 run.repo_path,
+                run.base_oid,
                 run.candidate_ref,
                 run.candidate_oid,
                 run.candidate_tree,
