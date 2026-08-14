@@ -66,13 +66,7 @@ impl Repo {
         )
     }
 
-    pub fn add_locked_worktree(
-        &self,
-        path: &Path,
-        commit_oid: &str,
-        branch: &str,
-        reason: &str,
-    ) -> Result<()> {
+    pub fn add_locked_worktree(&self, path: &Path, commit_oid: &str, reason: &str) -> Result<()> {
         if path.exists() {
             return Err(
                 format!("candidate worktree path already exists: {}", path.display()).into(),
@@ -87,8 +81,7 @@ impl Repo {
             [
                 OsStr::new("worktree"),
                 OsStr::new("add"),
-                OsStr::new("-b"),
-                OsStr::new(branch),
+                OsStr::new("--detach"),
                 path.as_os_str(),
                 OsStr::new(commit_oid),
             ],
