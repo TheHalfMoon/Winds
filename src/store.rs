@@ -130,7 +130,7 @@ impl Store {
             params![report.run_id],
         )?;
         tx.execute(
-            "INSERT OR REPLACE INTO evidence_reports(run_id, eligibility, report_json, created_unix_ms)
+            "INSERT INTO evidence_reports(run_id, eligibility, report_json, created_unix_ms)
              VALUES (?1, ?2, ?3, ?4)",
             params![report.run_id, report.eligibility.as_str(), json, now_ms],
         )?;
