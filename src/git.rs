@@ -148,13 +148,5 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let output = Command::new("git").arg("-C").arg(cwd).args(args).output()?;
-    if output.status.success() {
-        return Ok(());
-    }
-    Err(format!(
-        "git command failed: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    )
-    .into())
+    run_git_bytes(cwd, args).map(|_| ())
 }
