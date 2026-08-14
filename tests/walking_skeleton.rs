@@ -286,12 +286,7 @@ fn winds<const N: usize>(home: &Path, args: [&str; N]) -> Output {
         .unwrap()
 }
 
-fn winds_with_env<const N: usize>(
-    home: &Path,
-    args: [&str; N],
-    key: &str,
-    value: &str,
-) -> Output {
+fn winds_with_env<const N: usize>(home: &Path, args: [&str; N], key: &str, value: &str) -> Output {
     Command::new(env!("CARGO_BIN_EXE_winds"))
         .args(args)
         .env("WINDS_HOME", home)
