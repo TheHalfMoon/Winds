@@ -1,4 +1,4 @@
-use crate::domain::{BlobEvidence, Eligibility, EvidenceReport, StoredRun};
+use crate::domain::{BlobEvidence, CheckEvidence, Eligibility, EvidenceReport, StoredRun};
 use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
 use std::error::Error;
@@ -208,25 +208,7 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
-    pub fn mark_recovered_ready(&mut self, run_id: &str, now_ms: i64) -> Result<()> {
-        let tx = self.connection.transaction()?;
-        tx.execute(
-            "UPDATE candidate_runs SET state = 'READY' WHERE run_id = ?1",
-            params![run_id],
-        )?;
-        insert_event(
-            &tx,
-            run_id,
-            "WorkspaceRecovered",
-            "WINDS_OBSERVED",
-            "{\"state\":\"READY\"}",
-            now_ms,
-        )?;
-        tx.commit()?;
-        Ok(())
-    }
-
-    pub fn mark_recovery_required(
+    pub fn record_recovery_required(
         &mut self,
         run_id: &str,
         reason: &str,
@@ -234,14 +216,30 @@ impl Store {
     ) -> Result<()> {
         let payload = serde_json::to_string(&serde_json::json!({ "reason": reason }))?;
         let tx = self.connection.transaction()?;
-        tx.execute(
-            "UPDATE candidate_runs SET state = 'MANUAL_RECOVERY_REQUIRED' WHERE run_id = ?1",
-            params![run_id],
-        )?;
         insert_event(
             &tx,
             run_id,
             "RecoveryRequired",
+            "WINDS_OBSERVED",
+            &payload,
+            now_ms,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn record_promotion_recheck(
+        &mut self,
+        run_id: &str,
+        evidence: &CheckEvidence,
+        now_ms: i64,
+    ) -> Result<()> {
+        let payload = serde_json::to_string(evidence)?;
+        let tx = self.connection.transaction()?;
+        insert_event(
+            &tx,
+            run_id,
+            "PromotionRecheckObserved",
             "WINDS_OBSERVED",
             &payload,
             now_ms,
@@ -266,7 +264,7 @@ impl Store {
             &tx,
             run_id,
             "DecisionRecorded",
-            "HUMAN_DECIDED",
+            "CALLER_REQUESTED",
             "{\"decision\":\"promote\"}",
             now_ms,
         )?;
