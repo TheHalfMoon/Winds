@@ -26,7 +26,7 @@ pub struct CheckRun {
 pub fn run_check(cwd: &Path, command: &str, timeout: Duration) -> Result<CheckRun, String> {
     let started = Instant::now();
     let mut child = Command::new("/bin/sh")
-        .args(["-lc", command])
+        .args(["-c", command])
         .current_dir(cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -121,10 +121,10 @@ fn read_capped<R: Read>(mut reader: R) -> IoResult<CapturedStream> {
 fn terminate_process_group(pid: u32) {
     let group = format!("-{pid}");
     let _ = Command::new("kill")
-        .args(["-TERM", group.as_str()])
+        .args(["-TERM", "--", group.as_str()])
         .status();
     thread::sleep(Duration::from_millis(100));
     let _ = Command::new("kill")
-        .args(["-KILL", group.as_str()])
+        .args(["-KILL", "--", group.as_str()])
         .status();
 }
