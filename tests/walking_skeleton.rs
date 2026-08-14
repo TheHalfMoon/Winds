@@ -57,6 +57,29 @@ fn verifies_blocks_and_promotes_without_touching_primary_checkout() {
     assert!(String::from_utf8_lossy(&dirty_primary.stderr).contains("primary checkout is dirty"));
     fs::remove_file(repo.join("dirty.tmp")).unwrap();
 
+    let hostile_git_dir = root.join("hostile-git-dir");
+    fs::create_dir_all(&hostile_git_dir).unwrap();
+    let isolated_git_context = winds_with_env(
+        &winds_home,
+        [
+            "verify",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--base",
+            &base_oid,
+            "--candidate",
+            &passing_oid,
+            "--check",
+            "true",
+        ],
+        "GIT_DIR",
+        hostile_git_dir.to_str().unwrap(),
+    );
+    assert_success(&isolated_git_context);
+    let isolated_json: Value = serde_json::from_slice(&isolated_git_context.stdout).unwrap();
+    assert_eq!(isolated_json["eligibility"], "ELIGIBLE");
+    assert_eq!(isolated_json["candidate_oid"], passing_oid);
+
     let passing = winds(
         &winds_home,
         [
@@ -138,7 +161,7 @@ fn verifies_blocks_and_promotes_without_touching_primary_checkout() {
             "5",
         ],
     );
-    assert_success(&failing);
+    assert!(!failing.status.success());
     let failing_json: Value = serde_json::from_slice(&failing.stdout).unwrap();
     assert_eq!(failing_json["eligibility"], "BLOCKED");
     assert_eq!(failing_json["check"]["status"], "FAIL");
@@ -159,7 +182,7 @@ fn verifies_blocks_and_promotes_without_touching_primary_checkout() {
             "5",
         ],
     );
-    assert_success(&mutating);
+    assert!(!mutating.status.success());
     let mutating_json: Value = serde_json::from_slice(&mutating.stdout).unwrap();
     assert_eq!(mutating_json["check"]["status"], "PASS");
     assert_eq!(mutating_json["eligibility"], "BLOCKED");
@@ -188,7 +211,7 @@ fn verifies_blocks_and_promotes_without_touching_primary_checkout() {
             "1",
         ],
     );
-    assert_success(&timed_out);
+    assert!(!timed_out.status.success());
     assert!(timeout_started.elapsed() < Duration::from_secs(3));
     let timeout_json: Value = serde_json::from_slice(&timed_out.stdout).unwrap();
     assert_eq!(timeout_json["check"]["status"], "TIMEOUT");
@@ -230,7 +253,7 @@ fn verifies_blocks_and_promotes_without_touching_primary_checkout() {
     );
 
     let recovery = winds(&winds_home, ["recover", "--repo", repo.to_str().unwrap()]);
-    assert_success(&recovery);
+    assert!(!recovery.status.success());
     let recovery_json: Value = serde_json::from_slice(&recovery.stdout).unwrap();
     let stale_recovery = recovery_json["runs"]
         .as_array()
@@ -259,6 +282,20 @@ fn winds<const N: usize>(home: &Path, args: [&str; N]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_winds"))
         .args(args)
         .env("WINDS_HOME", home)
+        .output()
+        .unwrap()
+}
+
+fn winds_with_env<const N: usize>(
+    home: &Path,
+    args: [&str; N],
+    key: &str,
+    value: &str,
+) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_winds"))
+        .args(args)
+        .env("WINDS_HOME", home)
+        .env(key, value)
         .output()
         .unwrap()
 }
