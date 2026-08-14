@@ -71,7 +71,6 @@ fn verify(flags: HashMap<String, String>) -> Result<()> {
     let candidate_oid = repo.resolve_commit(candidate_ref)?;
     let candidate_tree = repo.tree_oid(&candidate_oid)?;
     let run_id = new_run_id()?;
-    let run_branch = format!("winds/run/{run_id}");
     let worktree = home.join("worktrees").join(&run_id);
     let repo_path = utf8_path(repo.root(), "repository path")?.to_owned();
     let worktree_path = utf8_path(&worktree, "candidate worktree path")?.to_owned();
@@ -86,7 +85,6 @@ fn verify(flags: HashMap<String, String>) -> Result<()> {
             candidate_ref,
             candidate_oid: &candidate_oid,
             candidate_tree: &candidate_tree,
-            run_branch: &run_branch,
             worktree_path: &worktree_path,
             check_command,
             timeout_secs,
@@ -96,7 +94,6 @@ fn verify(flags: HashMap<String, String>) -> Result<()> {
     repo.add_locked_worktree(
         &worktree,
         &candidate_oid,
-        &run_branch,
         &format!("Winds verification run {run_id}"),
     )?;
     store.mark_workspace_ready(&run_id, unix_ms()?)?;
@@ -151,7 +148,6 @@ fn verify(flags: HashMap<String, String>) -> Result<()> {
         candidate_ref: candidate_ref.to_owned(),
         candidate_oid,
         candidate_tree,
-        run_branch,
         worktree_path,
         check: CheckEvidence {
             authority: "WINDS_OBSERVED",
