@@ -18,10 +18,10 @@ This checklist records **as-built truth** for PR #1. A checked item has implemen
 ## Phase 3 - Persistence and Evidence
 
 - [x] **T008** Add SQLite migration for the minimum proven run/event/evidence/promotion records; standalone `Task`/`Decision` tables are intentionally not present.
-- [x] **T009** Persist lifecycle projections with corresponding events transactionally; keep recovery-required observations append-only.
-- [x] **T010** Implement explicit required-check execution with pass/fail/timeout disposition, bounded output capture, and process-group termination.
-- [x] **T011** Build an Evidence Report bound to the exact base/candidate snapshot and check definition with hashed blob metadata.
-- [x] **T012** Add tests proving fail, timeout, dirty/not-run preflight, check mutation, and stale candidate evidence fail closed.
+- [x] **T009** Persist lifecycle projections with corresponding events transactionally; keep recovery-required observations append-only; enforce run ownership for events and one-shot primary Evidence Reports.
+- [x] **T010** Implement explicit required-check execution with pass/fail/timeout disposition, bounded output capture, process-group termination, and bounded stream shutdown.
+- [x] **T011** Build an Evidence Report bound to the exact base/candidate snapshot and check definition with content-addressed SHA-256 blob metadata.
+- [x] **T012** Add tests proving fail, timeout, dirty/not-run preflight, check mutation, hostile inherited Git context, and stale candidate evidence fail closed.
 
 ## Phase 4 - Explicit Selection and Promotion
 
@@ -35,8 +35,8 @@ This checklist records **as-built truth** for PR #1. A checked item has implemen
 - [x] **T017** Reconcile persisted workspace metadata with `git worktree list --porcelain -z`; dirty/missing/mismatched/interrupted-provisioning state reports `MANUAL_RECOVERY_REQUIRED` without cleanup or lifecycle auto-adoption.
 - [ ] **T018** Add fault-injection fixtures for partial worktree creation, failed DB write, and interrupted cross-resource transitions. Current CLI-per-process fixtures exercise restart-style reconciliation and ambiguous ownership but do not inject every partial failure.
 - [x] **T019** Add deterministic read-only CI with pinned GitHub Action SHAs, Rust `1.97.1`, committed `Cargo.lock`, `--locked`, rustfmt, Clippy `-D warnings`, and tests on Ubuntu/macOS.
-- [ ] **T020** Complete final correctness/safety review on the code-frozen head and resolve all blocking findings.
-- [ ] **T021** Complete final Ponytail v4.9.0 pass on the code-frozen diff; record `Lean already. Ship.` only if no further justified cuts remain.
+- [x] **T020** Complete final correctness/safety review on code-frozen head `9cea0a4a662be1f8d890a5fe4e663ad774e7d678`; blocking findings were resolved and exact-head quality run #55 passed fmt, Clippy, and tests on Ubuntu/macOS.
+- [x] **T021** Complete final Ponytail v4.9.0 pass on the code-frozen diff after removing speculative Task/run-branch abstractions, duplicate helpers, unnecessary login-shell behavior, and untested compatibility claims. Final verdict: `Lean already. Ship.`
 - [ ] **T022** Run independent/external reviewer pass on a Ready-for-Review PR and reconcile actual findings. Bot summaries, skipped reviews, and rate-limit responses do not count as PASS.
 
 ## Pre-release Soak
