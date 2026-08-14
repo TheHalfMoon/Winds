@@ -82,6 +82,7 @@ impl Store {
     }
 
     pub fn create_run(&mut self, run: NewRun<'_>, now_ms: i64) -> Result<()> {
+        let timeout_secs = i64::try_from(run.timeout_secs)?;
         let tx = self.connection.transaction()?;
         tx.execute(
             "INSERT INTO tasks(task_id, base_oid, created_unix_ms) VALUES (?1, ?2, ?3)",
@@ -101,7 +102,7 @@ impl Store {
                 run.run_branch,
                 run.worktree_path,
                 run.check_command,
-                run.timeout_secs,
+                timeout_secs,
                 now_ms,
             ],
         )?;
@@ -133,7 +134,7 @@ impl Store {
         fs::write(&path, bytes)?;
         let relative = path.strip_prefix(&self.home)?.to_string_lossy().into_owned();
         let digest = Sha256::digest(bytes);
-        let sha256 = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+        let sha256: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
         Ok(BlobEvidence {
             relative_path: relative,
             sha256,
@@ -163,16 +164,15 @@ impl Store {
         let row = self
             .connection
             .query_row(
-                "SELECT r.run_id, r.repo_path, t.base_oid, r.candidate_ref, r.candidate_oid,
-                        r.candidate_tree, r.run_branch, r.worktree_path, r.check_command,
-                        r.timeout_secs, e.eligibility
+                "SELECT r.run_id, r.repo_path, r.candidate_oid, r.candidate_tree,
+                        r.worktree_path, r.check_command, r.timeout_secs, e.eligibility
                  FROM candidate_runs r
-                 JOIN tasks t ON t.task_id = r.task_id
                  LEFT JOIN evidence_reports e ON e.run_id = r.run_id
                  WHERE r.run_id = ?1",
                 params![run_id],
                 |row| {
-                    let eligibility: Option<String> = row.get(10)?;
+                    let timeout_secs: i64 = row.get(6)?;
+                    let eligibility: Option<String> = row.get(7)?;
                     Ok((
                         row.get::<_, String>(0)?,
                         row.get::<_, String>(1)?,
@@ -180,10 +180,7 @@ impl Store {
                         row.get::<_, String>(3)?,
                         row.get::<_, String>(4)?,
                         row.get::<_, String>(5)?,
-                        row.get::<_, String>(6)?,
-                        row.get::<_, String>(7)?,
-                        row.get::<_, String>(8)?,
-                        row.get::<_, u64>(9)?,
+                        timeout_secs,
                         eligibility,
                     ))
                 },
@@ -191,7 +188,7 @@ impl Store {
             .optional()?
             .ok_or_else(|| format!("unknown Winds run: {run_id}"))?;
 
-        let eligibility = match row.10.as_deref() {
+        let eligibility = match row.7.as_deref() {
             Some("ELIGIBLE") => Eligibility::Eligible,
             Some("WARNING") => Eligibility::Warning,
             _ => Eligibility::Blocked,
@@ -199,14 +196,11 @@ impl Store {
         Ok(StoredRun {
             run_id: row.0,
             repo_path: row.1,
-            base_oid: row.2,
-            candidate_ref: row.3,
-            candidate_oid: row.4,
-            candidate_tree: row.5,
-            run_branch: row.6,
-            worktree_path: row.7,
-            check_command: row.8,
-            timeout_secs: row.9,
+            candidate_oid: row.2,
+            candidate_tree: row.3,
+            worktree_path: row.4,
+            check_command: row.5,
+            timeout_secs: u64::try_from(row.6)?,
             eligibility,
         })
     }

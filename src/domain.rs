@@ -1,28 +1,14 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum CheckStatus {
     Pass,
     Fail,
     Timeout,
-    Error,
-    NotRun,
 }
 
-impl CheckStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Pass => "PASS",
-            Self::Fail => "FAIL",
-            Self::Timeout => "TIMEOUT",
-            Self::Error => "ERROR",
-            Self::NotRun => "NOT_RUN",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Eligibility {
     Eligible,
@@ -40,7 +26,7 @@ impl Eligibility {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct BlobEvidence {
     pub relative_path: String,
     pub sha256: String,
@@ -48,7 +34,7 @@ pub struct BlobEvidence {
     pub truncated: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct CheckEvidence {
     pub authority: &'static str,
     pub command: String,
@@ -59,7 +45,7 @@ pub struct CheckEvidence {
     pub stderr: BlobEvidence,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct EvidenceReport {
     pub schema_version: u32,
     pub run_id: String,
@@ -80,11 +66,8 @@ pub struct EvidenceReport {
 pub struct StoredRun {
     pub run_id: String,
     pub repo_path: String,
-    pub base_oid: String,
-    pub candidate_ref: String,
     pub candidate_oid: String,
     pub candidate_tree: String,
-    pub run_branch: String,
     pub worktree_path: String,
     pub check_command: String,
     pub timeout_secs: u64,
