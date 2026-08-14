@@ -120,11 +120,19 @@ fn read_capped<R: Read>(mut reader: R) -> IoResult<CapturedStream> {
 
 fn terminate_process_group(pid: u32) {
     let group = format!("-{pid}");
-    let _ = Command::new("kill")
+    let term = Command::new("/bin/kill")
         .args(["-TERM", "--", group.as_str()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status();
+    if !matches!(term, Ok(status) if status.success()) {
+        return;
+    }
+
     thread::sleep(Duration::from_millis(100));
-    let _ = Command::new("kill")
+    let _ = Command::new("/bin/kill")
         .args(["-KILL", "--", group.as_str()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .status();
 }
