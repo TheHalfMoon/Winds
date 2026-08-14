@@ -6,9 +6,187 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  review-fix:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.head_ref }}
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt
+      - name: Apply exact Qodo fixes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match, found {count}")
+              p.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "src/main.rs",
+              '''    let repo = Repo::open(Path::new(repo_arg))?;
+              let home = winds_home(flags.get("home").map(String::as_str), &repo)?;
+              repo.require_clean_primary()?;
+              let mut store = Store::open(&home)?;
+          ''',
+              '''    let repo = Repo::open(Path::new(repo_arg))?;
+              let git_lock = repo.acquire_mutation_lock()?;
+              repo.require_clean_primary()?;
+              let home = winds_home(flags.get("home").map(String::as_str), &repo)?;
+              let mut store = Store::open(&home)?;
+          ''',
+          )
+          replace_once(
+              "src/main.rs",
+              '''    let now = unix_ms()?;
+
+              let git_lock = repo.acquire_mutation_lock()?;
+              store.create_run(
+          ''',
+              '''    let now = unix_ms()?;
+
+              store.create_run(
+          ''',
+          )
+          replace_once(
+              "src/main.rs",
+              '''    if run.eligibility != Eligibility::Eligible {
+                  return Err("only ELIGIBLE evidence can be promoted in Winds 0.1".into());
+              }
+
+              let worktree = PathBuf::from(&run.worktree_path);
+          ''',
+              '''    if run.eligibility != Eligibility::Eligible {
+                  return Err("only ELIGIBLE evidence can be promoted in Winds 0.1".into());
+              }
+
+              let _git_lock = repo.acquire_mutation_lock()?;
+              let worktree = PathBuf::from(&run.worktree_path);
+          ''',
+          )
+          replace_once(
+              "src/main.rs",
+              '''    let selected_branch = format!("winds/selected/{}", run.run_id);
+              let _git_lock = repo.acquire_mutation_lock()?;
+              repo.create_selected_branch(&selected_branch, &run.candidate_oid)?;
+          ''',
+              '''    let selected_branch = format!("winds/selected/{}", run.run_id);
+              repo.create_selected_branch(&selected_branch, &run.candidate_oid)?;
+          ''',
+          )
+
+          replace_once(
+              "tests/walking_skeleton.rs",
+              '    let repo = root.join("repo");\n',
+              '    let repo = root.join(" repo ");\n',
+          )
+          replace_once(
+              "tests/walking_skeleton.rs",
+              '''    fs::write(repo.join("dirty.tmp"), "dirty\\n").unwrap();
+              let dirty_primary = winds(
+          ''',
+              '''    git(&repo, ["config", "status.showUntrackedFiles", "no"]);
+              fs::write(repo.join("dirty.tmp"), "dirty\\n").unwrap();
+              let dirty_primary = winds(
+          ''',
+          )
+          replace_once(
+              "tests/walking_skeleton.rs",
+              '''    fs::remove_file(repo.join("dirty.tmp")).unwrap();
+
+              let hostile_git_dir = root.join("hostile-git-dir");
+          ''',
+              '''    fs::remove_file(repo.join("dirty.tmp")).unwrap();
+              git(&repo, ["config", "--unset", "status.showUntrackedFiles"]);
+
+              let hostile_git_dir = root.join("hostile-git-dir");
+          ''',
+          )
+          replace_once(
+              "tests/walking_skeleton.rs",
+              '''    let mutating = winds(
+          ''',
+              '''    git(&repo, ["config", "status.showUntrackedFiles", "no"]);
+              let mutating = winds(
+          ''',
+          )
+          replace_once(
+              "tests/walking_skeleton.rs",
+              '''            "--check",
+                          "printf 'changed\\\\n' > result.txt",
+          ''',
+              '''            "--check",
+                          "printf 'changed\\\\n' > untracked-check.tmp",
+          ''',
+          )
+          replace_once(
+              "tests/walking_skeleton.rs",
+              '''            .any(|warning| warning.as_str().unwrap().contains("mutated candidate"))
+              );
+
+              let timeout_started = Instant::now();
+          ''',
+              '''            .any(|warning| warning.as_str().unwrap().contains("mutated candidate"))
+              );
+              git(&repo, ["config", "--unset", "status.showUntrackedFiles"]);
+
+              let timeout_started = Instant::now();
+          ''',
+          )
+          replace_once(
+              "tests/walking_skeleton.rs",
+              '''    let _ = fs::remove_dir_all(root);
+              }
+          ''',
+              '''    remove_owned_temp_dir(&root);
+              }
+          ''',
+          )
+          replace_once(
+              "tests/walking_skeleton.rs",
+              '''fn unique_temp_dir(prefix: &str) -> PathBuf {
+          ''',
+              '''fn remove_owned_temp_dir(path: &Path) {
+              let temp = std::env::temp_dir().canonicalize().unwrap();
+              let canonical = path.canonicalize().unwrap();
+              assert_eq!(canonical.parent(), Some(temp.as_path()));
+              assert!(
+                  canonical
+                      .file_name()
+                      .and_then(|name| name.to_str())
+                      .unwrap()
+                      .starts_with("winds-walking-skeleton-")
+              );
+              fs::remove_dir_all(canonical).unwrap();
+          }
+
+          fn unique_temp_dir(prefix: &str) -> PathBuf {
+          ''',
+          )
+          PY
+          cargo fmt --all
+      - name: Commit reconciled findings
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/main.rs tests/walking_skeleton.rs
+          git diff --cached --quiet && exit 0
+          git commit -m "fix: reconcile Qodo review findings"
+          git push origin HEAD:${{ github.head_ref }}
+
   rust:
     strategy:
       fail-fast: false
