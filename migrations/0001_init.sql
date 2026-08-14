@@ -5,7 +5,6 @@ CREATE TABLE IF NOT EXISTS candidate_runs (
     candidate_ref TEXT NOT NULL,
     candidate_oid TEXT NOT NULL,
     candidate_tree TEXT NOT NULL,
-    run_branch TEXT NOT NULL,
     worktree_path TEXT NOT NULL,
     check_command TEXT NOT NULL,
     timeout_secs INTEGER NOT NULL,
