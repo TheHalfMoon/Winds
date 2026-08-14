@@ -32,6 +32,7 @@ impl Repo {
     pub fn acquire_mutation_lock(&self) -> Result<File> {
         let lock = OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(self.common_dir.join("winds.lock"))?;
