@@ -38,6 +38,25 @@ fn verifies_blocks_and_promotes_without_touching_primary_checkout() {
     let primary_head_before = git_text(&repo, ["rev-parse", "HEAD"]);
     let primary_content_before = fs::read(repo.join("result.txt")).unwrap();
 
+    fs::write(repo.join("dirty.tmp"), "dirty\n").unwrap();
+    let dirty_primary = winds(
+        &winds_home,
+        [
+            "verify",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--base",
+            &base_oid,
+            "--candidate",
+            &passing_oid,
+            "--check",
+            "true",
+        ],
+    );
+    assert!(!dirty_primary.status.success());
+    assert!(String::from_utf8_lossy(&dirty_primary.stderr).contains("primary checkout is dirty"));
+    fs::remove_file(repo.join("dirty.tmp")).unwrap();
+
     let passing = winds(
         &winds_home,
         [
@@ -149,6 +168,39 @@ fn verifies_blocks_and_promotes_without_touching_primary_checkout() {
     let timeout_json: Value = serde_json::from_slice(&timed_out.stdout).unwrap();
     assert_eq!(timeout_json["check"]["status"], "TIMEOUT");
     assert_eq!(timeout_json["eligibility"], "BLOCKED");
+
+    let stale = winds(
+        &winds_home,
+        [
+            "verify",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--base",
+            &base_oid,
+            "--candidate",
+            &passing_oid,
+            "--check",
+            "true",
+        ],
+    );
+    assert_success(&stale);
+    let stale_json: Value = serde_json::from_slice(&stale.stdout).unwrap();
+    assert_eq!(stale_json["eligibility"], "ELIGIBLE");
+    let stale_run_id = stale_json["run_id"].as_str().unwrap();
+    let stale_worktree = PathBuf::from(stale_json["worktree_path"].as_str().unwrap());
+    fs::write(stale_worktree.join("manual.txt"), "manual edit\n").unwrap();
+    let stale_promotion = winds(
+        &winds_home,
+        [
+            "promote",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--run",
+            stale_run_id,
+        ],
+    );
+    assert!(!stale_promotion.status.success());
+    assert!(String::from_utf8_lossy(&stale_promotion.stderr).contains("changed after verification"));
 
     assert_eq!(
         git_text(&repo, ["branch", "--show-current"]),
