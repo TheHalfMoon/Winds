@@ -279,7 +279,9 @@ fn recover(flags: HashMap<String, String>) -> Result<()> {
         let (status, recovery_reason) = if run.state == "PROVISIONING" {
             (
                 "MANUAL_RECOVERY_REQUIRED",
-                Some("run was interrupted during provisioning; automatic ownership cannot be proven"),
+                Some(
+                    "run was interrupted during provisioning; automatic ownership cannot be proven",
+                ),
             )
         } else if exact_head && clean {
             ("PRESENT", None)
@@ -385,8 +387,9 @@ fn winds_home(explicit: Option<&str>) -> Result<PathBuf> {
 }
 
 fn utf8_path<'a>(path: &'a Path, label: &str) -> Result<&'a str> {
-    path.to_str()
-        .ok_or_else(|| format!("{label} is not valid UTF-8; Winds 0.1 refuses lossy path storage").into())
+    path.to_str().ok_or_else(|| {
+        format!("{label} is not valid UTF-8; Winds 0.1 refuses lossy path storage").into()
+    })
 }
 
 fn new_run_id() -> Result<String> {
