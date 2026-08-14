@@ -99,6 +99,32 @@ fn verifies_blocks_and_promotes_without_touching_primary_checkout() {
     assert_eq!(failing_json["eligibility"], "BLOCKED");
     assert_eq!(failing_json["check"]["status"], "FAIL");
 
+    let mutating = winds(
+        &winds_home,
+        [
+            "verify",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--base",
+            &base_oid,
+            "--candidate",
+            &passing_oid,
+            "--check",
+            "printf 'changed\\n' > result.txt",
+            "--timeout-secs",
+            "5",
+        ],
+    );
+    assert_success(&mutating);
+    let mutating_json: Value = serde_json::from_slice(&mutating.stdout).unwrap();
+    assert_eq!(mutating_json["check"]["status"], "PASS");
+    assert_eq!(mutating_json["eligibility"], "BLOCKED");
+    assert!(mutating_json["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|warning| warning.as_str().unwrap().contains("mutated candidate")));
+
     assert_eq!(
         git_text(&repo, ["branch", "--show-current"]),
         primary_branch_before
