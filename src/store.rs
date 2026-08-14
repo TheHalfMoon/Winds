@@ -2,7 +2,8 @@ use crate::domain::{BlobEvidence, CheckEvidence, Eligibility, EvidenceReport, St
 use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
 use std::error::Error;
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
@@ -108,9 +109,25 @@ impl Store {
         let dir = self.home.join("blobs").join(run_id);
         fs::create_dir_all(&dir)?;
         let path = dir.join(format!("{name}.{sha256}"));
-        if !path.exists() {
-            fs::write(&path, bytes)?;
+
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(mut file) => {
+                file.write_all(bytes)?;
+                file.sync_all()?;
+            }
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+                let existing = fs::read(&path)?;
+                if existing.as_slice() != bytes {
+                    return Err(format!(
+                        "existing evidence blob does not match its content-addressed path: {}",
+                        path.display()
+                    )
+                    .into());
+                }
+            }
+            Err(error) => return Err(error.into()),
         }
+
         let relative = path.strip_prefix(&self.home)?;
         let relative_path = relative
             .to_str()
