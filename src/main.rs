@@ -11,6 +11,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -44,6 +45,10 @@ fn run() -> Result<()> {
 }
 
 fn verify(flags: HashMap<String, String>) -> Result<()> {
+    ensure_allowed_flags(
+        &flags,
+        &["repo", "base", "candidate", "check", "timeout-secs", "home"],
+    )?;
     let repo_arg = required(&flags, "repo")?;
     let base_ref = required(&flags, "base")?;
     let candidate_ref = required(&flags, "candidate")?;
@@ -68,8 +73,8 @@ fn verify(flags: HashMap<String, String>) -> Result<()> {
     let run_id = new_run_id()?;
     let run_branch = format!("winds/run/{run_id}");
     let worktree = home.join("worktrees").join(&run_id);
-    let repo_path = repo.root().to_string_lossy().into_owned();
-    let worktree_path = worktree.to_string_lossy().into_owned();
+    let repo_path = utf8_path(repo.root(), "repository path")?.to_owned();
+    let worktree_path = utf8_path(&worktree, "candidate worktree path")?.to_owned();
     let now = unix_ms()?;
 
     let git_lock = repo.acquire_mutation_lock()?;
@@ -166,6 +171,7 @@ fn verify(flags: HashMap<String, String>) -> Result<()> {
 }
 
 fn promote(flags: HashMap<String, String>) -> Result<()> {
+    ensure_allowed_flags(&flags, &["repo", "run", "home"])?;
     let repo_arg = required(&flags, "repo")?;
     let run_id = required(&flags, "run")?;
     let home = winds_home(flags.get("home").map(String::as_str))?;
@@ -173,7 +179,7 @@ fn promote(flags: HashMap<String, String>) -> Result<()> {
     let run = store.load_run(run_id)?;
     let repo = Repo::open(Path::new(repo_arg))?;
 
-    if repo.root().to_string_lossy() != run.repo_path {
+    if utf8_path(repo.root(), "repository path")? != run.repo_path {
         return Err("promotion repository does not match the verified run".into());
     }
     if run.eligibility != Eligibility::Eligible {
@@ -197,7 +203,33 @@ fn promote(flags: HashMap<String, String>) -> Result<()> {
         Duration::from_secs(run.timeout_secs),
     )
     .map_err(|error| format!("promotion recheck failed to execute: {error}"))?;
-    if recheck.status != CheckStatus::Pass || recheck.stdout.truncated || recheck.stderr.truncated {
+    let recheck_stdout = store.write_blob(
+        &run.run_id,
+        "promotion-recheck.stdout",
+        &recheck.stdout.bytes,
+        recheck.stdout.truncated,
+    )?;
+    let recheck_stderr = store.write_blob(
+        &run.run_id,
+        "promotion-recheck.stderr",
+        &recheck.stderr.bytes,
+        recheck.stderr.truncated,
+    )?;
+    let recheck_evidence = CheckEvidence {
+        authority: "WINDS_OBSERVED",
+        command: run.check_command.clone(),
+        status: recheck.status,
+        exit_code: recheck.exit_code,
+        duration_ms: recheck.duration_ms,
+        stdout: recheck_stdout,
+        stderr: recheck_stderr,
+    };
+    store.record_promotion_recheck(&run.run_id, &recheck_evidence, unix_ms()?)?;
+
+    if recheck_evidence.status != CheckStatus::Pass
+        || recheck_evidence.stdout.truncated
+        || recheck_evidence.stderr.truncated
+    {
         return Err("promotion recheck did not produce complete PASS evidence".into());
     }
     if repo.worktree_head(&worktree)? != run.candidate_oid || !repo.worktree_is_clean(&worktree)? {
@@ -216,7 +248,7 @@ fn promote(flags: HashMap<String, String>) -> Result<()> {
 
     let report = PromotionReport {
         run_id: run.run_id,
-        authority: "HUMAN_DECIDED",
+        authority: "CALLER_REQUESTED",
         branch: selected_branch,
         commit_oid: run.candidate_oid,
         candidate_tree: run.candidate_tree,
@@ -226,11 +258,13 @@ fn promote(flags: HashMap<String, String>) -> Result<()> {
 }
 
 fn recover(flags: HashMap<String, String>) -> Result<()> {
+    ensure_allowed_flags(&flags, &["repo", "home"])?;
     let repo_arg = required(&flags, "repo")?;
     let home = winds_home(flags.get("home").map(String::as_str))?;
     let mut store = Store::open(&home)?;
     let repo = Repo::open(Path::new(repo_arg))?;
-    let repo_path = repo.root().to_string_lossy().into_owned();
+    let repo_path = utf8_path(repo.root(), "repository path")?.to_owned();
+    let _git_lock = repo.acquire_mutation_lock()?;
     let inventory = repo.worktree_paths()?;
     let runs = store.runs_for_repo(&repo_path)?;
     let mut outcomes = Vec::new();
@@ -246,26 +280,38 @@ fn recover(flags: HashMap<String, String>) -> Result<()> {
                 .unwrap_or(false);
         let clean = exact_head && repo.worktree_is_clean(&path).unwrap_or(false);
 
-        let status = if exact_head && clean {
-            if run.state == "PROVISIONING" {
-                store.mark_recovered_ready(&run.run_id, unix_ms()?)?;
-                "RECOVERED_READY"
-            } else {
-                "PRESENT"
-            }
+        let (status, recovery_reason) = if run.state == "PROVISIONING" {
+            (
+                "MANUAL_RECOVERY_REQUIRED",
+                Some("run was interrupted during provisioning; automatic ownership cannot be proven"),
+            )
+        } else if exact_head && clean {
+            ("PRESENT", None)
+        } else if !registered {
+            (
+                "MANUAL_RECOVERY_REQUIRED",
+                Some("worktree is not registered in Git inventory"),
+            )
+        } else if !path.exists() {
+            (
+                "MANUAL_RECOVERY_REQUIRED",
+                Some("registered worktree path is missing"),
+            )
+        } else if !exact_head {
+            (
+                "MANUAL_RECOVERY_REQUIRED",
+                Some("worktree HEAD does not match the recorded candidate"),
+            )
         } else {
-            let reason = if !registered {
-                "worktree is not registered in Git inventory"
-            } else if !path.exists() {
-                "registered worktree path is missing"
-            } else if !exact_head {
-                "worktree HEAD does not match the recorded candidate"
-            } else {
-                "worktree contains unverified changes"
-            };
-            store.mark_recovery_required(&run.run_id, reason, unix_ms()?)?;
-            "MANUAL_RECOVERY_REQUIRED"
+            (
+                "MANUAL_RECOVERY_REQUIRED",
+                Some("worktree contains unverified changes"),
+            )
         };
+
+        if let Some(reason) = recovery_reason {
+            store.record_recovery_required(&run.run_id, reason, unix_ms()?)?;
+        }
 
         outcomes.push(json!({
             "run_id": run.run_id,
@@ -306,6 +352,15 @@ fn parse_flags(args: Vec<String>) -> Result<HashMap<String, String>> {
     Ok(result)
 }
 
+fn ensure_allowed_flags(flags: &HashMap<String, String>, allowed: &[&str]) -> Result<()> {
+    for name in flags.keys() {
+        if !allowed.contains(&name.as_str()) {
+            return Err(format!("unknown flag --{name}").into());
+        }
+    }
+    Ok(())
+}
+
 fn required<'a>(flags: &'a HashMap<String, String>, name: &str) -> Result<&'a str> {
     flags
         .get(name)
@@ -322,11 +377,20 @@ fn winds_home(explicit: Option<&str>) -> Result<PathBuf> {
         let home = env::var_os("HOME").ok_or("HOME is not set; pass --home or WINDS_HOME")?;
         PathBuf::from(home).join(".winds")
     };
-    if path.is_absolute() {
-        Ok(path)
+    let absolute = if path.is_absolute() {
+        path
     } else {
-        Ok(env::current_dir()?.join(path))
-    }
+        env::current_dir()?.join(path)
+    };
+    fs::create_dir_all(&absolute)?;
+    let canonical = absolute.canonicalize()?;
+    utf8_path(&canonical, "WINDS_HOME")?;
+    Ok(canonical)
+}
+
+fn utf8_path<'a>(path: &'a Path, label: &str) -> Result<&'a str> {
+    path.to_str()
+        .ok_or_else(|| format!("{label} is not valid UTF-8; Winds 0.1 refuses lossy path storage").into())
 }
 
 fn new_run_id() -> Result<String> {
