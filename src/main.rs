@@ -64,8 +64,9 @@ fn verify(flags: HashMap<String, String>) -> Result<()> {
     }
 
     let repo = Repo::open(Path::new(repo_arg))?;
-    let home = winds_home(flags.get("home").map(String::as_str), &repo)?;
+    let git_lock = repo.acquire_mutation_lock()?;
     repo.require_clean_primary()?;
+    let home = winds_home(flags.get("home").map(String::as_str), &repo)?;
     let mut store = Store::open(&home)?;
 
     let base_oid = repo.resolve_commit(base_ref)?;
@@ -77,7 +78,6 @@ fn verify(flags: HashMap<String, String>) -> Result<()> {
     let worktree_path = utf8_path(&worktree, "candidate worktree path")?.to_owned();
     let now = unix_ms()?;
 
-    let git_lock = repo.acquire_mutation_lock()?;
     store.create_run(
         NewRun {
             run_id: &run_id,
@@ -186,6 +186,7 @@ fn promote(flags: HashMap<String, String>) -> Result<()> {
         return Err("only ELIGIBLE evidence can be promoted in Winds 0.1".into());
     }
 
+    let _git_lock = repo.acquire_mutation_lock()?;
     let worktree = PathBuf::from(&run.worktree_path);
     if !worktree.exists() {
         return Err("verified candidate worktree is missing; manual recovery is required".into());
@@ -237,7 +238,6 @@ fn promote(flags: HashMap<String, String>) -> Result<()> {
     }
 
     let selected_branch = format!("winds/selected/{}", run.run_id);
-    let _git_lock = repo.acquire_mutation_lock()?;
     repo.create_selected_branch(&selected_branch, &run.candidate_oid)?;
     store.record_promotion(
         &run.run_id,

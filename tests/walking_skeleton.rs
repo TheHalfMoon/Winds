@@ -7,7 +7,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[test]
 fn verifies_blocks_and_promotes_without_touching_primary_checkout() {
     let root = unique_temp_dir("winds-walking-skeleton");
-    let repo = root.join("repo");
+    let repo = root.join(" repo ");
     let winds_home = root.join("winds-home");
     fs::create_dir_all(&repo).unwrap();
 
@@ -63,6 +63,7 @@ fn verifies_blocks_and_promotes_without_touching_primary_checkout() {
     assert!(!repo_local_home.exists());
     assert!(git_bytes(&repo, ["status", "--porcelain=v1", "-z"]).is_empty());
 
+    git(&repo, ["config", "status.showUntrackedFiles", "no"]);
     fs::write(repo.join("dirty.tmp"), "dirty\n").unwrap();
     let dirty_primary = winds(
         &winds_home,
@@ -81,6 +82,7 @@ fn verifies_blocks_and_promotes_without_touching_primary_checkout() {
     assert!(!dirty_primary.status.success());
     assert!(String::from_utf8_lossy(&dirty_primary.stderr).contains("primary checkout is dirty"));
     fs::remove_file(repo.join("dirty.tmp")).unwrap();
+    git(&repo, ["config", "--unset", "status.showUntrackedFiles"]);
 
     let hostile_git_dir = root.join("hostile-git-dir");
     fs::create_dir_all(&hostile_git_dir).unwrap();
@@ -321,7 +323,7 @@ fn verifies_blocks_and_promotes_without_touching_primary_checkout() {
     );
     assert!(git_bytes(&repo, ["status", "--porcelain=v1", "-z"]).is_empty());
 
-    let _ = fs::remove_dir_all(root);
+    remove_owned_temp_dir(&root);
 }
 
 fn winds<const N: usize>(home: &Path, args: [&str; N]) -> Output {
@@ -376,6 +378,20 @@ fn git_bytes<const N: usize>(repo: &Path, args: [&str; N]) -> Vec<u8> {
         .unwrap();
     assert_success(&output);
     output.stdout
+}
+
+fn remove_owned_temp_dir(path: &Path) {
+    let temp = std::env::temp_dir().canonicalize().unwrap();
+    let canonical = path.canonicalize().unwrap();
+    assert_eq!(canonical.parent(), Some(temp.as_path()));
+    assert!(
+        canonical
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap()
+            .starts_with("winds-walking-skeleton-")
+    );
+    fs::remove_dir_all(canonical).unwrap();
 }
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {
