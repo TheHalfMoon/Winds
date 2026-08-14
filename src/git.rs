@@ -30,12 +30,12 @@ pub struct Repo {
 impl Repo {
     pub fn open(path: &Path) -> Result<Self> {
         let root = run_git_text(path, ["rev-parse", "--show-toplevel"])?;
-        let root = PathBuf::from(root.trim()).canonicalize()?;
+        let root = PathBuf::from(strip_git_line_ending(&root)).canonicalize()?;
         let common_dir = run_git_text(
             &root,
             ["rev-parse", "--path-format=absolute", "--git-common-dir"],
         )?;
-        let common_dir = PathBuf::from(common_dir.trim()).canonicalize()?;
+        let common_dir = PathBuf::from(strip_git_line_ending(&common_dir)).canonicalize()?;
         Ok(Self { root, common_dir })
     }
 
@@ -64,7 +64,10 @@ impl Repo {
     }
 
     pub fn require_clean_primary(&self) -> Result<()> {
-        let status = run_git_bytes(&self.root, ["status", "--porcelain=v1", "-z"])?;
+        let status = run_git_bytes(
+            &self.root,
+            ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        )?;
         if !status.is_empty() {
             return Err("primary checkout is dirty; Winds refuses to provision a candidate".into());
         }
@@ -130,7 +133,11 @@ impl Repo {
     }
 
     pub fn worktree_is_clean(&self, path: &Path) -> Result<bool> {
-        Ok(run_git_bytes(path, ["status", "--porcelain=v1", "-z"])?.is_empty())
+        Ok(run_git_bytes(
+            path,
+            ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        )?
+        .is_empty())
     }
 
     pub fn worktree_paths(&self) -> Result<Vec<PathBuf>> {
@@ -225,4 +232,9 @@ where
     S: AsRef<OsStr>,
 {
     run_git_bytes(cwd, args).map(|_| ())
+}
+
+fn strip_git_line_ending(value: &str) -> &str {
+    let value = value.strip_suffix('\n').unwrap_or(value);
+    value.strip_suffix('\r').unwrap_or(value)
 }
