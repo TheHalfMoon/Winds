@@ -19,7 +19,6 @@ pub struct NewRun<'a> {
     pub candidate_ref: &'a str,
     pub candidate_oid: &'a str,
     pub candidate_tree: &'a str,
-    pub run_branch: &'a str,
     pub worktree_path: &'a str,
     pub check_command: &'a str,
     pub timeout_secs: u64,
@@ -52,8 +51,8 @@ impl Store {
         tx.execute(
             "INSERT INTO candidate_runs(
                 run_id, repo_path, base_oid, candidate_ref, candidate_oid, candidate_tree,
-                run_branch, worktree_path, check_command, timeout_secs, state, created_unix_ms
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'PROVISIONING', ?11)",
+                worktree_path, check_command, timeout_secs, state, created_unix_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'PROVISIONING', ?10)",
             params![
                 run.run_id,
                 run.repo_path,
@@ -61,7 +60,6 @@ impl Store {
                 run.candidate_ref,
                 run.candidate_oid,
                 run.candidate_tree,
-                run.run_branch,
                 run.worktree_path,
                 run.check_command,
                 timeout_secs,
@@ -109,14 +107,15 @@ impl Store {
         fs::create_dir_all(&dir)?;
         let path = dir.join(name);
         fs::write(&path, bytes)?;
-        let relative = path
-            .strip_prefix(&self.home)?
-            .to_string_lossy()
-            .into_owned();
+        let relative = path.strip_prefix(&self.home)?;
+        let relative_path = relative
+            .to_str()
+            .ok_or("evidence blob path is not valid UTF-8")?
+            .to_owned();
         let digest = Sha256::digest(bytes);
         let sha256: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
         Ok(BlobEvidence {
-            relative_path: relative,
+            relative_path,
             sha256,
             captured_bytes: bytes.len(),
             truncated,
