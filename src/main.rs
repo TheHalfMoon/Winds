@@ -11,6 +11,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -62,10 +63,10 @@ fn verify(flags: HashMap<String, String>) -> Result<()> {
         return Err("--timeout-secs must be greater than zero".into());
     }
 
-    let home = winds_home(flags.get("home").map(String::as_str))?;
-    let mut store = Store::open(&home)?;
     let repo = Repo::open(Path::new(repo_arg))?;
+    let home = winds_home(flags.get("home").map(String::as_str), &repo)?;
     repo.require_clean_primary()?;
+    let mut store = Store::open(&home)?;
 
     let base_oid = repo.resolve_commit(base_ref)?;
     let candidate_oid = repo.resolve_commit(candidate_ref)?;
@@ -173,10 +174,10 @@ fn promote(flags: HashMap<String, String>) -> Result<()> {
     ensure_allowed_flags(&flags, &["repo", "run", "home"])?;
     let repo_arg = required(&flags, "repo")?;
     let run_id = required(&flags, "run")?;
-    let home = winds_home(flags.get("home").map(String::as_str))?;
+    let repo = Repo::open(Path::new(repo_arg))?;
+    let home = winds_home(flags.get("home").map(String::as_str), &repo)?;
     let mut store = Store::open(&home)?;
     let run = store.load_run(run_id)?;
-    let repo = Repo::open(Path::new(repo_arg))?;
 
     if utf8_path(repo.root(), "repository path")? != run.repo_path {
         return Err("promotion repository does not match the verified run".into());
@@ -259,9 +260,9 @@ fn promote(flags: HashMap<String, String>) -> Result<()> {
 fn recover(flags: HashMap<String, String>) -> Result<()> {
     ensure_allowed_flags(&flags, &["repo", "home"])?;
     let repo_arg = required(&flags, "repo")?;
-    let home = winds_home(flags.get("home").map(String::as_str))?;
-    let mut store = Store::open(&home)?;
     let repo = Repo::open(Path::new(repo_arg))?;
+    let home = winds_home(flags.get("home").map(String::as_str), &repo)?;
+    let mut store = Store::open(&home)?;
     let repo_path = utf8_path(repo.root(), "repository path")?.to_owned();
     let _git_lock = repo.acquire_mutation_lock()?;
     let inventory = repo.worktree_paths()?;
@@ -374,7 +375,7 @@ fn required<'a>(flags: &'a HashMap<String, String>, name: &str) -> Result<&'a st
         .ok_or_else(|| format!("missing required flag --{name}").into())
 }
 
-fn winds_home(explicit: Option<&str>) -> Result<PathBuf> {
+fn winds_home(explicit: Option<&str>, repo: &Repo) -> Result<PathBuf> {
     let path = if let Some(path) = explicit {
         PathBuf::from(path)
     } else if let Some(path) = env::var_os("WINDS_HOME") {
@@ -388,10 +389,33 @@ fn winds_home(explicit: Option<&str>) -> Result<PathBuf> {
     } else {
         env::current_dir()?.join(path)
     };
-    fs::create_dir_all(&absolute)?;
-    let canonical = absolute.canonicalize()?;
+    let resolved = resolve_without_creation(&absolute)?;
+    repo.require_external_state_path(&resolved)?;
+    fs::create_dir_all(&resolved)?;
+    let canonical = resolved.canonicalize()?;
+    repo.require_external_state_path(&canonical)?;
     utf8_path(&canonical, "WINDS_HOME")?;
     Ok(canonical)
+}
+
+fn resolve_without_creation(path: &Path) -> Result<PathBuf> {
+    let mut missing: Vec<OsString> = Vec::new();
+    let mut cursor = path;
+    while !cursor.exists() {
+        let name = cursor
+            .file_name()
+            .ok_or("WINDS_HOME has no existing ancestor")?;
+        missing.push(name.to_os_string());
+        cursor = cursor
+            .parent()
+            .ok_or("WINDS_HOME has no existing ancestor")?;
+    }
+
+    let mut resolved = cursor.canonicalize()?;
+    for component in missing.iter().rev() {
+        resolved.push(component);
+    }
+    Ok(resolved)
 }
 
 fn utf8_path<'a>(path: &'a Path, label: &str) -> Result<&'a str> {
