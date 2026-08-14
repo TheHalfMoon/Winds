@@ -21,8 +21,9 @@ A repository maintainer gives Winds a clean repository, a pinned base ref, a can
 **Acceptance Scenarios**:
 
 1. **Given** a clean repository and valid base/candidate refs, **When** a required check exits 0 without mutating the candidate tree, **Then** Winds records exact base/candidate identities and reports the candidate eligible.
-2. **Given** a valid candidate, **When** the required check exits non-zero, **Then** Winds records the exact command, exit result, bounded output evidence, and reports the candidate blocked.
+2. **Given** a valid candidate, **When** the required check exits non-zero, times out, or mutates candidate state, **Then** Winds emits the Evidence Report, reports the candidate blocked, and exits non-zero.
 3. **Given** a dirty source checkout, **When** verification is requested, **Then** Winds fails closed before provisioning a candidate worktree.
+4. **Given** hostile inherited Git repository-context environment such as `GIT_DIR`, **When** Winds runs repository operations, **Then** the explicit `--repo` identity remains authoritative.
 
 ### User Story 2 - Compare Two Candidates (Priority: P2)
 
@@ -56,7 +57,7 @@ After reviewing evidence, the maintainer explicitly requests promotion of one el
 - Source checkout becomes dirty after a run starts.
 - Candidate ref or base ref cannot be resolved to an exact commit.
 - Worktree creation partially succeeds.
-- Required check times out, cannot start, produces oversized output, or mutates tracked/untracked files.
+- Required check times out, cannot start, produces oversized output, mutates tracked/untracked files, or leaves an escaped descendant holding output pipes open.
 - Git reports a worktree/path/ref mismatch during recovery.
 - Candidate contains commits made by an authoring agent.
 - Disk or database writes fail mid-transition.
@@ -71,14 +72,17 @@ After reviewing evidence, the maintainer explicitly requests promotion of one el
 - **FR-004**: Winds MUST execute explicit repository-owned checks with a timeout and capture observed exit status, duration, and bounded output metadata.
 - **FR-005**: Winds MUST distinguish evidence authority. The walking skeleton persists `WINDS_OBSERVED` for directly observed facts and `CALLER_REQUESTED` for an explicit promotion request. It MUST NOT claim authenticated human identity. `AGENT_REPORTED` and `INFERRED` remain reserved until a real source exists.
 - **FR-006**: Winds MUST persist run/evidence/promotion state using SQLite WAL, keep event/projection transitions transactional, and store large/raw streams outside SQLite. A standalone `Task` persistence entity is intentionally deferred until multi-candidate task behavior exists; in this slice the run carries the pinned base/check identity directly.
-- **FR-007**: Winds MUST fail closed when required checks fail, time out, cannot run, or evidence no longer matches the candidate snapshot. A request that fails before an Evidence Report exists cannot be eligible.
+- **FR-007**: Winds MUST fail closed when required checks fail, time out, cannot run, or evidence no longer matches the candidate snapshot. `winds verify` MUST exit zero only for `ELIGIBLE`; a request that fails before an Evidence Report exists cannot be eligible.
 - **FR-008**: Winds MUST NOT compute an overall winner score or automatically select a candidate.
 - **FR-009**: Promotion MUST require an explicit caller request, revalidate the exact candidate, persist the promotion recheck evidence, and bind the selected ref to the exact promoted commit/tree.
 - **FR-010**: Winds MUST NOT merge, rebase, cherry-pick into the source branch, push, open PRs, auto-resolve conflicts, force-clean, force-remove worktrees, or automatically delete ambiguous/dirty candidate state.
-- **FR-011**: Winds MUST retain ambiguous state and surface manual recovery rather than guessing ownership or deleting user data. An interrupted `PROVISIONING` run MUST NOT be auto-promoted to a ready lifecycle state by recovery.
+- **FR-011**: Winds MUST retain ambiguous state and surface manual recovery rather than guessing ownership or deleting user data. An interrupted `PROVISIONING` run MUST NOT be auto-promoted to a ready lifecycle state by recovery. `winds recover` MUST exit non-zero when any run requires manual recovery.
 - **FR-012**: The first implementation MUST have no real Claude/Codex integration; candidate generation is fixture/existing-ref based until the Git/evidence invariants pass.
 - **FR-013**: Repository mutation operations and recovery reconciliation MUST serialize per Git common directory.
 - **FR-014**: `WINDS_HOME` and persisted repository/worktree paths MUST be canonical UTF-8 paths in this slice; unsupported non-UTF-8 paths fail closed rather than being stored lossily.
+- **FR-015**: Winds Git subprocesses MUST remove inherited repository-context environment that could redirect operations, disable Git hooks/fsmonitor for Winds-owned Git commands, ignore replace refs for identity resolution, and terminate untrusted revision parsing with `--end-of-options` where applicable.
+- **FR-016**: Check completion MUST be bounded after process termination. If stdout/stderr do not close within the configured grace period because a descendant escaped the process group, Winds MUST fail instead of hanging indefinitely.
+- **FR-017**: A run's primary Evidence Report MUST be immutable once inserted. Evidence events MUST reference an existing run, and raw evidence blobs MUST use content-addressed paths so a later recheck cannot overwrite bytes referenced by earlier evidence.
 
 ### Key Entities
 
@@ -95,7 +99,7 @@ A standalone **Task** entity is deferred by design. Ponytail review found that t
 
 - **SC-001**: Before a 0.1 release claim, 100 fixture create/verify/promote/reconcile cycles complete with zero source-checkout mutations. This is a pre-release soak gate, not a 100x loop in every PR CI run.
 - **SC-002**: Dirty or ambiguous candidate workspaces are retained in 100% of safety tests; no forced worktree removal is used.
-- **SC-003**: A required failing or timed-out check blocks eligibility in 100% of tests.
+- **SC-003**: A required failing or timed-out check blocks eligibility and returns non-zero in 100% of tests.
 - **SC-004**: Evidence records the exact base/candidate identity and exact required check definition used for verification; promotion records a fresh recheck before selected-ref creation.
 - **SC-005**: Recovery must never delete or auto-adopt state whose ownership/lifecycle cannot be proven. Crash-injection coverage for partial Git/DB transitions remains a pre-release hardening gate.
 
@@ -105,3 +109,4 @@ A standalone **Task** entity is deferred by design. Ponytail review found that t
 - Initial implementation targets Unix-like execution semantics (Linux/macOS/WSL2 Linux domain); native Windows is deferred.
 - Project-owned checks may be non-hermetic; Winds records that limitation rather than claiming determinism.
 - Git worktrees isolate checkout/index state but do not provide OS, network, secret, service, or container isolation.
+- The system Git executable resolved from the user's `PATH` is part of the trusted local execution environment for this slice; Winds does not claim protection from a malicious replacement Git binary or hostile checkout filters.
