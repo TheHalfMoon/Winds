@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS candidate_runs (
 
 CREATE TABLE IF NOT EXISTS events (
     event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id TEXT NOT NULL,
+    run_id TEXT NOT NULL REFERENCES candidate_runs(run_id),
     kind TEXT NOT NULL,
     authority TEXT NOT NULL,
     payload_json TEXT NOT NULL,
