@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::ffi::OsStr;
+use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -8,17 +9,33 @@ pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 #[derive(Debug, Clone)]
 pub struct Repo {
     root: PathBuf,
+    common_dir: PathBuf,
 }
 
 impl Repo {
     pub fn open(path: &Path) -> Result<Self> {
         let root = run_git_text(path, ["rev-parse", "--show-toplevel"])?;
         let root = PathBuf::from(root.trim()).canonicalize()?;
-        Ok(Self { root })
+        let common_dir = run_git_text(
+            &root,
+            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        )?;
+        let common_dir = PathBuf::from(common_dir.trim()).canonicalize()?;
+        Ok(Self { root, common_dir })
     }
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub fn acquire_mutation_lock(&self) -> Result<File> {
+        let lock = OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(self.common_dir.join("winds.lock"))?;
+        lock.lock()?;
+        Ok(lock)
     }
 
     pub fn require_clean_primary(&self) -> Result<()> {

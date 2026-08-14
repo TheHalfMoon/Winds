@@ -70,6 +70,7 @@ fn verify(flags: HashMap<String, String>) -> Result<()> {
     let worktree_path = worktree.to_string_lossy().into_owned();
     let now = unix_ms()?;
 
+    let git_lock = repo.acquire_mutation_lock()?;
     store.create_run(
         NewRun {
             run_id: &run_id,
@@ -85,7 +86,6 @@ fn verify(flags: HashMap<String, String>) -> Result<()> {
         },
         now,
     )?;
-
     repo.add_locked_worktree(
         &worktree,
         &candidate_oid,
@@ -93,6 +93,7 @@ fn verify(flags: HashMap<String, String>) -> Result<()> {
         &format!("Winds verification run {run_id}"),
     )?;
     store.mark_workspace_ready(&run_id, unix_ms()?)?;
+    drop(git_lock);
 
     let check_run = run_check(&worktree, check_command, Duration::from_secs(timeout_secs))
         .map_err(|error| format!("required check failed to execute: {error}"))?;
@@ -202,6 +203,7 @@ fn promote(flags: HashMap<String, String>) -> Result<()> {
     }
 
     let selected_branch = format!("winds/selected/{}", run.run_id);
+    let _git_lock = repo.acquire_mutation_lock()?;
     repo.create_selected_branch(&selected_branch, &run.candidate_oid)?;
     store.record_promotion(
         &run.run_id,
