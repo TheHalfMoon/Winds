@@ -115,10 +115,7 @@ impl Repo {
     }
 
     pub fn worktree_paths(&self) -> Result<Vec<PathBuf>> {
-        let output = run_git_bytes(
-            &self.root,
-            ["worktree", "list", "--porcelain", "-z"],
-        )?;
+        let output = run_git_bytes(&self.root, ["worktree", "list", "--porcelain", "-z"])?;
         let mut paths = Vec::new();
         for field in output.split(|byte| *byte == 0) {
             if let Some(path) = field.strip_prefix(b"worktree ") {
