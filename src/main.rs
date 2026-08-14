@@ -163,6 +163,9 @@ fn verify(flags: HashMap<String, String>) -> Result<()> {
     };
     store.save_evidence(&report, unix_ms()?)?;
     println!("{}", serde_json::to_string_pretty(&report)?);
+    if report.eligibility != Eligibility::Eligible {
+        return Err(format!("candidate verification is {}", report.eligibility.as_str()).into());
+    }
     Ok(())
 }
 
@@ -264,6 +267,7 @@ fn recover(flags: HashMap<String, String>) -> Result<()> {
     let inventory = repo.worktree_paths()?;
     let runs = store.runs_for_repo(&repo_path)?;
     let mut outcomes = Vec::new();
+    let mut manual_recovery_required = false;
 
     for run in runs {
         let path = PathBuf::from(&run.worktree_path);
@@ -308,6 +312,7 @@ fn recover(flags: HashMap<String, String>) -> Result<()> {
         };
 
         if let Some(reason) = recovery_reason {
+            manual_recovery_required = true;
             store.record_recovery_required(&run.run_id, reason, unix_ms()?)?;
         }
 
@@ -326,6 +331,9 @@ fn recover(flags: HashMap<String, String>) -> Result<()> {
             "runs": outcomes,
         }))?
     );
+    if manual_recovery_required {
+        return Err("one or more Winds runs require manual recovery".into());
+    }
     Ok(())
 }
 
