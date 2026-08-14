@@ -43,6 +43,15 @@ impl Repo {
         &self.root
     }
 
+    pub fn require_external_state_path(&self, path: &Path) -> Result<()> {
+        if path.starts_with(&self.root) || path.starts_with(&self.common_dir) {
+            return Err(
+                "Winds state must live outside the source checkout and Git common directory".into(),
+            );
+        }
+        Ok(())
+    }
+
     pub fn acquire_mutation_lock(&self) -> Result<File> {
         let lock = OpenOptions::new()
             .create(true)
