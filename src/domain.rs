@@ -55,7 +55,6 @@ pub struct EvidenceReport {
     pub candidate_ref: String,
     pub candidate_oid: String,
     pub candidate_tree: String,
-    pub run_branch: String,
     pub worktree_path: String,
     pub check: CheckEvidence,
     pub eligibility: Eligibility,
