@@ -7,6 +7,20 @@ use std::process::Command;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
+const GIT_CONTEXT_ENV_VARS: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_SHALLOW_FILE",
+    "GIT_NAMESPACE",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_PREFIX",
+];
+
 #[derive(Debug, Clone)]
 pub struct Repo {
     root: PathBuf,
@@ -50,20 +64,22 @@ impl Repo {
 
     pub fn resolve_commit(&self, value: &str) -> Result<String> {
         let spec = format!("{value}^{{commit}}");
-        Ok(
-            run_git_text(&self.root, ["rev-parse", "--verify", spec.as_str()])?
-                .trim()
-                .to_owned(),
-        )
+        Ok(run_git_text(
+            &self.root,
+            ["rev-parse", "--verify", "--end-of-options", spec.as_str()],
+        )?
+        .trim()
+        .to_owned())
     }
 
     pub fn tree_oid(&self, commit_oid: &str) -> Result<String> {
         let spec = format!("{commit_oid}^{{tree}}");
-        Ok(
-            run_git_text(&self.root, ["rev-parse", "--verify", spec.as_str()])?
-                .trim()
-                .to_owned(),
-        )
+        Ok(run_git_text(
+            &self.root,
+            ["rev-parse", "--verify", "--end-of-options", spec.as_str()],
+        )?
+        .trim()
+        .to_owned())
     }
 
     pub fn add_locked_worktree(&self, path: &Path, commit_oid: &str, reason: &str) -> Result<()> {
@@ -121,10 +137,15 @@ impl Repo {
 
     pub fn create_selected_branch(&self, branch: &str, commit_oid: &str) -> Result<()> {
         let full_ref = format!("refs/heads/{branch}");
-        let existing = Command::new("git")
-            .arg("-C")
-            .arg(&self.root)
-            .args(["show-ref", "--verify", "--hash", full_ref.as_str()])
+        let spec = format!("{full_ref}^{{commit}}");
+        let existing = git_command(&self.root)
+            .args([
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                spec.as_str(),
+            ])
             .output()?;
 
         if existing.status.success() {
@@ -136,10 +157,33 @@ impl Repo {
                 format!("selected branch already exists at different commit: {current}").into(),
             );
         }
+        if existing.status.code() != Some(1) {
+            return Err(format!(
+                "failed checking selected branch: {}",
+                String::from_utf8_lossy(&existing.stderr).trim()
+            )
+            .into());
+        }
 
         run_git_text(&self.root, ["branch", branch, commit_oid])?;
         Ok(())
     }
+}
+
+fn git_command(cwd: &Path) -> Command {
+    let mut command = Command::new("git");
+    for key in GIT_CONTEXT_ENV_VARS {
+        command.env_remove(key);
+    }
+    command
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
+        .arg("-c")
+        .arg("core.hooksPath=/dev/null")
+        .arg("-c")
+        .arg("core.fsmonitor=false")
+        .arg("-C")
+        .arg(cwd);
+    command
 }
 
 fn run_git_bytes<I, S>(cwd: &Path, args: I) -> Result<Vec<u8>>
@@ -147,7 +191,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let output = Command::new("git").arg("-C").arg(cwd).args(args).output()?;
+    let output = git_command(cwd).args(args).output()?;
     if output.status.success() {
         return Ok(output.stdout);
     }
