@@ -38,6 +38,31 @@ fn verifies_blocks_and_promotes_without_touching_primary_checkout() {
     let primary_head_before = git_text(&repo, ["rev-parse", "HEAD"]);
     let primary_content_before = fs::read(repo.join("result.txt")).unwrap();
 
+    let repo_local_home = repo.join(".winds-local");
+    let repository_local_state = winds(
+        &winds_home,
+        [
+            "verify",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--base",
+            &base_oid,
+            "--candidate",
+            &passing_oid,
+            "--check",
+            "true",
+            "--home",
+            repo_local_home.to_str().unwrap(),
+        ],
+    );
+    assert!(!repository_local_state.status.success());
+    assert!(
+        String::from_utf8_lossy(&repository_local_state.stderr)
+            .contains("outside the source checkout")
+    );
+    assert!(!repo_local_home.exists());
+    assert!(git_bytes(&repo, ["status", "--porcelain=v1", "-z"]).is_empty());
+
     fs::write(repo.join("dirty.tmp"), "dirty\n").unwrap();
     let dirty_primary = winds(
         &winds_home,
@@ -143,7 +168,28 @@ fn verifies_blocks_and_promotes_without_touching_primary_checkout() {
         .unwrap();
     let recheck_json: Value = serde_json::from_str(&recheck_payload).unwrap();
     assert_eq!(recheck_json["status"], "PASS");
+    let recheck_stdout_relative = recheck_json["stdout"]["relative_path"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     drop(db);
+
+    fs::write(winds_home.join(recheck_stdout_relative), b"corrupt").unwrap();
+    let corrupt_blob_retry = winds(
+        &winds_home,
+        [
+            "promote",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--run",
+            &run_id,
+        ],
+    );
+    assert!(!corrupt_blob_retry.status.success());
+    assert!(
+        String::from_utf8_lossy(&corrupt_blob_retry.stderr)
+            .contains("existing evidence blob does not match")
+    );
 
     let failing = winds(
         &winds_home,
