@@ -107,16 +107,19 @@ fn verify(flags: HashMap<String, String>) -> Result<()> {
         warnings.push("required check mutated candidate worktree state".to_owned());
     }
     if check_run.stdout.truncated || check_run.stderr.truncated {
-        warnings.push("required check output exceeded the capture cap; evidence is incomplete".to_owned());
+        warnings.push(
+            "required check output exceeded the capture cap; evidence is incomplete".to_owned(),
+        );
     }
 
-    let eligibility = if check_run.status != CheckStatus::Pass || head_after != candidate_oid || !clean_after {
-        Eligibility::Blocked
-    } else if check_run.stdout.truncated || check_run.stderr.truncated {
-        Eligibility::Warning
-    } else {
-        Eligibility::Eligible
-    };
+    let eligibility =
+        if check_run.status != CheckStatus::Pass || head_after != candidate_oid || !clean_after {
+            Eligibility::Blocked
+        } else if check_run.stdout.truncated || check_run.stderr.truncated {
+            Eligibility::Warning
+        } else {
+            Eligibility::Eligible
+        };
 
     let stdout = store.write_blob(
         &run_id,
@@ -200,7 +203,12 @@ fn promote(flags: HashMap<String, String>) -> Result<()> {
 
     let selected_branch = format!("winds/selected/{}", run.run_id);
     repo.create_selected_branch(&selected_branch, &run.candidate_oid)?;
-    store.record_promotion(&run.run_id, &selected_branch, &run.candidate_oid, unix_ms()?)?;
+    store.record_promotion(
+        &run.run_id,
+        &selected_branch,
+        &run.candidate_oid,
+        unix_ms()?,
+    )?;
 
     let report = PromotionReport {
         run_id: run.run_id,

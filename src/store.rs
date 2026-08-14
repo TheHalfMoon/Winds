@@ -106,7 +106,14 @@ impl Store {
                 now_ms,
             ],
         )?;
-        insert_event(&tx, run.run_id, "WorkspaceProvisionRequested", "WINDS_OBSERVED", "{}", now_ms)?;
+        insert_event(
+            &tx,
+            run.run_id,
+            "WorkspaceProvisionRequested",
+            "WINDS_OBSERVED",
+            "{}",
+            now_ms,
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -127,12 +134,21 @@ impl Store {
         Ok(())
     }
 
-    pub fn write_blob(&self, run_id: &str, name: &str, bytes: &[u8], truncated: bool) -> Result<BlobEvidence> {
+    pub fn write_blob(
+        &self,
+        run_id: &str,
+        name: &str,
+        bytes: &[u8],
+        truncated: bool,
+    ) -> Result<BlobEvidence> {
         let dir = self.home.join("blobs").join(run_id);
         fs::create_dir_all(&dir)?;
         let path = dir.join(name);
         fs::write(&path, bytes)?;
-        let relative = path.strip_prefix(&self.home)?.to_string_lossy().into_owned();
+        let relative = path
+            .strip_prefix(&self.home)?
+            .to_string_lossy()
+            .into_owned();
         let digest = Sha256::digest(bytes);
         let sha256: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
         Ok(BlobEvidence {
@@ -155,7 +171,14 @@ impl Store {
              VALUES (?1, ?2, ?3, ?4)",
             params![report.run_id, report.eligibility.as_str(), json, now_ms],
         )?;
-        insert_event(&tx, &report.run_id, "EvidenceBuilt", "WINDS_OBSERVED", "{}", now_ms)?;
+        insert_event(
+            &tx,
+            &report.run_id,
+            "EvidenceBuilt",
+            "WINDS_OBSERVED",
+            "{}",
+            now_ms,
+        )?;
         tx.commit()?;
         Ok(())
     }
@@ -205,7 +228,13 @@ impl Store {
         })
     }
 
-    pub fn record_promotion(&mut self, run_id: &str, branch: &str, commit_oid: &str, now_ms: i64) -> Result<()> {
+    pub fn record_promotion(
+        &mut self,
+        run_id: &str,
+        branch: &str,
+        commit_oid: &str,
+        now_ms: i64,
+    ) -> Result<()> {
         let tx = self.connection.transaction()?;
         tx.execute(
             "INSERT INTO promotions(run_id, branch, commit_oid, created_unix_ms) VALUES (?1, ?2, ?3, ?4)",
@@ -219,7 +248,14 @@ impl Store {
             "{\"decision\":\"promote\"}",
             now_ms,
         )?;
-        insert_event(&tx, run_id, "PromotionCreated", "WINDS_OBSERVED", "{}", now_ms)?;
+        insert_event(
+            &tx,
+            run_id,
+            "PromotionCreated",
+            "WINDS_OBSERVED",
+            "{}",
+            now_ms,
+        )?;
         tx.commit()?;
         Ok(())
     }

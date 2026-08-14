@@ -34,8 +34,14 @@ pub fn run_check(cwd: &Path, command: &str, timeout: Duration) -> Result<CheckRu
         .spawn()
         .map_err(|error| format!("failed to start required check: {error}"))?;
 
-    let stdout = child.stdout.take().ok_or("failed to capture check stdout")?;
-    let stderr = child.stderr.take().ok_or("failed to capture check stderr")?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or("failed to capture check stdout")?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or("failed to capture check stderr")?;
     let stdout_reader = thread::spawn(move || read_capped(stdout));
     let stderr_reader = thread::spawn(move || read_capped(stderr));
 
@@ -108,7 +114,11 @@ fn read_capped<R: Read>(mut reader: R) -> IoResult<CapturedStream> {
 
 fn terminate_process_group(pid: u32) {
     let group = format!("-{pid}");
-    let _ = Command::new("kill").args(["-TERM", group.as_str()]).status();
+    let _ = Command::new("kill")
+        .args(["-TERM", group.as_str()])
+        .status();
     thread::sleep(Duration::from_millis(100));
-    let _ = Command::new("kill").args(["-KILL", group.as_str()]).status();
+    let _ = Command::new("kill")
+        .args(["-KILL", group.as_str()])
+        .status();
 }

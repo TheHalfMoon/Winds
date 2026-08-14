@@ -31,16 +31,20 @@ impl Repo {
 
     pub fn resolve_commit(&self, value: &str) -> Result<String> {
         let spec = format!("{value}^{{commit}}");
-        Ok(run_git_text(&self.root, ["rev-parse", "--verify", spec.as_str()])?
-            .trim()
-            .to_owned())
+        Ok(
+            run_git_text(&self.root, ["rev-parse", "--verify", spec.as_str()])?
+                .trim()
+                .to_owned(),
+        )
     }
 
     pub fn tree_oid(&self, commit_oid: &str) -> Result<String> {
         let spec = format!("{commit_oid}^{{tree}}");
-        Ok(run_git_text(&self.root, ["rev-parse", "--verify", spec.as_str()])?
-            .trim()
-            .to_owned())
+        Ok(
+            run_git_text(&self.root, ["rev-parse", "--verify", spec.as_str()])?
+                .trim()
+                .to_owned(),
+        )
     }
 
     pub fn add_locked_worktree(
@@ -51,7 +55,9 @@ impl Repo {
         reason: &str,
     ) -> Result<()> {
         if path.exists() {
-            return Err(format!("candidate worktree path already exists: {}", path.display()).into());
+            return Err(
+                format!("candidate worktree path already exists: {}", path.display()).into(),
+            );
         }
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -103,7 +109,9 @@ impl Repo {
             if current == commit_oid {
                 return Ok(());
             }
-            return Err(format!("selected branch already exists at different commit: {current}").into());
+            return Err(
+                format!("selected branch already exists at different commit: {current}").into(),
+            );
         }
 
         run_git_text(&self.root, ["branch", branch, commit_oid])?;

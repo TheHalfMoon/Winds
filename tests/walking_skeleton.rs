@@ -12,7 +12,10 @@ fn verifies_blocks_and_promotes_without_touching_primary_checkout() {
     fs::create_dir_all(&repo).unwrap();
 
     git(&repo, ["init", "-b", "main"]);
-    git(&repo, ["config", "user.email", "winds-test@example.invalid"]);
+    git(
+        &repo,
+        ["config", "user.email", "winds-test@example.invalid"],
+    );
     git(&repo, ["config", "user.name", "Winds Test"]);
     fs::write(repo.join("result.txt"), "base\n").unwrap();
     git(&repo, ["add", "result.txt"]);
@@ -96,9 +99,15 @@ fn verifies_blocks_and_promotes_without_touching_primary_checkout() {
     assert_eq!(failing_json["eligibility"], "BLOCKED");
     assert_eq!(failing_json["check"]["status"], "FAIL");
 
-    assert_eq!(git_text(&repo, ["branch", "--show-current"]), primary_branch_before);
+    assert_eq!(
+        git_text(&repo, ["branch", "--show-current"]),
+        primary_branch_before
+    );
     assert_eq!(git_text(&repo, ["rev-parse", "HEAD"]), primary_head_before);
-    assert_eq!(fs::read(repo.join("result.txt")).unwrap(), primary_content_before);
+    assert_eq!(
+        fs::read(repo.join("result.txt")).unwrap(),
+        primary_content_before
+    );
     assert!(git_bytes(&repo, ["status", "--porcelain=v1", "-z"]).is_empty());
 
     let _ = fs::remove_dir_all(root);
@@ -122,16 +131,29 @@ fn assert_success(output: &Output) {
 }
 
 fn git<const N: usize>(repo: &Path, args: [&str; N]) {
-    let output = Command::new("git").arg("-C").arg(repo).args(args).output().unwrap();
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .unwrap();
     assert_success(&output);
 }
 
 fn git_text<const N: usize>(repo: &Path, args: [&str; N]) -> String {
-    String::from_utf8(git_bytes(repo, args)).unwrap().trim().to_owned()
+    String::from_utf8(git_bytes(repo, args))
+        .unwrap()
+        .trim()
+        .to_owned()
 }
 
 fn git_bytes<const N: usize>(repo: &Path, args: [&str; N]) -> Vec<u8> {
-    let output = Command::new("git").arg("-C").arg(repo).args(args).output().unwrap();
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .unwrap();
     assert_success(&output);
     output.stdout
 }
