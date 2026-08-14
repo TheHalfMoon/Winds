@@ -127,8 +127,8 @@ fn verifies_blocks_and_promotes_without_touching_primary_checkout() {
             .any(|warning| warning.as_str().unwrap().contains("mutated candidate"))
     );
 
-    let background_started = Instant::now();
-    let background = winds(
+    let timeout_started = Instant::now();
+    let timed_out = winds(
         &winds_home,
         [
             "verify",
@@ -139,15 +139,16 @@ fn verifies_blocks_and_promotes_without_touching_primary_checkout() {
             "--candidate",
             &passing_oid,
             "--check",
-            "sleep 5 & true",
+            "sleep 5",
             "--timeout-secs",
-            "5",
+            "1",
         ],
     );
-    assert_success(&background);
-    assert!(background_started.elapsed() < Duration::from_secs(2));
-    let background_json: Value = serde_json::from_slice(&background.stdout).unwrap();
-    assert_eq!(background_json["eligibility"], "ELIGIBLE");
+    assert_success(&timed_out);
+    assert!(timeout_started.elapsed() < Duration::from_secs(3));
+    let timeout_json: Value = serde_json::from_slice(&timed_out.stdout).unwrap();
+    assert_eq!(timeout_json["check"]["status"], "TIMEOUT");
+    assert_eq!(timeout_json["eligibility"], "BLOCKED");
 
     assert_eq!(
         git_text(&repo, ["branch", "--show-current"]),
