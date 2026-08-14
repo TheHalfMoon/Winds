@@ -24,6 +24,7 @@ A repository maintainer gives Winds a clean repository, a pinned base ref, a can
 2. **Given** a valid candidate, **When** the required check exits non-zero, times out, or mutates candidate state, **Then** Winds emits the Evidence Report, reports the candidate blocked, and exits non-zero.
 3. **Given** a dirty source checkout, **When** verification is requested, **Then** Winds fails closed before provisioning a candidate worktree.
 4. **Given** hostile inherited Git repository-context environment such as `GIT_DIR`, **When** Winds runs repository operations, **Then** the explicit `--repo` identity remains authoritative.
+5. **Given** a caller-supplied `--home` or `WINDS_HOME`, **When** the resolved state path is inside the source checkout or Git common directory, **Then** Winds rejects it before creating that state path.
 
 ### User Story 2 - Compare Two Candidates (Priority: P2)
 
@@ -78,11 +79,13 @@ After reviewing evidence, the maintainer explicitly requests promotion of one el
 - **FR-010**: Winds MUST NOT merge, rebase, cherry-pick into the source branch, push, open PRs, auto-resolve conflicts, force-clean, force-remove worktrees, or automatically delete ambiguous/dirty candidate state.
 - **FR-011**: Winds MUST retain ambiguous state and surface manual recovery rather than guessing ownership or deleting user data. An interrupted `PROVISIONING` run MUST NOT be auto-promoted to a ready lifecycle state by recovery. `winds recover` MUST exit non-zero when any run requires manual recovery.
 - **FR-012**: The first implementation MUST have no real Claude/Codex integration; candidate generation is fixture/existing-ref based until the Git/evidence invariants pass.
-- **FR-013**: Repository mutation operations and recovery reconciliation MUST serialize per Git common directory.
+- **FR-013**: Repository mutation operations, promotion rechecks over a shared candidate worktree, and recovery reconciliation MUST serialize per Git common directory in this slice.
 - **FR-014**: `WINDS_HOME` and persisted repository/worktree paths MUST be canonical UTF-8 paths in this slice; unsupported non-UTF-8 paths fail closed rather than being stored lossily.
-- **FR-015**: Winds Git subprocesses MUST remove inherited repository-context environment that could redirect operations, disable Git hooks/fsmonitor for Winds-owned Git commands, ignore replace refs for identity resolution, and terminate untrusted revision parsing with `--end-of-options` where applicable.
+- **FR-015**: Winds Git subprocesses MUST remove inherited repository-context environment that could redirect operations, disable Git hooks/fsmonitor for Winds-owned Git commands, ignore replace refs for identity resolution, and terminate untrusted revision parsing with `--end-of-options` where applicable. Cleanliness checks MUST explicitly include non-ignored untracked files rather than inheriting `status.showUntrackedFiles` configuration.
 - **FR-016**: Check completion MUST be bounded after process termination. If stdout/stderr do not close within the configured grace period because a descendant escaped the process group, Winds MUST fail instead of hanging indefinitely.
-- **FR-017**: A run's primary Evidence Report MUST be immutable once inserted. Evidence events MUST reference an existing run, and raw evidence blobs MUST use content-addressed paths so a later recheck cannot overwrite bytes referenced by earlier evidence.
+- **FR-017**: A run's primary Evidence Report MUST be immutable once inserted. Evidence events MUST reference an existing run, and raw evidence blobs MUST use content-addressed paths so a later recheck cannot overwrite bytes referenced by earlier evidence. If a digest-named blob already exists with different bytes, Winds MUST fail closed rather than trust or overwrite it.
+- **FR-018**: `--home PATH` is the explicit CLI override for Winds state. Precedence is `--home` -> `WINDS_HOME` -> `$HOME/.winds`. The resolved path MUST satisfy FR-014 and MUST live outside the source checkout and Git common directory before Winds creates persistent state there.
+- **FR-019**: `winds verify --timeout-secs N` configures the required-check timeout, MUST reject `N = 0`, and defaults to 300 seconds when omitted. Winds MUST persist the chosen timeout and reuse it for the promotion recheck of that run.
 
 ### Key Entities
 
