@@ -4,9 +4,9 @@
 
 **Created**: 2026-08-14
 
-**Status**: Approved for implementation planning
+**Status**: Implementation complete; acceptance review in progress
 
-**Input**: Build the smallest end-to-end Winds slice that independently verifies agent-made or existing Git candidates and promotes a human-selected verified snapshot without touching the primary checkout.
+**Input**: Build the smallest end-to-end Winds slice that independently verifies agent-made or existing Git candidates and promotes an explicitly selected verified snapshot without touching the source checkout.
 
 ## User Scenarios & Testing
 
@@ -16,37 +16,41 @@ A repository maintainer gives Winds a clean repository, a pinned base ref, a can
 
 **Why this priority**: Independent verification is the product wedge. If this does not work safely, orchestration and UI are irrelevant.
 
-**Independent Test**: Create a fixture repository with a known passing candidate, run Winds verification, and prove the check ran against the exact candidate snapshot while the primary checkout remained byte-for-byte and Git-state unchanged.
+**Independent Test**: Create a fixture repository with a known passing candidate, run Winds verification, and prove the check ran against the exact candidate snapshot while the source checkout remained byte-for-byte and Git-state unchanged.
 
 **Acceptance Scenarios**:
 
 1. **Given** a clean repository and valid base/candidate refs, **When** a required check exits 0 without mutating the candidate tree, **Then** Winds records exact base/candidate identities and reports the candidate eligible.
-2. **Given** a valid candidate, **When** the required check exits non-zero, **Then** Winds records the exact command, exit result, bounded output evidence, and reports the candidate blocked.
-3. **Given** a dirty primary checkout, **When** verification is requested, **Then** Winds fails closed before provisioning a candidate worktree.
+2. **Given** a valid candidate, **When** the required check exits non-zero, times out, or mutates candidate state, **Then** Winds emits the Evidence Report, reports the candidate blocked, and exits non-zero.
+3. **Given** a dirty source checkout, **When** verification is requested, **Then** Winds fails closed before provisioning a candidate worktree.
+4. **Given** hostile inherited Git repository-context environment such as `GIT_DIR`, **When** Winds runs repository operations, **Then** the explicit `--repo` identity remains authoritative.
+5. **Given** a caller-supplied `--home` or `WINDS_HOME`, **When** the resolved state path is inside the source checkout or Git common directory, **Then** Winds rejects it before creating that state path.
 
 ### User Story 2 - Compare Two Candidates (Priority: P2)
 
-A maintainer verifies two candidates from the same pinned base and sees objective evidence side-by-side without a model-generated winner score.
+A maintainer verifies two candidates from the same pinned base and can compare their objective evidence without a model-generated winner score.
 
 **Why this priority**: Comparison is useful only after single-candidate evidence is trustworthy.
 
-**Independent Test**: Verify one passing and one failing candidate against the same contract and confirm the reports share the same base/contract identity while retaining candidate-specific evidence.
+**Independent Test**: Verify one passing and one failing candidate against the same contract and confirm the reports share the same base/check identity while retaining candidate-specific evidence.
 
 **Acceptance Scenarios**:
 
-1. **Given** two candidate refs and one pinned base/check contract, **When** both are verified, **Then** Winds exposes objective check/Git/process evidence for each and leaves selection to the human.
+1. **Given** two candidate refs and one pinned base/check contract, **When** both are verified, **Then** Winds produces independent objective evidence for each and leaves selection to the caller.
+
+The walking skeleton does not add a dedicated `compare` command or comparison UI. P2 is satisfied at this layer by two independently produced JSON Evidence Reports; a comparison surface remains deferred until there is a second concrete product need.
 
 ### User Story 3 - Promote a Verified Snapshot (Priority: P3)
 
-After reviewing evidence, the maintainer explicitly promotes one eligible candidate to a dedicated Winds-selected branch without merging, rebasing, pushing, or touching the primary checkout.
+After reviewing evidence, the maintainer explicitly requests promotion of one eligible candidate to a dedicated Winds-selected branch without merging, rebasing, pushing, or touching the source checkout.
 
-**Why this priority**: The product must bind evidence to the exact state the human selected.
+**Why this priority**: The product must bind evidence to the exact state selected for downstream integration.
 
-**Independent Test**: Promote an eligible fixture candidate and confirm the selected branch points at the verified snapshot, required checks are revalidated against that snapshot, and the primary checkout branch/index/worktree are unchanged.
+**Independent Test**: Promote an eligible fixture candidate and confirm the selected branch points at the verified snapshot, required checks are revalidated against that snapshot, recheck evidence is persisted, and the source checkout branch/index/worktree are unchanged.
 
 **Acceptance Scenarios**:
 
-1. **Given** an eligible evidence record whose candidate state has not changed, **When** the human explicitly promotes it, **Then** Winds creates/updates only a dedicated Winds-selected ref and records the decision/promotion.
+1. **Given** an eligible evidence record whose candidate state has not changed, **When** the caller explicitly requests promotion, **Then** Winds creates only a dedicated Winds-selected ref and records the request/promotion.
 2. **Given** stale evidence or a changed candidate, **When** promotion is attempted, **Then** Winds blocks promotion until verification is rerun.
 
 ### Edge Cases
@@ -54,8 +58,8 @@ After reviewing evidence, the maintainer explicitly promotes one eligible candid
 - Source checkout becomes dirty after a run starts.
 - Candidate ref or base ref cannot be resolved to an exact commit.
 - Worktree creation partially succeeds.
-- Required check times out, crashes, produces oversized output, or mutates tracked/untracked files.
-- Git reports a worktree/path/ref mismatch during cleanup or recovery.
+- Required check times out, cannot start, produces oversized output, mutates tracked/untracked files, or leaves an escaped descendant holding output pipes open.
+- Git reports a worktree/path/ref mismatch during recovery.
 - Candidate contains commits made by an authoring agent.
 - Disk or database writes fail mid-transition.
 
@@ -64,35 +68,43 @@ After reviewing evidence, the maintainer explicitly promotes one eligible candid
 ### Functional Requirements
 
 - **FR-001**: Winds MUST resolve and persist an exact base commit OID before candidate provisioning.
-- **FR-002**: Winds MUST reject a dirty primary checkout by default for the walking skeleton.
-- **FR-003**: Winds MUST create candidate workspaces using system Git and MUST NOT modify the primary checkout.
+- **FR-002**: Winds MUST reject a dirty source checkout by default for the walking skeleton.
+- **FR-003**: Winds MUST create candidate workspaces using system Git and MUST NOT modify the source checkout. Verification worktrees MUST be detached because this slice does not author candidate changes.
 - **FR-004**: Winds MUST execute explicit repository-owned checks with a timeout and capture observed exit status, duration, and bounded output metadata.
-- **FR-005**: Winds MUST distinguish `WINDS_OBSERVED`, `AGENT_REPORTED`, and `INFERRED` evidence authority.
-- **FR-006**: Winds MUST persist task/run/evidence/promotion state transactionally using SQLite WAL and store large/raw streams outside SQLite.
-- **FR-007**: Winds MUST invalidate eligibility when required checks fail, time out, are not run, or evidence no longer matches the candidate snapshot.
+- **FR-005**: Winds MUST distinguish evidence authority. The walking skeleton persists `WINDS_OBSERVED` for directly observed facts and `CALLER_REQUESTED` for an explicit promotion request. It MUST NOT claim authenticated human identity. `AGENT_REPORTED` and `INFERRED` remain reserved until a real source exists.
+- **FR-006**: Winds MUST persist run/evidence/promotion state using SQLite WAL, keep event/projection transitions transactional, and store large/raw streams outside SQLite. A standalone `Task` persistence entity is intentionally deferred until multi-candidate task behavior exists; in this slice the run carries the pinned base/check identity directly.
+- **FR-007**: Winds MUST fail closed when required checks fail, time out, cannot run, or evidence no longer matches the candidate snapshot. `winds verify` MUST exit zero only for `ELIGIBLE`; a request that fails before an Evidence Report exists cannot be eligible.
 - **FR-008**: Winds MUST NOT compute an overall winner score or automatically select a candidate.
-- **FR-009**: Promotion MUST require explicit human action and MUST bind the Evidence Report to the exact promoted commit/tree.
-- **FR-010**: Winds MUST NOT merge, rebase, cherry-pick into the primary branch, push, open PRs, auto-resolve conflicts, force-clean, force-remove worktrees, or automatically delete ambiguous/dirty candidate state.
-- **FR-011**: Winds MUST retain ambiguous state and surface manual recovery rather than guessing ownership or deleting user data.
+- **FR-009**: Promotion MUST require an explicit caller request, revalidate the exact candidate, persist the promotion recheck evidence, and bind the selected ref to the exact promoted commit/tree.
+- **FR-010**: Winds MUST NOT merge, rebase, cherry-pick into the source branch, push, open PRs, auto-resolve conflicts, force-clean, force-remove worktrees, or automatically delete ambiguous/dirty candidate state.
+- **FR-011**: Winds MUST retain ambiguous state and surface manual recovery rather than guessing ownership or deleting user data. An interrupted `PROVISIONING` run MUST NOT be auto-promoted to a ready lifecycle state by recovery. `winds recover` MUST exit non-zero when any run requires manual recovery.
 - **FR-012**: The first implementation MUST have no real Claude/Codex integration; candidate generation is fixture/existing-ref based until the Git/evidence invariants pass.
+- **FR-013**: Repository mutation operations, promotion rechecks over a shared candidate worktree, and recovery reconciliation MUST serialize per Git common directory in this slice.
+- **FR-014**: `WINDS_HOME` and persisted repository/worktree paths MUST be canonical UTF-8 paths in this slice; unsupported non-UTF-8 paths fail closed rather than being stored lossily.
+- **FR-015**: Winds Git subprocesses MUST remove inherited repository-context environment that could redirect operations, disable Git hooks/fsmonitor for Winds-owned Git commands, ignore replace refs for identity resolution, and terminate untrusted revision parsing with `--end-of-options` where applicable. Cleanliness checks MUST explicitly include non-ignored untracked files rather than inheriting `status.showUntrackedFiles` configuration.
+- **FR-016**: Check completion MUST be bounded after process termination. If stdout/stderr do not close within the configured grace period because a descendant escaped the process group, Winds MUST fail instead of hanging indefinitely.
+- **FR-017**: A run's primary Evidence Report MUST be immutable once inserted. Evidence events MUST reference an existing run, and raw evidence blobs MUST use content-addressed paths so a later recheck cannot overwrite bytes referenced by earlier evidence. If a digest-named blob already exists with different bytes, Winds MUST fail closed rather than trust or overwrite it.
+- **FR-018**: `--home PATH` is the explicit CLI override for Winds state. Precedence is `--home` -> `WINDS_HOME` -> `$HOME/.winds`. The resolved path MUST satisfy FR-014 and MUST live outside the source checkout and Git common directory before Winds creates persistent state there.
+- **FR-019**: `winds verify --timeout-secs N` configures the required-check timeout, MUST reject `N = 0`, and defaults to 300 seconds when omitted. Winds MUST persist the chosen timeout and reuse it for the promotion recheck of that run.
 
 ### Key Entities
 
-- **Task**: Pinned base, immutable brief/contract identity, lifecycle status.
-- **CandidateRun**: Candidate source/ref, worktree identity, process/check disposition, snapshot identity.
+- **CandidateRun**: Pinned base/check identity, candidate source/ref, detached worktree identity, process/check disposition, snapshot identity.
 - **EvidenceReport**: Exact candidate snapshot plus observed check/Git/process evidence and completeness warnings.
-- **Decision**: Human-selected candidate and optional rationale/override.
+- **Decision event**: Explicit caller-requested promotion intent; it is not proof of authenticated human identity.
 - **Promotion**: Dedicated selected ref bound to an exact verified snapshot.
+
+A standalone **Task** entity is deferred by design. Ponytail review found that the original walking-skeleton schema made `Task` an alias for `run_id` with no independent behavior. It must not return until a second concrete caller (for example, multi-candidate comparison under one immutable brief) proves the boundary.
 
 ## Success Criteria
 
 ### Measurable Outcomes
 
-- **SC-001**: 100 fixture create/verify/promote/reconcile cycles complete with zero primary-checkout mutations.
+- **SC-001**: Before a 0.1 release claim, 100 fixture create/verify/promote/reconcile cycles complete with zero source-checkout mutations. This is a pre-release soak gate, not a 100x loop in every PR CI run.
 - **SC-002**: Dirty or ambiguous candidate workspaces are retained in 100% of safety tests; no forced worktree removal is used.
-- **SC-003**: A required failing or timed-out check blocks eligibility in 100% of tests.
-- **SC-004**: Evidence always records the exact base/candidate identity and the exact required check definition used for the decision.
-- **SC-005**: Restart/recovery fixtures never delete state whose ownership cannot be proven.
+- **SC-003**: A required failing or timed-out check blocks eligibility and returns non-zero in 100% of tests.
+- **SC-004**: Evidence records the exact base/candidate identity and exact required check definition used for verification; promotion records a fresh recheck before selected-ref creation.
+- **SC-005**: Recovery must never delete or auto-adopt state whose ownership/lifecycle cannot be proven. Crash-injection coverage for partial Git/DB transitions remains a pre-release hardening gate.
 
 ## Assumptions
 
@@ -100,3 +112,4 @@ After reviewing evidence, the maintainer explicitly promotes one eligible candid
 - Initial implementation targets Unix-like execution semantics (Linux/macOS/WSL2 Linux domain); native Windows is deferred.
 - Project-owned checks may be non-hermetic; Winds records that limitation rather than claiming determinism.
 - Git worktrees isolate checkout/index state but do not provide OS, network, secret, service, or container isolation.
+- The system Git executable resolved from the user's `PATH` is part of the trusted local execution environment for this slice; Winds does not claim protection from a malicious replacement Git binary or hostile checkout filters.

@@ -1,49 +1,56 @@
 # Tasks: Verification Walking Skeleton
 
+This checklist records **as-built truth** for PR #1. A checked item has implementation/evidence in the PR. Open items are not implied complete by nearby work and remain gates for the stated scope.
+
 ## Phase 1 - Repository and Test Harness
 
-- [ ] **T001** Create one unpublished Rust package and minimal `winds` binary composition root.
-- [ ] **T002** Add fixture helpers that initialize temporary Git repositories with exact base/pass/fail candidate commits.
-- [ ] **T003** Add a safety test proving the primary checkout branch/index/worktree remain unchanged during candidate verification.
+- [x] **T001** Create one unpublished Rust package and minimal `winds` binary composition root.
+- [x] **T002** Add fixture helpers that initialize temporary Git repositories with exact base/pass/fail candidate commits.
+- [x] **T003** Add a safety test proving the source checkout branch/index/worktree remain unchanged during candidate verification and promotion.
 
 ## Phase 2 - Git Candidate Workspace
 
-- [ ] **T004** Implement exact base/candidate OID resolution through system Git.
-- [ ] **T005** Reject dirty primary checkout before provisioning.
-- [ ] **T006** Create a Winds-owned candidate worktree outside the primary checkout and record its ownership metadata.
-- [ ] **T007** Inspect candidate Git state using machine-readable output only; retain unknown/dirty state.
+- [x] **T004** Implement exact base/candidate OID resolution through system Git.
+- [x] **T005** Reject dirty source checkout before provisioning, including when repository config attempts to hide untracked files.
+- [x] **T006** Create a detached, locked Winds-owned candidate worktree outside the source checkout and Git common directory, and record its ownership metadata without creating a verification branch.
+- [x] **T007** Inspect candidate Git state using machine-readable output only; explicitly include non-ignored untracked files and retain unknown/dirty state.
 
 ## Phase 3 - Persistence and Evidence
 
-- [ ] **T008** Add SQLite schema/migrations for the minimum task/run/event/evidence/promotion records.
-- [ ] **T009** Persist append-only events and current projections transactionally.
-- [ ] **T010** Implement explicit required-check execution with timeout/error/pass/fail disposition and bounded output capture.
-- [ ] **T011** Build an Evidence Report bound to the exact candidate snapshot and check definition.
-- [ ] **T012** Add tests proving fail/timeout/not-run/stale evidence blocks eligibility.
+- [x] **T008** Add SQLite migration for the minimum proven run/event/evidence/promotion records; standalone `Task`/`Decision` tables are intentionally not present.
+- [x] **T009** Persist lifecycle projections with corresponding events transactionally; keep recovery-required observations append-only; enforce run ownership for events and one-shot primary Evidence Reports.
+- [x] **T010** Implement explicit required-check execution with pass/fail/timeout disposition, bounded output capture, process-group termination, and bounded stream shutdown.
+- [x] **T011** Build an Evidence Report bound to the exact base/candidate snapshot and check definition with content-addressed SHA-256 blob metadata; fail closed if an existing digest path contains different bytes.
+- [x] **T012** Add tests proving fail, timeout, dirty/not-run preflight, check mutation, hostile inherited Git context, repository-local Winds state rejection, whitespace-preserving repository paths, corrupt evidence, and stale candidate evidence fail closed.
 
-## Phase 4 - Human Decision and Promotion
+## Phase 4 - Explicit Selection and Promotion
 
-- [ ] **T013** Record explicit human candidate selection separately from verification evidence.
-- [ ] **T014** Revalidate candidate state and required checks before promotion.
-- [ ] **T015** Create a dedicated Winds-selected branch/ref at the exact verified snapshot without touching the primary checkout.
-- [ ] **T016** Add tests proving Winds does not merge, rebase, cherry-pick, push, force-clean, force-remove, or delete ambiguous state.
+- [x] **T013** Record explicit `CALLER_REQUESTED` promotion intent separately from `WINDS_OBSERVED` verification evidence; do not claim authenticated human identity.
+- [x] **T014** Revalidate candidate state and required checks before promotion, persist fresh promotion-recheck evidence, and serialize the shared-worktree recheck/promotion sequence per Git common directory.
+- [x] **T015** Create a dedicated Winds-selected branch/ref at the exact verified snapshot without touching the source checkout.
+- [ ] **T016** Add explicit negative fixtures for every prohibited downstream Git operation (merge, rebase, cherry-pick, push, force-clean, force-remove). Current fixtures prove source-checkout preservation and ambiguous-worktree retention, while the implementation exposes none of those prohibited operations; exhaustive negative instrumentation remains a pre-release hardening gate.
 
 ## Phase 5 - Recovery and Review
 
-- [ ] **T017** Reconcile persisted workspace metadata with `git worktree list --porcelain -z` after interrupted/partial operations.
-- [ ] **T018** Add crash/failure fixtures for partial worktree creation, failed DB write, failed check, and ambiguous ownership.
-- [ ] **T019** Add deterministic CI quality workflow.
-- [ ] **T020** Run correctness/safety review and resolve blocking findings.
-- [ ] **T021** Run Ponytail review; remove unjustified code, dependencies, and abstractions without weakening safety.
-- [ ] **T022** Run independent reviewer pass and reconcile findings against the spec/constitution.
+- [x] **T017** Reconcile persisted workspace metadata with `git worktree list --porcelain -z`; dirty/missing/mismatched/interrupted-provisioning state reports `MANUAL_RECOVERY_REQUIRED` without cleanup or lifecycle auto-adoption.
+- [ ] **T018** Add fault-injection fixtures for partial worktree creation, failed DB write, and interrupted cross-resource transitions. Current CLI-per-process fixtures exercise restart-style reconciliation and ambiguous ownership but do not inject every partial failure.
+- [x] **T019** Add deterministic read-only CI with pinned GitHub Action SHAs, Rust `1.97.1`, committed `Cargo.lock`, `--locked`, rustfmt, Clippy `-D warnings`, and tests on Ubuntu/macOS.
+- [x] **T020** Re-run correctness/safety review after DeepCode review-agent and Qodo findings. The reconciled code head `1d4390af48c668542b4b8b9ad2d6ba3b34d10543` passed read-only quality run #71: rustfmt, Clippy `-D warnings`, and tests on Ubuntu/macOS. Blocking findings around repository-local state, corrupt evidence blobs, Git config-hidden untracked files, path whitespace, promotion recheck concurrency, and Winds-owned clean-check/provision serialization were resolved.
+- [x] **T021** Re-run Ponytail v4.9.0 after the external-review corrections. The repo-wide Git lock remains intentionally simpler than adding a per-run locking subsystem; no additional abstraction or dependency can be removed without weakening a current invariant. Final verdict remains `Lean already. Ship.`
+- [ ] **T022** Complete independent/external review reconciliation on the final Ready-for-Review head. Qodo produced a real 10-finding review on an earlier head; valid findings were reconciled, including two spec-contract gaps and eight code/provenance/safety issues. A fresh Qodo review on the final head plus any available Greptile result must be inspected before this gate can close. Bot summaries, skipped reviews, missing acknowledgements, and rate-limit responses do not count as PASS.
 
-## Explicitly Deferred
+## Pre-release Soak
+
+- [ ] **T023** Execute the SC-001 100-cycle create/verify/promote/reconcile soak with zero source-checkout mutations before any 0.1 release claim. This is intentionally not multiplied into every PR CI run.
+
+## Explicitly Deferred Product Scope
 
 - Claude/Codex drivers, ACP, MCP, A2A, Pi/OpenCode.
-- `winds race` orchestration.
+- `winds race` orchestration and dedicated candidate-comparison UI/command.
 - TUI/dashboard and v0 UI integration.
 - Terminal emulator/PTY ownership and `windsd`.
 - Port/service/container/database isolation.
 - Graphify/semantic brain/Jujutsu dependency.
 - Broad sandbox/security claims, secret broker, MCP firewall.
 - Automatic winner scoring, merge/rebase/push/PR automation.
+- Native Windows execution semantics.
