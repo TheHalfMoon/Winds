@@ -321,6 +321,10 @@ fn open_db(home: &Path) -> Connection {
 }
 
 fn only_run(db: &Connection) -> (String, String, String) {
+    let count: i64 = db
+        .query_row("SELECT COUNT(*) FROM candidate_runs", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 1, "fault fixture must contain exactly one candidate run");
     db.query_row(
         "SELECT run_id, worktree_path, state FROM candidate_runs",
         [],
