@@ -16,13 +16,19 @@ fn partial_worktree_creation_remains_manual_recovery_required() {
     install_fail_worktree_lock_shim(&shim_dir);
 
     let verify = fixture.verify(Some(&shim_dir));
-    assert!(!verify.status.success(), "fault-injected verify unexpectedly passed");
+    assert!(
+        !verify.status.success(),
+        "fault-injected verify unexpectedly passed"
+    );
 
     let db = open_db(&fixture.home);
     let (run_id, worktree_path, state) = only_run(&db);
     assert_eq!(state, "PROVISIONING");
     let worktree = PathBuf::from(&worktree_path);
-    assert!(worktree.exists(), "git worktree add did not partially succeed");
+    assert!(
+        worktree.exists(),
+        "git worktree add did not partially succeed"
+    );
     assert!(
         fixture.git_worktree_paths().contains(&worktree),
         "partially provisioned worktree is not registered in Git inventory"
@@ -43,18 +49,23 @@ fn failed_workspace_ready_db_write_retains_provisioning_state() {
 
     let db = open_db(&fixture.home);
     db.execute_batch(
-        "CREATE TRIGGER inject_workspace_ready_failure\
-         BEFORE UPDATE OF state ON candidate_runs\
-         WHEN NEW.state = 'READY'\
-         BEGIN\
-           SELECT RAISE(ABORT, 'injected workspace-ready write failure');\
-         END;",
+        r#"
+        CREATE TRIGGER inject_workspace_ready_failure
+        BEFORE UPDATE OF state ON candidate_runs
+        WHEN NEW.state = 'READY'
+        BEGIN
+          SELECT RAISE(ABORT, 'injected workspace-ready write failure');
+        END;
+        "#,
     )
     .unwrap();
     drop(db);
 
     let verify = fixture.verify(None);
-    assert!(!verify.status.success(), "fault-injected verify unexpectedly passed");
+    assert!(
+        !verify.status.success(),
+        "fault-injected verify unexpectedly passed"
+    );
 
     let db = open_db(&fixture.home);
     let (run_id, worktree_path, state) = only_run(&db);
@@ -76,7 +87,8 @@ fn failed_workspace_ready_db_write_retains_provisioning_state() {
 fn interrupted_promotion_db_transition_is_retryable_without_ref_drift() {
     let fixture = Fixture::new("winds-promotion-transition");
     let source_branch_before = fixture.git_text(&["symbolic-ref", "--short", "HEAD"]);
-    let source_status_before = fixture.git_text(&["status", "--porcelain=v1", "--untracked-files=all"]);
+    let source_status_before =
+        fixture.git_text(&["status", "--porcelain=v1", "--untracked-files=all"]);
 
     let verify = fixture.verify(None);
     assert_success(&verify);
@@ -88,11 +100,13 @@ fn interrupted_promotion_db_transition_is_retryable_without_ref_drift() {
 
     let db = open_db(&fixture.home);
     db.execute_batch(
-        "CREATE TRIGGER inject_promotion_write_failure\
-         BEFORE INSERT ON promotions\
-         BEGIN\
-           SELECT RAISE(ABORT, 'injected promotion write failure');\
-         END;",
+        r#"
+        CREATE TRIGGER inject_promotion_write_failure
+        BEFORE INSERT ON promotions
+        BEGIN
+          SELECT RAISE(ABORT, 'injected promotion write failure');
+        END;
+        "#,
     )
     .unwrap();
     drop(db);
@@ -102,7 +116,10 @@ fn interrupted_promotion_db_transition_is_retryable_without_ref_drift() {
         !first_promote.status.success(),
         "fault-injected promotion unexpectedly passed"
     );
-    assert_eq!(fixture.git_text(&["rev-parse", &selected_ref]), candidate_oid);
+    assert_eq!(
+        fixture.git_text(&["rev-parse", &selected_ref]),
+        candidate_oid
+    );
 
     let db = open_db(&fixture.home);
     assert_eq!(promotion_count(&db, &run_id), 0);
@@ -115,7 +132,10 @@ fn interrupted_promotion_db_transition_is_retryable_without_ref_drift() {
 
     let retry = fixture.promote(&run_id);
     assert_success(&retry);
-    assert_eq!(fixture.git_text(&["rev-parse", &selected_ref]), candidate_oid);
+    assert_eq!(
+        fixture.git_text(&["rev-parse", &selected_ref]),
+        candidate_oid
+    );
 
     let db = open_db(&fixture.home);
     assert_eq!(promotion_count(&db, &run_id), 1);
@@ -124,7 +144,10 @@ fn interrupted_promotion_db_transition_is_retryable_without_ref_drift() {
     assert_eq!(event_count(&db, &run_id, "PromotionRecheckObserved"), 2);
     drop(db);
 
-    assert_eq!(fixture.git_text(&["symbolic-ref", "--short", "HEAD"]), source_branch_before);
+    assert_eq!(
+        fixture.git_text(&["symbolic-ref", "--short", "HEAD"]),
+        source_branch_before
+    );
     assert_eq!(
         fixture.git_text(&["status", "--porcelain=v1", "--untracked-files=all"]),
         source_status_before
@@ -428,7 +451,10 @@ fn remove_owned_temp_dir(path: &Path) {
     let temp = env::temp_dir().canonicalize().unwrap();
     let canonical = path.canonicalize().unwrap();
     assert_eq!(canonical.parent(), Some(temp.as_path()));
-    let name = canonical.file_name().and_then(|name| name.to_str()).unwrap();
+    let name = canonical
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap();
     assert!(name.starts_with("winds-"));
     fs::remove_dir_all(canonical).unwrap();
 }
