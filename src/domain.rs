@@ -26,12 +26,20 @@ impl Eligibility {
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ExecutionKind {
     Terminal,
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
 impl ExecutionKind {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -47,6 +55,10 @@ impl ExecutionKind {
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FactSource {
@@ -55,6 +67,10 @@ pub enum FactSource {
     ShellReported,
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
 impl FactSource {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -74,6 +90,10 @@ impl FactSource {
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ExecutionStatus {
@@ -85,6 +105,10 @@ pub enum ExecutionStatus {
     OwnershipLost,
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
 impl ExecutionStatus {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -110,6 +134,10 @@ impl ExecutionStatus {
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceRecord {
     pub workspace_id: String,
@@ -119,6 +147,10 @@ pub struct WorkspaceRecord {
     pub last_opened_unix_ms: i64,
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionRecord {
     pub execution_id: String,
@@ -134,6 +166,10 @@ pub struct ExecutionRecord {
     pub duration_ms: Option<u64>,
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutionEventRecord {
     pub event_id: i64,
@@ -143,6 +179,10 @@ pub struct ExecutionEventRecord {
     pub created_unix_ms: i64,
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalSessionRecord {
     pub execution_id: String,
