@@ -1,28 +1,29 @@
 # Winds 0.1 Public Repository Hygiene Audit
 
 **Task**: Spec 002 / T037  
-**Automated audit head**: `1dbec4ec750b1ae7c0cf61fa9626a64bdbbe8ba6`  
+**Final automated audit head**: `9f4cff591d8f8af284d035914cbbc665f6652d29`  
+**Final probe run**: `31900819095`  
 **Audit date**: 2026-08-15  
-**Status**: PASS candidate; the temporary probe is removed from the accepted tree after it validates this audit content
+**Status**: PASS; the temporary probe was removed after the final successful content scan
 
 ## Scope
 
 This audit covers tracked repository content intended to become public. It does not rewrite or sanitize Git history automatically. If a real historical secret is later identified, publication must stop and the event must be handled as a separate credential-rotation/history-remediation incident.
 
-The temporary `public-hygiene-probe` workflow is excluded from its own corpus because it embeds the detection regex literals and is not part of the accepted tree. Removing that excluded probe after a successful scan removes scanner implementation only; it does not add unscanned public content.
+The temporary `public-hygiene-probe` workflow excluded only its own file from the scan because that file embedded the detection regex literals. The probe was not part of the intended accepted tree and was removed immediately after the final successful scan. Removing that excluded scanner implementation did not add unscanned public content.
 
 ## Automated tracked-content scan
 
-A read-only GitHub Actions probe checked out exact head `1dbec4ec750b1ae7c0cf61fa9626a64bdbbe8ba6` with persisted credentials disabled and scanned `git ls-files` content only.
+The final read-only GitHub Actions probe checked out exact head `9f4cff591d8f8af284d035914cbbc665f6652d29` with persisted credentials disabled and scanned `git ls-files` content other than the probe itself.
 
 Observed markers:
 
 ```text
-AUDITED_TRACKED_FILE_COUNT=38
-TEXT_FILE_COUNT=38
+AUDITED_TRACKED_FILE_COUNT=39
+TEXT_FILE_COUNT=39
 BINARY_OR_NON_UTF8_FILE_COUNT=0
 HIGH_CONFIDENCE_FINDINGS=0
-PUBLIC_SURFACE_REVIEW_MATCHES=47
+PUBLIC_SURFACE_REVIEW_MATCHES=61
 SOURCE_PROVENANCE_MARKERS=0
 TRACKED_PUBLIC_HYGIENE_HIGH_CONFIDENCE=PASS
 ```
@@ -37,7 +38,7 @@ High-confidence blocker patterns covered:
 - signed/tokenized HTTP(S) URLs;
 - platform-specific absolute user-home paths on macOS, Linux, and Windows.
 
-The scanner prints only rule/path/line metadata when a blocker is found; it does not echo matched secret values.
+The scanner printed only rule/path/line metadata when a blocker was found; it did not echo matched secret values.
 
 ## Public-surface semantic triage
 
@@ -96,4 +97,4 @@ This audit does not authorize publication. At the time of the release-candidate 
 
 `PASS — NO TRACKED-CONTENT PUBLICATION BLOCKER IDENTIFIED.`
 
-The accepted tree omits the temporary hygiene probe after the final successful content scan. Because the probe excludes only its own file, that removal does not add any unscanned public content.
+The final probe successfully scanned the complete intended public corpus at `9f4cff591d8f8af284d035914cbbc665f6652d29`, excluding only its own temporary workflow file, and was then removed. The accepted tree therefore contains no additional unscanned implementation content from that probe.
