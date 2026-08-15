@@ -16,7 +16,7 @@ Winds should answer five questions for every meaningful execution:
 2. **What ran?** Command now; typed SQL query and LLM request in follow-on specifications.
 3. **What happened?** Exit/result state, bounded artifacts/output, errors, and before/after repository observations when available.
 4. **How long and how much did it consume?** Duration for every execution; SQL/database timing and LLM token/latency/cost metrics in their typed domain records.
-5. **What authority does the record have?** Winds-observed process/repository facts remain distinct from caller input, model claims, and explicit human decisions.
+5. **What authority does the record have?** Winds-observed process/repository facts remain distinct from caller input, shell-reported telemetry, model claims, and explicit human decisions.
 
 The goal is not to become a generic IDE with unrelated tabs. The goal is a **verification-native workspace** in which terminal, SQL, and LLM work can share exact workspace identity and a trustworthy local execution timeline without weakening the existing `winds verify` evidence model.
 
@@ -43,14 +43,14 @@ A developer can start an interactive shell in the workspace and Winds owns a rea
 
 **Why this priority**: A pipe-backed command runner cannot provide the terminal behavior required by shells, REPLs, TUIs, debuggers, database clients, and agent CLIs.
 
-**Independent Test**: Launch supported shells under a PTY, run an interactive command, resize the terminal, send interrupt, verify exit behavior, then close the session. Repeat with a full-screen/alternate-screen fixture and confirm no child session is silently orphaned.
+**Independent Test**: Launch supported shells under a PTY, run an interactive command, resize the terminal, send interrupt, verify exit behavior, then close the session. Repeat with a full-screen/alternate-screen fixture and confirm no directly owned child session is silently orphaned during normal close.
 
 **Acceptance Scenarios**:
 
 1. **Given** a supported shell profile, **When** the user starts a terminal, **Then** the shell receives a real terminal device and starts in the requested mapped workspace directory.
 2. **Given** an active terminal, **When** input, resize, interrupt, or terminate is requested, **Then** Winds applies the operation to that exact terminal session and records the observed result.
 3. **Given** a shell or child program that exits, **When** Winds observes termination, **Then** the session has one final observed state and duration rather than remaining falsely active.
-4. **Given** a Winds process crash or forced exit, **When** the workspace is opened again, **Then** persisted sessions that cannot still be owned are reconciled as interrupted/stale; Winds does not claim they are live.
+4. **Given** a Winds process crash or forced exit, **When** the workspace is opened again, **Then** persisted sessions that Winds can no longer prove it owns are reconciled as `OWNERSHIP_LOST`/interrupted with process state explicitly unknown. Winds MUST NOT claim those processes are live or dead and MUST NOT blindly signal a persisted PID that may have been reused.
 
 ### User Story 3 - Switch Easily Between Host Shells and WSL/Ubuntu (Priority: P1)
 
@@ -73,13 +73,13 @@ A developer can inspect when a terminal session started, where it ran, which she
 
 **Why this priority**: The execution ledger is the common spine that later allows SQL and LLM activity to live in the same workspace without inventing incompatible logging systems.
 
-**Independent Test**: Run terminal sessions and supported shell command fixtures, inspect the SQLite-backed records, and prove that timestamps/status/domain/cwd/repository observations correspond to Winds-observed lifecycle events while caller-entered text remains distinguishable from verification evidence.
+**Independent Test**: Run terminal sessions and supported shell command fixtures, inspect the SQLite-backed records, and prove that timestamps/status/domain/cwd/repository observations have explicit sources: direct Winds process/Git observations are distinguishable from caller-entered intent and shell-reported command telemetry.
 
 **Acceptance Scenarios**:
 
 1. **Given** a terminal session, **When** it starts and ends, **Then** Winds records stable session identity, workspace identity, execution domain, shell profile, start/end timestamps, duration, and observed final state.
-2. **Given** a shell for which a reliable non-invasive lifecycle hook is implemented, **When** commands run, **Then** Winds may record command text, cwd, exit code, and duration as command observations without inferring commands from arbitrary raw keystrokes.
-3. **Given** a command that changes the repository, **When** before/after Git observations are available, **Then** Winds records the observed change in workspace state but does not represent the interactive command as verified candidate evidence.
+2. **Given** a shell for which a reliable non-invasive lifecycle hook is implemented, **When** commands run, **Then** Winds may record command text, cwd, exit code, and duration as shell-reported command telemetry without inferring commands from arbitrary raw keystrokes. Hook-reported facts are not `WINDS_OBSERVED` unless Winds has an independently protected observation channel that proves them.
+3. **Given** a command that changes the repository, **When** before/after Git observations are available, **Then** Winds records the directly observed change in workspace state but does not represent the interactive command as verified candidate evidence.
 4. **Given** unavailable/ambiguous lifecycle information, **When** an execution record is shown, **Then** missing facts remain unknown rather than synthesized.
 
 ### User Story 5 - Understand the Environment Without Auto-Executing It (Priority: P2)
@@ -113,10 +113,11 @@ A developer later using Winds SQL or LLM surfaces should see those executions in
 - A shell executable disappears after discovery or exits before integration is ready.
 - A PTY child forks, changes process groups, runs a TUI/alternate screen, emits invalid UTF-8, emits very large output, or ignores a polite interrupt.
 - Resize/input/exit happen concurrently.
+- A child survives an unexpected Winds crash; the old PID may later be reused by an unrelated process, so restart reconciliation cannot use blind PID signaling as proof or cleanup.
 - The machine has no WSL, multiple WSL distributions, a stopped distribution, WSL1 plus WSL2, or a distribution name containing spaces.
 - A Windows path maps to `/mnt/<drive>` but the repository is actually stored in a WSL-native filesystem, or vice versa.
 - A shell changes cwd independently of the workspace root.
-- Shell command hooks are unsupported, disabled, or altered by user configuration.
+- Shell command hooks are unsupported, disabled, altered by user configuration, or spoofed by child output.
 - Command text/output contains credentials or secrets.
 - SQLite write fails while a terminal remains active.
 - Winds exits while terminal records are partially persisted.
@@ -151,9 +152,9 @@ A developer later using Winds SQL or LLM surfaces should see those executions in
 - **FR-016**: WSL launch behavior MUST use supported `wsl.exe` semantics and bind the selected distribution explicitly. Winds MUST NOT parse localized human-readable output when a stable machine-usable form is available.
 - **FR-017**: Spec 003 expands Winds beyond the 0.1 terminal/native-Windows guardrail specifically for workspace terminal execution. It does **not** authorize a daemon, public IPC/runtime protocol, generic plugin runtime, remote shell service, or broad sandbox framework.
 - **FR-018**: The first Spec 003 implementation MUST NOT build a custom terminal emulator/VT renderer in the Rust core. It should prove PTY/session mechanics first and leave UI rendering/embedding to a later UI slice unless implementation evidence shows a renderer is required sooner.
-- **FR-019**: Initial terminal sessions are owned by the running Winds process. Cross-restart live-session persistence is deferred; on restart Winds MUST reconcile stale persisted session state as interrupted/ended rather than inventing liveness.
+- **FR-019**: Initial terminal sessions are owned by the running Winds process. Cross-restart live-session persistence is deferred. On restart, a persisted session for which Winds cannot prove continuing ownership MUST become `OWNERSHIP_LOST`/interrupted with process state unknown. Winds MUST NOT infer liveness/death from a stored PID alone and MUST NOT blindly signal or kill such a PID because of PID reuse risk.
 - **FR-020**: Winds MUST NOT modify the user's persistent shell dotfiles/profile merely to instrument a session. Any shell integration must be injected ephemerally and be removable with the session.
-- **FR-021**: Winds MUST NOT infer exact shell commands by scraping arbitrary keystrokes. Command-level records require a reliable shell lifecycle integration or an explicit Winds-run command surface.
+- **FR-021**: Winds MUST NOT infer exact shell commands by scraping arbitrary keystrokes. Command-level records require a reliable shell lifecycle integration or an explicit Winds-run command surface. Telemetry supplied by an instrumented shell MUST remain source-labeled shell-reported data unless a protected independent observation proves the fact directly.
 
 ### Execution Ledger
 
@@ -162,9 +163,9 @@ A developer later using Winds SQL or LLM surfaces should see those executions in
 - **FR-024**: Terminal-specific fields MUST live in a typed terminal/session record rather than a generic plugin payload. Future SQL and LLM fields MUST likewise use typed domain records.
 - **FR-025**: Winds SHOULD record before/after Git HEAD and working-tree state observations around command boundaries when those observations can be obtained reliably and cheaply. Missing observations MUST remain explicitly unknown.
 - **FR-026**: Interactive terminal activity MAY intentionally mutate the primary checkout because it is user workspace behavior. Such activity MUST remain clearly separated from `winds verify` candidate worktrees and MUST NOT become `ELIGIBLE` verification evidence merely because it appears in the execution ledger.
-- **FR-027**: Process/session lifecycle facts directly observed by Winds may be `WINDS_OBSERVED`; caller-entered commands/profile selections are caller intent and MUST NOT be elevated into authenticated-human or verification authority.
+- **FR-027**: Process/session lifecycle facts directly observed by Winds may be `WINDS_OBSERVED`; caller-entered commands/profile selections are caller intent; shell-hook command/cwd/exit telemetry is shell-reported unless independently observed. None of those sources may be elevated into authenticated-human or verification authority merely because they are persisted.
 - **FR-028**: Persistent terminal output/history MUST be bounded by an explicit local retention/quota policy. Winds MUST NOT allow an unbounded PTY stream to grow SQLite or blob storage indefinitely.
-- **FR-029**: Partial database writes, process-launch failures, and interrupted sessions MUST reconcile to explicit failed/interrupted state; no execution may remain falsely successful because persistence failed.
+- **FR-029**: Partial database writes, process-launch failures, interrupted sessions, and lost process ownership MUST reconcile to explicit failed/interrupted/ownership-unknown state. No execution may remain falsely successful or falsely live because persistence failed. Restart recovery MUST be conservative and MUST NOT attempt destructive cleanup of a process whose identity/ownership is ambiguous.
 
 ### SQL and LLM Follow-On Contract
 
@@ -185,7 +186,7 @@ A developer later using Winds SQL or LLM surfaces should see those executions in
 - **Workspace registry**: canonical repository/worktree identity plus safe environment inventory.
 - **Shell profile inventory**: exact host/WSL execution-domain and shell launch definitions.
 - **PTY session controller**: in-process terminal lifecycle control with no public runtime protocol.
-- **Execution ledger**: SQLite/WAL common execution identity plus typed terminal records/events.
+- **Execution ledger**: SQLite/WAL common execution identity plus typed terminal records/events with explicit observation source.
 - **CLI proof surface**: minimal commands that prove open/clone/inspect and shell profile/session behavior before a GUI is relied upon.
 - **Cross-platform fixtures**: Linux/macOS/Windows terminal lifecycle tests plus WSL-specific integration evidence when available.
 - **Follow-on boundary**: explicit data/authority contract for later SQL Studio and LLM Observatory specifications.
@@ -196,10 +197,10 @@ A developer later using Winds SQL or LLM surfaces should see those executions in
 
 - **SC-001**: Opening an existing fixture through canonical and symlinked paths yields the correct canonical Git worktree/common-dir identity, exact HEAD, and no persistent Winds state inside the repository.
 - **SC-002**: Cloning a fixture through Winds yields a usable registered workspace with exact resulting Git identity while no repository environment/bootstrap manifest is automatically executed.
-- **SC-003**: Supported Linux, macOS, and Windows terminal fixtures can create a PTY-backed shell, exchange input/output, resize, interrupt a child command, observe exit, and close without orphaning the directly owned terminal child.
+- **SC-003**: Supported Linux, macOS, and Windows terminal fixtures can create a PTY-backed shell, exchange input/output, resize, interrupt a child command, observe exit, and close without orphaning the directly owned terminal child during normal lifecycle control.
 - **SC-004**: On a Windows+WSL2 environment used for acceptance, Winds discovers installed distributions and can launch an explicitly selected Ubuntu/WSL session at the mapped repository cwd when that mapping is valid; mismatches fail visibly rather than silently.
-- **SC-005**: A deterministic 100-cycle create/input/resize/command/close soak completes with zero falsely-live terminal records, zero leaked directly owned child processes, and zero corruption of existing verification tables.
-- **SC-006**: Execution-ledger fixtures prove start/end/duration/final-status data is internally consistent and interrupted persistence/process cases reconcile to explicit failure/interrupted state.
+- **SC-005**: A deterministic 100-cycle create/input/resize/command/close soak completes with zero falsely-live terminal records, zero leaked directly owned child processes during controlled close, and zero corruption of existing verification tables.
+- **SC-006**: Execution-ledger fixtures prove start/end/duration/final-status data is internally consistent; interrupted persistence cases reconcile explicitly; and simulated restart/lost-ownership cases become `OWNERSHIP_LOST`/unknown without blind PID signaling.
 - **SC-007**: Secret-safety fixtures prove full environment values, credential-bearing clone URLs, API keys, and database/password placeholders are not persisted by default.
 - **SC-008**: The full pre-existing 0.1 deterministic suite remains green; terminal/workspace changes do not weaken isolated verification/promotion behavior.
 - **SC-009**: Spec 003 adds no daemon, public IPC/runtime protocol, generic plugin system, remote execution service, or custom terminal renderer to the first implementation slice.
