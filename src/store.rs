@@ -31,12 +31,20 @@ pub struct NewRun<'a> {
     pub timeout_secs: u64,
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
 pub struct NewWorkspace<'a> {
     pub workspace_id: &'a str,
     pub canonical_worktree_root: &'a str,
     pub git_common_dir: &'a str,
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
 pub struct NewExecution<'a> {
     pub execution_id: &'a str,
     pub workspace_id: &'a str,
@@ -45,6 +53,10 @@ pub struct NewExecution<'a> {
     pub execution_domain: &'a str,
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
 pub struct NewTerminalSession<'a> {
     pub execution_id: &'a str,
     pub profile_id: &'a str,
@@ -78,7 +90,13 @@ impl Store {
             home: home.to_path_buf(),
         })
     }
+}
 
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
+impl Store {
     pub fn create_workspace(&self, workspace: NewWorkspace<'_>, now_ms: i64) -> Result<()> {
         self.connection.execute(
             "INSERT INTO workspaces(
@@ -311,7 +329,9 @@ impl Store {
             close_reason: row.7,
         })
     }
+}
 
+impl Store {
     pub fn create_run(&mut self, run: NewRun<'_>, now_ms: i64) -> Result<()> {
         let timeout_secs = i64::try_from(run.timeout_secs)?;
         let tx = self.connection.transaction()?;
@@ -623,6 +643,10 @@ fn insert_event(
     Ok(())
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
 fn insert_execution_event(
     connection: &Connection,
     execution_id: &str,
