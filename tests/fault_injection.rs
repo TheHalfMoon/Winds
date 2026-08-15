@@ -4,10 +4,14 @@ use rusqlite::Connection;
 use serde_json::Value;
 use std::env;
 use std::fs;
+use std::io::ErrorKind;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
 fn partial_worktree_creation_remains_manual_recovery_required() {
@@ -442,9 +446,18 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let path = env::temp_dir().join(format!("{prefix}-{nanos}-{}", std::process::id()));
-    fs::create_dir_all(&path).unwrap();
-    path
+    loop {
+        let attempt = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = env::temp_dir().join(format!(
+            "{prefix}-{nanos}-{}-{attempt}",
+            std::process::id()
+        ));
+        match fs::create_dir(&path) {
+            Ok(()) => return path,
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
+            Err(error) => panic!("failed to create exclusive fixture root: {error}"),
+        }
+    }
 }
 
 fn remove_owned_temp_dir(path: &Path) {
