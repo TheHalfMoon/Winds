@@ -1,6 +1,7 @@
 use crate::domain::{
     BlobEvidence, CheckEvidence, Eligibility, EvidenceReport, ExecutionEventRecord, ExecutionKind,
-    ExecutionRecord, ExecutionStatus, FactSource, StoredRun, TerminalSessionRecord, WorkspaceRecord,
+    ExecutionRecord, ExecutionStatus, FactSource, StoredRun, TerminalSessionRecord,
+    WorkspaceRecord,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
