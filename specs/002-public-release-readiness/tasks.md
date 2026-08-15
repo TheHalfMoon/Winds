@@ -1,6 +1,6 @@
 # Tasks: Public Release Readiness
 
-This checklist records implementation/evidence truth for Spec 002. Checked items require repository evidence; nearby work does not imply completion. Public publication remains separately gated even after all implementation tasks are accepted.
+This checklist records implementation/evidence truth for Spec 002. Checked items require repository evidence; nearby work does not imply completion. Public publication was separately gated and is recorded only after explicit founder authorization and post-publication verification.
 
 ## Phase 1 - Canonical Release-Readiness Baseline
 
@@ -36,7 +36,7 @@ This checklist records implementation/evidence truth for Spec 002. Checked items
 
 ## Founder Publication Gate
 
-- [ ] **T041** **FOUNDER-CONTROLLED / NOT IMPLIED BY `go ahead` FOR IMPLEMENTATION** — after T025-T040 are accepted and merged, obtain a separate explicit founder publication authorization naming the exact release commit before changing repository visibility, creating `v0.1.0`, creating a GitHub Release, or publishing any package. The authorized public-transition procedure must also enable GitHub private vulnerability reporting once public visibility makes that setting available and verify the `SECURITY.md` reporting path before announcing the release. Until then Winds remains private and unreleased.
+- [x] **T041** Founder publication gate executed after explicit authorization `PUBLISH WINDS 0.1.0 FROM 041140c6093ad59ac51d523051f5dabe170b784d`. Final release-candidate workflow run `31903303471` passed on that exact release commit, including Ubuntu/macOS quality, SC-001 100-cycle soak, and both supported artifact builds. The repository was then made public; GitHub private vulnerability reporting was enabled and independently re-read as `enabled=true`; lightweight tag `v0.1.0` was created directly at `041140c6093ad59ac51d523051f5dabe170b784d`; and GitHub Release `Winds v0.1.0` was published on 2026-08-15 as non-draft/non-prerelease with exactly four uploaded assets: Linux x86-64 and macOS arm64 archives plus their SHA-256 manifests. `Cargo.toml` remains `publish = false`; no crates.io or other package publication occurred. Spec 002 publication scope is complete without adding product behavior.
 
 ## Explicitly Deferred Beyond This Feature
 

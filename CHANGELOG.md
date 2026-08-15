@@ -2,7 +2,7 @@
 
 This changelog records release-facing product behavior. Exact CI/review run identifiers remain in pull-request/release evidence so this file does not become stale operational metadata.
 
-## 0.1.0 - Unreleased
+## 0.1.0 - 2026-08-15
 
 ### Added
 

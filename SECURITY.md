@@ -16,9 +16,9 @@ Winds worktrees are **not security sandboxes**. Reports that only demonstrate be
 
 ## Supported versions
 
-The first public release line is `0.1.x`. Until a public `0.1.0` release exists, the repository is a release candidate rather than a supported public release.
+The current public release line is `0.1.x`. Winds `v0.1.0` is the first supported public release.
 
-After release, security fixes are expected to target the current `0.1.x` line. This policy does not promise a fixed response or remediation SLA.
+Security fixes are expected to target the current `0.1.x` line. This policy does not promise a fixed response or remediation SLA.
 
 ## Reporting a vulnerability
 
