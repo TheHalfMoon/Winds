@@ -26,6 +26,175 @@ impl Eligibility {
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ExecutionKind {
+    Terminal,
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
+impl ExecutionKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Terminal => "TERMINAL",
+        }
+    }
+
+    pub(crate) fn from_db(value: &str) -> Option<Self> {
+        match value {
+            "TERMINAL" => Some(Self::Terminal),
+            _ => None,
+        }
+    }
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum FactSource {
+    CallerRequested,
+    WindsObserved,
+    ShellReported,
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
+impl FactSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CallerRequested => "CALLER_REQUESTED",
+            Self::WindsObserved => "WINDS_OBSERVED",
+            Self::ShellReported => "SHELL_REPORTED",
+        }
+    }
+
+    pub(crate) fn from_db(value: &str) -> Option<Self> {
+        match value {
+            "CALLER_REQUESTED" => Some(Self::CallerRequested),
+            "WINDS_OBSERVED" => Some(Self::WindsObserved),
+            "SHELL_REPORTED" => Some(Self::ShellReported),
+            _ => None,
+        }
+    }
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ExecutionStatus {
+    Requested,
+    Running,
+    Exited,
+    FailedToStart,
+    Interrupted,
+    OwnershipLost,
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
+impl ExecutionStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Requested => "REQUESTED",
+            Self::Running => "RUNNING",
+            Self::Exited => "EXITED",
+            Self::FailedToStart => "FAILED_TO_START",
+            Self::Interrupted => "INTERRUPTED",
+            Self::OwnershipLost => "OWNERSHIP_LOST",
+        }
+    }
+
+    pub(crate) fn from_db(value: &str) -> Option<Self> {
+        match value {
+            "REQUESTED" => Some(Self::Requested),
+            "RUNNING" => Some(Self::Running),
+            "EXITED" => Some(Self::Exited),
+            "FAILED_TO_START" => Some(Self::FailedToStart),
+            "INTERRUPTED" => Some(Self::Interrupted),
+            "OWNERSHIP_LOST" => Some(Self::OwnershipLost),
+            _ => None,
+        }
+    }
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceRecord {
+    pub workspace_id: String,
+    pub canonical_worktree_root: String,
+    pub git_common_dir: String,
+    pub created_unix_ms: i64,
+    pub last_opened_unix_ms: i64,
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionRecord {
+    pub execution_id: String,
+    pub workspace_id: String,
+    pub kind: ExecutionKind,
+    pub request_source: FactSource,
+    pub execution_domain: String,
+    pub status: ExecutionStatus,
+    pub status_source: FactSource,
+    pub requested_unix_ms: i64,
+    pub started_unix_ms: Option<i64>,
+    pub ended_unix_ms: Option<i64>,
+    pub duration_ms: Option<u64>,
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutionEventRecord {
+    pub event_id: i64,
+    pub execution_id: String,
+    pub kind: String,
+    pub source: FactSource,
+    pub created_unix_ms: i64,
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalSessionRecord {
+    pub execution_id: String,
+    pub profile_id: String,
+    pub shell_executable: String,
+    pub shell_arguments: Vec<String>,
+    pub requested_cwd: String,
+    pub initial_cols: Option<u16>,
+    pub initial_rows: Option<u16>,
+    pub close_reason: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct BlobEvidence {
     pub relative_path: String,

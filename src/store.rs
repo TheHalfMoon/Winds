@@ -1,4 +1,8 @@
-use crate::domain::{BlobEvidence, CheckEvidence, Eligibility, EvidenceReport, StoredRun};
+use crate::domain::{
+    BlobEvidence, CheckEvidence, Eligibility, EvidenceReport, ExecutionEventRecord, ExecutionKind,
+    ExecutionRecord, ExecutionStatus, FactSource, StoredRun, TerminalSessionRecord,
+    WorkspaceRecord,
+};
 use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
 use std::error::Error;
@@ -27,6 +31,42 @@ pub struct NewRun<'a> {
     pub timeout_secs: u64,
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
+pub struct NewWorkspace<'a> {
+    pub workspace_id: &'a str,
+    pub canonical_worktree_root: &'a str,
+    pub git_common_dir: &'a str,
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
+pub struct NewExecution<'a> {
+    pub execution_id: &'a str,
+    pub workspace_id: &'a str,
+    pub kind: ExecutionKind,
+    pub request_source: FactSource,
+    pub execution_domain: &'a str,
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
+pub struct NewTerminalSession<'a> {
+    pub execution_id: &'a str,
+    pub profile_id: &'a str,
+    pub shell_executable: &'a str,
+    pub shell_arguments: &'a [String],
+    pub requested_cwd: &'a str,
+    pub initial_cols: Option<u16>,
+    pub initial_rows: Option<u16>,
+}
+
 pub struct RecoverableRun {
     pub run_id: String,
     pub candidate_oid: String,
@@ -42,12 +82,256 @@ impl Store {
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.execute_batch(include_str!("../migrations/0001_init.sql"))?;
+        connection.execute_batch(include_str!(
+            "../migrations/0002_workspace_execution_ledger.sql"
+        ))?;
         Ok(Self {
             connection,
             home: home.to_path_buf(),
         })
     }
+}
 
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
+impl Store {
+    pub fn create_workspace(&self, workspace: NewWorkspace<'_>, now_ms: i64) -> Result<()> {
+        self.connection.execute(
+            "INSERT INTO workspaces(
+                workspace_id, canonical_worktree_root, git_common_dir,
+                created_unix_ms, last_opened_unix_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?4)",
+            params![
+                workspace.workspace_id,
+                workspace.canonical_worktree_root,
+                workspace.git_common_dir,
+                now_ms,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn mark_workspace_opened(&self, workspace_id: &str, now_ms: i64) -> Result<()> {
+        let updated = self.connection.execute(
+            "UPDATE workspaces SET last_opened_unix_ms = ?2 WHERE workspace_id = ?1",
+            params![workspace_id, now_ms],
+        )?;
+        if updated != 1 {
+            return Err(format!("unknown Winds workspace: {workspace_id}").into());
+        }
+        Ok(())
+    }
+
+    pub fn load_workspace(&self, workspace_id: &str) -> Result<WorkspaceRecord> {
+        let workspace = self
+            .connection
+            .query_row(
+                "SELECT workspace_id, canonical_worktree_root, git_common_dir,
+                        created_unix_ms, last_opened_unix_ms
+                 FROM workspaces WHERE workspace_id = ?1",
+                params![workspace_id],
+                |row| {
+                    Ok(WorkspaceRecord {
+                        workspace_id: row.get(0)?,
+                        canonical_worktree_root: row.get(1)?,
+                        git_common_dir: row.get(2)?,
+                        created_unix_ms: row.get(3)?,
+                        last_opened_unix_ms: row.get(4)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or_else(|| format!("unknown Winds workspace: {workspace_id}"))?;
+        Ok(workspace)
+    }
+
+    pub fn create_execution(&mut self, execution: NewExecution<'_>, now_ms: i64) -> Result<()> {
+        let tx = self.connection.transaction()?;
+        tx.execute(
+            "INSERT INTO executions(
+                execution_id, workspace_id, kind, request_source, execution_domain,
+                status, status_source, requested_unix_ms,
+                started_unix_ms, ended_unix_ms, duration_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?4, ?7, NULL, NULL, NULL)",
+            params![
+                execution.execution_id,
+                execution.workspace_id,
+                execution.kind.as_str(),
+                execution.request_source.as_str(),
+                execution.execution_domain,
+                ExecutionStatus::Requested.as_str(),
+                now_ms,
+            ],
+        )?;
+        insert_execution_event(
+            &tx,
+            execution.execution_id,
+            "ExecutionRequested",
+            execution.request_source,
+            now_ms,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn load_execution(&self, execution_id: &str) -> Result<ExecutionRecord> {
+        let row = self
+            .connection
+            .query_row(
+                "SELECT execution_id, workspace_id, kind, request_source, execution_domain,
+                        status, status_source, requested_unix_ms,
+                        started_unix_ms, ended_unix_ms, duration_ms
+                 FROM executions WHERE execution_id = ?1",
+                params![execution_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, i64>(7)?,
+                        row.get::<_, Option<i64>>(8)?,
+                        row.get::<_, Option<i64>>(9)?,
+                        row.get::<_, Option<i64>>(10)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| format!("unknown Winds execution: {execution_id}"))?;
+
+        let kind = ExecutionKind::from_db(&row.2)
+            .ok_or_else(|| format!("unknown execution kind in store: {}", row.2))?;
+        let request_source = FactSource::from_db(&row.3)
+            .ok_or_else(|| format!("unknown execution request source in store: {}", row.3))?;
+        let status = ExecutionStatus::from_db(&row.5)
+            .ok_or_else(|| format!("unknown execution status in store: {}", row.5))?;
+        let status_source = FactSource::from_db(&row.6)
+            .ok_or_else(|| format!("unknown execution status source in store: {}", row.6))?;
+        let duration_ms = row.10.map(u64::try_from).transpose()?;
+
+        Ok(ExecutionRecord {
+            execution_id: row.0,
+            workspace_id: row.1,
+            kind,
+            request_source,
+            execution_domain: row.4,
+            status,
+            status_source,
+            requested_unix_ms: row.7,
+            started_unix_ms: row.8,
+            ended_unix_ms: row.9,
+            duration_ms,
+        })
+    }
+
+    pub fn record_execution_event(
+        &self,
+        execution_id: &str,
+        kind: &str,
+        source: FactSource,
+        now_ms: i64,
+    ) -> Result<()> {
+        insert_execution_event(&self.connection, execution_id, kind, source, now_ms)?;
+        Ok(())
+    }
+
+    pub fn execution_events(&self, execution_id: &str) -> Result<Vec<ExecutionEventRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT event_id, execution_id, kind, fact_source, created_unix_ms
+             FROM execution_events
+             WHERE execution_id = ?1
+             ORDER BY created_unix_ms, event_id",
+        )?;
+        let raw_rows = statement
+            .query_map(params![execution_id], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        let mut events = Vec::with_capacity(raw_rows.len());
+        for row in raw_rows {
+            let source = FactSource::from_db(&row.3)
+                .ok_or_else(|| format!("unknown execution event source in store: {}", row.3))?;
+            events.push(ExecutionEventRecord {
+                event_id: row.0,
+                execution_id: row.1,
+                kind: row.2,
+                source,
+                created_unix_ms: row.4,
+            });
+        }
+        Ok(events)
+    }
+
+    pub fn create_terminal_session(&self, session: NewTerminalSession<'_>) -> Result<()> {
+        let shell_arguments_json = serde_json::to_string(session.shell_arguments)?;
+        self.connection.execute(
+            "INSERT INTO terminal_sessions(
+                execution_id, profile_id, shell_executable, shell_arguments_json,
+                requested_cwd, initial_cols, initial_rows, close_reason
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)",
+            params![
+                session.execution_id,
+                session.profile_id,
+                session.shell_executable,
+                shell_arguments_json,
+                session.requested_cwd,
+                session.initial_cols.map(i64::from),
+                session.initial_rows.map(i64::from),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_terminal_session(&self, execution_id: &str) -> Result<TerminalSessionRecord> {
+        let row = self
+            .connection
+            .query_row(
+                "SELECT execution_id, profile_id, shell_executable, shell_arguments_json,
+                        requested_cwd, initial_cols, initial_rows, close_reason
+                 FROM terminal_sessions WHERE execution_id = ?1",
+                params![execution_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, Option<i64>>(5)?,
+                        row.get::<_, Option<i64>>(6)?,
+                        row.get::<_, Option<String>>(7)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| format!("unknown Winds terminal session: {execution_id}"))?;
+
+        Ok(TerminalSessionRecord {
+            execution_id: row.0,
+            profile_id: row.1,
+            shell_executable: row.2,
+            shell_arguments: serde_json::from_str(&row.3)?,
+            requested_cwd: row.4,
+            initial_cols: row.5.map(u16::try_from).transpose()?,
+            initial_rows: row.6.map(u16::try_from).transpose()?,
+            close_reason: row.7,
+        })
+    }
+}
+
+impl Store {
     pub fn create_run(&mut self, run: NewRun<'_>, now_ms: i64) -> Result<()> {
         let timeout_secs = i64::try_from(run.timeout_secs)?;
         let tx = self.connection.transaction()?;
@@ -357,6 +641,218 @@ fn insert_event(
         params![run_id, kind, authority, payload_json, now_ms],
     )?;
     Ok(())
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
+fn insert_execution_event(
+    connection: &Connection,
+    execution_id: &str,
+    kind: &str,
+    source: FactSource,
+    now_ms: i64,
+) -> rusqlite::Result<()> {
+    connection.execute(
+        "INSERT INTO execution_events(execution_id, kind, fact_source, created_unix_ms)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![execution_id, kind, source.as_str(), now_ms],
+    )?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::{NewExecution, NewTerminalSession, NewWorkspace, Store};
+    use crate::domain::{ExecutionKind, ExecutionStatus, FactSource};
+    use std::fs;
+    use std::io::ErrorKind;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_HOME: AtomicU64 = AtomicU64::new(0);
+
+    fn test_home(name: &str) -> PathBuf {
+        let sequence = NEXT_HOME.fetch_add(1, Ordering::Relaxed);
+        let home = std::env::temp_dir().join(format!(
+            "winds-store-{name}-{}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir(&home).unwrap();
+        home
+    }
+
+    fn remove_file_if_exists(path: &Path) {
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => panic!("failed to remove test file {}: {error}", path.display()),
+        }
+    }
+
+    fn cleanup_test_home(home: &Path) {
+        remove_file_if_exists(&home.join("winds.db-wal"));
+        remove_file_if_exists(&home.join("winds.db-shm"));
+        remove_file_if_exists(&home.join("winds.db-journal"));
+        remove_file_if_exists(&home.join("winds.db"));
+        fs::remove_dir(home.join("blobs")).unwrap();
+        fs::remove_dir(home).unwrap();
+    }
+
+    #[test]
+    fn workspace_execution_ledger_is_separate_and_source_labeled() {
+        let home = test_home("execution-ledger");
+        let mut store = Store::open(&home).unwrap();
+
+        store
+            .create_workspace(
+                NewWorkspace {
+                    workspace_id: "workspace-1",
+                    canonical_worktree_root: "/tmp/example",
+                    git_common_dir: "/tmp/example/.git",
+                },
+                100,
+            )
+            .unwrap();
+        store.mark_workspace_opened("workspace-1", 105).unwrap();
+        store
+            .create_execution(
+                NewExecution {
+                    execution_id: "execution-1",
+                    workspace_id: "workspace-1",
+                    kind: ExecutionKind::Terminal,
+                    request_source: FactSource::CallerRequested,
+                    execution_domain: "host-linux",
+                },
+                110,
+            )
+            .unwrap();
+
+        let shell_arguments = vec!["--login".to_owned()];
+        store
+            .create_terminal_session(NewTerminalSession {
+                execution_id: "execution-1",
+                profile_id: "bash-login",
+                shell_executable: "/bin/bash",
+                shell_arguments: &shell_arguments,
+                requested_cwd: "/tmp/example",
+                initial_cols: Some(120),
+                initial_rows: Some(40),
+            })
+            .unwrap();
+        store
+            .record_execution_event(
+                "execution-1",
+                "ShellTelemetryReceived",
+                FactSource::ShellReported,
+                120,
+            )
+            .unwrap();
+
+        let workspace = store.load_workspace("workspace-1").unwrap();
+        assert_eq!(workspace.canonical_worktree_root, "/tmp/example");
+        assert_eq!(workspace.git_common_dir, "/tmp/example/.git");
+        assert_eq!(workspace.created_unix_ms, 100);
+        assert_eq!(workspace.last_opened_unix_ms, 105);
+
+        let execution = store.load_execution("execution-1").unwrap();
+        assert_eq!(execution.kind, ExecutionKind::Terminal);
+        assert_eq!(execution.request_source, FactSource::CallerRequested);
+        assert_eq!(execution.status, ExecutionStatus::Requested);
+        assert_eq!(execution.status_source, FactSource::CallerRequested);
+        assert_eq!(execution.requested_unix_ms, 110);
+        assert_eq!(execution.started_unix_ms, None);
+        assert_eq!(execution.ended_unix_ms, None);
+        assert_eq!(execution.duration_ms, None);
+
+        let terminal = store.load_terminal_session("execution-1").unwrap();
+        assert_eq!(terminal.profile_id, "bash-login");
+        assert_eq!(terminal.shell_executable, "/bin/bash");
+        assert_eq!(terminal.shell_arguments, shell_arguments);
+        assert_eq!(terminal.requested_cwd, "/tmp/example");
+        assert_eq!(terminal.initial_cols, Some(120));
+        assert_eq!(terminal.initial_rows, Some(40));
+        assert_eq!(terminal.close_reason, None);
+
+        let oversized_dimension = store.connection.execute(
+            "UPDATE terminal_sessions SET initial_cols = 65536 WHERE execution_id = ?1",
+            rusqlite::params!["execution-1"],
+        );
+        assert!(oversized_dimension.is_err());
+
+        let execution_events = store.execution_events("execution-1").unwrap();
+        assert_eq!(execution_events.len(), 2);
+        assert_eq!(execution_events[0].kind, "ExecutionRequested");
+        assert_eq!(execution_events[0].source, FactSource::CallerRequested);
+        assert_eq!(execution_events[1].kind, "ShellTelemetryReceived");
+        assert_eq!(execution_events[1].source, FactSource::ShellReported);
+
+        let candidate_event_count: i64 = store
+            .connection
+            .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(candidate_event_count, 0);
+
+        drop(store);
+        cleanup_test_home(&home);
+    }
+
+    #[test]
+    fn failed_launch_can_end_without_claiming_a_process_start_or_duration() {
+        let home = test_home("failed-launch");
+        let mut store = Store::open(&home).unwrap();
+        store
+            .create_workspace(
+                NewWorkspace {
+                    workspace_id: "workspace-1",
+                    canonical_worktree_root: "/tmp/example",
+                    git_common_dir: "/tmp/example/.git",
+                },
+                200,
+            )
+            .unwrap();
+        store
+            .create_execution(
+                NewExecution {
+                    execution_id: "execution-1",
+                    workspace_id: "workspace-1",
+                    kind: ExecutionKind::Terminal,
+                    request_source: FactSource::CallerRequested,
+                    execution_domain: "host-linux",
+                },
+                210,
+            )
+            .unwrap();
+
+        store
+            .connection
+            .execute(
+                "UPDATE executions
+                 SET status = 'FAILED_TO_START',
+                     status_source = 'WINDS_OBSERVED',
+                     ended_unix_ms = ?2
+                 WHERE execution_id = ?1",
+                rusqlite::params!["execution-1", 215_i64],
+            )
+            .unwrap();
+
+        let execution = store.load_execution("execution-1").unwrap();
+        assert_eq!(execution.status, ExecutionStatus::FailedToStart);
+        assert_eq!(execution.status_source, FactSource::WindsObserved);
+        assert_eq!(execution.started_unix_ms, None);
+        assert_eq!(execution.ended_unix_ms, Some(215));
+        assert_eq!(execution.duration_ms, None);
+
+        let invalid_duration = store.connection.execute(
+            "UPDATE executions SET duration_ms = 5 WHERE execution_id = ?1",
+            rusqlite::params!["execution-1"],
+        );
+        assert!(invalid_duration.is_err());
+
+        drop(store);
+        cleanup_test_home(&home);
+    }
 }
 
 #[cfg(all(test, unix))]
