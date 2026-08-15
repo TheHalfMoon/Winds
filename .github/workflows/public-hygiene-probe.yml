@@ -31,10 +31,13 @@ jobs:
           import re
           import subprocess
 
+          probe_path = pathlib.Path(".github/workflows/public-hygiene-probe.yml")
           tracked = [
-              pathlib.Path(raw.decode("utf-8"))
+              path
               for raw in subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0")
               if raw
+              for path in [pathlib.Path(raw.decode("utf-8"))]
+              if path != probe_path
           ]
 
           high_confidence_rules = [
@@ -99,7 +102,7 @@ jobs:
                   if str(path).startswith(source_roots) and provenance_marker.search(line):
                       source_markers.append((str(path), line_number))
 
-          print(f"TRACKED_FILE_COUNT={len(tracked)}")
+          print(f"AUDITED_TRACKED_FILE_COUNT={len(tracked)}")
           print(f"TEXT_FILE_COUNT={text_files}")
           print(f"BINARY_OR_NON_UTF8_FILE_COUNT={binary_files}")
           print(f"HIGH_CONFIDENCE_FINDINGS={len(high_findings)}")
