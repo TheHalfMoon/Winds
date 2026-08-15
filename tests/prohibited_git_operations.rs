@@ -24,11 +24,7 @@ fn winds_never_invokes_prohibited_downstream_git_operations() {
         &repo,
         &["config", "user.email", "winds-test@example.invalid"],
     );
-    git(
-        &real_git,
-        &repo,
-        &["config", "user.name", "Winds Test"],
-    );
+    git(&real_git, &repo, &["config", "user.name", "Winds Test"]);
     fs::write(repo.join("result.txt"), "base\n").unwrap();
     git(&real_git, &repo, &["add", "result.txt"]);
     git(&real_git, &repo, &["commit", "-m", "base"]);
@@ -91,11 +87,13 @@ fn winds_never_invokes_prohibited_downstream_git_operations() {
     );
     assert!(!recover.status.success());
     let recover_json: Value = serde_json::from_slice(&recover.stdout).unwrap();
-    assert!(recover_json["runs"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|run| run["run_id"] == run_id && run["status"] == "MANUAL_RECOVERY_REQUIRED"));
+    assert!(
+        recover_json["runs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|run| run["run_id"] == run_id && run["status"] == "MANUAL_RECOVERY_REQUIRED")
+    );
 
     let trace = fs::read_to_string(&trace_path).unwrap();
     assert_no_prohibited_git_operations(&trace);
@@ -109,7 +107,10 @@ fn assert_no_prohibited_git_operations(trace: &str) {
         .map(|line| line.split('\t').skip(1).collect())
         .collect();
 
-    assert!(!invocations.is_empty(), "Git shim recorded no Winds invocations");
+    assert!(
+        !invocations.is_empty(),
+        "Git shim recorded no Winds invocations"
+    );
     assert!(
         invocations
             .iter()
@@ -129,9 +130,7 @@ fn assert_no_prohibited_git_operations(trace: &str) {
     for args in &invocations {
         if let Some(clean_index) = args.iter().position(|arg| *arg == "clean") {
             assert!(
-                !args[clean_index + 1..]
-                    .iter()
-                    .any(|arg| is_force_flag(arg)),
+                !args[clean_index + 1..].iter().any(|arg| is_force_flag(arg)),
                 "Winds invoked prohibited force-clean operation:\n{trace}"
             );
         }
