@@ -20,7 +20,11 @@ fn sc_001_runs_100_clean_create_verify_promote_reconcile_cycles() {
     for cycle in 0..SOAK_CYCLES {
         run_cycle(&root, cycle);
         if (cycle + 1) % 10 == 0 || cycle + 1 == SOAK_CYCLES {
-            eprintln!("SC-001 progress: {}/{} cycles passed", cycle + 1, SOAK_CYCLES);
+            eprintln!(
+                "SC-001 progress: {}/{} cycles passed",
+                cycle + 1,
+                SOAK_CYCLES
+            );
         }
     }
 
@@ -95,7 +99,10 @@ fn run_cycle(root: &Path, cycle: usize) {
     );
     assert_success(&promote, cycle, "promote");
     let promote_json: Value = serde_json::from_slice(&promote.stdout).unwrap();
-    assert_eq!(promote_json["authority"], "CALLER_REQUESTED", "cycle {cycle}");
+    assert_eq!(
+        promote_json["authority"], "CALLER_REQUESTED",
+        "cycle {cycle}"
+    );
     assert_eq!(promote_json["commit_oid"], candidate_oid, "cycle {cycle}");
     assert_eq!(
         git_text(
@@ -106,14 +113,15 @@ fn run_cycle(root: &Path, cycle: usize) {
         "cycle {cycle}: selected ref drifted"
     );
 
-    let recover = winds(
-        &winds_home,
-        &["recover", "--repo", repo.to_str().unwrap()],
-    );
+    let recover = winds(&winds_home, &["recover", "--repo", repo.to_str().unwrap()]);
     assert_success(&recover, cycle, "recover");
     let recover_json: Value = serde_json::from_slice(&recover.stdout).unwrap();
     let runs = recover_json["runs"].as_array().unwrap();
-    assert_eq!(runs.len(), 1, "cycle {cycle}: recovery returned unexpected run count");
+    assert_eq!(
+        runs.len(),
+        1,
+        "cycle {cycle}: recovery returned unexpected run count"
+    );
     assert_eq!(runs[0]["run_id"], run_id, "cycle {cycle}");
     assert_eq!(runs[0]["status"], "PRESENT", "cycle {cycle}");
 
@@ -259,10 +267,8 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
         .as_nanos();
     loop {
         let attempt = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = env::temp_dir().join(format!(
-            "{prefix}-{nanos}-{}-{attempt}",
-            std::process::id()
-        ));
+        let path =
+            env::temp_dir().join(format!("{prefix}-{nanos}-{}-{attempt}", std::process::id()));
         match fs::create_dir(&path) {
             Ok(()) => return path,
             Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
