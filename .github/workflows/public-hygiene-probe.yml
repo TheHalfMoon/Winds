@@ -1,0 +1,120 @@
+name: public-hygiene-probe
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/public-hygiene-probe.yml
+
+permissions:
+  contents: read
+
+jobs:
+  tracked-content:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact candidate head
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Scan tracked public-facing content
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          python3 - <<'PY'
+          import pathlib
+          import re
+          import subprocess
+
+          tracked = [
+              pathlib.Path(raw.decode("utf-8"))
+              for raw in subprocess.check_output(["git", "ls-files", "-z"]).split(b"\0")
+              if raw
+          ]
+
+          high_confidence_rules = [
+              ("github-token", re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b")),
+              ("openai-style-secret", re.compile(r"\bsk-[A-Za-z0-9_-]{20,}\b")),
+              ("aws-access-key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
+              ("slack-token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b")),
+              ("private-key", re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----")),
+              (
+                  "signed-or-tokenized-url",
+                  re.compile(
+                      r"https?://[^\s\"'<>]+[?&](?:token|signature|x-amz-signature|x-goog-signature|sig)=[^\s\"'<>]+",
+                      re.IGNORECASE,
+                  ),
+              ),
+              ("macos-user-path", re.compile(r"/Users/[^/\s]+/")),
+              ("linux-user-path", re.compile(r"/home/[^/\s]+/")),
+              ("windows-user-path", re.compile(r"\b[A-Za-z]:\\Users\\[^\\\s]+\\")),
+          ]
+
+          review_terms = {
+              "pre-alpha": re.compile(r"\bpre-alpha\b", re.IGNORECASE),
+              "internal-only": re.compile(r"\binternal[- ]only\b", re.IGNORECASE),
+              "private-repository": re.compile(r"\bprivate repository\b", re.IGNORECASE),
+              "placeholder-version": re.compile(r"\b0\.0\.0\b"),
+              "unpublished": re.compile(r"\bunpublished\b", re.IGNORECASE),
+              "sandbox-claim-term": re.compile(r"\bsandbox(?:ing)?\b", re.IGNORECASE),
+              "native-windows-term": re.compile(r"\bnative Windows\b", re.IGNORECASE),
+          }
+
+          source_roots = ("src/", "tests/", "scripts/", "migrations/")
+          provenance_marker = re.compile(
+              r"(?:Copyright\s*\(c\)|SPDX-License-Identifier|Licensed under the)",
+              re.IGNORECASE,
+          )
+
+          high_findings = []
+          review_matches = []
+          source_markers = []
+          text_files = 0
+          binary_files = 0
+
+          for path in tracked:
+              data = path.read_bytes()
+              if b"\0" in data:
+                  binary_files += 1
+                  continue
+              try:
+                  text = data.decode("utf-8")
+              except UnicodeDecodeError:
+                  binary_files += 1
+                  continue
+              text_files += 1
+
+              for line_number, line in enumerate(text.splitlines(), 1):
+                  for rule_name, pattern in high_confidence_rules:
+                      if pattern.search(line):
+                          high_findings.append((rule_name, str(path), line_number))
+                  for term_name, pattern in review_terms.items():
+                      if pattern.search(line):
+                          review_matches.append((term_name, str(path), line_number))
+                  if str(path).startswith(source_roots) and provenance_marker.search(line):
+                      source_markers.append((str(path), line_number))
+
+          print(f"TRACKED_FILE_COUNT={len(tracked)}")
+          print(f"TEXT_FILE_COUNT={text_files}")
+          print(f"BINARY_OR_NON_UTF8_FILE_COUNT={binary_files}")
+          print(f"HIGH_CONFIDENCE_FINDINGS={len(high_findings)}")
+          print(f"PUBLIC_SURFACE_REVIEW_MATCHES={len(review_matches)}")
+          print(f"SOURCE_PROVENANCE_MARKERS={len(source_markers)}")
+
+          for rule_name, path, line_number in high_findings:
+              print(f"BLOCKER={rule_name} {path}:{line_number}")
+          for term_name, path, line_number in review_matches:
+              print(f"REVIEW={term_name} {path}:{line_number}")
+          for path, line_number in source_markers:
+              print(f"SOURCE_PROVENANCE_REVIEW={path}:{line_number}")
+
+          if high_findings:
+              raise SystemExit("public hygiene scan found high-confidence tracked-content blockers")
+
+          print("TRACKED_PUBLIC_HYGIENE_HIGH_CONFIDENCE=PASS")
+          PY
