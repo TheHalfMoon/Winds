@@ -10,8 +10,9 @@ This ledger records external projects that materially shape Winds. Before code i
 | System Git | feature-probed; minimum target >= 2.36 | GPL-2.0-only executable boundary | Git/ref/worktree authority | Invoke executable; parse machine-readable output |
 | SQLite / `rusqlite` | rusqlite 0.40.2; committed `Cargo.lock` | SQLite public domain / rusqlite MIT | Transactional local metadata/events/projections | `rusqlite` dependency with bundled SQLite |
 | Rust `libc` | 0.2.189; committed `Cargo.lock` | MIT OR Apache-2.0 | Unix `O_NOFOLLOW` / `O_NONBLOCK` constants for race-resistant validation of pre-existing evidence blobs | Direct dependency; platform constants only |
+| WezTerm `portable-pty` | crate `0.9.0`; published-source VCS `f8921727a11b9f8b073e8c24821d72fd41283500`; upstream path `pty/` | MIT | Spec 003 PTY/ConPTY allocation, spawn, resize, I/O, and owned child-lifecycle primitive | **Approved direct-dependency candidate; not yet landed in `Cargo.toml`/`Cargo.lock`; no copied/adapted WezTerm code.** First landing must request exact `=0.9.0`, commit the resolved lockfile, and re-audit exact transitive licenses/footprint. Decision evidence: `specs/003-workspace-execution-spine/pty-dependency-decision.md`. |
 | `amElnagdy/delegate-skills` | pin required before agent adapter implementation | MIT | Future adapter semantics/adversarial test corpus | Study/reimplement selectively; not runtime dependency |
 
-No copied donor runtime code is currently present. The implementation in Winds is Winds-authored; external projects above are dependencies or process/design references only.
+No copied donor runtime code is currently present. The implementation in Winds is Winds-authored; external projects above are dependencies, approved dependency candidates, or process/design references only.
 
 Winds-authored source is licensed under `MIT OR Apache-2.0` through the repository's standard `LICENSE-MIT` and `LICENSE-APACHE` files. That source-license choice does not replace or relicense third-party dependency terms; release artifacts must continue to satisfy applicable upstream notice obligations recorded by the release licensing audit.
