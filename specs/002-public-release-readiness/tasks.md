@@ -9,7 +9,7 @@ This checklist records implementation/evidence truth for Spec 002. Checked items
 ## Phase 2 - License and Provenance Closure
 
 - [x] **T025** Produce a release-facing licensing/provenance audit from the exact current dependency/provenance state. Exact-head probe `1516078d22ae64cd0a3b04a0d402351669846e70` used `cargo metadata --locked` and found 49/49 non-workspace packages with license metadata; ordinary quality also passed on Ubuntu/macOS. `docs/release/license-audit.md` records the grouped inventory, donor reuse modes, no identified copied donor runtime code, source-license compatibility, and the additional Unicode-3.0 notice obligation for `unicode-ident`. The temporary probe workflow is removed rather than retained as permanent CI.
-- [ ] **T026** Add the standard `MIT OR Apache-2.0` source license set and reconcile `docs/provenance/donors.md` / release audit with the chosen source-license truth. Do not copy third-party notice text unless required and provenance-recorded.
+- [x] **T026** Add the standard `MIT OR Apache-2.0` source license set and reconcile `docs/provenance/donors.md` / release audit with the chosen source-license truth. `LICENSE-MIT` uses the standard MIT terms with `Winds contributors`; `LICENSE-APACHE` is the standard Apache License 2.0 text. The provenance ledger explicitly distinguishes the Winds source license from unchanged third-party dependency/notice obligations.
 - [ ] **T027** Reconcile public package metadata for the 0.1 release candidate: `version = "0.1.0"`, `license = "MIT OR Apache-2.0"`, repository, README, concise description, while preserving `publish = false`.
 
 ## Phase 3 - Public Project Surface
