@@ -41,7 +41,7 @@ This checklist records **as-built truth** for the verification walking skeleton 
 
 ## Pre-release Soak
 
-- [x] **T023** Execute the SC-001 100-cycle create/verify/promote/reconcile soak with zero source-checkout mutations before any 0.1 release claim. PR #4 adds an ignored explicit pre-release harness plus a dedicated path-scoped/manual workflow rather than multiplying the soak into ordinary PR CI. Pre-release-soak run #2 checked out exact head `25a22006597402ab8589b54f9bf47339b370eab2` and completed `100/100` fresh create/verify/promote/reconcile cycles with zero observed primary-checkout mutations; quality run #96 also passed Format, Clippy `-D warnings`, and Tests on Ubuntu/macOS on that exact head. Final task-truth-head gates must re-run before merge.
+- [x] **T023** Execute the SC-001 100-cycle create/verify/promote/reconcile soak with zero source-checkout mutations before any 0.1 release claim. PR #4 adds an ignored explicit pre-release harness plus a dedicated path-scoped/manual workflow rather than multiplying the soak into ordinary PR CI. Pre-release-soak run #3 checked out exact task-truth head `65ba00b1bf85c3f85c691d0e56cc9c12dc94bfe4` and completed `100/100` fresh create/verify/promote/reconcile cycles with zero observed primary-checkout mutations; quality run #97 also passed Format, Clippy `-D warnings`, and Tests on Ubuntu/macOS on that head. Exact-head merge evidence is maintained in PR review metadata rather than encoded as a future checklist condition.
 
 ## Explicitly Deferred Product Scope
 

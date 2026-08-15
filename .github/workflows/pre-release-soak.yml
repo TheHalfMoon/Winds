@@ -7,7 +7,6 @@ on:
     paths:
       - .github/workflows/pre-release-soak.yml
       - tests/pre_release_soak.rs
-      - specs/001-verification-walking-skeleton/tasks.md
   workflow_dispatch:
 
 permissions:

@@ -128,7 +128,7 @@ fn run_cycle(root: &Path, cycle: usize) {
     primary_before.assert_unchanged(&repo, cycle);
 
     remove_registered_worktree(&repo, &worktree, cycle);
-    fs::remove_dir_all(&cycle_root).unwrap();
+    remove_owned_cycle_dir(root, &cycle_root, cycle);
 }
 
 #[derive(Debug)]
@@ -275,6 +275,23 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
             Err(error) => panic!("failed to create exclusive soak root: {error}"),
         }
     }
+}
+
+fn remove_owned_cycle_dir(root: &Path, cycle_root: &Path, cycle: usize) {
+    let canonical_root = root.canonicalize().unwrap();
+    let canonical_cycle = cycle_root.canonicalize().unwrap();
+    assert_eq!(
+        canonical_cycle.parent(),
+        Some(canonical_root.as_path()),
+        "cycle {cycle}: cycle root escaped owned soak root"
+    );
+    let expected_name = format!("cycle-{cycle:03}");
+    assert_eq!(
+        canonical_cycle.file_name().and_then(|name| name.to_str()),
+        Some(expected_name.as_str()),
+        "cycle {cycle}: unexpected cycle directory name"
+    );
+    fs::remove_dir_all(canonical_cycle).unwrap();
 }
 
 fn remove_owned_temp_dir(path: &Path) {
