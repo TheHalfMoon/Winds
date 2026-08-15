@@ -14,10 +14,10 @@ This checklist records implementation/evidence truth for Spec 002. Checked items
 
 ## Phase 3 - Public Project Surface
 
-- [ ] **T028** Rewrite/extend `README.md` as a fresh-evaluator front door: product wedge, proven 0.1 behavior, trust model, supported environments, pinned build/test quickstart, minimal existing-ref verification/promotion example, safety boundary, deferred scope, and links to contributor/security/provenance docs.
-- [ ] **T029** Add `CONTRIBUTING.md` that reuses rather than duplicates governance: Constitution -> Spec -> Plan -> Tasks -> Implement -> deterministic checks -> correctness/safety -> Ponytail -> independent review -> evidence reconciliation.
-- [ ] **T030** Add `SECURITY.md` with the precise 0.1 security boundary and a proven private vulnerability-reporting path. Do not claim sandboxing or promise an unsupported response SLA.
-- [ ] **T031** Add a concise `CHANGELOG.md` / 0.1 release-notes source that distinguishes shipped/proven behavior from explicitly deferred scope and avoids stale exact-run metadata in long-lived source text.
+- [x] **T028** Rewrite/extend `README.md` as a fresh-evaluator front door: product wedge, proven 0.1 behavior, trust model, supported environments, pinned build/test quickstart, minimal existing-ref verification/promotion example, safety boundary, deferred scope, and links to contributor/security/provenance docs.
+- [x] **T029** Add `CONTRIBUTING.md` that reuses rather than duplicates governance: Constitution -> Spec -> Plan -> Tasks -> Implement -> deterministic checks -> correctness/safety -> Ponytail -> independent review -> evidence reconciliation.
+- [x] **T030** Add `SECURITY.md` with the precise 0.1 security boundary and a proven publication-time private vulnerability-reporting path. GitHub's official model permits private vulnerability reporting for public repositories; the policy therefore defines GitHub private vulnerability reporting as the primary public channel and carries its enablement into founder-controlled T041. No sandboxing or unsupported response SLA is claimed.
+- [x] **T031** Add a concise `CHANGELOG.md` / 0.1 release-notes source that distinguishes shipped/proven behavior from explicitly deferred scope and avoids stale exact-run metadata in long-lived source text.
 
 ## Phase 4 - Non-Publishing Release Candidate
 
@@ -36,7 +36,7 @@ This checklist records implementation/evidence truth for Spec 002. Checked items
 
 ## Founder Publication Gate
 
-- [ ] **T041** **FOUNDER-CONTROLLED / NOT IMPLIED BY `go ahead` FOR IMPLEMENTATION** — after T025-T040 are accepted and merged, obtain a separate explicit founder publication authorization naming the exact release commit before changing repository visibility, creating `v0.1.0`, creating a GitHub Release, or publishing any package. Until then Winds remains private and unreleased.
+- [ ] **T041** **FOUNDER-CONTROLLED / NOT IMPLIED BY `go ahead` FOR IMPLEMENTATION** — after T025-T040 are accepted and merged, obtain a separate explicit founder publication authorization naming the exact release commit before changing repository visibility, creating `v0.1.0`, creating a GitHub Release, or publishing any package. The authorized public-transition procedure must also enable GitHub private vulnerability reporting once public visibility makes that setting available and verify the `SECURITY.md` reporting path before announcing the release. Until then Winds remains private and unreleased.
 
 ## Explicitly Deferred Beyond This Feature
 
