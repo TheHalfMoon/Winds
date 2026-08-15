@@ -95,6 +95,17 @@ impl Store {
         Ok(())
     }
 
+    pub fn mark_workspace_opened(&self, workspace_id: &str, now_ms: i64) -> Result<()> {
+        let updated = self.connection.execute(
+            "UPDATE workspaces SET last_opened_unix_ms = ?2 WHERE workspace_id = ?1",
+            params![workspace_id, now_ms],
+        )?;
+        if updated != 1 {
+            return Err(format!("unknown Winds workspace: {workspace_id}").into());
+        }
+        Ok(())
+    }
+
     pub fn load_workspace(&self, workspace_id: &str) -> Result<WorkspaceRecord> {
         let workspace = self
             .connection
@@ -632,7 +643,8 @@ mod persistence_tests {
     use super::{NewExecution, NewTerminalSession, NewWorkspace, Store};
     use crate::domain::{ExecutionKind, ExecutionStatus, FactSource};
     use std::fs;
-    use std::path::PathBuf;
+    use std::io::ErrorKind;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_HOME: AtomicU64 = AtomicU64::new(0);
@@ -643,10 +655,25 @@ mod persistence_tests {
             "winds-store-{name}-{}-{sequence}",
             std::process::id()
         ));
-        if home.exists() {
-            fs::remove_dir_all(&home).unwrap();
-        }
+        fs::create_dir(&home).unwrap();
         home
+    }
+
+    fn remove_file_if_exists(path: &Path) {
+        match fs::remove_file(path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => panic!("failed to remove test file {}: {error}", path.display()),
+        }
+    }
+
+    fn cleanup_test_home(home: &Path) {
+        remove_file_if_exists(&home.join("winds.db-wal"));
+        remove_file_if_exists(&home.join("winds.db-shm"));
+        remove_file_if_exists(&home.join("winds.db-journal"));
+        remove_file_if_exists(&home.join("winds.db"));
+        fs::remove_dir(home.join("blobs")).unwrap();
+        fs::remove_dir(home).unwrap();
     }
 
     #[test]
@@ -664,6 +691,7 @@ mod persistence_tests {
                 100,
             )
             .unwrap();
+        store.mark_workspace_opened("workspace-1", 105).unwrap();
         store
             .create_execution(
                 NewExecution {
@@ -702,7 +730,7 @@ mod persistence_tests {
         assert_eq!(workspace.canonical_worktree_root, "/tmp/example");
         assert_eq!(workspace.git_common_dir, "/tmp/example/.git");
         assert_eq!(workspace.created_unix_ms, 100);
-        assert_eq!(workspace.last_opened_unix_ms, 100);
+        assert_eq!(workspace.last_opened_unix_ms, 105);
 
         let execution = store.load_execution("execution-1").unwrap();
         assert_eq!(execution.kind, ExecutionKind::Terminal);
@@ -723,6 +751,12 @@ mod persistence_tests {
         assert_eq!(terminal.initial_rows, Some(40));
         assert_eq!(terminal.close_reason, None);
 
+        let oversized_dimension = store.connection.execute(
+            "UPDATE terminal_sessions SET initial_cols = 65536 WHERE execution_id = ?1",
+            rusqlite::params!["execution-1"],
+        );
+        assert!(oversized_dimension.is_err());
+
         let execution_events = store.execution_events("execution-1").unwrap();
         assert_eq!(execution_events.len(), 2);
         assert_eq!(execution_events[0].kind, "ExecutionRequested");
@@ -737,7 +771,7 @@ mod persistence_tests {
         assert_eq!(candidate_event_count, 0);
 
         drop(store);
-        fs::remove_dir_all(home).unwrap();
+        cleanup_test_home(&home);
     }
 
     #[test]
@@ -793,7 +827,7 @@ mod persistence_tests {
         assert!(invalid_duration.is_err());
 
         drop(store);
-        fs::remove_dir_all(home).unwrap();
+        cleanup_test_home(&home);
     }
 }
 
