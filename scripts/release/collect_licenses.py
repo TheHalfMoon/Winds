@@ -16,9 +16,30 @@ LICENSE_PREFIXES = (
     "COPYRIGHT",
 )
 
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+LICENSE_OVERRIDES = {
+    ("rsqlite-vfs", "0.1.1"): REPOSITORY_ROOT
+    / "third-party"
+    / "licenses"
+    / "rsqlite-vfs-0.1.1"
+    / "LICENSE",
+}
+
 
 def is_license_file(path: Path) -> bool:
     return path.is_file() and not path.is_symlink() and path.name.upper().startswith(LICENSE_PREFIXES)
+
+
+def copy_override(name: str, version: str, package_dir: Path) -> bool:
+    override = LICENSE_OVERRIDES.get((name, version))
+    if override is None:
+        return False
+    if not override.is_file() or override.is_symlink():
+        raise SystemExit(f"invalid license override for {name} {version}: {override}")
+    package_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(override, package_dir / "LICENSE")
+    print(f"LICENSE_OVERRIDE_USED={name} {version}")
+    return True
 
 
 def main() -> int:
@@ -58,16 +79,17 @@ def main() -> int:
             if is_license_file(path)
         )
         if not candidates:
-            missing.append(f"{name} {version}")
-            continue
-
-        for source_path in candidates:
-            relative = source_path.relative_to(package_root)
-            destination = package_dir / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source_path, destination)
-            if name == "unicode-ident" and "unicode" in source_path.name.lower():
-                unicode_notice_seen = True
+            if not copy_override(name, version, package_dir):
+                missing.append(f"{name} {version}")
+                continue
+        else:
+            for source_path in candidates:
+                relative = source_path.relative_to(package_root)
+                destination = package_dir / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source_path, destination)
+                if name == "unicode-ident" and "unicode" in source_path.name.lower():
+                    unicode_notice_seen = True
 
         inventory_lines.append(f"{name}\t{version}\t{license_expression}\t{source}")
 
