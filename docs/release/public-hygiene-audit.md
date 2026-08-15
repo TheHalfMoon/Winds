@@ -3,13 +3,13 @@
 **Task**: Spec 002 / T037  
 **Automated audit head**: `1dbec4ec750b1ae7c0cf61fa9626a64bdbbe8ba6`  
 **Audit date**: 2026-08-15  
-**Status**: PASS; temporary probe remains only long enough to scan this audit/task-truth update before removal
+**Status**: PASS candidate; the temporary probe is removed from the accepted tree after it validates this audit content
 
 ## Scope
 
 This audit covers tracked repository content intended to become public. It does not rewrite or sanitize Git history automatically. If a real historical secret is later identified, publication must stop and the event must be handled as a separate credential-rotation/history-remediation incident.
 
-The temporary `public-hygiene-probe` workflow is excluded from its own corpus because it embeds the detection regex literals and will not exist in the accepted tree. The intended final tracked corpus is therefore the scanned corpus plus this audit/task-truth record, followed by removal of the excluded probe itself.
+The temporary `public-hygiene-probe` workflow is excluded from its own corpus because it embeds the detection regex literals and is not part of the accepted tree. Removing that excluded probe after a successful scan removes scanner implementation only; it does not add unscanned public content.
 
 ## Automated tracked-content scan
 
@@ -35,13 +35,13 @@ High-confidence blocker patterns covered:
 - Slack token shapes;
 - PEM/OpenSSH private-key headers;
 - signed/tokenized HTTP(S) URLs;
-- absolute macOS `/Users/<user>/...`, Linux `/home/<user>/...`, and Windows `C:\Users\<user>\...` machine paths.
+- platform-specific absolute user-home paths on macOS, Linux, and Windows.
 
 The scanner prints only rule/path/line metadata when a blocker is found; it does not echo matched secret values.
 
 ## Public-surface semantic triage
 
-The 47 review-only keyword matches were manually reconciled rather than promoted to automatic failures.
+The review-only keyword matches were manually reconciled rather than promoted to automatic failures.
 
 ### `sandbox` / `native Windows`
 
@@ -96,4 +96,4 @@ This audit does not authorize publication. At the time of the release-candidate 
 
 `PASS — NO TRACKED-CONTENT PUBLICATION BLOCKER IDENTIFIED.`
 
-The temporary hygiene probe must successfully scan this audit/task-truth update and then be removed. Because the probe excludes only its own file, removing that excluded file does not add any unscanned public content.
+The accepted tree omits the temporary hygiene probe after the final successful content scan. Because the probe excludes only its own file, that removal does not add any unscanned public content.
