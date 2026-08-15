@@ -2,8 +2,10 @@ use crate::domain::{BlobEvidence, CheckEvidence, Eligibility, EvidenceReport, St
 use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
 use std::error::Error;
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
@@ -299,12 +301,17 @@ impl Store {
 }
 
 fn existing_blob_matches(path: &Path, expected: &[u8]) -> Result<bool> {
-    let metadata = fs::metadata(path)?;
-    if metadata.len() != u64::try_from(expected.len())? {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_file() {
         return Ok(false);
     }
 
-    let mut file = OpenOptions::new().read(true).open(path)?;
+    let mut file = open_existing_blob(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.file_type().is_file() || metadata.len() != u64::try_from(expected.len())? {
+        return Ok(false);
+    }
+
     let mut offset = 0_usize;
     let mut buffer = [0_u8; 8192];
     loop {
@@ -323,6 +330,19 @@ fn existing_blob_matches(path: &Path, expected: &[u8]) -> Result<bool> {
     Ok(offset == expected.len())
 }
 
+#[cfg(unix)]
+fn open_existing_blob(path: &Path) -> Result<File> {
+    Ok(OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)?)
+}
+
+#[cfg(not(unix))]
+fn open_existing_blob(_path: &Path) -> Result<File> {
+    Err("existing evidence blob validation is unsupported on this platform".into())
+}
+
 fn insert_event(
     connection: &Connection,
     run_id: &str,
@@ -337,4 +357,35 @@ fn insert_event(
         params![run_id, kind, authority, payload_json, now_ms],
     )?;
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::existing_blob_matches;
+    use std::fs;
+    use std::os::unix::fs::symlink;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn existing_blob_rejects_symlink_even_when_target_bytes_match() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "winds-existing-blob-symlink-{nanos}-{}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        let target = root.join("target");
+        let link = root.join("blob");
+        fs::write(&target, b"evidence").unwrap();
+        symlink(&target, &link).unwrap();
+
+        assert!(!existing_blob_matches(&link, b"evidence").unwrap());
+
+        fs::remove_file(&link).unwrap();
+        fs::remove_file(&target).unwrap();
+        fs::remove_dir(&root).unwrap();
+    }
 }

@@ -9,6 +9,7 @@ This ledger records external projects that materially shape Winds. Before code i
 | `HKUDS/DeepCode` | `287510fbf6820147a48adf79f7fd86b0ed1afe92`; `core/skills/builtin/review-agent/SKILL.md` | MIT | Read-only defect-first review methodology: complete diff, surrounding code, actionable P0-P3 findings, no invented issues | Review/process reference; no runtime dependency or copied runtime code |
 | System Git | feature-probed; minimum target >= 2.36 | GPL-2.0-only executable boundary | Git/ref/worktree authority | Invoke executable; parse machine-readable output |
 | SQLite / `rusqlite` | rusqlite 0.40.2; committed `Cargo.lock` | SQLite public domain / rusqlite MIT | Transactional local metadata/events/projections | `rusqlite` dependency with bundled SQLite |
+| Rust `libc` | 0.2.189; committed `Cargo.lock` | MIT OR Apache-2.0 | Unix `O_NOFOLLOW` / `O_NONBLOCK` constants for race-resistant validation of pre-existing evidence blobs | Direct dependency; platform constants only |
 | `amElnagdy/delegate-skills` | pin required before agent adapter implementation | MIT | Future adapter semantics/adversarial test corpus | Study/reimplement selectively; not runtime dependency |
 
 No copied donor runtime code is currently present. The implementation in Winds is Winds-authored; external projects above are dependencies or process/design references only.
