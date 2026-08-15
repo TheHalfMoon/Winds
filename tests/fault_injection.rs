@@ -448,10 +448,8 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
         .as_nanos();
     loop {
         let attempt = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = env::temp_dir().join(format!(
-            "{prefix}-{nanos}-{}-{attempt}",
-            std::process::id()
-        ));
+        let path =
+            env::temp_dir().join(format!("{prefix}-{nanos}-{}-{attempt}", std::process::id()));
         match fs::create_dir(&path) {
             Ok(()) => return path,
             Err(error) if error.kind() == ErrorKind::AlreadyExists => continue,
