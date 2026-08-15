@@ -14,7 +14,7 @@ fn winds_never_invokes_prohibited_downstream_git_operations() {
     let repo = root.join("repo");
     let winds_home = root.join("winds-home");
     let shim_dir = root.join("shim");
-    let trace_path = root.join("git-trace.tsv");
+    let trace_path = root.join("git-trace.bin");
     let real_git = real_git_path();
     fs::create_dir_all(&repo).unwrap();
 
@@ -95,60 +95,141 @@ fn winds_never_invokes_prohibited_downstream_git_operations() {
             .any(|run| run["run_id"] == run_id && run["status"] == "MANUAL_RECOVERY_REQUIRED")
     );
 
-    let trace = fs::read_to_string(&trace_path).unwrap();
+    let trace = fs::read(&trace_path).unwrap();
     assert_no_prohibited_git_operations(&trace);
 
     remove_owned_temp_dir(&root);
 }
 
-fn assert_no_prohibited_git_operations(trace: &str) {
-    let invocations: Vec<Vec<&str>> = trace
-        .lines()
-        .map(|line| line.split('\t').skip(1).collect())
-        .collect();
+#[test]
+fn binary_trace_parser_preserves_embedded_delimiters_and_empty_args() {
+    let trace = b"4\0-C\0/tmp/with\ttab\nand-newline\0status\0\0";
+    let invocations = parse_trace(trace);
+
+    assert_eq!(invocations.len(), 1);
+    assert_eq!(invocations[0].len(), 4);
+    assert_eq!(invocations[0][0], b"-C");
+    assert_eq!(invocations[0][1], b"/tmp/with\ttab\nand-newline");
+    assert_eq!(invocations[0][2], b"status");
+    assert!(invocations[0][3].is_empty());
+}
+
+fn assert_no_prohibited_git_operations(trace: &[u8]) {
+    let invocations = parse_trace(trace);
+    let rendered = render_invocations(&invocations);
 
     assert!(
         !invocations.is_empty(),
         "Git shim recorded no Winds invocations"
     );
     assert!(
-        invocations.iter().any(|args| args.contains(&"worktree")),
-        "Git shim did not observe the expected worktree path"
+        invocations
+            .iter()
+            .filter_map(|args| git_subcommand_index(args).map(|index| &args[index]))
+            .any(|subcommand| subcommand == b"worktree"),
+        "Git shim did not observe the expected worktree path: {rendered}"
     );
 
-    for forbidden in ["merge", "rebase", "cherry-pick", "push"] {
+    for forbidden in [b"merge".as_slice(), b"rebase", b"cherry-pick", b"push"] {
         assert!(
-            !invocations.iter().any(|args| args.contains(&forbidden)),
-            "Winds invoked prohibited git operation `{forbidden}`:\n{trace}"
+            !invocations.iter().any(|args| {
+                git_subcommand_index(args)
+                    .map(|index| args[index].as_slice() == forbidden)
+                    .unwrap_or(false)
+            }),
+            "Winds invoked prohibited git operation `{}`: {rendered}",
+            String::from_utf8_lossy(forbidden)
         );
     }
 
     for args in &invocations {
-        if let Some(clean_index) = args.iter().position(|arg| *arg == "clean") {
+        let Some(subcommand_index) = git_subcommand_index(args) else {
+            continue;
+        };
+
+        if args[subcommand_index] == b"clean" {
             assert!(
-                !args[clean_index + 1..].iter().any(|arg| is_force_flag(arg)),
-                "Winds invoked prohibited force-clean operation:\n{trace}"
+                !args[subcommand_index + 1..]
+                    .iter()
+                    .any(|arg| is_force_flag(arg)),
+                "Winds invoked prohibited force-clean operation: {rendered}"
             );
         }
 
-        if let Some(worktree_index) = args.iter().position(|arg| *arg == "worktree")
-            && args.get(worktree_index + 1) == Some(&"remove")
+        if args[subcommand_index] == b"worktree"
+            && args.get(subcommand_index + 1).map(Vec::as_slice) == Some(b"remove")
         {
             assert!(
-                !args[worktree_index + 2..]
+                !args[subcommand_index + 2..]
                     .iter()
                     .any(|arg| is_force_flag(arg)),
-                "Winds invoked prohibited force-remove operation:\n{trace}"
+                "Winds invoked prohibited force-remove operation: {rendered}"
             );
         }
     }
 }
 
-fn is_force_flag(arg: &str) -> bool {
-    arg == "--force"
-        || (arg.starts_with('-')
-            && !arg.starts_with("--")
-            && arg.chars().skip(1).any(|flag| flag == 'f'))
+fn parse_trace(trace: &[u8]) -> Vec<Vec<Vec<u8>>> {
+    let mut fields = trace.split(|byte| *byte == 0);
+    let mut invocations = Vec::new();
+
+    loop {
+        let Some(count_bytes) = fields.next() else {
+            break;
+        };
+        if count_bytes.is_empty() {
+            assert!(fields.next().is_none(), "unexpected empty trace record");
+            break;
+        }
+
+        let count = std::str::from_utf8(count_bytes)
+            .expect("trace argc must be ASCII")
+            .parse::<usize>()
+            .expect("trace argc must be numeric");
+        let mut args = Vec::with_capacity(count);
+        for _ in 0..count {
+            args.push(
+                fields
+                    .next()
+                    .expect("trace record ended before argc arguments")
+                    .to_vec(),
+            );
+        }
+        invocations.push(args);
+    }
+
+    invocations
+}
+
+fn git_subcommand_index(args: &[Vec<u8>]) -> Option<usize> {
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_slice() {
+            b"-c" | b"-C" => index += 2,
+            _ => return Some(index),
+        }
+    }
+    None
+}
+
+fn is_force_flag(arg: &[u8]) -> bool {
+    arg == b"--force"
+        || (arg.starts_with(b"-")
+            && !arg.starts_with(b"--")
+            && arg[1..].contains(&b'f'))
+}
+
+fn render_invocations(invocations: &[Vec<Vec<u8>>]) -> String {
+    invocations
+        .iter()
+        .map(|args| {
+            args.iter()
+                .map(|arg| format!("{:?}", String::from_utf8_lossy(arg)))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 fn install_git_trace_shim(shim_dir: &Path) {
@@ -158,11 +239,10 @@ fn install_git_trace_shim(shim_dir: &Path) {
         &shim,
         r#"#!/bin/sh
 {
-    printf 'git'
+    printf '%s\000' "$#"
     for arg in "$@"; do
-        printf '\t%s' "$arg"
+        printf '%s\000' "$arg"
     done
-    printf '\n'
 } >> "$WINDS_GIT_TRACE"
 exec "$WINDS_REAL_GIT" "$@"
 "#,
