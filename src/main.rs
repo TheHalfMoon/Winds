@@ -284,48 +284,49 @@ fn recover(flags: HashMap<String, String>) -> Result<()> {
         } else {
             Ok((false, false))
         };
-        let (exact_head, clean, inspection_failed) = match inspection {
-            Ok((exact_head, clean)) => (exact_head, clean, false),
-            Err(_) => (false, false, true),
+        let (exact_head, clean, inspection_error) = match inspection {
+            Ok((exact_head, clean)) => (exact_head, clean, None),
+            Err(error) => (false, false, Some(error.to_string())),
         };
 
-        let (status, recovery_reason) = if run.state == "PROVISIONING" {
+        let (status, recovery_reason): (&str, Option<String>) = if run.state == "PROVISIONING" {
             (
                 "MANUAL_RECOVERY_REQUIRED",
                 Some(
-                    "run was interrupted during provisioning; automatic ownership cannot be proven",
+                    "run was interrupted during provisioning; automatic ownership cannot be proven"
+                        .to_owned(),
                 ),
             )
-        } else if inspection_failed {
+        } else if let Some(error) = inspection_error.as_deref() {
             (
                 "MANUAL_RECOVERY_REQUIRED",
-                Some("worktree state could not be inspected"),
+                Some(format!("worktree state could not be inspected: {error}")),
             )
         } else if exact_head && clean {
             ("PRESENT", None)
         } else if !registered {
             (
                 "MANUAL_RECOVERY_REQUIRED",
-                Some("worktree is not registered in Git inventory"),
+                Some("worktree is not registered in Git inventory".to_owned()),
             )
         } else if !path.exists() {
             (
                 "MANUAL_RECOVERY_REQUIRED",
-                Some("registered worktree path is missing"),
+                Some("registered worktree path is missing".to_owned()),
             )
         } else if !exact_head {
             (
                 "MANUAL_RECOVERY_REQUIRED",
-                Some("worktree HEAD does not match the recorded candidate"),
+                Some("worktree HEAD does not match the recorded candidate".to_owned()),
             )
         } else {
             (
                 "MANUAL_RECOVERY_REQUIRED",
-                Some("worktree contains unverified changes"),
+                Some("worktree contains unverified changes".to_owned()),
             )
         };
 
-        if let Some(reason) = recovery_reason {
+        if let Some(reason) = recovery_reason.as_deref() {
             manual_recovery_required = true;
             store.record_recovery_required(&run.run_id, reason, unix_ms()?)?;
         }

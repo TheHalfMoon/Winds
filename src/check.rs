@@ -57,7 +57,16 @@ pub fn run_check(cwd: &Path, command: &str, timeout: Duration) -> Result<CheckRu
 
     let mut timed_out = false;
     let exit = loop {
-        if child_exited_without_reaping(group_pid)? {
+        let exited = match child_exited_without_reaping(group_pid) {
+            Ok(exited) => exited,
+            Err(error) => {
+                terminate_process_group(group_pid);
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
+        };
+        if exited {
             // Keep the exited group leader unreaped until descendants have been terminated so the
             // process-group id cannot be recycled to an unrelated process group.
             terminate_process_group(group_pid);
