@@ -4,7 +4,7 @@ This checklist records implementation/evidence truth for Spec 003. A checked ite
 
 ## Phase 1 - Canonical Baseline and Dependency Decision
 
-- [x] **T042** Establish Spec 003 with `spec.md`, `plan.md`, `tasks.md`, and `research.md` on a dedicated branch rooted at canonical main `8e92c5612a9ddc32996ed5e08475e3c9baa5e161`. The specification explicitly authorizes the 0.2 workspace/PTTY/native-Windows expansion while retaining the no-daemon/no-public-protocol/no-plugin-system boundary.
+- [x] **T042** Establish Spec 003 with `spec.md`, `plan.md`, `tasks.md`, and `research.md` on a dedicated branch rooted at canonical main `8e92c5612a9ddc32996ed5e08475e3c9baa5e161`. The specification explicitly authorizes the 0.2 workspace/PTY/native-Windows expansion while retaining the no-daemon/no-public-protocol/no-plugin-system boundary.
 - [ ] **T043** Perform the exact PTY dependency/provenance decision. Audit the current `portable-pty` candidate (or demonstrably smaller/better alternative) for exact version/source, MSRV 1.97.1 compatibility, Linux/macOS/Windows behavior, transitive dependency footprint, license/notice obligations, and API needed by Spec 003. Record reference/dependency/copy mode in provenance before runtime code lands. Do not copy WezTerm/Zellij/Zed/Ghostty runtime code without path+commit provenance.
 
 ## Phase 2 - Workspace and Execution Persistence
