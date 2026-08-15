@@ -13,3 +13,5 @@ This ledger records external projects that materially shape Winds. Before code i
 | `amElnagdy/delegate-skills` | pin required before agent adapter implementation | MIT | Future adapter semantics/adversarial test corpus | Study/reimplement selectively; not runtime dependency |
 
 No copied donor runtime code is currently present. The implementation in Winds is Winds-authored; external projects above are dependencies or process/design references only.
+
+Winds-authored source is licensed under `MIT OR Apache-2.0` through the repository's standard `LICENSE-MIT` and `LICENSE-APACHE` files. That source-license choice does not replace or relicense third-party dependency terms; release artifacts must continue to satisfy applicable upstream notice obligations recorded by the release licensing audit.
