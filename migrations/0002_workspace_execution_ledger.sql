@@ -6,6 +6,9 @@ CREATE TABLE IF NOT EXISTS workspaces (
     last_opened_unix_ms INTEGER NOT NULL
 );
 
+-- kind/source/status vocabularies are enforced by the typed Store API and fail-closed reads.
+-- They remain unconstrained TEXT here so later forward-only specs can extend the common ledger
+-- without rebuilding this table merely to add a new execution domain or fact-source category.
 CREATE TABLE IF NOT EXISTS executions (
     execution_id TEXT PRIMARY KEY,
     workspace_id TEXT NOT NULL REFERENCES workspaces(workspace_id),
@@ -37,8 +40,8 @@ CREATE TABLE IF NOT EXISTS terminal_sessions (
     shell_executable TEXT NOT NULL,
     shell_arguments_json TEXT NOT NULL,
     requested_cwd TEXT NOT NULL,
-    initial_cols INTEGER CHECK (initial_cols IS NULL OR initial_cols > 0),
-    initial_rows INTEGER CHECK (initial_rows IS NULL OR initial_rows > 0),
+    initial_cols INTEGER CHECK (initial_cols IS NULL OR initial_cols BETWEEN 1 AND 65535),
+    initial_rows INTEGER CHECK (initial_rows IS NULL OR initial_rows BETWEEN 1 AND 65535),
     close_reason TEXT
 );
 
