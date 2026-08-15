@@ -112,17 +112,13 @@ fn assert_no_prohibited_git_operations(trace: &str) {
         "Git shim recorded no Winds invocations"
     );
     assert!(
-        invocations
-            .iter()
-            .any(|args| args.iter().any(|arg| *arg == "worktree")),
+        invocations.iter().any(|args| args.contains(&"worktree")),
         "Git shim did not observe the expected worktree path"
     );
 
     for forbidden in ["merge", "rebase", "cherry-pick", "push"] {
         assert!(
-            !invocations
-                .iter()
-                .any(|args| args.iter().any(|arg| *arg == forbidden)),
+            !invocations.iter().any(|args| args.contains(&forbidden)),
             "Winds invoked prohibited git operation `{forbidden}`:\n{trace}"
         );
     }
@@ -135,15 +131,15 @@ fn assert_no_prohibited_git_operations(trace: &str) {
             );
         }
 
-        if let Some(worktree_index) = args.iter().position(|arg| *arg == "worktree") {
-            if args.get(worktree_index + 1) == Some(&"remove") {
-                assert!(
-                    !args[worktree_index + 2..]
-                        .iter()
-                        .any(|arg| is_force_flag(arg)),
-                    "Winds invoked prohibited force-remove operation:\n{trace}"
-                );
-            }
+        if let Some(worktree_index) = args.iter().position(|arg| *arg == "worktree")
+            && args.get(worktree_index + 1) == Some(&"remove")
+        {
+            assert!(
+                !args[worktree_index + 2..]
+                    .iter()
+                    .any(|arg| is_force_flag(arg)),
+                "Winds invoked prohibited force-remove operation:\n{trace}"
+            );
         }
     }
 }
