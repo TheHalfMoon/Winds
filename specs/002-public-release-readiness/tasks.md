@@ -21,11 +21,11 @@ This checklist records implementation/evidence truth for Spec 002. Checked items
 
 ## Phase 4 - Non-Publishing Release Candidate
 
-- [ ] **T032** Add one minimal release-candidate workflow that is manual or narrowly release-scoped, checks out an exact candidate SHA, uses read-only repository permissions, pinned Rust `1.97.1`, committed `Cargo.lock`, and performs zero tag/release/visibility/package mutations.
-- [ ] **T033** Make the release-candidate workflow rerun existing deterministic quality and the SC-001 100-cycle soak on the exact candidate before accepting artifacts.
-- [ ] **T034** Build only proven 0.1 distribution targets using then-current official runner/target support: Linux x86-64 and macOS arm64 when CI proves it. Do not emit or imply native Windows support.
-- [ ] **T035** Produce version/target-identifying release-candidate artifact names plus a SHA-256 checksum manifest, and verify the manifest in CI without adding signing/attestation infrastructure.
-- [ ] **T036** Execute the complete release-candidate dry run on one exact candidate commit and record reproducible evidence for quality, SC-001, target builds, checksums, and zero publication-side effects.
+- [x] **T032** Add one minimal release-candidate workflow that is PR-path-scoped or manually dispatchable with an exact `candidate_sha`, checks out that exact commit with credential persistence disabled, uses repository permission `contents: read`, pinned Rust `1.97.1`, and the committed lockfile, and contains no tag/release/visibility/package publication action.
+- [x] **T033** Make the release-candidate workflow rerun exact-head deterministic quality on Ubuntu 24.04 and macOS 15 plus the existing SC-001 100-cycle soak before artifact jobs can start. Release-candidate run #2 on exact head `6160472413da40e5a24d4290af58508bde44a5c8` passed both quality jobs and logged `SC-001 PASS: 100/100 create/verify/promote/reconcile cycles completed with zero observed primary-checkout mutations` with `1 passed; 0 failed`.
+- [x] **T034** Build only proven 0.1 distribution targets. Release-candidate run #2 proved `x86_64-unknown-linux-gnu` on Ubuntu 24.04/x86-64 and `aarch64-apple-darwin` on the macOS 15 arm64 runner; no native Windows artifact is emitted or implied.
+- [x] **T035** Produce version/target-identifying release-candidate archives plus SHA-256 manifests and verify them before upload. Run #2 emitted exactly `winds-v0.1.0-x86_64-unknown-linux-gnu` and `winds-v0.1.0-aarch64-apple-darwin` workflow artifacts; both build logs report `THIRD_PARTY_PACKAGE_COUNT=49`, `THIRD_PARTY_LICENSE_FILES_COMPLETE=YES`, `UNICODE_NOTICE_PRESENT=YES`, and `SHA256_VERIFIED=<target archive>`. The exact-version `rsqlite-vfs 0.1.1` MIT notice override is provenance-pinned; any other missing notice still fails closed.
+- [x] **T036** Execute the complete non-publishing release-candidate dry run on exact implementation head `6160472413da40e5a24d4290af58508bde44a5c8`. Release-candidate run #2 and ordinary quality run #107 both concluded success. After the dry run the repository remained private, Git tags remained empty, GitHub Releases remained empty, and `Cargo.toml` retained `publish = false`; therefore no publication-side effect was observed.
 
 ## Phase 5 - Public-Repository Hygiene and Review
 
