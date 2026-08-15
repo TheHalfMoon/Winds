@@ -214,9 +214,7 @@ fn git_subcommand_index(args: &[Vec<u8>]) -> Option<usize> {
 
 fn is_force_flag(arg: &[u8]) -> bool {
     arg == b"--force"
-        || (arg.starts_with(b"-")
-            && !arg.starts_with(b"--")
-            && arg[1..].contains(&b'f'))
+        || (arg.starts_with(b"-") && !arg.starts_with(b"--") && arg[1..].contains(&b'f'))
 }
 
 fn render_invocations(invocations: &[Vec<Vec<u8>>]) -> String {
