@@ -1,6 +1,6 @@
 # Tasks: Verification Walking Skeleton
 
-This checklist records **as-built truth** for PR #1. A checked item has implementation/evidence in the PR. Open items are not implied complete by nearby work and remain gates for the stated scope.
+This checklist records **as-built truth** for the verification walking skeleton and its bounded hardening follow-ups. A checked item has implementation/evidence in merged or active review history. Open items are not implied complete by nearby work and remain gates for the stated scope.
 
 ## Phase 1 - Repository and Test Harness
 
@@ -28,7 +28,7 @@ This checklist records **as-built truth** for PR #1. A checked item has implemen
 - [x] **T013** Record explicit `CALLER_REQUESTED` promotion intent separately from `WINDS_OBSERVED` verification evidence; do not claim authenticated human identity.
 - [x] **T014** Revalidate candidate state and required checks before promotion, persist fresh promotion-recheck evidence, and serialize the shared-worktree recheck/promotion sequence per Git common directory.
 - [x] **T015** Create a dedicated Winds-selected branch/ref at the exact verified snapshot without touching the source checkout.
-- [ ] **T016** Add explicit negative fixtures for every prohibited downstream Git operation (merge, rebase, cherry-pick, push, force-clean, force-remove). Current fixtures prove source-checkout preservation and ambiguous-worktree retention, while the implementation exposes none of those prohibited operations; exhaustive negative instrumentation remains a pre-release hardening gate.
+- [x] **T016** Add explicit negative fixtures for every prohibited downstream Git operation (merge, rebase, cherry-pick, push, force-clean, force-remove). PR #2 adds an instrumented Git shim that traces the real `verify -> promote -> recover` lifecycle and fails on any prohibited operation while proving the trace observed Winds worktree activity; quality run #80 passed format, Clippy `-D warnings`, and tests on Ubuntu/macOS before this task-truth update.
 
 ## Phase 5 - Recovery and Review
 
@@ -37,7 +37,7 @@ This checklist records **as-built truth** for PR #1. A checked item has implemen
 - [x] **T019** Add deterministic read-only CI with pinned GitHub Action SHAs, Rust `1.97.1`, committed `Cargo.lock`, `--locked`, rustfmt, Clippy `-D warnings`, and tests on Ubuntu/macOS.
 - [x] **T020** Re-run correctness/safety review after DeepCode review-agent and Qodo findings. The reconciled code head `1d4390af48c668542b4b8b9ad2d6ba3b34d10543` passed read-only quality run #71: rustfmt, Clippy `-D warnings`, and tests on Ubuntu/macOS. Blocking findings around repository-local state, corrupt evidence blobs, Git config-hidden untracked files, path whitespace, promotion recheck concurrency, and Winds-owned clean-check/provision serialization were resolved.
 - [x] **T021** Re-run Ponytail v4.9.0 after the external-review corrections. The repo-wide Git lock remains intentionally simpler than adding a per-run locking subsystem; no additional abstraction or dependency can be removed without weakening a current invariant. Final verdict remains `Lean already. Ship.`
-- [ ] **T022** Complete independent/external review reconciliation on the final Ready-for-Review head. Qodo produced a real 10-finding review on an earlier head; valid findings were reconciled, including two spec-contract gaps and eight code/provenance/safety issues. A fresh Qodo review on the final head plus any available Greptile result must be inspected before this gate can close. Bot summaries, skipped reviews, missing acknowledgements, and rate-limit responses do not count as PASS.
+- [x] **T022** Complete independent/external review reconciliation on the final Ready-for-Review head. Qodo explicitly updated its final review through exact PR #1 head `1f868d75568a851394dbae17928325bbc0b93e10` with `0 Bugs / 0 Rule violations / 0 Skill insights`; CodeRabbit reported no actionable comments on the final incremental review, all review threads were resolved, and no Greptile result became available to inspect. PR #1 was then merged by merge commit `1b5885faa019567657a2527cb2b6c54497af9077`, preserving the reviewed head as a direct parent.
 
 ## Pre-release Soak
 
