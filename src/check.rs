@@ -35,6 +35,7 @@ pub fn run_check(cwd: &Path, command: &str, timeout: Duration) -> Result<CheckRu
         .process_group(0)
         .spawn()
         .map_err(|error| format!("failed to start required check: {error}"))?;
+    let group_pid = child.id();
 
     let stdout = child
         .stdout
@@ -56,26 +57,26 @@ pub fn run_check(cwd: &Path, command: &str, timeout: Duration) -> Result<CheckRu
 
     let mut timed_out = false;
     let exit = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if started.elapsed() < timeout => thread::sleep(Duration::from_millis(25)),
-            Ok(None) => {
-                timed_out = true;
-                terminate_process_group(child.id());
-                let _ = child.kill();
-                break child
-                    .wait()
-                    .map_err(|error| format!("failed waiting after check timeout: {error}"))?;
-            }
-            Err(error) => return Err(format!("failed while waiting for required check: {error}")),
+        if child_exited_without_reaping(group_pid)? {
+            // Keep the exited group leader unreaped until descendants have been terminated so the
+            // process-group id cannot be recycled to an unrelated process group.
+            terminate_process_group(group_pid);
+            break child
+                .wait()
+                .map_err(|error| format!("failed waiting for required check: {error}"))?;
         }
-    };
+        if started.elapsed() < timeout {
+            thread::sleep(Duration::from_millis(25));
+            continue;
+        }
 
-    // A successful shell may leave background children holding stdout/stderr open.
-    // Verification checks are bounded units of work, so no descendant may outlive the check.
-    if !timed_out {
-        terminate_process_group(child.id());
-    }
+        timed_out = true;
+        terminate_process_group(group_pid);
+        let _ = child.kill();
+        break child
+            .wait()
+            .map_err(|error| format!("failed waiting after check timeout: {error}"))?;
+    };
 
     let stdout = receive_stream(stdout_rx, "stdout")?;
     let stderr = receive_stream(stderr_rx, "stderr")?;
@@ -95,6 +96,27 @@ pub fn run_check(cwd: &Path, command: &str, timeout: Duration) -> Result<CheckRu
         stdout,
         stderr,
     })
+}
+
+fn child_exited_without_reaping(pid: u32) -> Result<bool, String> {
+    // waitid + WNOWAIT observes child exit without releasing its pid, which keeps the process-group
+    // identity stable until Winds has signalled any surviving descendants.
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    let result = unsafe {
+        libc::waitid(
+            libc::P_PID,
+            pid as libc::id_t,
+            &mut info,
+            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+        )
+    };
+    if result == -1 {
+        return Err(format!(
+            "failed while waiting for required check: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(unsafe { info.si_pid() } != 0)
 }
 
 fn receive_stream(

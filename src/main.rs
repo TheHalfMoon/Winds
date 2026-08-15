@@ -273,13 +273,21 @@ fn recover(flags: HashMap<String, String>) -> Result<()> {
     for run in runs {
         let path = PathBuf::from(&run.worktree_path);
         let registered = inventory.iter().any(|known| known == &path);
-        let exact_head = registered
-            && path.exists()
-            && repo
-                .worktree_head(&path)
-                .map(|head| head == run.candidate_oid)
-                .unwrap_or(false);
-        let clean = exact_head && repo.worktree_is_clean(&path).unwrap_or(false);
+        let inspection = if registered && path.exists() {
+            match repo.worktree_head(&path) {
+                Ok(head) => match repo.worktree_is_clean(&path) {
+                    Ok(clean) => Ok((head == run.candidate_oid, clean)),
+                    Err(error) => Err(error),
+                },
+                Err(error) => Err(error),
+            }
+        } else {
+            Ok((false, false))
+        };
+        let (exact_head, clean, inspection_failed) = match inspection {
+            Ok((exact_head, clean)) => (exact_head, clean, false),
+            Err(_) => (false, false, true),
+        };
 
         let (status, recovery_reason) = if run.state == "PROVISIONING" {
             (
@@ -287,6 +295,11 @@ fn recover(flags: HashMap<String, String>) -> Result<()> {
                 Some(
                     "run was interrupted during provisioning; automatic ownership cannot be proven",
                 ),
+            )
+        } else if inspection_failed {
+            (
+                "MANUAL_RECOVERY_REQUIRED",
+                Some("worktree state could not be inspected"),
             )
         } else if exact_head && clean {
             ("PRESENT", None)
