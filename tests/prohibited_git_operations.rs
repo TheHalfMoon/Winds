@@ -173,10 +173,7 @@ fn parse_trace(trace: &[u8]) -> Vec<Vec<Vec<u8>>> {
     let mut fields = trace.split(|byte| *byte == 0);
     let mut invocations = Vec::new();
 
-    loop {
-        let Some(count_bytes) = fields.next() else {
-            break;
-        };
+    while let Some(count_bytes) = fields.next() {
         if count_bytes.is_empty() {
             assert!(fields.next().is_none(), "unexpected empty trace record");
             break;
