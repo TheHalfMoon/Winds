@@ -227,7 +227,7 @@ fn conpty_terminate_reaps_the_exact_owned_child() {
 
     complete_headless_terminal_startup(&mut session, &output);
     session
-        .send_input(b"echo WINDS_READY\r\nping -t 127.0.0.1\r\n")
+        .send_input(b"echo WINDS_READY\r\nset /p WINDS_BLOCK=\r\n")
         .unwrap();
     wait_for_output(&output, b"WINDS_READY");
     let exit = session.terminate().unwrap();
