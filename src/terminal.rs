@@ -40,7 +40,8 @@ pub struct TerminalSession {
     session_id: TerminalSessionId,
     profile_id: String,
     start_cwd: PathBuf,
-    master: Box<dyn MasterPty + Send>,
+    master: Option<Box<dyn MasterPty + Send>>,
+    output_reader: Option<Box<dyn Read + Send>>,
     writer: Option<Box<dyn Write + Send>>,
     child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
     final_exit: Option<TerminalExit>,
@@ -55,6 +56,7 @@ impl TerminalSession {
 
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(pty_size)?;
+        let output_reader = pair.master.try_clone_reader()?;
         let writer = pair.master.take_writer()?;
 
         let mut command = CommandBuilder::new(&profile.executable);
@@ -67,7 +69,8 @@ impl TerminalSession {
             session_id,
             profile_id: profile.profile_id.clone(),
             start_cwd,
-            master: pair.master,
+            master: Some(pair.master),
+            output_reader: Some(output_reader),
             writer: Some(writer),
             child: Some(child),
             final_exit: None,
@@ -86,8 +89,10 @@ impl TerminalSession {
         &self.start_cwd
     }
 
-    pub fn try_clone_output_reader(&self) -> Result<Box<dyn Read + Send>> {
-        Ok(self.master.try_clone_reader()?)
+    pub fn take_output_reader(&mut self) -> Result<Box<dyn Read + Send>> {
+        self.output_reader
+            .take()
+            .ok_or_else(|| "terminal session output reader has already been taken".into())
     }
 
     pub fn send_input(&mut self, bytes: &[u8]) -> Result<()> {
@@ -103,12 +108,19 @@ impl TerminalSession {
 
     pub fn resize(&mut self, size: TerminalSize) -> Result<()> {
         self.require_active()?;
-        self.master.resize(size.to_pty_size()?)?;
+        self.master
+            .as_ref()
+            .ok_or("terminal PTY master is already closed")?
+            .resize(size.to_pty_size()?)?;
         Ok(())
     }
 
     pub fn current_size(&self) -> Result<TerminalSize> {
-        let size = self.master.get_size()?;
+        let size = self
+            .master
+            .as_ref()
+            .ok_or("terminal PTY master is already closed")?
+            .get_size()?;
         Ok(TerminalSize {
             rows: size.rows,
             cols: size.cols,
@@ -127,6 +139,8 @@ impl TerminalSession {
             .map_err(|_| "terminal interrupt unavailable: child process id is out of range")?;
         let process_group = self
             .master
+            .as_ref()
+            .ok_or("terminal interrupt unavailable: PTY master is already closed")?
             .process_group_leader()
             .ok_or("terminal interrupt unavailable: foreground PTY process group is unknown")?;
 
@@ -225,6 +239,8 @@ impl TerminalSession {
         };
         self.child.take();
         self.writer.take();
+        self.output_reader.take();
+        self.master.take();
         self.final_exit = Some(exit.clone());
         exit
     }
@@ -424,7 +440,8 @@ mod tests {
         assert_eq!(session.profile_id(), profile.profile_id);
         assert_eq!(session.start_cwd(), canonical_root);
 
-        let output = start_output_reader(session.try_clone_output_reader().unwrap());
+        let output = start_output_reader(session.take_output_reader().unwrap());
+        assert!(session.take_output_reader().is_err());
         session
             .send_input(
                 b"pwd\nprintf '\\127\\111\\116\\104\\123\\137\\122\\105\\101\\104\\131\\012'\nexit\n",
@@ -474,7 +491,7 @@ mod tests {
 
         let profile = native_sh_profile();
         let mut session = TerminalSession::start(&profile, root.path(), default_size()).unwrap();
-        let output = start_output_reader(session.try_clone_output_reader().unwrap());
+        let output = start_output_reader(session.take_output_reader().unwrap());
 
         let mut command = b"sh ".to_vec();
         command.extend_from_slice(&shell_quote_path(&script));
@@ -500,7 +517,7 @@ mod tests {
         let root = TestRoot::new("terminate");
         let profile = native_sh_profile();
         let mut session = TerminalSession::start(&profile, root.path(), default_size()).unwrap();
-        let output = start_output_reader(session.try_clone_output_reader().unwrap());
+        let output = start_output_reader(session.take_output_reader().unwrap());
 
         session
             .send_input(
