@@ -27,13 +27,13 @@ pub struct WorkspaceInspection {
 pub fn open_existing_workspace(
     path: &Path,
     canonical_state_root: &Path,
-    store: &Store,
     now_ms: i64,
 ) -> Result<WorkspaceInspection> {
     let repo = open_worktree(path)?;
     let observation = inspect_worktree(&repo)?;
     require_canonical_external_state_root(&repo, canonical_state_root)?;
-    register_observed_workspace(&observation, store, now_ms)?;
+    let store = Store::open(canonical_state_root)?;
+    register_observed_workspace(&observation, &store, now_ms)?;
     Ok(observation)
 }
 
@@ -269,6 +269,12 @@ mod tests {
         (repo, nested)
     }
 
+    fn create_state_root(root: &Path) -> PathBuf {
+        let home = root.join("winds-home");
+        fs::create_dir(&home).unwrap();
+        home.canonicalize().unwrap()
+    }
+
     fn cleanup_owned_root(root: &Path) {
         let canonical_root = root.canonicalize().unwrap();
         let canonical_temp = std::env::temp_dir().canonicalize().unwrap();
@@ -285,11 +291,9 @@ mod tests {
     fn open_registers_canonical_identity_and_refreshes_mutable_observations() {
         let root = test_root("open");
         let (repo, nested) = initialize_repo(&root);
-        let home = root.join("winds-home");
-        let store = Store::open(&home).unwrap();
-        let canonical_home = home.canonicalize().unwrap();
+        let canonical_home = create_state_root(&root);
 
-        let first = open_existing_workspace(&nested, &canonical_home, &store, 100).unwrap();
+        let first = open_existing_workspace(&nested, &canonical_home, 100).unwrap();
         assert_eq!(
             first.canonical_worktree_root,
             repo.canonicalize().unwrap().to_str().unwrap()
@@ -300,6 +304,7 @@ mod tests {
         assert!(!first.dirty);
         assert!(!first.head_oid.is_empty());
 
+        let store = Store::open(&canonical_home).unwrap();
         let persisted = store.load_workspace(&first.workspace_id).unwrap();
         assert_eq!(persisted.created_unix_ms, 100);
         assert_eq!(persisted.last_opened_unix_ms, 100);
@@ -308,18 +313,20 @@ mod tests {
             first.canonical_worktree_root
         );
         assert_eq!(persisted.git_common_dir, first.git_common_dir);
+        drop(store);
 
         fs::write(repo.join("untracked.txt"), b"dirty\n").unwrap();
-        let second = open_existing_workspace(&repo, &canonical_home, &store, 200).unwrap();
+        let second = open_existing_workspace(&repo, &canonical_home, 200).unwrap();
         assert_eq!(second.workspace_id, first.workspace_id);
         assert_eq!(second.head_oid, first.head_oid);
         assert!(second.dirty);
 
+        let store = Store::open(&canonical_home).unwrap();
         let reopened = store.load_workspace(&first.workspace_id).unwrap();
         assert_eq!(reopened.created_unix_ms, 100);
         assert_eq!(reopened.last_opened_unix_ms, 200);
-
         drop(store);
+
         cleanup_owned_root(&root);
     }
 
@@ -328,63 +335,55 @@ mod tests {
         let root = test_root("detached");
         let (repo, _) = initialize_repo(&root);
         run_git(&repo, ["checkout", "--detach", "HEAD"]);
-        let home = root.join("winds-home");
-        let store = Store::open(&home).unwrap();
-        let canonical_home = home.canonicalize().unwrap();
+        let canonical_home = create_state_root(&root);
 
-        let observed = open_existing_workspace(&repo, &canonical_home, &store, 300).unwrap();
+        let observed = open_existing_workspace(&repo, &canonical_home, 300).unwrap();
         assert_eq!(observed.branch, None);
         assert!(observed.detached);
         assert!(!observed.dirty);
 
-        drop(store);
         cleanup_owned_root(&root);
     }
 
     #[test]
     fn missing_non_git_and_bare_paths_fail_closed_before_registration() {
         let root = test_root("invalid");
-        let home = root.join("winds-home");
-        let store = Store::open(&home).unwrap();
-        let canonical_home = home.canonicalize().unwrap();
+        let canonical_home = create_state_root(&root);
 
         let missing = root.join("missing");
-        let error = open_existing_workspace(&missing, &canonical_home, &store, 400).unwrap_err();
+        let error = open_existing_workspace(&missing, &canonical_home, 400).unwrap_err();
         assert!(error.to_string().contains("does not exist"));
 
         let non_git = root.join("plain");
-        fs::create_dir(&non_git).unwrap();
-        let error = open_existing_workspace(&non_git, &canonical_home, &store, 401).unwrap_err();
+        std::fs::create_dir(&non_git).unwrap();
+        let error = open_existing_workspace(&non_git, &canonical_home, 401).unwrap_err();
         assert!(error.to_string().contains("not a Git worktree"));
 
         let bare = root.join("bare.git");
-        fs::create_dir(&bare).unwrap();
+        std::fs::create_dir(&bare).unwrap();
         run_git(&bare, ["init", "--bare"]);
-        let error = open_existing_workspace(&bare, &canonical_home, &store, 402).unwrap_err();
+        let error = open_existing_workspace(&bare, &canonical_home, 402).unwrap_err();
         assert!(error.to_string().contains("bare Git repositories"));
 
-        drop(store);
         cleanup_owned_root(&root);
     }
 
     #[test]
-    fn registration_rejects_state_root_inside_the_checkout() {
+    fn registration_rejects_actual_state_root_inside_the_checkout() {
         let root = test_root("state-boundary");
         let (repo, _) = initialize_repo(&root);
-        let home = root.join("winds-home");
-        let store = Store::open(&home).unwrap();
         let inside = repo.join("winds-state");
-        fs::create_dir(&inside).unwrap();
+        std::fs::create_dir(&inside).unwrap();
         let canonical_inside = inside.canonicalize().unwrap();
 
-        let error = open_existing_workspace(&repo, &canonical_inside, &store, 500).unwrap_err();
+        let error = open_existing_workspace(&repo, &canonical_inside, 500).unwrap_err();
         assert!(
             error
                 .to_string()
                 .contains("Winds state must live outside the source checkout")
         );
+        assert!(!inside.join("winds.db").exists());
 
-        drop(store);
         cleanup_owned_root(&root);
     }
 }
