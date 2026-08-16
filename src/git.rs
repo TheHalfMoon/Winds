@@ -13,6 +13,8 @@ pub(crate) mod workspace;
 pub(crate) mod workspace_clone;
 #[path = "workspace_inventory.rs"]
 pub(crate) mod workspace_inventory;
+#[path = "wsl.rs"]
+pub(crate) mod wsl;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
