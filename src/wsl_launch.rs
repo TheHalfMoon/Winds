@@ -145,19 +145,8 @@ pub fn launch_wsl_terminal(
     if launcher_text != plan.profile.launcher_executable {
         return Err("WSL launcher identity changed after launch preparation".into());
     }
-    if plan.profile.shell_executable != WSL_SHELL_EXECUTABLE {
-        return Err("WSL terminal profile shell executable is unsupported or stale".into());
-    }
-    if !plan.profile.shell_arguments.is_empty() {
-        return Err("WSL terminal profile shell arguments are unsupported or stale".into());
-    }
-    if plan.profile.cwd_strategy != WslCwdStrategy::MappedWorkspaceOrHomeFallback {
-        return Err("WSL terminal profile cwd strategy is unsupported or stale".into());
-    }
     let expected_profile = build_profile(launcher_text, &distribution);
-    if expected_profile.profile_id != plan.profile.profile_id {
-        return Err("WSL terminal profile identity does not match its launch data".into());
-    }
+    validate_profile_for_launch(&plan.profile, &expected_profile)?;
 
     let (windows_workspace_root, linux_cwd) = match &plan.cwd_resolution {
         WslCwdResolution::MappedWorkspace {
@@ -189,11 +178,11 @@ pub fn launch_wsl_terminal(
     let arguments = build_launch_arguments(
         &distribution.name,
         linux_cwd,
-        &plan.profile.shell_executable,
-        &plan.profile.shell_arguments,
+        &expected_profile.shell_executable,
+        &expected_profile.shell_arguments,
     )?;
     let session = TerminalSession::start_exact_launch(
-        &plan.profile.profile_id,
+        &expected_profile.profile_id,
         &launcher,
         &arguments,
         Path::new(windows_workspace_root),
@@ -242,9 +231,34 @@ pub fn launch_wsl_terminal(
 
     Ok(WslLaunchedTerminal {
         session,
-        profile: plan.profile.clone(),
+        profile: expected_profile,
         cwd_resolution: plan.cwd_resolution.clone(),
     })
+}
+
+fn validate_profile_for_launch(
+    profile: &WslTerminalProfile,
+    expected: &WslTerminalProfile,
+) -> Result<()> {
+    if profile.execution_domain != expected.execution_domain {
+        return Err("WSL terminal profile execution domain is unsupported or stale".into());
+    }
+    if profile.launcher_executable != expected.launcher_executable {
+        return Err("WSL terminal profile launcher executable is unsupported or stale".into());
+    }
+    if profile.shell_executable != expected.shell_executable {
+        return Err("WSL terminal profile shell executable is unsupported or stale".into());
+    }
+    if profile.shell_arguments != expected.shell_arguments {
+        return Err("WSL terminal profile shell arguments are unsupported or stale".into());
+    }
+    if profile.cwd_strategy != expected.cwd_strategy {
+        return Err("WSL terminal profile cwd strategy is unsupported or stale".into());
+    }
+    if profile.profile_id != expected.profile_id {
+        return Err("WSL terminal profile identity does not match its launch data".into());
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -702,8 +716,8 @@ fn parse_single_linux_path(bytes: &[u8], label: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        WslCwdStrategy, WslExecutionDomain, build_launch_arguments, parse_single_linux_path,
-        stable_profile_id,
+        WslCwdStrategy, WslExecutionDomain, WslTerminalProfile, build_launch_arguments,
+        parse_single_linux_path, stable_profile_id, validate_profile_for_launch,
     };
 
     #[test]
@@ -789,5 +803,46 @@ mod tests {
         );
         assert!(parse_single_linux_path(b"relative\n", "mapped path").is_err());
         assert!(parse_single_linux_path(b"/one\n/two\n", "mapped path").is_err());
+    }
+
+    #[test]
+    fn launch_validation_rejects_tampered_host_domain_but_ignores_ux_label() {
+        let domain = WslExecutionDomain {
+            host_os: "windows".to_owned(),
+            host_arch: "x86_64".to_owned(),
+            distribution: "Ubuntu Dev".to_owned(),
+            version: 2,
+        };
+        let strategy = WslCwdStrategy::MappedWorkspaceOrHomeFallback;
+        let profile_id = stable_profile_id(
+            &domain,
+            r"C:\Windows\System32\wsl.exe",
+            "/bin/sh",
+            &[],
+            strategy,
+        );
+        let expected = WslTerminalProfile {
+            profile_id,
+            display_name: "WSL: Ubuntu Dev / /bin/sh".to_owned(),
+            execution_domain: domain,
+            launcher_executable: r"C:\Windows\System32\wsl.exe".to_owned(),
+            shell_executable: "/bin/sh".to_owned(),
+            shell_arguments: Vec::new(),
+            cwd_strategy: strategy,
+        };
+
+        let mut ux_only = expected.clone();
+        ux_only.display_name = "UX label only".to_owned();
+        validate_profile_for_launch(&ux_only, &expected).unwrap();
+
+        let mut tampered_os = expected.clone();
+        tampered_os.execution_domain.host_os = "linux".to_owned();
+        let error = validate_profile_for_launch(&tampered_os, &expected).unwrap_err();
+        assert!(error.to_string().contains("execution domain"));
+
+        let mut tampered_arch = expected.clone();
+        tampered_arch.execution_domain.host_arch = "aarch64".to_owned();
+        let error = validate_profile_for_launch(&tampered_arch, &expected).unwrap_err();
+        assert!(error.to_string().contains("execution domain"));
     }
 }
