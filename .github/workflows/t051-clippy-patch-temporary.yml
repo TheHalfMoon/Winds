@@ -1,0 +1,76 @@
+name: t051-clippy-patch-temporary
+
+on:
+  push:
+    branches: [feat/003-t051-windows-conpty]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: true
+      - name: Apply narrow Windows lint and fail-before-mutation repairs
+        shell: python
+        run: |
+          from pathlib import Path
+
+          git = Path('src/git.rs')
+          text = git.read_text(encoding='utf-8')
+          old = 'use std::ffi::{OsStr, OsString};\n'
+          new = 'use std::ffi::OsStr;\n#[cfg(unix)]\nuse std::ffi::OsString;\n'
+          if text.count(old) != 1:
+              raise SystemExit(f'git import count={text.count(old)}')
+          git.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          domain = Path('src/domain.rs')
+          text = domain.read_text(encoding='utf-8')
+          old = '#[derive(Debug, Clone, Serialize, PartialEq, Eq)]\n#[serde(rename_all = "SCREAMING_SNAKE_CASE")]\npub enum CheckStatus {'
+          new = '''#[cfg_attr(\n    not(unix),\n    allow(\n        dead_code,\n        reason = "Spec 003 T051 keeps authoritative required-check execution Unix-only; Fail/Timeout remain cross-platform evidence values"\n    )\n)]\n#[derive(Debug, Clone, Serialize, PartialEq, Eq)]\n#[serde(rename_all = "SCREAMING_SNAKE_CASE")]\npub enum CheckStatus {'''
+          if text.count(old) != 1:
+              raise SystemExit(f'CheckStatus marker count={text.count(old)}')
+          domain.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          shell = Path('src/shell_profiles.rs')
+          text = shell.read_text(encoding='utf-8')
+          old = '''    use crate::git::workspace_inventory::WorkspaceEnvironmentInventory;\n    use std::ffi::OsStr;\n    use std::fs;\n    #[cfg(unix)]\n    use std::os::unix::fs::PermissionsExt;\n    use std::path::{Path, PathBuf};\n    use std::sync::atomic::{AtomicU64, Ordering};\n\n    static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);\n\n    fn test_root(name: &str) -> PathBuf {'''
+          new = '''    use crate::git::workspace_inventory::WorkspaceEnvironmentInventory;\n    #[cfg(unix)]\n    use std::ffi::OsStr;\n    #[cfg(unix)]\n    use std::fs;\n    #[cfg(unix)]\n    use std::os::unix::fs::PermissionsExt;\n    #[cfg(unix)]\n    use std::path::{Path, PathBuf};\n    #[cfg(unix)]\n    use std::sync::atomic::{AtomicU64, Ordering};\n\n    #[cfg(unix)]\n    static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);\n\n    #[cfg(unix)]\n    fn test_root(name: &str) -> PathBuf {'''
+          if text.count(old) != 1:
+              raise SystemExit(f'shell helper import marker count={text.count(old)}')
+          text = text.replace(old, new, 1)
+          old = '    fn cleanup_owned_root(root: &Path) {\n'
+          new = '    #[cfg(unix)]\n    fn cleanup_owned_root(root: &Path) {\n'
+          if text.count(old) != 1:
+              raise SystemExit(f'cleanup helper count={text.count(old)}')
+          shell.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          main = Path('src/main.rs')
+          text = main.read_text(encoding='utf-8')
+          verify_marker = '''    ensure_allowed_flags(\n        &flags,\n        &["repo", "base", "candidate", "check", "timeout-secs", "home"],\n    )?;\n'''
+          if text.count(verify_marker) != 1:
+              raise SystemExit(f'verify marker count={text.count(verify_marker)}')
+          text = text.replace(verify_marker, verify_marker + '    require_required_check_runtime()?;\n', 1)
+          promote_marker = '    ensure_allowed_flags(&flags, &["repo", "run", "home"])?;\n'
+          if text.count(promote_marker) != 1:
+              raise SystemExit(f'promote marker count={text.count(promote_marker)}')
+          text = text.replace(promote_marker, promote_marker + '    require_required_check_runtime()?;\n', 1)
+          helper_marker = '\nfn parse_flags(args: Vec<String>) -> Result<HashMap<String, String>> {'
+          helper = '''\n#[cfg(unix)]\nfn require_required_check_runtime() -> Result<()> {\n    Ok(())\n}\n\n#[cfg(not(unix))]\nfn require_required_check_runtime() -> Result<()> {\n    Err(\n        "authoritative required-check execution is unsupported on native Windows in Spec 003 T051"\n            .into(),\n    )\n}\n'''
+          if text.count(helper_marker) != 1:
+              raise SystemExit(f'parse marker count={text.count(helper_marker)}')
+          main.write_text(text.replace(helper_marker, helper + helper_marker, 1), encoding='utf-8')
+      - name: Commit repairs
+        shell: bash
+        run: |
+          cargo fmt --all
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/git.rs src/domain.rs src/shell_profiles.rs src/main.rs
+          git diff --cached --check
+          git commit -m "fix(winds): keep T051 Windows surface fail-closed and lint-clean"
+          git push origin "HEAD:$GITHUB_REF_NAME"
