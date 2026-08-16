@@ -146,9 +146,9 @@ fn parse_system_shells(reader: impl BufRead) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MANIFEST_PATHS, inventory_workspace_environment};
     #[cfg(unix)]
     use super::parse_system_shells;
+    use super::{MANIFEST_PATHS, inventory_workspace_environment};
     use crate::git::workspace::WorkspaceInspection;
     use std::ffi::OsStr;
     use std::fs;
@@ -248,14 +248,18 @@ mod tests {
         assert!(!json.contains(secret));
         assert!(!json.contains("TOKEN="));
         assert_eq!(MANIFEST_PATHS.len(), 8);
-        assert!(inventory
-            .shell_candidates
-            .windows(2)
-            .all(|pair| pair[0] < pair[1]));
-        assert!(inventory
-            .shell_candidates
-            .iter()
-            .all(|candidate| Path::new(candidate).is_absolute()));
+        assert!(
+            inventory
+                .shell_candidates
+                .windows(2)
+                .all(|pair| pair[0] < pair[1])
+        );
+        assert!(
+            inventory
+                .shell_candidates
+                .iter()
+                .all(|candidate| Path::new(candidate).is_absolute())
+        );
 
         cleanup_owned_root(&root);
     }
