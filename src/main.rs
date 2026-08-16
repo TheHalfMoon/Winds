@@ -1,4 +1,9 @@
 mod check;
+#[allow(
+    dead_code,
+    reason = "Spec 003 T054 explicit-command backend API; CLI caller lands in T057"
+)]
+mod command;
 mod domain;
 #[allow(
     dead_code,

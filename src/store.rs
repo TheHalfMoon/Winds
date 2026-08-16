@@ -1,7 +1,7 @@
 use crate::domain::{
     BlobEvidence, CheckEvidence, Eligibility, EvidenceReport, ExecutionEventRecord, ExecutionKind,
-    ExecutionRecord, ExecutionStatus, FactSource, StoredRun, TerminalCloseReason,
-    TerminalSessionRecord, WorkspaceRecord,
+    ExecutionRecord, ExecutionStatus, FactSource, ShellCommandRecord, StoredRun,
+    TerminalCloseReason, TerminalSessionRecord, WorkspaceRecord,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
@@ -18,6 +18,7 @@ pub struct Store {
     connection: Connection,
     home: PathBuf,
     deferred_terminal_finalizations: Vec<DeferredTerminalFinalization>,
+    deferred_shell_command_finalizations: Vec<DeferredShellCommandFinalization>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -38,6 +39,18 @@ pub(crate) enum TerminalFinalization {
 struct DeferredTerminalFinalization {
     execution_id: String,
     finalization: TerminalFinalization,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ShellCommandFinalization {
+    pub exit_code: Option<i32>,
+    pub ended_unix_ms: i64,
+}
+
+#[derive(Debug, Clone)]
+struct DeferredShellCommandFinalization {
+    execution_id: String,
+    finalization: ShellCommandFinalization,
 }
 
 pub struct NewRun<'a> {
@@ -88,6 +101,19 @@ pub struct NewTerminalSession<'a> {
     pub initial_rows: Option<u16>,
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 003 T054 command-record backend API; CLI/timeline caller lands in T057"
+)]
+pub struct NewShellCommand<'a> {
+    pub execution_id: &'a str,
+    pub executable: &'a str,
+    pub arguments: &'a [String],
+    pub command_source: FactSource,
+    pub requested_cwd: &'a str,
+    pub cwd_source: FactSource,
+}
+
 pub struct RecoverableRun {
     pub run_id: String,
     pub candidate_oid: String,
@@ -109,10 +135,12 @@ impl Store {
         connection.execute_batch(include_str!(
             "../migrations/0003_workspace_clone_origins.sql"
         ))?;
+        connection.execute_batch(include_str!("../migrations/0004_shell_commands.sql"))?;
         Ok(Self {
             connection,
             home: home.to_path_buf(),
             deferred_terminal_finalizations: Vec::new(),
+            deferred_shell_command_finalizations: Vec::new(),
         })
     }
 }
@@ -312,6 +340,478 @@ impl Store {
         )?;
         tx.commit()?;
         Ok(())
+    }
+
+    pub fn create_shell_command_execution(
+        &mut self,
+        execution: NewExecution<'_>,
+        command: NewShellCommand<'_>,
+        now_ms: i64,
+    ) -> Result<()> {
+        if execution.kind != ExecutionKind::ShellCommand {
+            return Err("shell-command persistence requires SHELL_COMMAND execution kind".into());
+        }
+        if execution.execution_id != command.execution_id {
+            return Err("shell-command execution/record identities do not match".into());
+        }
+        if command.command_source == FactSource::WindsObserved
+            || command.cwd_source == FactSource::WindsObserved
+        {
+            return Err(
+                "explicit/shell-reported command intent cannot be persisted as WINDS_OBSERVED"
+                    .into(),
+            );
+        }
+        let arguments_json = serde_json::to_string(command.arguments)?;
+        let tx = self.connection.transaction()?;
+        tx.execute(
+            "INSERT INTO executions(
+                execution_id, workspace_id, kind, request_source, execution_domain,
+                status, status_source, requested_unix_ms,
+                started_unix_ms, ended_unix_ms, duration_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?4, ?7, NULL, NULL, NULL)",
+            params![
+                execution.execution_id,
+                execution.workspace_id,
+                execution.kind.as_str(),
+                execution.request_source.as_str(),
+                execution.execution_domain,
+                ExecutionStatus::Requested.as_str(),
+                now_ms,
+            ],
+        )?;
+        insert_execution_event(
+            &tx,
+            execution.execution_id,
+            "ExecutionRequested",
+            execution.request_source,
+            now_ms,
+        )?;
+        tx.execute(
+            "INSERT INTO shell_commands(
+                execution_id, executable, arguments_json, command_source,
+                requested_cwd, cwd_source, exit_code, exit_source
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL)",
+            params![
+                command.execution_id,
+                command.executable,
+                arguments_json,
+                command.command_source.as_str(),
+                command.requested_cwd,
+                command.cwd_source.as_str(),
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn mark_shell_command_running(&mut self, execution_id: &str, now_ms: i64) -> Result<()> {
+        let tx = self.connection.transaction()?;
+        let (status, requested_unix_ms, started_unix_ms) =
+            shell_command_execution_state(&tx, execution_id)?;
+        if status != ExecutionStatus::Requested || started_unix_ms.is_some() {
+            return Err(format!(
+                "shell command cannot start from persisted state {}: {execution_id}",
+                status.as_str()
+            )
+            .into());
+        }
+        if now_ms < requested_unix_ms {
+            return Err("shell-command start time cannot precede its request time".into());
+        }
+        let updated = tx.execute(
+            "UPDATE executions
+             SET status = ?2, status_source = ?3, started_unix_ms = ?4,
+                 ended_unix_ms = NULL, duration_ms = NULL
+             WHERE execution_id = ?1 AND status = ?5",
+            params![
+                execution_id,
+                ExecutionStatus::Running.as_str(),
+                FactSource::WindsObserved.as_str(),
+                now_ms,
+                ExecutionStatus::Requested.as_str(),
+            ],
+        )?;
+        if updated != 1 {
+            return Err("shell-command RUNNING transition lost its expected REQUESTED row".into());
+        }
+        insert_execution_event(
+            &tx,
+            execution_id,
+            "ShellCommandStarted",
+            FactSource::WindsObserved,
+            now_ms,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn mark_shell_command_failed_to_start(
+        &mut self,
+        execution_id: &str,
+        now_ms: i64,
+    ) -> Result<()> {
+        let tx = self.connection.transaction()?;
+        let (status, requested_unix_ms, started_unix_ms) =
+            shell_command_execution_state(&tx, execution_id)?;
+        if status != ExecutionStatus::Requested || started_unix_ms.is_some() {
+            return Err(format!(
+                "shell command cannot fail-to-start from persisted state {}: {execution_id}",
+                status.as_str()
+            )
+            .into());
+        }
+        if now_ms < requested_unix_ms {
+            return Err("shell-command failure time cannot precede its request time".into());
+        }
+        let updated = tx.execute(
+            "UPDATE executions
+             SET status = ?2, status_source = ?3, ended_unix_ms = ?4, duration_ms = NULL
+             WHERE execution_id = ?1 AND status = ?5",
+            params![
+                execution_id,
+                ExecutionStatus::FailedToStart.as_str(),
+                FactSource::WindsObserved.as_str(),
+                now_ms,
+                ExecutionStatus::Requested.as_str(),
+            ],
+        )?;
+        if updated != 1 {
+            return Err("shell-command FAILED_TO_START transition lost its expected row".into());
+        }
+        insert_execution_event(
+            &tx,
+            execution_id,
+            "ShellCommandFailedToStart",
+            FactSource::WindsObserved,
+            now_ms,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn mark_shell_command_start_persistence_failed(
+        &mut self,
+        execution_id: &str,
+        started_unix_ms: i64,
+        ended_unix_ms: i64,
+    ) -> Result<()> {
+        let tx = self.connection.transaction()?;
+        let (status, requested_unix_ms, persisted_started_unix_ms) =
+            shell_command_execution_state(&tx, execution_id)?;
+        if status != ExecutionStatus::Requested || persisted_started_unix_ms.is_some() {
+            return Err(format!(
+                "shell-command start-persistence recovery cannot run from persisted state {}: {execution_id}",
+                status.as_str()
+            )
+            .into());
+        }
+        if started_unix_ms < requested_unix_ms || ended_unix_ms < started_unix_ms {
+            return Err(
+                "shell-command start-persistence recovery timestamps are inconsistent".into(),
+            );
+        }
+        let duration_ms = ended_unix_ms - started_unix_ms;
+        let updated = tx.execute(
+            "UPDATE executions
+             SET status = ?2, status_source = ?3, started_unix_ms = ?4,
+                 ended_unix_ms = ?5, duration_ms = ?6
+             WHERE execution_id = ?1 AND status = ?7",
+            params![
+                execution_id,
+                ExecutionStatus::Interrupted.as_str(),
+                FactSource::WindsObserved.as_str(),
+                started_unix_ms,
+                ended_unix_ms,
+                duration_ms,
+                ExecutionStatus::Requested.as_str(),
+            ],
+        )?;
+        if updated != 1 {
+            return Err("shell-command start-persistence recovery lost its REQUESTED row".into());
+        }
+        insert_execution_event(
+            &tx,
+            execution_id,
+            "ShellCommandStartPersistenceFailed",
+            FactSource::WindsObserved,
+            ended_unix_ms,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn mark_shell_command_interrupted(
+        &mut self,
+        execution_id: &str,
+        ended_unix_ms: i64,
+    ) -> Result<()> {
+        let tx = self.connection.transaction()?;
+        let (status, _requested_unix_ms, started_unix_ms) =
+            shell_command_execution_state(&tx, execution_id)?;
+        let started_unix_ms = started_unix_ms.ok_or("running shell command has no start time")?;
+        if status != ExecutionStatus::Running {
+            return Err(format!(
+                "shell command cannot be interrupted from persisted state {}: {execution_id}",
+                status.as_str()
+            )
+            .into());
+        }
+        if ended_unix_ms < started_unix_ms {
+            return Err("shell-command end time cannot precede its start time".into());
+        }
+        let duration_ms = ended_unix_ms - started_unix_ms;
+        let updated = tx.execute(
+            "UPDATE executions
+             SET status = ?2, status_source = ?3, ended_unix_ms = ?4, duration_ms = ?5
+             WHERE execution_id = ?1 AND status = ?6",
+            params![
+                execution_id,
+                ExecutionStatus::Interrupted.as_str(),
+                FactSource::WindsObserved.as_str(),
+                ended_unix_ms,
+                duration_ms,
+                ExecutionStatus::Running.as_str(),
+            ],
+        )?;
+        if updated != 1 {
+            return Err("shell-command INTERRUPTED transition lost its RUNNING row".into());
+        }
+        insert_execution_event(
+            &tx,
+            execution_id,
+            "ShellCommandInterrupted",
+            FactSource::WindsObserved,
+            ended_unix_ms,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn mark_shell_command_ownership_lost(
+        &mut self,
+        execution_id: &str,
+        observed_unix_ms: i64,
+    ) -> Result<()> {
+        let tx = self.connection.transaction()?;
+        let (status, requested_unix_ms, _started_unix_ms) =
+            shell_command_execution_state(&tx, execution_id)?;
+        if !matches!(
+            status,
+            ExecutionStatus::Requested | ExecutionStatus::Running
+        ) {
+            return Err(format!(
+                "shell-command ownership cannot be lost from persisted state {}: {execution_id}",
+                status.as_str()
+            )
+            .into());
+        }
+        if observed_unix_ms < requested_unix_ms {
+            return Err(
+                "shell-command ownership-loss observation cannot precede its request time".into(),
+            );
+        }
+        let updated = tx.execute(
+            "UPDATE executions
+             SET status = ?2, status_source = ?3,
+                 ended_unix_ms = NULL, duration_ms = NULL
+             WHERE execution_id = ?1 AND status IN (?4, ?5)",
+            params![
+                execution_id,
+                ExecutionStatus::OwnershipLost.as_str(),
+                FactSource::WindsObserved.as_str(),
+                ExecutionStatus::Requested.as_str(),
+                ExecutionStatus::Running.as_str(),
+            ],
+        )?;
+        if updated != 1 {
+            return Err("shell-command ownership-loss transition lost its non-final row".into());
+        }
+        insert_execution_event(
+            &tx,
+            execution_id,
+            "ShellCommandOwnershipLost",
+            FactSource::WindsObserved,
+            observed_unix_ms,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn mark_shell_command_exited(
+        &mut self,
+        execution_id: &str,
+        exit_code: Option<i32>,
+        ended_unix_ms: i64,
+    ) -> Result<()> {
+        let tx = self.connection.transaction()?;
+        let (status, _requested_unix_ms, started_unix_ms) =
+            shell_command_execution_state(&tx, execution_id)?;
+        let started_unix_ms = started_unix_ms.ok_or("running shell command has no start time")?;
+        if status != ExecutionStatus::Running {
+            return Err(format!(
+                "shell command cannot exit from persisted state {}: {execution_id}",
+                status.as_str()
+            )
+            .into());
+        }
+        if ended_unix_ms < started_unix_ms {
+            return Err("shell-command end time cannot precede its start time".into());
+        }
+        let duration_ms = ended_unix_ms - started_unix_ms;
+        let updated = tx.execute(
+            "UPDATE executions
+             SET status = ?2, status_source = ?3, ended_unix_ms = ?4, duration_ms = ?5
+             WHERE execution_id = ?1 AND status = ?6",
+            params![
+                execution_id,
+                ExecutionStatus::Exited.as_str(),
+                FactSource::WindsObserved.as_str(),
+                ended_unix_ms,
+                duration_ms,
+                ExecutionStatus::Running.as_str(),
+            ],
+        )?;
+        if updated != 1 {
+            return Err("shell-command EXITED transition lost its RUNNING row".into());
+        }
+        let updated_command = tx.execute(
+            "UPDATE shell_commands SET exit_code = ?2, exit_source = ?3 WHERE execution_id = ?1",
+            params![
+                execution_id,
+                exit_code.map(i64::from),
+                FactSource::WindsObserved.as_str(),
+            ],
+        )?;
+        if updated_command != 1 {
+            return Err("shell-command exit update lost its typed record".into());
+        }
+        insert_execution_event(
+            &tx,
+            execution_id,
+            "ShellCommandExited",
+            FactSource::WindsObserved,
+            ended_unix_ms,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn apply_shell_command_finalization(
+        &mut self,
+        execution_id: &str,
+        finalization: ShellCommandFinalization,
+    ) -> Result<()> {
+        self.mark_shell_command_exited(
+            execution_id,
+            finalization.exit_code,
+            finalization.ended_unix_ms,
+        )
+    }
+
+    pub(crate) fn defer_shell_command_finalization(
+        &mut self,
+        execution_id: &str,
+        finalization: ShellCommandFinalization,
+    ) {
+        if let Some(existing) = self
+            .deferred_shell_command_finalizations
+            .iter_mut()
+            .find(|pending| pending.execution_id == execution_id)
+        {
+            existing.finalization = finalization;
+            return;
+        }
+        self.deferred_shell_command_finalizations
+            .push(DeferredShellCommandFinalization {
+                execution_id: execution_id.to_owned(),
+                finalization,
+            });
+    }
+
+    pub fn retry_deferred_shell_command_finalizations(&mut self) -> Result<usize> {
+        let pending = std::mem::take(&mut self.deferred_shell_command_finalizations);
+        let mut completed = 0_usize;
+        let mut failed = Vec::new();
+        let mut failures = Vec::new();
+        for item in pending {
+            match self.apply_shell_command_finalization(&item.execution_id, item.finalization) {
+                Ok(()) => completed += 1,
+                Err(error) => {
+                    failures.push(format!("{}: {error}", item.execution_id));
+                    failed.push(item);
+                }
+            }
+        }
+        self.deferred_shell_command_finalizations = failed;
+        if failures.is_empty() {
+            Ok(completed)
+        } else {
+            Err(format!(
+                "{} deferred shell-command finalization(s) remain pending: {}",
+                failures.len(),
+                failures.join("; ")
+            )
+            .into())
+        }
+    }
+
+    pub fn pending_shell_command_finalization_count(&self) -> usize {
+        self.deferred_shell_command_finalizations.len()
+    }
+
+    pub fn reconcile_unowned_shell_commands_after_restart(&mut self, now_ms: i64) -> Result<usize> {
+        self.retry_deferred_shell_command_finalizations()?;
+        let tx = self.connection.transaction()?;
+        let execution_ids = {
+            let mut statement = tx.prepare(
+                "SELECT e.execution_id
+                 FROM executions e
+                 INNER JOIN shell_commands c ON c.execution_id = e.execution_id
+                 WHERE e.kind = ?1 AND e.status IN (?2, ?3)
+                 ORDER BY e.requested_unix_ms, e.execution_id",
+            )?;
+            statement
+                .query_map(
+                    params![
+                        ExecutionKind::ShellCommand.as_str(),
+                        ExecutionStatus::Requested.as_str(),
+                        ExecutionStatus::Running.as_str(),
+                    ],
+                    |row| row.get::<_, String>(0),
+                )?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        for execution_id in &execution_ids {
+            let updated = tx.execute(
+                "UPDATE executions
+                 SET status = ?2, status_source = ?3,
+                     ended_unix_ms = NULL, duration_ms = NULL
+                 WHERE execution_id = ?1 AND status IN (?4, ?5)",
+                params![
+                    execution_id,
+                    ExecutionStatus::OwnershipLost.as_str(),
+                    FactSource::WindsObserved.as_str(),
+                    ExecutionStatus::Requested.as_str(),
+                    ExecutionStatus::Running.as_str(),
+                ],
+            )?;
+            if updated != 1 {
+                return Err(format!(
+                    "shell-command restart reconciliation lost its non-final row: {execution_id}"
+                )
+                .into());
+            }
+            insert_execution_event(
+                &tx,
+                execution_id,
+                "ShellCommandOwnershipLostAfterRestart",
+                FactSource::WindsObserved,
+                now_ms,
+            )?;
+        }
+        tx.commit()?;
+        Ok(execution_ids.len())
     }
 
     pub fn mark_terminal_running(&mut self, execution_id: &str, now_ms: i64) -> Result<()> {
@@ -797,6 +1297,66 @@ impl Store {
         Ok(())
     }
 
+    pub fn load_shell_command(&self, execution_id: &str) -> Result<ShellCommandRecord> {
+        let row = self
+            .connection
+            .query_row(
+                "SELECT execution_id, executable, arguments_json, command_source,
+                        requested_cwd, cwd_source, exit_code, exit_source
+                 FROM shell_commands WHERE execution_id = ?1",
+                params![execution_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, Option<i64>>(6)?,
+                        row.get::<_, Option<String>>(7)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| format!("unknown Winds shell command: {execution_id}"))?;
+        let command_source = FactSource::from_db(&row.3)
+            .ok_or_else(|| format!("unknown shell-command source in store: {}", row.3))?;
+        let cwd_source = FactSource::from_db(&row.5)
+            .ok_or_else(|| format!("unknown shell-command cwd source in store: {}", row.5))?;
+        let exit_source = row
+            .7
+            .as_deref()
+            .map(|value| {
+                FactSource::from_db(value)
+                    .ok_or_else(|| format!("unknown shell-command exit source in store: {value}"))
+            })
+            .transpose()?;
+        Ok(ShellCommandRecord {
+            execution_id: row.0,
+            executable: row.1,
+            arguments: serde_json::from_str(&row.2)?,
+            command_source,
+            requested_cwd: row.4,
+            cwd_source,
+            exit_code: row.6.map(i32::try_from).transpose()?,
+            exit_source,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shell_command_count_for_workspace(&self, workspace_id: &str) -> Result<usize> {
+        let count: i64 = self.connection.query_row(
+            "SELECT COUNT(*)
+             FROM shell_commands c
+             INNER JOIN executions e ON e.execution_id = c.execution_id
+             WHERE e.workspace_id = ?1",
+            params![workspace_id],
+            |row| row.get(0),
+        )?;
+        Ok(usize::try_from(count)?)
+    }
+
     pub fn load_terminal_session(&self, execution_id: &str) -> Result<TerminalSessionRecord> {
         let row = self
             .connection
@@ -1253,6 +1813,32 @@ fn insert_event(
         params![run_id, kind, authority, payload_json, now_ms],
     )?;
     Ok(())
+}
+
+fn shell_command_execution_state(
+    connection: &Connection,
+    execution_id: &str,
+) -> Result<(ExecutionStatus, i64, Option<i64>)> {
+    let row = connection
+        .query_row(
+            "SELECT e.status, e.requested_unix_ms, e.started_unix_ms
+             FROM executions e
+             INNER JOIN shell_commands c ON c.execution_id = e.execution_id
+             WHERE e.execution_id = ?1 AND e.kind = ?2",
+            params![execution_id, ExecutionKind::ShellCommand.as_str()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or_else(|| format!("unknown Winds shell command execution: {execution_id}"))?;
+    let status = ExecutionStatus::from_db(&row.0)
+        .ok_or_else(|| format!("unknown shell-command execution status in store: {}", row.0))?;
+    Ok((status, row.1, row.2))
 }
 
 #[allow(
