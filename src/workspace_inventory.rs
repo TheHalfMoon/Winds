@@ -132,7 +132,11 @@ fn manifest_path_present(worktree_root: &Path, relative: &str) -> Result<bool> {
     match fs::symlink_metadata(worktree_root.join(relative_path)) {
         Ok(metadata) => {
             let kind = metadata.file_type();
-            Ok(kind.is_file() || kind.is_symlink())
+            if kind.is_file() || kind.is_symlink() {
+                Ok(true)
+            } else {
+                Err(format!("manifest path is not a file or symlink: {relative}").into())
+            }
         }
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
         Err(error) => {
@@ -355,6 +359,19 @@ mod tests {
                 .to_string()
                 .contains(".devcontainer/devcontainer.json")
         );
+
+        cleanup_owned_root(&root);
+    }
+
+    #[test]
+    fn manifest_leaf_type_ambiguity_fails_closed_instead_of_looking_absent() {
+        let root = test_root("manifest-leaf-ambiguity");
+        let (workspace, worktree) = fixture_workspace(&root);
+        fs::create_dir(worktree.join(".envrc")).unwrap();
+
+        let error = inventory_workspace_environment(&workspace).unwrap_err();
+        assert!(error.to_string().contains("manifest path is not a file or symlink"));
+        assert!(error.to_string().contains(".envrc"));
 
         cleanup_owned_root(&root);
     }
