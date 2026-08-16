@@ -5,6 +5,8 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "shell_profiles.rs"]
+pub(crate) mod shell_profiles;
 #[path = "workspace.rs"]
 pub(crate) mod workspace;
 #[path = "workspace_clone.rs"]
