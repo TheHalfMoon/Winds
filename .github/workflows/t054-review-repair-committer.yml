@@ -1,0 +1,70 @@
+name: t054-review-repair-committer
+
+on:
+  push:
+    branches: [ci/t053-obsolete-run-cleanup]
+    paths:
+      - ".github/workflows/t054-review-repair-committer.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  commit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: feat/003-t054-command-records
+          fetch-depth: 2
+      - name: Verify exact reviewed head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "7c03b769d8b1e9ddd906f9afe976e58a352239e6"
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+      - name: Apply exact validated review repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/t054-review-repair.patch.gz.b64 <<'EOF'
+          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
+          EOF
+          tr -d '[:space:]' < /tmp/t054-review-repair.patch.gz.b64 | base64 --decode | gzip -d > /tmp/t054-review-repair.patch
+          test "$(sha256sum /tmp/t054-review-repair.patch | awk '{print $1}')" = "b213db69e07a6647a790627099ae647c8a0c7f6b3da7c3a0cee76cbd652899d6"
+          git apply --check /tmp/t054-review-repair.patch
+          git apply /tmp/t054-review-repair.patch
+      - name: Validate repaired source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo check --locked --all-targets --all-features
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          cargo test --locked --all-targets --all-features
+          expected=$(cat <<'EOF'
+          migrations/0004_shell_commands.sql
+          src/command.rs
+          src/domain.rs
+          src/store.rs
+          EOF
+          )
+          actual=$(git status --short | awk '{print $2}' | sort)
+          test "$actual" = "$(printf '%s\n' "$expected" | sort)"
+          git diff --check
+      - name: Commit and push if feature head is unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin feat/003-t054-command-records
+          test "$(git rev-parse FETCH_HEAD)" = "7c03b769d8b1e9ddd906f9afe976e58a352239e6"
+          git config user.name "winds-ci"
+          git config user.email "winds-ci@users.noreply.github.com"
+          git add migrations/0004_shell_commands.sql src/command.rs src/domain.rs src/store.rs
+          git commit -m "fix(winds): make command completion durable"
+          git push origin HEAD:feat/003-t054-command-records
