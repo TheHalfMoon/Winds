@@ -5,26 +5,32 @@ on:
     branches: [feat/003-t050-unix-pty-lifecycle]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   lock:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          persist-credentials: false
+          persist-credentials: true
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
         with:
           toolchain: 1.97.1
-      - name: Generate exact lockfile
+      - name: Generate and commit exact lockfile on the guarded T050 branch
         shell: bash
         run: |
+          test "$GITHUB_REF_NAME" = "feat/003-t050-unix-pty-lifecycle"
           rm -f Cargo.lock
           cargo generate-lockfile
-          echo '===== T050_CARGO_LOCK_BEGIN ====='
-          cat Cargo.lock
-          echo '===== T050_CARGO_LOCK_END ====='
-          echo '===== T050_CARGO_TREE_BEGIN ====='
           cargo tree --locked --edges normal,build
-          echo '===== T050_CARGO_TREE_END ====='
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          if git diff --cached --quiet; then
+            echo "Cargo.lock already matches Cargo resolution"
+            exit 0
+          fi
+          git commit -m "chore(winds): generate exact T050 Cargo.lock"
+          git push origin "HEAD:$GITHUB_REF_NAME"
