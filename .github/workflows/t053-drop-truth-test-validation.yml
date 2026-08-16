@@ -1,4 +1,4 @@
-name: t053-drop-truth-test-validation
+name: t053-closeout-committer
 
 on:
   push:
@@ -10,121 +10,50 @@ permissions:
   contents: write
 
 jobs:
-  land-validated-test-repair:
+  closeout:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: feat/003-t053-terminal-ledger
+          ref: docs/003-t053-closeout
           fetch-depth: 2
-      - name: Verify exact target head before mutation
+      - name: Verify exact closeout base
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "79717dd226254086d529ac3401ec57c878cf422a"
-      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
-        with:
-          toolchain: 1.97.1
-          components: rustfmt, clippy
-      - name: Apply exact validated test-only repair
+          test "$(git rev-parse HEAD)" = "aebf35057f5d5c5133961b008d0cb7c12b8d1ea7"
+      - name: Record T053 canonical evidence only
         shell: python
         run: |
           from pathlib import Path
 
-          path = Path("src/execution.rs")
+          path = Path("specs/003-workspace-execution-spine/tasks.md")
           text = path.read_text(encoding="utf-8")
-
-          drop_start_marker = "    #[test]\n    fn dropping_live_terminal_closes_owned_child_and_finalizes_ledger() {\n"
-          drop_next_marker = "    #[test]\n    fn launch_failure_records_failed_to_start_without_duration() {\n"
-          drop_start = text.find(drop_start_marker)
-          drop_end = text.find(drop_next_marker, drop_start + len(drop_start_marker))
-          if drop_start < 0 or drop_end < 0 or drop_end <= drop_start:
-              raise SystemExit(f"Drop test bounds invalid: start={drop_start}, end={drop_end}")
-
-          drop_replacement = '''    #[test]
-          fn dropping_live_terminal_records_only_proven_cleanup_truth() {
-              let root = TestRoot::new("drop-live");
-              let mut store = store_with_workspace(&root);
-              let profile = native_sh_profile();
-              let execution = TerminalExecution::start_native(
-                  &mut store,
-                  "execution-drop",
-                  "workspace-1",
-                  &profile,
-                  root.path(),
-                  TerminalSize { rows: 24, cols: 80 },
-              )
-              .unwrap();
-
-              drop(execution);
-              let final_record = store.load_execution("execution-drop").unwrap();
-              assert_eq!(final_record.status_source, FactSource::WindsObserved);
-              assert!(final_record.started_unix_ms.is_some());
-              let terminal = store.load_terminal_session("execution-drop").unwrap();
-              match final_record.status {
-                  ExecutionStatus::Interrupted => {
-                      assert_eq!(
-                          terminal.close_reason,
-                          Some(TerminalCloseReason::ClosedByWinds)
-                      );
-                      assert!(final_record.ended_unix_ms.is_some());
-                      assert!(final_record.duration_ms.is_some());
-                  }
-                  ExecutionStatus::OwnershipLost => {
-                      assert_eq!(
-                          terminal.close_reason,
-                          Some(TerminalCloseReason::OwnershipLostProcessStateUnknown)
-                      );
-                      assert_eq!(final_record.ended_unix_ms, None);
-                      assert_eq!(final_record.duration_ms, None);
-                  }
-                  other => panic!(
-                      "live terminal Drop must record only proven cleanup truth, got {other:?}"
-                  ),
-              }
-              assert_eq!(store.pending_terminal_finalization_count(), 0);
-          }
-
-          '''
-          text = text[:drop_start] + drop_replacement + text[drop_end:]
-
-          terminate_marker = (
-              "        execution.terminate().unwrap();\n"
-              "        drop(execution);\n"
-              "        let final_record = store.load_execution(\"execution-terminate\").unwrap();\n"
-          )
-          if text.count(terminate_marker) != 1:
-              raise SystemExit(
-                  f"controlled terminate sequence count={text.count(terminate_marker)}"
-              )
-          terminate_replacement = (
-              "        let output = drain_output(execution.take_output_reader().unwrap());\n"
-              "        execution.terminate().unwrap();\n"
-              "        drop(execution);\n"
-              "        output.join().unwrap();\n"
-              "        let final_record = store.load_execution(\"execution-terminate\").unwrap();\n"
-          )
-          text = text.replace(terminate_marker, terminate_replacement, 1)
+          old = "- [ ] **T053** Persist terminal lifecycle transitions into the execution ledger, including start/final state/timing/domain/profile/cwd and explicit failed/interrupted states. After restart, any session whose continuing process ownership cannot be proven MUST reconcile to `OWNERSHIP_LOST` with process state unknown. A persisted PID alone is not process identity; recovery MUST NOT blindly signal/kill it. No daemon or cross-restart process attachment is allowed in this slice."
+          new = "- [x] **T053** Persist terminal lifecycle transitions into the execution ledger, including start/final state/timing/domain/profile/cwd and explicit failed/interrupted states. After restart, any session whose continuing process ownership cannot be proven MUST reconcile to `OWNERSHIP_LOST` with process state unknown. A persisted PID alone is not process identity; recovery MUST NOT blindly signal/kill it. No daemon or cross-restart process attachment is allowed in this slice. **Canonical evidence:** PR #29 final exact implementation head `e2121b70b37839a95be8352c55ac63e86ae5052a` passed quality #310, windows-terminal #94 on official `windows-latest`, release-candidate #167, Ubuntu/macOS format+Clippy+tests, SC-001 100-cycle soak, Linux x86-64 and macOS arm64 release builds/artifacts, final correctness/safety and Ponytail review, Qodo final exact-head review with no actionable correctness/safety/active-spec findings, and zero unresolved review threads. The final source tree also passed five repeated default-parallel full macOS test cycles after reconciling PTY lifecycle test races. PR #29 merged with expected-head and unchanged-main guards as canonical main `aebf35057f5d5c5133961b008d0cb7c12b8d1ea7`; post-merge quality #311 passed on that exact canonical main. The accepted slice reuses the existing execution/terminal-session schema without migration, atomically records request/session identity and guarded lifecycle transitions, persists typed close reasons and timing only when proven, keeps Drop cleanup ledger-aware and bounded through directly owned child handles, retains Drop-time SQLite finalization failures in a Store-owned in-process retry queue, and reconciles unowned `REQUESTED`/`RUNNING` terminal executions after restart to conservative `OWNERSHIP_LOST` with unknown end/duration. It persists no PID and performs no PID lookup, blind signaling, cross-restart process attachment, daemon behavior, command telemetry/history (T054-T056), CLI proof surface (T057), broad Windows claim (T061), real Windows+WSL2 claim (T062), public protocol/plugin/MCP/ACP, or Agent Fleet behavior."
+          if text.count(old) != 1:
+              raise SystemExit(f"expected exactly one open T053 line, found {text.count(old)}")
+          text = text.replace(old, new, 1)
+          if "- [ ] **T054**" not in text:
+              raise SystemExit("T054 must remain open")
           path.write_text(text, encoding="utf-8")
-      - name: Validate exact repair
+      - name: Verify docs-only delta
         shell: bash
         run: |
           set -euo pipefail
-          cargo fmt --all
-          cargo fmt --all -- --check
-          cargo clippy --locked --all-targets --all-features -- -D warnings
-          cargo test --locked --all-targets --all-features
           test "$(git status --short | wc -l | tr -d ' ')" = "1"
-          test "$(git status --short | awk '{print $2}')" = "src/execution.rs"
-      - name: Commit and push only if remote target head is unchanged
+          test "$(git status --short | awk '{print $2}')" = "specs/003-workspace-execution-spine/tasks.md"
+          git diff --check
+          git diff -- specs/003-workspace-execution-spine/tasks.md
+      - name: Commit and push only if closeout head is unchanged
         shell: bash
         run: |
           set -euo pipefail
-          git fetch origin feat/003-t053-terminal-ledger
-          test "$(git rev-parse FETCH_HEAD)" = "79717dd226254086d529ac3401ec57c878cf422a"
+          git fetch origin docs/003-t053-closeout
+          test "$(git rev-parse FETCH_HEAD)" = "aebf35057f5d5c5133961b008d0cb7c12b8d1ea7"
           git config user.name "winds-ci"
           git config user.email "winds-ci@users.noreply.github.com"
-          git add src/execution.rs
-          git commit -m "test(winds): preserve truthful terminal cleanup outcomes"
-          git push origin HEAD:feat/003-t053-terminal-ledger
+          git add specs/003-workspace-execution-spine/tasks.md
+          git commit -m "docs(winds): close T053 terminal lifecycle persistence"
+          git push origin HEAD:docs/003-t053-closeout
