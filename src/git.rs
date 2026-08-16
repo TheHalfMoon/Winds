@@ -5,6 +5,9 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "workspace.rs"]
+pub(crate) mod workspace;
+
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
 const GIT_CONTEXT_ENV_VARS: &[&str] = &[
