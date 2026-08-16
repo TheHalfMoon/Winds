@@ -72,7 +72,7 @@ pub fn discover_wsl_distributions() -> Result<Vec<WslDistribution>> {
 }
 
 #[cfg(windows)]
-fn system_wsl_executable() -> Result<PathBuf> {
+pub(super) fn system_wsl_executable() -> Result<PathBuf> {
     let executable = system_directory()?.join("wsl.exe");
     if !executable.is_absolute() {
         return Err("WSL discovery unavailable: Windows system directory is not absolute".into());
@@ -311,7 +311,7 @@ fn verbose_line_looks_like_distribution(row: &str) -> bool {
 }
 
 #[cfg(any(windows, test))]
-fn decode_wsl_text(bytes: &[u8]) -> Result<String> {
+pub(super) fn decode_wsl_text(bytes: &[u8]) -> Result<String> {
     let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes);
     if bytes.starts_with(&[0xff, 0xfe]) || bytes.contains(&0) {
         let bytes = bytes.strip_prefix(&[0xff, 0xfe]).unwrap_or(bytes);

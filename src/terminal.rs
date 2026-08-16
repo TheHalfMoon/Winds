@@ -50,6 +50,52 @@ pub struct TerminalSession {
 impl TerminalSession {
     pub fn start(profile: &ShellProfile, cwd: &Path, size: TerminalSize) -> Result<Self> {
         validate_shell_profile_for_launch(profile)?;
+        Self::start_command(
+            &profile.profile_id,
+            Path::new(&profile.executable),
+            &profile.arguments,
+            cwd,
+            size,
+        )
+    }
+
+    #[cfg(windows)]
+    pub(super) fn start_exact_launch(
+        profile_id: &str,
+        executable: &Path,
+        arguments: &[String],
+        cwd: &Path,
+        size: TerminalSize,
+    ) -> Result<Self> {
+        if profile_id.is_empty() {
+            return Err("terminal launch profile identity cannot be empty".into());
+        }
+        if !executable.is_absolute() {
+            return Err("terminal launch executable must be an absolute path".into());
+        }
+        let metadata = std::fs::metadata(executable).map_err(|error| {
+            format!(
+                "terminal launch executable cannot be inspected ({}): {error}",
+                executable.display()
+            )
+        })?;
+        if !metadata.is_file() {
+            return Err(format!(
+                "terminal launch executable is not a file: {}",
+                executable.display()
+            )
+            .into());
+        }
+        Self::start_command(profile_id, executable, arguments, cwd, size)
+    }
+
+    fn start_command(
+        profile_id: &str,
+        executable: &Path,
+        arguments: &[String],
+        cwd: &Path,
+        size: TerminalSize,
+    ) -> Result<Self> {
         let start_cwd = canonical_start_cwd(cwd)?;
         let pty_size = size.to_pty_size()?;
         let session_id = next_session_id()?;
@@ -59,15 +105,15 @@ impl TerminalSession {
         let output_reader = pair.master.try_clone_reader()?;
         let writer = pair.master.take_writer()?;
 
-        let mut command = CommandBuilder::new(&profile.executable);
-        command.args(&profile.arguments);
+        let mut command = CommandBuilder::new(executable.as_os_str());
+        command.args(arguments);
         command.cwd(start_cwd.as_os_str());
         let child = pair.slave.spawn_command(command)?;
         drop(pair.slave);
 
         Ok(Self {
             session_id,
-            profile_id: profile.profile_id.clone(),
+            profile_id: profile_id.to_owned(),
             start_cwd,
             master: Some(pair.master),
             output_reader: Some(output_reader),
