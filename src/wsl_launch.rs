@@ -192,7 +192,7 @@ pub fn launch_wsl_terminal(
         &plan.profile.shell_executable,
         &plan.profile.shell_arguments,
     )?;
-    let mut session = TerminalSession::start_exact_launch(
+    let session = TerminalSession::start_exact_launch(
         &plan.profile.profile_id,
         &launcher,
         &arguments,
@@ -207,25 +207,35 @@ pub fn launch_wsl_terminal(
         ..
     } = &plan.cwd_resolution
     {
-        let repo = Repo::open(Path::new(windows_workspace_root))?;
+        let repo = match Repo::open(Path::new(windows_workspace_root)) {
+            Ok(repo) => repo,
+            Err(error) => {
+                return fail_after_started_wsl_session(
+                    session,
+                    format!(
+                        "WSL mapped workspace could not be reopened after terminal launch: {error}"
+                    ),
+                );
+            }
+        };
         match attest_workspace(&launcher, &distribution, linux_workspace_root, &repo) {
             Ok(attestation)
                 if attestation.linux_workspace_root == *linux_workspace_root
                     && attestation.linux_git_common_dir == *linux_git_common_dir
                     && attestation.git_head_oid == *git_head_oid => {}
             Ok(_) => {
-                let _ = session.terminate();
-                return Err(
-                    "WSL mapped workspace identity changed after terminal launch; session terminated"
-                        .into(),
+                return fail_after_started_wsl_session(
+                    session,
+                    "WSL mapped workspace identity changed after terminal launch".to_owned(),
                 );
             }
             Err(error) => {
-                let _ = session.terminate();
-                return Err(format!(
-                    "WSL mapped workspace could not be revalidated after terminal launch; session terminated: {error}"
-                )
-                .into());
+                return fail_after_started_wsl_session(
+                    session,
+                    format!(
+                        "WSL mapped workspace could not be revalidated after terminal launch: {error}"
+                    ),
+                );
             }
         }
     }
@@ -235,6 +245,20 @@ pub fn launch_wsl_terminal(
         profile: plan.profile.clone(),
         cwd_resolution: plan.cwd_resolution.clone(),
     })
+}
+
+#[cfg(windows)]
+fn fail_after_started_wsl_session(
+    mut session: TerminalSession,
+    reason: String,
+) -> Result<WslLaunchedTerminal> {
+    match session.terminate() {
+        Ok(_) => Err(format!("{reason}; owned session terminated").into()),
+        Err(cleanup_error) => Err(format!(
+            "{reason}; owned session termination could not be proven: {cleanup_error}"
+        )
+        .into()),
+    }
 }
 
 #[cfg(not(windows))]
