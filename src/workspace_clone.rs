@@ -1,6 +1,6 @@
-use super::workspace::{WorkspaceInspection, open_existing_workspace};
+use super::workspace::{WorkspaceInspection, inspect_existing_workspace};
 use super::{Result, git_command};
-use rusqlite::{Connection, params};
+use crate::store::{NewWorkspace, Store};
 use serde::Serialize;
 use std::ffi::OsStr;
 use std::fs;
@@ -33,18 +33,22 @@ pub fn clone_and_register_workspace(
         .parent()
         .ok_or("clone destination has no parent directory")?;
 
-    let output = git_command(parent)
+    let status = git_command(parent)
+        .arg("-c")
+        .arg("core.askPass=")
         .arg("clone")
         .arg("--")
         .arg(OsStr::new(remote))
         .arg(&reserved_destination)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()?;
-    if !output.status.success() {
-        let status = output
-            .status
+        .env_remove("GIT_ASKPASS")
+        .env_remove("SSH_ASKPASS")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    if !status.success() {
+        let status = status
             .code()
             .map_or_else(|| "signal".to_owned(), |code| code.to_string());
         return Err(format!(
@@ -53,10 +57,14 @@ pub fn clone_and_register_workspace(
         .into());
     }
 
-    let workspace = open_existing_workspace(&reserved_destination, canonical_state_root, now_ms)?;
-    persist_clone_origin(
-        canonical_state_root,
-        &workspace.workspace_id,
+    let workspace = inspect_existing_workspace(&reserved_destination, canonical_state_root)?;
+    let mut store = Store::open(canonical_state_root)?;
+    store.register_cloned_workspace(
+        NewWorkspace {
+            workspace_id: &workspace.workspace_id,
+            canonical_worktree_root: &workspace.canonical_worktree_root,
+            git_common_dir: &workspace.git_common_dir,
+        },
         &remote_identity,
         now_ms,
     )?;
@@ -201,12 +209,20 @@ fn sanitize_url_remote(scheme: &str, rest: &str) -> Result<String> {
 fn sanitize_scp_like_remote(remote: &str) -> Option<String> {
     let colon = remote.find(':')?;
     let authority = &remote[..colon];
-    let path = &remote[colon + 1..];
+    let raw_path = &remote[colon + 1..];
     if authority.is_empty()
-        || path.is_empty()
+        || raw_path.is_empty()
         || authority.contains('/')
         || authority.contains('\\')
     {
+        return None;
+    }
+    let tail_index = raw_path
+        .char_indices()
+        .find_map(|(index, ch)| matches!(ch, '?' | '#').then_some(index))
+        .unwrap_or(raw_path.len());
+    let path = &raw_path[..tail_index];
+    if path.is_empty() {
         return None;
     }
     let host = authority
@@ -218,31 +234,10 @@ fn sanitize_scp_like_remote(remote: &str) -> Option<String> {
     Some(format!("{host}:{path}"))
 }
 
-fn persist_clone_origin(
-    canonical_state_root: &Path,
-    workspace_id: &str,
-    remote_identity: &str,
-    now_ms: i64,
-) -> Result<()> {
-    let connection = Connection::open(canonical_state_root.join("winds.db"))?;
-    connection.pragma_update(None, "foreign_keys", "ON")?;
-    connection.execute_batch(include_str!(
-        "../migrations/0003_workspace_clone_origins.sql"
-    ))?;
-    connection.execute(
-        "INSERT INTO workspace_clone_origins(workspace_id, remote_identity, recorded_unix_ms)
-         VALUES (?1, ?2, ?3)
-         ON CONFLICT(workspace_id) DO UPDATE SET
-             remote_identity = excluded.remote_identity,
-             recorded_unix_ms = excluded.recorded_unix_ms",
-        params![workspace_id, remote_identity, now_ms],
-    )?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::{clone_and_register_workspace, sanitize_remote_identity};
+    use crate::store::Store;
     use rusqlite::{Connection, params};
     use std::ffi::OsStr;
     use std::fs;
@@ -433,6 +428,53 @@ mod tests {
     }
 
     #[test]
+    fn origin_persistence_failure_rolls_back_workspace_registration() {
+        let root = test_root("atomic-origin");
+        let marker = root.join("bootstrap-ran");
+        let (remote, _) = initialize_remote(&root, &marker);
+        let state_root = create_state_root(&root);
+        let destination = root.join("atomic-clone");
+
+        let store = Store::open(&state_root).unwrap();
+        drop(store);
+        let connection = Connection::open(state_root.join("winds.db")).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TRIGGER fail_clone_origin
+                 BEFORE INSERT ON workspace_clone_origins
+                 BEGIN
+                     SELECT RAISE(ABORT, 'forced clone-origin failure');
+                 END;",
+            )
+            .unwrap();
+        drop(connection);
+
+        let error = clone_and_register_workspace(
+            remote.to_str().unwrap(),
+            &destination,
+            &state_root,
+            350,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("forced clone-origin failure"));
+        assert!(destination.is_dir());
+
+        let connection = Connection::open(state_root.join("winds.db")).unwrap();
+        let workspace_count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM workspaces", [], |row| row.get(0))
+            .unwrap();
+        let origin_count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM workspace_clone_origins", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(workspace_count, 0);
+        assert_eq!(origin_count, 0);
+
+        cleanup_owned_root(&root);
+    }
+
+    #[test]
     fn remote_sanitization_removes_credentials_and_url_secret_components() {
         let sanitized = sanitize_remote_identity(
             "https://alice:super-secret@example.test/org/repo.git?token=also-secret#private",
@@ -446,6 +488,14 @@ mod tests {
 
         assert_eq!(
             sanitize_remote_identity("git@example.test:org/repo.git").unwrap(),
+            "example.test:org/repo.git"
+        );
+        assert_eq!(
+            sanitize_remote_identity("git@example.test:org/repo.git?token=secret").unwrap(),
+            "example.test:org/repo.git"
+        );
+        assert_eq!(
+            sanitize_remote_identity("git@example.test:org/repo.git#private").unwrap(),
             "example.test:org/repo.git"
         );
         assert!(sanitize_remote_identity("ext::sh -c 'echo unsafe'").is_err());
