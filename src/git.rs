@@ -9,6 +9,8 @@ use std::process::Command;
 pub(crate) mod workspace;
 #[path = "workspace_clone.rs"]
 pub(crate) mod workspace_clone;
+#[path = "workspace_inventory.rs"]
+pub(crate) mod workspace_inventory;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
