@@ -22,86 +22,68 @@ jobs:
         run: |
           from pathlib import Path
 
-          def replace_once(path, old, new):
-              text = path.read_text(encoding='utf-8')
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'{path}: expected one replacement, found {count}: {old[:100]!r}')
-              path.write_text(text.replace(old, new, 1), encoding='utf-8')
-
           git_rs = Path('src/git.rs')
-          replace_once(
-              git_rs,
-              'pub(super) const GIT_CONTEXT_ENV_VARS: &[&str] = &[',
-              'const GIT_CONTEXT_ENV_VARS: &[&str] = &[',
+          git_text = git_rs.read_text(encoding='utf-8')
+          old_const = 'pub(super) const GIT_CONTEXT_ENV_VARS: &[&str] = &['
+          if git_text.count(old_const) != 1:
+              raise SystemExit(f'expected one broadened Git context constant, found {git_text.count(old_const)}')
+          git_rs.write_text(
+              git_text.replace(old_const, 'const GIT_CONTEXT_ENV_VARS: &[&str] = &[', 1),
+              encoding='utf-8',
           )
 
           launch = Path('src/wsl_launch.rs')
-          replace_once(
-              launch,
-              '    let mut session = TerminalSession::start_exact_launch(\n',
-              '    let session = TerminalSession::start_exact_launch(\n',
-          )
-          replace_once(
-              launch,
-              '''        let repo = Repo::open(Path::new(windows_workspace_root))?;
-              match attest_workspace(&launcher, &distribution, linux_workspace_root, &repo) {
-                  Ok(attestation)
-                      if attestation.linux_workspace_root == *linux_workspace_root
-                          && attestation.linux_git_common_dir == *linux_git_common_dir
-                          && attestation.git_head_oid == *git_head_oid => {}
-                  Ok(_) => {
-                      let _ = session.terminate();
-                      return Err(
-                          "WSL mapped workspace identity changed after terminal launch; session terminated"
-                              .into(),
-                      );
-                  }
-                  Err(error) => {
-                      let _ = session.terminate();
-                      return Err(format!(
-                          "WSL mapped workspace could not be revalidated after terminal launch; session terminated: {error}"
-                      )
-                      .into());
-                  }
+          text = launch.read_text(encoding='utf-8')
+          old_session = '    let mut session = TerminalSession::start_exact_launch(\n'
+          if text.count(old_session) != 1:
+              raise SystemExit(f'expected one mutable launched session, found {text.count(old_session)}')
+          text = text.replace(old_session, '    let session = TerminalSession::start_exact_launch(\n', 1)
+
+          start_marker = '        let repo = Repo::open(Path::new(windows_workspace_root))?;\n'
+          outer_close_marker = '    }\n\n    Ok(WslLaunchedTerminal {\n'
+          start = text.find(start_marker)
+          if start < 0:
+              raise SystemExit('post-launch Repo::open marker not found')
+          end = text.find(outer_close_marker, start)
+          if end < 0:
+              raise SystemExit('post-launch mapped block end marker not found')
+          replacement = '''        let repo = match Repo::open(Path::new(windows_workspace_root)) {
+              Ok(repo) => repo,
+              Err(error) => {
+                  return fail_after_started_wsl_session(
+                      session,
+                      format!(
+                          "WSL mapped workspace could not be reopened after terminal launch: {error}"
+                      ),
+                  );
               }
-          ''',
-              '''        let repo = match Repo::open(Path::new(windows_workspace_root)) {
-                  Ok(repo) => repo,
-                  Err(error) => {
-                      return fail_after_started_wsl_session(
-                          session,
-                          format!(
-                              "WSL mapped workspace could not be reopened after terminal launch: {error}"
-                          ),
-                      );
-                  }
-              };
-              match attest_workspace(&launcher, &distribution, linux_workspace_root, &repo) {
-                  Ok(attestation)
-                      if attestation.linux_workspace_root == *linux_workspace_root
-                          && attestation.linux_git_common_dir == *linux_git_common_dir
-                          && attestation.git_head_oid == *git_head_oid => {}
-                  Ok(_) => {
-                      return fail_after_started_wsl_session(
-                          session,
-                          "WSL mapped workspace identity changed after terminal launch".to_owned(),
-                      );
-                  }
-                  Err(error) => {
-                      return fail_after_started_wsl_session(
-                          session,
-                          format!(
-                              "WSL mapped workspace could not be revalidated after terminal launch: {error}"
-                          ),
-                      );
-                  }
+          };
+          match attest_workspace(&launcher, &distribution, linux_workspace_root, &repo) {
+              Ok(attestation)
+                  if attestation.linux_workspace_root == *linux_workspace_root
+                      && attestation.linux_git_common_dir == *linux_git_common_dir
+                      && attestation.git_head_oid == *git_head_oid => {}
+              Ok(_) => {
+                  return fail_after_started_wsl_session(
+                      session,
+                      "WSL mapped workspace identity changed after terminal launch".to_owned(),
+                  );
               }
-          ''',
-          )
-          marker = '''#[cfg(not(windows))]
-          pub fn launch_wsl_terminal(
+              Err(error) => {
+                  return fail_after_started_wsl_session(
+                      session,
+                      format!(
+                          "WSL mapped workspace could not be revalidated after terminal launch: {error}"
+                      ),
+                  );
+              }
+          }
           '''
+          text = text[:start] + replacement + text[end:]
+
+          helper_marker = '#[cfg(not(windows))]\npub fn launch_wsl_terminal(\n'
+          if text.count(helper_marker) != 1:
+              raise SystemExit(f'expected one non-Windows launch marker, found {text.count(helper_marker)}')
           helper = '''#[cfg(windows)]
           fn fail_after_started_wsl_session(
               mut session: TerminalSession,
@@ -116,10 +98,9 @@ jobs:
               }
           }
 
-          #[cfg(not(windows))]
-          pub fn launch_wsl_terminal(
           '''
-          replace_once(launch, marker, helper)
+          text = text.replace(helper_marker, helper + helper_marker, 1)
+          launch.write_text(text, encoding='utf-8')
 
       - name: Validate exact source delta
         shell: bash
