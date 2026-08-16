@@ -71,12 +71,15 @@ fn system_wsl_executable() -> Result<PathBuf> {
 
 #[cfg(windows)]
 fn run_wsl<const N: usize>(executable: &Path, args: [&str; N]) -> Result<Vec<u8>> {
-    let output = Command::new(executable).args(args).output().map_err(|error| {
-        format!(
-            "WSL discovery unavailable: failed to execute {}: {error}",
-            executable.display()
-        )
-    })?;
+    let output = Command::new(executable)
+        .args(args)
+        .output()
+        .map_err(|error| {
+            format!(
+                "WSL discovery unavailable: failed to execute {}: {error}",
+                executable.display()
+            )
+        })?;
     if !output.status.success() {
         let stderr = decode_wsl_text(&output.stderr)
             .unwrap_or_else(|_| String::from_utf8_lossy(&output.stderr).into_owned());
@@ -103,7 +106,10 @@ fn parse_quiet_names(bytes: &[u8]) -> Result<Vec<String>> {
             continue;
         }
         if !seen.insert(name.to_owned()) {
-            return Err(format!("WSL discovery is ambiguous: duplicate distribution name {name:?}").into());
+            return Err(format!(
+                "WSL discovery is ambiguous: duplicate distribution name {name:?}"
+            )
+            .into());
         }
         names.push(name.to_owned());
     }
@@ -129,12 +135,8 @@ fn reconcile_verbose_rows(
         }
 
         let matched_name = longest_names.iter().find(|name| {
-            row.strip_prefix(name.as_str()).is_some_and(|suffix| {
-                suffix
-                    .chars()
-                    .next()
-                    .is_some_and(char::is_whitespace)
-            })
+            row.strip_prefix(name.as_str())
+                .is_some_and(|suffix| suffix.chars().next().is_some_and(char::is_whitespace))
         });
 
         let Some(name) = matched_name else {
@@ -287,11 +289,8 @@ mod tests {
         let missing = reconcile_verbose_rows(names.clone(), b"NAME STATE VERSION\r\n").unwrap_err();
         assert!(missing.to_string().contains("did not report distribution"));
 
-        let duplicate = reconcile_verbose_rows(
-            names,
-            b"Ubuntu Running 2\r\nUbuntu Stopped 2\r\n",
-        )
-        .unwrap_err();
+        let duplicate =
+            reconcile_verbose_rows(names, b"Ubuntu Running 2\r\nUbuntu Stopped 2\r\n").unwrap_err();
         assert!(duplicate.to_string().contains("duplicate verbose row"));
     }
 
@@ -304,7 +303,10 @@ mod tests {
     #[test]
     fn decodes_utf8_and_utf16le_and_rejects_malformed_utf16le() {
         assert_eq!(decode_wsl_text(b"Ubuntu\r\n").unwrap(), "Ubuntu\r\n");
-        assert_eq!(decode_wsl_text(&utf16le("Ubuntu\r\n")).unwrap(), "Ubuntu\r\n");
+        assert_eq!(
+            decode_wsl_text(&utf16le("Ubuntu\r\n")).unwrap(),
+            "Ubuntu\r\n"
+        );
 
         let error = decode_wsl_text(&[b'U', 0, b'b']).unwrap_err();
         assert!(error.to_string().contains("malformed UTF-16LE"));
