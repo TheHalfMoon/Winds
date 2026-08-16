@@ -22,21 +22,22 @@ jobs:
         with:
           toolchain: 1.97.1
           components: rustfmt, clippy
-      - name: Apply test-only truthful Drop outcome assertion
+      - name: Apply test-only truthful PTY lifecycle assertions
         shell: python
         run: |
           from pathlib import Path
 
           path = Path("src/execution.rs")
           text = path.read_text(encoding="utf-8")
-          start_marker = "    #[test]\n    fn dropping_live_terminal_closes_owned_child_and_finalizes_ledger() {\n"
-          next_marker = "    #[test]\n    fn launch_failure_records_failed_to_start_without_duration() {\n"
-          start = text.find(start_marker)
-          end = text.find(next_marker, start + len(start_marker))
-          if start < 0 or end < 0 or end <= start:
-              raise SystemExit(f"Drop test bounds invalid: start={start}, end={end}")
 
-          replacement = '''    #[test]
+          drop_start_marker = "    #[test]\n    fn dropping_live_terminal_closes_owned_child_and_finalizes_ledger() {\n"
+          drop_next_marker = "    #[test]\n    fn launch_failure_records_failed_to_start_without_duration() {\n"
+          drop_start = text.find(drop_start_marker)
+          drop_end = text.find(drop_next_marker, drop_start + len(drop_start_marker))
+          if drop_start < 0 or drop_end < 0 or drop_end <= drop_start:
+              raise SystemExit(f"Drop test bounds invalid: start={drop_start}, end={drop_end}")
+
+          drop_replacement = '''    #[test]
           fn dropping_live_terminal_records_only_proven_cleanup_truth() {
               let root = TestRoot::new("drop-live");
               let mut store = store_with_workspace(&root);
@@ -81,13 +82,40 @@ jobs:
           }
 
           '''
-          path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
-      - name: Format and lint patched test
+          text = text[:drop_start] + drop_replacement + text[drop_end:]
+
+          terminate_start_marker = "    #[test]\n    fn controlled_terminate_records_interrupted() {\n"
+          terminate_next_marker = "    #[test]\n    fn dropping_live_terminal_records_only_proven_cleanup_truth() {\n"
+          terminate_start = text.find(terminate_start_marker)
+          terminate_end = text.find(
+              terminate_next_marker,
+              terminate_start + len(terminate_start_marker),
+          )
+          if terminate_start < 0 or terminate_end < 0 or terminate_end <= terminate_start:
+              raise SystemExit(
+                  f"terminate test bounds invalid: start={terminate_start}, end={terminate_end}"
+              )
+          terminate_segment = text[terminate_start:terminate_end]
+          marker = "        execution.terminate().unwrap();\n"
+          if terminate_segment.count(marker) != 1:
+              raise SystemExit(
+                  f"controlled terminate call marker count={terminate_segment.count(marker)}"
+              )
+          terminate_segment = terminate_segment.replace(
+              marker,
+              "        let output = drain_output(execution.take_output_reader().unwrap());\n"
+              + marker
+              + "        output.join().unwrap();\n",
+              1,
+          )
+          text = text[:terminate_start] + terminate_segment + text[terminate_end:]
+          path.write_text(text, encoding="utf-8")
+      - name: Format and lint patched tests
         run: |
           cargo fmt --all
           cargo fmt --all -- --check
           cargo clippy --locked --all-targets --all-features -- -D warnings
-      - name: Repeat full macOS suite with patched truth assertion
+      - name: Repeat full macOS suite with truthful PTY test contracts
         shell: python
         run: |
           import subprocess
