@@ -146,7 +146,9 @@ fn conpty_streams_input_output_from_exact_start_cwd_and_observes_exit() {
 
     let output = start_output_reader(session.take_output_reader().unwrap());
     assert!(session.take_output_reader().is_err());
-    session.send_input(b"cd\r\necho WINDS_READY\r\nexit\r\n").unwrap();
+    session
+        .send_input(b"cd\r\necho WINDS_READY\r\nexit\r\n")
+        .unwrap();
     let observed = wait_for_output(&output, b"WINDS_READY");
     let cwd = canonical_root.to_string_lossy();
     assert!(
@@ -188,9 +190,7 @@ fn conpty_interrupts_foreground_command_and_keeps_cmd_usable() {
         .unwrap();
     wait_for_output(&output, b"WINDS_READY");
     session.interrupt().unwrap();
-    session
-        .send_input(b"echo WINDS_AFTER\r\nexit\r\n")
-        .unwrap();
+    session.send_input(b"echo WINDS_AFTER\r\nexit\r\n").unwrap();
     wait_for_output(&output, b"WINDS_AFTER");
 
     let exit = session.wait().unwrap();
