@@ -175,6 +175,27 @@ pub fn launch_wsl_terminal(
         }
     }
 
+    if let WslCwdResolution::MappedWorkspace {
+        linux_workspace_root,
+        linux_git_common_dir,
+        git_head_oid,
+        ..
+    } = &plan.cwd_resolution
+    {
+        let attestation = attest_workspace(
+            &launcher,
+            &distribution,
+            linux_workspace_root,
+            &current_repo,
+        )?;
+        if attestation.linux_workspace_root != *linux_workspace_root
+            || attestation.linux_git_common_dir != *linux_git_common_dir
+            || attestation.git_head_oid != *git_head_oid
+        {
+            return Err("WSL mapped workspace identity changed before terminal launch".into());
+        }
+    }
+
     let arguments = build_launch_arguments(
         &distribution.name,
         linux_cwd,
@@ -570,30 +591,111 @@ fn run_wsl_exec(
     command_args: &[std::ffi::OsString],
 ) -> Result<Vec<u8>> {
     use super::wsl::decode_wsl_text;
+    use std::ffi::c_void;
     use std::io::{Read, Result as IoResult};
-    use std::process::{Command, Stdio};
-    use std::sync::mpsc;
+    use std::os::windows::io::AsRawHandle;
+    use std::process::{ChildStderr, ChildStdout, Command, Stdio};
+    use std::ptr;
     use std::thread;
     use std::time::{Duration, Instant};
 
     const CAP: usize = 256 * 1024;
     const TIMEOUT: Duration = Duration::from_secs(30);
+    const ERROR_BROKEN_PIPE: i32 = 109;
+    const ERROR_NO_DATA: i32 = 232;
+    const ERROR_PIPE_NOT_CONNECTED: i32 = 233;
 
-    fn read_capped<R: Read>(mut reader: R) -> IoResult<(Vec<u8>, bool)> {
-        let mut bytes = Vec::new();
-        let mut truncated = false;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        #[link_name = "PeekNamedPipe"]
+        fn peek_named_pipe(
+            named_pipe: *mut c_void,
+            buffer: *mut c_void,
+            buffer_size: u32,
+            bytes_read: *mut u32,
+            total_bytes_available: *mut u32,
+            bytes_left_this_message: *mut u32,
+        ) -> i32;
+    }
+
+    fn read_available<R: Read + AsRawHandle>(
+        reader: &mut R,
+        captured: &mut Vec<u8>,
+        truncated: &mut bool,
+    ) -> IoResult<bool> {
+        let mut available = 0_u32;
+        // SAFETY: `reader` owns a valid pipe handle for this call. No output buffer is
+        // supplied; PeekNamedPipe only reports the number of bytes immediately readable.
+        let peeked = unsafe {
+            peek_named_pipe(
+                reader.as_raw_handle(),
+                ptr::null_mut(),
+                0,
+                ptr::null_mut(),
+                &mut available,
+                ptr::null_mut(),
+            )
+        };
+        if peeked == 0 {
+            let error = std::io::Error::last_os_error();
+            if matches!(
+                error.raw_os_error(),
+                Some(ERROR_BROKEN_PIPE | ERROR_NO_DATA | ERROR_PIPE_NOT_CONNECTED)
+            ) {
+                return Ok(false);
+            }
+            return Err(error);
+        }
+        if available == 0 {
+            return Ok(false);
+        }
+
         let mut buffer = [0_u8; 8192];
-        loop {
-            let count = reader.read(&mut buffer)?;
-            if count == 0 {
-                return Ok((bytes, truncated));
-            }
-            let remaining = CAP.saturating_sub(bytes.len());
-            let keep = remaining.min(count);
-            bytes.extend_from_slice(&buffer[..keep]);
-            if keep < count {
-                truncated = true;
-            }
+        let read_len = buffer.len().min(available as usize);
+        let count = reader.read(&mut buffer[..read_len])?;
+        if count == 0 {
+            return Ok(false);
+        }
+        let remaining = CAP.saturating_sub(captured.len());
+        let keep = remaining.min(count);
+        captured.extend_from_slice(&buffer[..keep]);
+        if keep < count {
+            *truncated = true;
+        }
+        Ok(true)
+    }
+
+    fn drain_pair(
+        stdout: &mut ChildStdout,
+        stderr: &mut ChildStderr,
+        stdout_bytes: &mut Vec<u8>,
+        stderr_bytes: &mut Vec<u8>,
+        stdout_truncated: &mut bool,
+        stderr_truncated: &mut bool,
+    ) -> IoResult<bool> {
+        let stdout_progress = read_available(stdout, stdout_bytes, stdout_truncated)?;
+        let stderr_progress = read_available(stderr, stderr_bytes, stderr_truncated)?;
+        Ok(stdout_progress || stderr_progress)
+    }
+
+    fn diagnostic_text(bytes: &[u8]) -> String {
+        let decoded =
+            decode_wsl_text(bytes).unwrap_or_else(|_| String::from_utf8_lossy(bytes).into_owned());
+        let trimmed = decoded.trim();
+        let mut chars = trimmed.chars();
+        let mut diagnostic: String = chars.by_ref().take(2048).collect();
+        if chars.next().is_some() {
+            diagnostic.push_str("...");
+        }
+        diagnostic
+    }
+
+    fn truncation_suffix(stdout_truncated: bool, stderr_truncated: bool) -> &'static str {
+        match (stdout_truncated, stderr_truncated) {
+            (true, true) => " [stdout truncated] [stderr truncated]",
+            (true, false) => " [stdout truncated]",
+            (false, true) => " [stderr truncated]",
+            (false, false) => "",
         }
     }
 
@@ -612,55 +714,88 @@ fn run_wsl_exec(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| format!("failed to execute selected WSL distribution: {error}"))?;
-    let stdout = child
+    let mut stdout = child
         .stdout
         .take()
         .ok_or("failed to capture WSL command stdout")?;
-    let stderr = child
+    let mut stderr = child
         .stderr
         .take()
         .ok_or("failed to capture WSL command stderr")?;
-    let (stdout_tx, stdout_rx) = mpsc::sync_channel(1);
-    let (stderr_tx, stderr_rx) = mpsc::sync_channel(1);
-    thread::spawn(move || {
-        let _ = stdout_tx.send(read_capped(stdout));
-    });
-    thread::spawn(move || {
-        let _ = stderr_tx.send(read_capped(stderr));
-    });
+    let mut stdout_bytes = Vec::new();
+    let mut stderr_bytes = Vec::new();
+    let mut stdout_truncated = false;
+    let mut stderr_truncated = false;
 
     let started = Instant::now();
     let status = loop {
+        let progressed = drain_pair(
+            &mut stdout,
+            &mut stderr,
+            &mut stdout_bytes,
+            &mut stderr_bytes,
+            &mut stdout_truncated,
+            &mut stderr_truncated,
+        )?;
         if let Some(status) = child.try_wait()? {
+            while drain_pair(
+                &mut stdout,
+                &mut stderr,
+                &mut stdout_bytes,
+                &mut stderr_bytes,
+                &mut stdout_truncated,
+                &mut stderr_truncated,
+            )? {}
             break status;
         }
         if started.elapsed() >= TIMEOUT {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("selected WSL command exceeded the 30 second safety timeout".into());
+            let cleanup = match child.kill() {
+                Ok(()) => match child.wait() {
+                    Ok(_) => "Windows WSL launcher process terminated".to_owned(),
+                    Err(error) => format!(
+                        "Windows WSL launcher termination wait could not be proven: {error}"
+                    ),
+                },
+                Err(kill_error) => match child.try_wait() {
+                    Ok(Some(_)) => "Windows WSL launcher had already exited".to_owned(),
+                    Ok(None) => format!(
+                        "Windows WSL launcher termination could not be proven: {kill_error}"
+                    ),
+                    Err(wait_error) => format!(
+                        "Windows WSL launcher termination could not be proven: {kill_error}; status check failed: {wait_error}"
+                    ),
+                },
+            };
+            return Err(format!(
+                "selected WSL command exceeded the 30 second safety timeout; {cleanup}"
+            )
+            .into());
         }
-        thread::sleep(Duration::from_millis(25));
+        if !progressed {
+            thread::sleep(Duration::from_millis(10));
+        }
     };
 
-    let (stdout, stdout_truncated) = stdout_rx
-        .recv_timeout(Duration::from_secs(1))
-        .map_err(|_| "WSL command stdout did not close")??;
-    let (stderr, stderr_truncated) = stderr_rx
-        .recv_timeout(Duration::from_secs(1))
-        .map_err(|_| "WSL command stderr did not close")??;
-    if stdout_truncated || stderr_truncated {
-        return Err("selected WSL command exceeded the 256 KiB per-stream safety bound".into());
-    }
+    let stderr_diagnostic = diagnostic_text(&stderr_bytes);
+    let suffix = truncation_suffix(stdout_truncated, stderr_truncated);
     if !status.success() {
-        let stderr = decode_wsl_text(&stderr)
-            .unwrap_or_else(|_| String::from_utf8_lossy(&stderr).into_owned());
         return Err(format!(
-            "selected WSL command failed with status {status}: {}",
-            stderr.trim()
+            "selected WSL command failed with status {status}: {stderr_diagnostic}{suffix}"
         )
         .into());
     }
-    Ok(stdout)
+    if stdout_truncated || stderr_truncated {
+        let diagnostic = if stderr_diagnostic.is_empty() {
+            suffix.to_owned()
+        } else {
+            format!("{suffix}; stderr: {stderr_diagnostic}")
+        };
+        return Err(format!(
+            "selected WSL command exceeded the 256 KiB per-stream safety bound{diagnostic}"
+        )
+        .into());
+    }
+    Ok(stdout_bytes)
 }
 
 #[cfg(windows)]
