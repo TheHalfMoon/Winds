@@ -7,6 +7,13 @@ use std::process::Command;
 
 #[path = "shell_profiles.rs"]
 pub(crate) mod shell_profiles;
+#[cfg(unix)]
+#[allow(
+    dead_code,
+    reason = "Spec 003 T050 backend API; persistence/CLI callers land in T053/T057"
+)]
+#[path = "terminal.rs"]
+pub(crate) mod terminal;
 #[path = "workspace.rs"]
 pub(crate) mod workspace;
 #[path = "workspace_clone.rs"]
