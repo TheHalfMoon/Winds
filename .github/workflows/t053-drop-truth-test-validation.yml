@@ -84,31 +84,23 @@ jobs:
           '''
           text = text[:drop_start] + drop_replacement + text[drop_end:]
 
-          terminate_start_marker = "    #[test]\n    fn controlled_terminate_records_interrupted() {\n"
-          terminate_next_marker = "    #[test]\n    fn dropping_live_terminal_records_only_proven_cleanup_truth() {\n"
-          terminate_start = text.find(terminate_start_marker)
-          terminate_end = text.find(
-              terminate_next_marker,
-              terminate_start + len(terminate_start_marker),
+          terminate_marker = (
+              "        execution.terminate().unwrap();\n"
+              "        drop(execution);\n"
+              "        let final_record = store.load_execution(\"execution-terminate\").unwrap();\n"
           )
-          if terminate_start < 0 or terminate_end < 0 or terminate_end <= terminate_start:
+          if text.count(terminate_marker) != 1:
               raise SystemExit(
-                  f"terminate test bounds invalid: start={terminate_start}, end={terminate_end}"
+                  f"controlled terminate sequence count={text.count(terminate_marker)}"
               )
-          terminate_segment = text[terminate_start:terminate_end]
-          marker = "        execution.terminate().unwrap();\n"
-          if terminate_segment.count(marker) != 1:
-              raise SystemExit(
-                  f"controlled terminate call marker count={terminate_segment.count(marker)}"
-              )
-          terminate_segment = terminate_segment.replace(
-              marker,
+          terminate_replacement = (
               "        let output = drain_output(execution.take_output_reader().unwrap());\n"
-              + marker
-              + "        output.join().unwrap();\n",
-              1,
+              "        execution.terminate().unwrap();\n"
+              "        drop(execution);\n"
+              "        output.join().unwrap();\n"
+              "        let final_record = store.load_execution(\"execution-terminate\").unwrap();\n"
           )
-          text = text[:terminate_start] + terminate_segment + text[terminate_end:]
+          text = text.replace(terminate_marker, terminate_replacement, 1)
           path.write_text(text, encoding="utf-8")
       - name: Format and lint patched tests
         run: |
