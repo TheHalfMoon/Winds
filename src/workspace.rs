@@ -206,9 +206,7 @@ fn register_observed_workspace(
     }
 }
 
-fn is_sqlite_constraint_violation(
-    error: &(dyn std::error::Error + Send + Sync + 'static),
-) -> bool {
+fn is_sqlite_constraint_violation(error: &(dyn std::error::Error + Send + Sync + 'static)) -> bool {
     error
         .downcast_ref::<rusqlite::Error>()
         .and_then(rusqlite::Error::sqlite_error_code)
