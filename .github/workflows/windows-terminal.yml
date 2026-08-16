@@ -3,8 +3,13 @@ name: windows-terminal
 on:
   pull_request:
     paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
       - "src/check.rs"
+      - "src/domain.rs"
       - "src/git.rs"
+      - "src/main.rs"
       - "src/shell_profiles.rs"
       - "src/terminal.rs"
       - "src/terminal_windows_tests.rs"
@@ -13,8 +18,13 @@ on:
   push:
     branches: [main]
     paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
       - "src/check.rs"
+      - "src/domain.rs"
       - "src/git.rs"
+      - "src/main.rs"
       - "src/shell_profiles.rs"
       - "src/terminal.rs"
       - "src/terminal_windows_tests.rs"
