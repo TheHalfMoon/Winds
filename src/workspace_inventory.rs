@@ -87,7 +87,9 @@ fn detect_manifests(worktree_root: &Path) -> Result<Vec<String>> {
             }
             Err(error) if error.kind() == ErrorKind::NotFound => {}
             Err(error) => {
-                return Err(format!("manifest path cannot be inspected ({relative}): {error}").into());
+                return Err(
+                    format!("manifest path cannot be inspected ({relative}): {error}").into(),
+                );
             }
         }
     }
@@ -146,7 +148,8 @@ fn system_shell_candidates() -> Result<Vec<String>> {
 fn parse_system_shells(reader: impl BufRead) -> Result<Vec<String>> {
     let mut candidates = BTreeSet::new();
     for line in reader.lines() {
-        let line = line.map_err(|error| format!("/etc/shells cannot be read completely: {error}"))?;
+        let line =
+            line.map_err(|error| format!("/etc/shells cannot be read completely: {error}"))?;
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
@@ -295,8 +298,16 @@ mod tests {
         fs::write(worktree.join(".devcontainer"), b"not a directory\n").unwrap();
 
         let error = inventory_workspace_environment(&workspace).unwrap_err();
-        assert!(error.to_string().contains("manifest path cannot be inspected"));
-        assert!(error.to_string().contains(".devcontainer/devcontainer.json"));
+        assert!(
+            error
+                .to_string()
+                .contains("manifest path cannot be inspected")
+        );
+        assert!(
+            error
+                .to_string()
+                .contains(".devcontainer/devcontainer.json")
+        );
 
         cleanup_owned_root(&root);
     }
