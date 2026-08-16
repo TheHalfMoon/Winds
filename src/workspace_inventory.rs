@@ -8,7 +8,7 @@ use std::fs::File;
 use std::io::ErrorKind;
 #[cfg(unix)]
 use std::io::{BufRead, BufReader};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 const MANIFEST_PATHS: &[&str] = &[
     ".devcontainer/devcontainer.json",
@@ -78,22 +78,65 @@ fn require_current_canonical_directory(value: &str, label: &str) -> Result<PathB
 fn detect_manifests(worktree_root: &Path) -> Result<Vec<String>> {
     let mut detected = Vec::new();
     for relative in MANIFEST_PATHS {
-        match fs::symlink_metadata(worktree_root.join(relative)) {
-            Ok(metadata) => {
-                let kind = metadata.file_type();
-                if kind.is_file() || kind.is_symlink() {
-                    detected.push((*relative).to_owned());
-                }
-            }
-            Err(error) if error.kind() == ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(
-                    format!("manifest path cannot be inspected ({relative}): {error}").into(),
-                );
-            }
+        if manifest_path_present(worktree_root, relative)? {
+            detected.push((*relative).to_owned());
         }
     }
     Ok(detected)
+}
+
+fn manifest_path_present(worktree_root: &Path, relative: &str) -> Result<bool> {
+    let relative_path = Path::new(relative);
+    if relative_path.is_absolute() {
+        return Err(format!("manifest path must be relative: {relative}").into());
+    }
+
+    let mut current_parent = worktree_root.to_path_buf();
+    if let Some(parent) = relative_path.parent() {
+        for component in parent.components() {
+            let Component::Normal(name) = component else {
+                return Err(format!("manifest path contains an unsafe component: {relative}").into());
+            };
+            current_parent.push(name);
+            match fs::symlink_metadata(&current_parent) {
+                Ok(metadata) => {
+                    let kind = metadata.file_type();
+                    if kind.is_symlink() {
+                        return Err(format!(
+                            "manifest parent must not be a symlink ({relative}): {}",
+                            current_parent.display()
+                        )
+                        .into());
+                    }
+                    if !kind.is_dir() {
+                        return Err(format!(
+                            "manifest parent is not a directory ({relative}): {}",
+                            current_parent.display()
+                        )
+                        .into());
+                    }
+                }
+                Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+                Err(error) => {
+                    return Err(format!(
+                        "manifest parent cannot be inspected ({relative}): {error}"
+                    )
+                    .into());
+                }
+            }
+        }
+    }
+
+    match fs::symlink_metadata(worktree_root.join(relative_path)) {
+        Ok(metadata) => {
+            let kind = metadata.file_type();
+            Ok(kind.is_file() || kind.is_symlink())
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+        Err(error) => {
+            Err(format!("manifest path cannot be inspected ({relative}): {error}").into())
+        }
+    }
 }
 
 fn discover_shell_candidates() -> Result<Vec<String>> {
@@ -169,6 +212,8 @@ mod tests {
     use std::fs;
     #[cfg(unix)]
     use std::io::Cursor;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -298,11 +343,28 @@ mod tests {
         fs::write(worktree.join(".devcontainer"), b"not a directory\n").unwrap();
 
         let error = inventory_workspace_environment(&workspace).unwrap_err();
+        assert!(error.to_string().contains("manifest parent is not a directory"));
         assert!(
             error
                 .to_string()
-                .contains("manifest path cannot be inspected")
+                .contains(".devcontainer/devcontainer.json")
         );
+
+        cleanup_owned_root(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nested_manifest_parent_symlink_fails_closed_without_inspecting_external_target() {
+        let root = test_root("manifest-parent-symlink");
+        let (workspace, worktree) = fixture_workspace(&root);
+        let outside = root.join("outside");
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("devcontainer.json"), b"{\"outside\":true}\n").unwrap();
+        symlink(&outside, worktree.join(".devcontainer")).unwrap();
+
+        let error = inventory_workspace_environment(&workspace).unwrap_err();
+        assert!(error.to_string().contains("manifest parent must not be a symlink"));
         assert!(
             error
                 .to_string()
