@@ -17,6 +17,27 @@ pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 pub struct Store {
     connection: Connection,
     home: PathBuf,
+    deferred_terminal_finalizations: Vec<DeferredTerminalFinalization>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum TerminalFinalization {
+    Exited {
+        ended_unix_ms: i64,
+    },
+    Interrupted {
+        ended_unix_ms: i64,
+        reason: TerminalCloseReason,
+    },
+    OwnershipLost {
+        observed_unix_ms: i64,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct DeferredTerminalFinalization {
+    execution_id: String,
+    finalization: TerminalFinalization,
 }
 
 pub struct NewRun<'a> {
@@ -91,6 +112,7 @@ impl Store {
         Ok(Self {
             connection,
             home: home.to_path_buf(),
+            deferred_terminal_finalizations: Vec::new(),
         })
     }
 }
@@ -463,10 +485,142 @@ impl Store {
         )
     }
 
+    pub(crate) fn apply_terminal_finalization(
+        &mut self,
+        execution_id: &str,
+        finalization: TerminalFinalization,
+    ) -> Result<()> {
+        match finalization {
+            TerminalFinalization::Exited { ended_unix_ms } => {
+                self.mark_terminal_exited(execution_id, ended_unix_ms)
+            }
+            TerminalFinalization::Interrupted {
+                ended_unix_ms,
+                reason,
+            } => self.mark_terminal_interrupted(execution_id, reason, ended_unix_ms),
+            TerminalFinalization::OwnershipLost { observed_unix_ms } => self
+                .mark_terminal_ownership_lost(
+                    execution_id,
+                    "TerminalOwnershipLostAfterCleanupFailure",
+                    observed_unix_ms,
+                ),
+        }
+    }
+
+    pub(crate) fn defer_terminal_finalization(
+        &mut self,
+        execution_id: &str,
+        finalization: TerminalFinalization,
+    ) {
+        if let Some(existing) = self
+            .deferred_terminal_finalizations
+            .iter_mut()
+            .find(|pending| pending.execution_id == execution_id)
+        {
+            existing.finalization = finalization;
+            return;
+        }
+        self.deferred_terminal_finalizations
+            .push(DeferredTerminalFinalization {
+                execution_id: execution_id.to_owned(),
+                finalization,
+            });
+    }
+
+    pub fn retry_deferred_terminal_finalizations(&mut self) -> Result<usize> {
+        let pending = std::mem::take(&mut self.deferred_terminal_finalizations);
+        let mut completed = 0_usize;
+        let mut failed = Vec::new();
+        let mut failures = Vec::new();
+        for item in pending {
+            match self.apply_terminal_finalization(&item.execution_id, item.finalization) {
+                Ok(()) => completed += 1,
+                Err(error) => {
+                    failures.push(format!("{}: {error}", item.execution_id));
+                    failed.push(item);
+                }
+            }
+        }
+        self.deferred_terminal_finalizations = failed;
+        if failures.is_empty() {
+            Ok(completed)
+        } else {
+            Err(format!(
+                "{} deferred terminal finalization(s) remain pending: {}",
+                failures.len(),
+                failures.join("; ")
+            )
+            .into())
+        }
+    }
+
+    pub fn pending_terminal_finalization_count(&self) -> usize {
+        self.deferred_terminal_finalizations.len()
+    }
+
+    fn mark_terminal_ownership_lost(
+        &mut self,
+        execution_id: &str,
+        event_kind: &str,
+        observed_unix_ms: i64,
+    ) -> Result<()> {
+        let tx = self.connection.transaction()?;
+        let (status, requested_unix_ms, _started_unix_ms) =
+            terminal_execution_state(&tx, execution_id)?;
+        if !matches!(
+            status,
+            ExecutionStatus::Requested | ExecutionStatus::Running
+        ) {
+            return Err(format!(
+                "terminal ownership cannot be lost from persisted state {}: {execution_id}",
+                status.as_str()
+            )
+            .into());
+        }
+        if observed_unix_ms < requested_unix_ms {
+            return Err(
+                "terminal ownership-loss observation cannot precede its request time".into(),
+            );
+        }
+        let updated = tx.execute(
+            "UPDATE executions
+         SET status = ?2, status_source = ?3,
+             ended_unix_ms = NULL, duration_ms = NULL
+         WHERE execution_id = ?1 AND status IN (?4, ?5)",
+            params![
+                execution_id,
+                ExecutionStatus::OwnershipLost.as_str(),
+                FactSource::WindsObserved.as_str(),
+                ExecutionStatus::Requested.as_str(),
+                ExecutionStatus::Running.as_str(),
+            ],
+        )?;
+        if updated != 1 {
+            return Err(
+                "terminal ownership-loss transition lost its expected non-final row".into(),
+            );
+        }
+        set_terminal_close_reason(
+            &tx,
+            execution_id,
+            TerminalCloseReason::OwnershipLostProcessStateUnknown,
+        )?;
+        insert_execution_event(
+            &tx,
+            execution_id,
+            event_kind,
+            FactSource::WindsObserved,
+            observed_unix_ms,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn reconcile_unowned_terminal_sessions_after_restart(
         &mut self,
         now_ms: i64,
     ) -> Result<usize> {
+        self.retry_deferred_terminal_finalizations()?;
         let tx = self.connection.transaction()?;
         let execution_ids = {
             let mut statement = tx.prepare(
@@ -1122,7 +1276,7 @@ fn insert_execution_event(
 
 #[cfg(test)]
 mod persistence_tests {
-    use super::{NewExecution, NewTerminalSession, NewWorkspace, Store};
+    use super::{NewExecution, NewTerminalSession, NewWorkspace, Store, TerminalFinalization};
     use crate::domain::{ExecutionKind, ExecutionStatus, FactSource, TerminalCloseReason};
     use std::fs;
     use std::io::ErrorKind;
@@ -1587,6 +1741,70 @@ mod persistence_tests {
             )
             .unwrap();
         assert_eq!(event_count, 0);
+
+        drop(store);
+        cleanup_test_home(&home);
+    }
+
+    #[test]
+    fn deferred_terminal_finalization_can_be_retried_after_owner_drop() {
+        let home = test_home("terminal-deferred-finalization");
+        let mut store = Store::open(&home).unwrap();
+        store
+            .create_workspace(
+                NewWorkspace {
+                    workspace_id: "workspace-1",
+                    canonical_worktree_root: "/tmp/example",
+                    git_common_dir: "/tmp/example/.git",
+                },
+                100,
+            )
+            .unwrap();
+        let shell_arguments = Vec::new();
+        store
+            .create_terminal_execution(
+                NewExecution {
+                    execution_id: "execution-deferred",
+                    workspace_id: "workspace-1",
+                    kind: ExecutionKind::Terminal,
+                    request_source: FactSource::CallerRequested,
+                    execution_domain: "host-linux",
+                },
+                NewTerminalSession {
+                    execution_id: "execution-deferred",
+                    profile_id: "profile-1",
+                    shell_executable: "/bin/sh",
+                    shell_arguments: &shell_arguments,
+                    requested_cwd: "/tmp/example",
+                    initial_cols: Some(80),
+                    initial_rows: Some(24),
+                },
+                110,
+            )
+            .unwrap();
+        store
+            .mark_terminal_running("execution-deferred", 120)
+            .unwrap();
+        store.defer_terminal_finalization(
+            "execution-deferred",
+            TerminalFinalization::Interrupted {
+                ended_unix_ms: 150,
+                reason: TerminalCloseReason::ClosedByWinds,
+            },
+        );
+        assert_eq!(store.pending_terminal_finalization_count(), 1);
+        assert_eq!(store.retry_deferred_terminal_finalizations().unwrap(), 1);
+        assert_eq!(store.pending_terminal_finalization_count(), 0);
+        let execution = store.load_execution("execution-deferred").unwrap();
+        assert_eq!(execution.status, ExecutionStatus::Interrupted);
+        assert_eq!(execution.duration_ms, Some(30));
+        assert_eq!(
+            store
+                .load_terminal_session("execution-deferred")
+                .unwrap()
+                .close_reason,
+            Some(TerminalCloseReason::ClosedByWinds)
+        );
 
         drop(store);
         cleanup_test_home(&home);
