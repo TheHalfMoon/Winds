@@ -195,21 +195,25 @@ fn conpty_resize_updates_owned_pseudoconsole_dimensions() {
 }
 
 #[test]
-fn conpty_interrupts_foreground_command_and_keeps_cmd_usable() {
+fn conpty_interrupt_fails_closed_without_corrupting_the_session() {
     let root = TestRoot::new("interrupt");
     let profile = native_cmd_profile();
     let mut session = TerminalSession::start(&profile, root.path(), default_size()).unwrap();
     let output = start_output_reader(session.take_output_reader().unwrap());
 
     complete_headless_terminal_startup(&mut session, &output);
-    session
-        .send_input(b"echo WINDS_READY & ping -t 127.0.0.1\r\n")
-        .unwrap();
+    session.send_input(b"echo WINDS_READY\r\n").unwrap();
     wait_for_output(&output, b"WINDS_READY");
-    session.interrupt().unwrap();
+
+    let error = session.interrupt().unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("interrupt is unsupported on native Windows")
+    );
+
     session.send_input(b"echo WINDS_AFTER\r\nexit\r\n").unwrap();
     wait_for_output(&output, b"WINDS_AFTER");
-
     let exit = session.wait().unwrap();
     assert_eq!(exit.exit_code, 0);
 }
