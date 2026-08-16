@@ -594,7 +594,7 @@ fn run_wsl_exec(
     use std::ffi::c_void;
     use std::io::{Read, Result as IoResult};
     use std::os::windows::io::AsRawHandle;
-    use std::process::{ChildStderr, ChildStdout, Command, Stdio};
+    use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
     use std::ptr;
     use std::thread;
     use std::time::{Duration, Instant};
@@ -699,57 +699,10 @@ fn run_wsl_exec(
         }
     }
 
-    let mut process = Command::new(launcher);
-    for key in GIT_CONTEXT_ENV_VARS {
-        process.env_remove(key);
-    }
-    process.arg("--distribution").arg(distribution);
-    if let Some(cwd) = cwd {
-        process.arg("--cd").arg(cwd);
-    }
-    process.arg("--exec").arg(command).args(command_args);
-    let mut child = process
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("failed to execute selected WSL distribution: {error}"))?;
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or("failed to capture WSL command stdout")?;
-    let mut stderr = child
-        .stderr
-        .take()
-        .ok_or("failed to capture WSL command stderr")?;
-    let mut stdout_bytes = Vec::new();
-    let mut stderr_bytes = Vec::new();
-    let mut stdout_truncated = false;
-    let mut stderr_truncated = false;
-
-    let started = Instant::now();
-    let status = loop {
-        let progressed = drain_pair(
-            &mut stdout,
-            &mut stderr,
-            &mut stdout_bytes,
-            &mut stderr_bytes,
-            &mut stdout_truncated,
-            &mut stderr_truncated,
-        )?;
-        if let Some(status) = child.try_wait()? {
-            while drain_pair(
-                &mut stdout,
-                &mut stderr,
-                &mut stdout_bytes,
-                &mut stderr_bytes,
-                &mut stdout_truncated,
-                &mut stderr_truncated,
-            )? {}
-            break status;
-        }
-        if started.elapsed() >= TIMEOUT {
-            let cleanup = match child.kill() {
+    fn cleanup_owned_launcher(child: &mut Child) -> String {
+        match child.try_wait() {
+            Ok(Some(_)) => "Windows WSL launcher had already exited".to_owned(),
+            Ok(None) | Err(_) => match child.kill() {
                 Ok(()) => match child.wait() {
                     Ok(_) => "Windows WSL launcher process terminated".to_owned(),
                     Err(error) => format!(
@@ -765,11 +718,94 @@ fn run_wsl_exec(
                         "Windows WSL launcher termination could not be proven: {kill_error}; status check failed: {wait_error}"
                     ),
                 },
-            };
-            return Err(format!(
-                "selected WSL command exceeded the 30 second safety timeout; {cleanup}"
+            },
+        }
+    }
+
+    fn fail_owned_launcher(child: &mut Child, reason: impl std::fmt::Display) -> Result<Vec<u8>> {
+        let cleanup = cleanup_owned_launcher(child);
+        Err(format!("{reason}; {cleanup}").into())
+    }
+
+    let mut process = Command::new(launcher);
+    for key in GIT_CONTEXT_ENV_VARS {
+        process.env_remove(key);
+    }
+    process.arg("--distribution").arg(distribution);
+    if let Some(cwd) = cwd {
+        process.arg("--cd").arg(cwd);
+    }
+    process.arg("--exec").arg(command).args(command_args);
+    let mut child = process
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("failed to execute selected WSL distribution: {error}"))?;
+
+    let mut stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            return fail_owned_launcher(&mut child, "failed to capture WSL command stdout");
+        }
+    };
+    let mut stderr = match child.stderr.take() {
+        Some(stderr) => stderr,
+        None => {
+            return fail_owned_launcher(&mut child, "failed to capture WSL command stderr");
+        }
+    };
+    let mut stdout_bytes = Vec::new();
+    let mut stderr_bytes = Vec::new();
+    let mut stdout_truncated = false;
+    let mut stderr_truncated = false;
+
+    let started = Instant::now();
+    let status = loop {
+        let progressed = match drain_pair(
+            &mut stdout,
+            &mut stderr,
+            &mut stdout_bytes,
+            &mut stderr_bytes,
+            &mut stdout_truncated,
+            &mut stderr_truncated,
+        ) {
+            Ok(progressed) => progressed,
+            Err(error) => {
+                return fail_owned_launcher(
+                    &mut child,
+                    format!("failed reading selected WSL command output: {error}"),
+                );
+            }
+        };
+        let observed_exit = match child.try_wait() {
+            Ok(observed_exit) => observed_exit,
+            Err(error) => {
+                return fail_owned_launcher(
+                    &mut child,
+                    format!("failed observing selected WSL command exit: {error}"),
+                );
+            }
+        };
+        if let Some(status) = observed_exit {
+            while drain_pair(
+                &mut stdout,
+                &mut stderr,
+                &mut stdout_bytes,
+                &mut stderr_bytes,
+                &mut stdout_truncated,
+                &mut stderr_truncated,
             )
-            .into());
+            .map_err(|error| {
+                format!("failed draining selected WSL command output after observed exit: {error}")
+            })? {}
+            break status;
+        }
+        if started.elapsed() >= TIMEOUT {
+            return fail_owned_launcher(
+                &mut child,
+                "selected WSL command exceeded the 30 second safety timeout",
+            );
         }
         if !progressed {
             thread::sleep(Duration::from_millis(10));
