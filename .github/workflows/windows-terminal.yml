@@ -14,6 +14,8 @@ on:
       - "src/terminal.rs"
       - "src/terminal_windows_tests.rs"
       - "src/workspace.rs"
+      - "src/wsl.rs"
+      - "src/wsl_launch.rs"
       - ".github/workflows/windows-terminal.yml"
   push:
     branches: [main]
@@ -29,6 +31,8 @@ on:
       - "src/terminal.rs"
       - "src/terminal_windows_tests.rs"
       - "src/workspace.rs"
+      - "src/wsl.rs"
+      - "src/wsl_launch.rs"
       - ".github/workflows/windows-terminal.yml"
 
 permissions:
@@ -54,3 +58,5 @@ jobs:
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - name: Native Windows ConPTY lifecycle tests
         run: cargo test --locked --bin winds terminal::windows_tests -- --test-threads=1
+      - name: WSL launch unit tests
+        run: cargo test --locked --bin winds wsl_launch::tests -- --test-threads=1
