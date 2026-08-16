@@ -1,5 +1,6 @@
 use super::Result;
 use serde::Serialize;
+#[cfg(any(windows, test))]
 use std::collections::{BTreeMap, BTreeSet};
 #[cfg(windows)]
 use std::ffi::OsString;
@@ -202,6 +203,7 @@ fn read_capped<R: Read>(mut reader: R) -> io::Result<BoundedBytes> {
     })
 }
 
+#[cfg(any(windows, test))]
 fn parse_quiet_names(bytes: &[u8]) -> Result<Vec<String>> {
     let text = decode_wsl_text(bytes)?;
     let mut seen = BTreeSet::new();
@@ -222,6 +224,7 @@ fn parse_quiet_names(bytes: &[u8]) -> Result<Vec<String>> {
     Ok(names)
 }
 
+#[cfg(any(windows, test))]
 fn reconcile_verbose_rows(
     names: Vec<String>,
     verbose_bytes: &[u8],
@@ -289,6 +292,7 @@ fn reconcile_verbose_rows(
     Ok(distributions)
 }
 
+#[cfg(any(windows, test))]
 fn parse_wsl_version(value: &str, name: &str) -> Result<u8> {
     match value.parse::<u8>() {
         Ok(version @ (1 | 2)) => Ok(version),
@@ -299,17 +303,19 @@ fn parse_wsl_version(value: &str, name: &str) -> Result<u8> {
     }
 }
 
+#[cfg(any(windows, test))]
 fn verbose_line_looks_like_distribution(row: &str) -> bool {
     row.split_whitespace()
         .next_back()
         .is_some_and(|field| field.parse::<u8>().is_ok())
 }
 
+#[cfg(any(windows, test))]
 fn decode_wsl_text(bytes: &[u8]) -> Result<String> {
     let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes);
     if bytes.starts_with(&[0xff, 0xfe]) || bytes.contains(&0) {
         let bytes = bytes.strip_prefix(&[0xff, 0xfe]).unwrap_or(bytes);
-        if bytes.len() % 2 != 0 {
+        if !bytes.len().is_multiple_of(2) {
             return Err("WSL discovery returned malformed UTF-16LE output".into());
         }
         let units: Vec<u16> = bytes
