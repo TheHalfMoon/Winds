@@ -1,0 +1,46 @@
+name: t051-failclosed-interrupt-patch-temporary
+
+on:
+  push:
+    branches: [feat/003-t051-windows-conpty]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: true
+      - name: Make native Windows interrupt explicitly fail closed
+        shell: python
+        run: |
+          from pathlib import Path
+
+          terminal = Path('src/terminal.rs')
+          text = terminal.read_text(encoding='utf-8')
+          start = text.index('    #[cfg(windows)]\n    fn interrupt_platform(&mut self) -> Result<()> {')
+          end = text.index('\n    pub fn try_wait(&mut self)', start)
+          replacement = '''    #[cfg(windows)]\n    fn interrupt_platform(&mut self) -> Result<()> {\n        Err(\n            "terminal interrupt is unsupported on native Windows in Spec 003 T051; use terminate for owned process termination"\n                .into(),\n        )\n    }\n'''
+          terminal.write_text(text[:start] + replacement + text[end:], encoding='utf-8')
+
+          tests = Path('src/terminal_windows_tests.rs')
+          text = tests.read_text(encoding='utf-8')
+          old = '''#[test]\nfn conpty_interrupts_foreground_command_and_keeps_cmd_usable() {\n    let root = TestRoot::new("interrupt");\n    let profile = native_cmd_profile();\n    let mut session = TerminalSession::start(&profile, root.path(), default_size()).unwrap();\n    let output = start_output_reader(session.take_output_reader().unwrap());\n\n    complete_headless_terminal_startup(&mut session, &output);\n    session\n        .send_input(b"echo WINDS_READY & ping -t 127.0.0.1\\r\\n")\n        .unwrap();\n    wait_for_output(&output, b"WINDS_READY");\n    session.interrupt().unwrap();\n    session.send_input(b"echo WINDS_AFTER\\r\\nexit\\r\\n").unwrap();\n    wait_for_output(&output, b"WINDS_AFTER");\n\n    let exit = session.wait().unwrap();\n    assert_eq!(exit.exit_code, 0);\n}\n'''
+          new = '''#[test]\nfn conpty_interrupt_fails_closed_without_corrupting_the_session() {\n    let root = TestRoot::new("interrupt");\n    let profile = native_cmd_profile();\n    let mut session = TerminalSession::start(&profile, root.path(), default_size()).unwrap();\n    let output = start_output_reader(session.take_output_reader().unwrap());\n\n    complete_headless_terminal_startup(&mut session, &output);\n    session.send_input(b"echo WINDS_READY\\r\\n").unwrap();\n    wait_for_output(&output, b"WINDS_READY");\n\n    let error = session.interrupt().unwrap_err();\n    assert!(\n        error\n            .to_string()\n            .contains("interrupt is unsupported on native Windows")\n    );\n\n    session.send_input(b"echo WINDS_AFTER\\r\\nexit\\r\\n").unwrap();\n    wait_for_output(&output, b"WINDS_AFTER");\n    let exit = session.wait().unwrap();\n    assert_eq!(exit.exit_code, 0);\n}\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f'Windows interrupt test count={text.count(old)}')
+          tests.write_text(text.replace(old, new, 1), encoding='utf-8')
+      - name: Commit fail-closed Windows interrupt boundary
+        shell: bash
+        run: |
+          cargo fmt --all
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/terminal.rs src/terminal_windows_tests.rs
+          git diff --cached --check
+          git commit -m "fix(winds): fail closed for unsupported native Windows interrupt"
+          git push origin "HEAD:$GITHUB_REF_NAME"
