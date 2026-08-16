@@ -185,19 +185,16 @@ impl TerminalSession {
             .as_mut()
             .ok_or("terminal session input is already closed")?;
 
-        // ConPTY keeps Win32 Input Mode enabled. Microsoft Terminal serializes a
-        // KEY_EVENT_RECORD losslessly as: CSI Vk;Sc;Uc;Kd;Cs;Rc _. A Ctrl+key
-        // chord is four records: Ctrl down, key down, key up, Ctrl up. Encode
-        // Ctrl+C entirely through this session's ConPTY input pipe, avoiding the
-        // process-global semantics of GenerateConsoleCtrlEvent(CTRL_C_EVENT).
-        const CTRL_DOWN: &[u8] = b"\x1b[17;29;0;1;8;1_";
-        const C_DOWN: &[u8] = b"\x1b[67;46;3;1;8;1_";
-        const C_UP: &[u8] = b"\x1b[67;46;3;0;8;1_";
-        const CTRL_UP: &[u8] = b"\x1b[17;29;0;0;0;1_";
-        writer.write_all(CTRL_DOWN)?;
-        writer.write_all(C_DOWN)?;
-        writer.write_all(C_UP)?;
-        writer.write_all(CTRL_UP)?;
+        // ConPTY parses Win32 Input Mode sequences into KEY_EVENT_RECORD values.
+        // Ctrl+C is conditional on ENABLE_PROCESSED_INPUT in conhost, but the
+        // host handles VK_CANCEL (Ctrl+Break) as CTRL_BREAK_EVENT regardless of
+        // that mode. Use that ownership-local interrupt primitive rather than
+        // process-global GenerateConsoleCtrlEvent semantics. Scan/Unicode values
+        // are not consulted by conhost's VK_CANCEL branch.
+        const CTRL_BREAK_DOWN: &[u8] = b"\x1b[3;0;0;1;8;1_";
+        const CTRL_BREAK_UP: &[u8] = b"\x1b[3;0;0;0;8;1_";
+        writer.write_all(CTRL_BREAK_DOWN)?;
+        writer.write_all(CTRL_BREAK_UP)?;
         writer.flush()?;
         Ok(())
     }
