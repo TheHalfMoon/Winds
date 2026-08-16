@@ -353,6 +353,17 @@ mod tests {
         assert_eq!(persisted.git_common_dir, first.git_common_dir);
         drop(store);
 
+        let symlinked_repo = root.join("repo-link");
+        std::os::unix::fs::symlink(&repo, &symlinked_repo).unwrap();
+        let via_symlink = open_existing_workspace(&symlinked_repo, &canonical_home, 150).unwrap();
+        assert_eq!(via_symlink.workspace_id, first.workspace_id);
+        assert_eq!(
+            via_symlink.canonical_worktree_root,
+            first.canonical_worktree_root
+        );
+        assert_eq!(via_symlink.git_common_dir, first.git_common_dir);
+        assert_eq!(via_symlink.head_oid, first.head_oid);
+
         fs::write(repo.join("untracked.txt"), b"dirty\n").unwrap();
         let second = open_existing_workspace(&repo, &canonical_home, 200).unwrap();
         assert_eq!(second.workspace_id, first.workspace_id);
@@ -406,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_non_git_and_bare_paths_fail_closed_before_registration() {
+    fn missing_file_non_git_and_bare_paths_fail_closed_before_registration() {
         let root = test_root("invalid");
         let canonical_home = create_state_root(&root);
 
@@ -414,16 +425,22 @@ mod tests {
         let error = open_existing_workspace(&missing, &canonical_home, 400).unwrap_err();
         assert!(error.to_string().contains("does not exist"));
 
+        let regular_file = root.join("regular-file");
+        fs::write(&regular_file, b"not a directory\n").unwrap();
+        let error = open_existing_workspace(&regular_file, &canonical_home, 401).unwrap_err();
+        assert!(error.to_string().contains("not a directory"));
+
         let non_git = root.join("plain");
-        std::fs::create_dir(&non_git).unwrap();
-        let error = open_existing_workspace(&non_git, &canonical_home, 401).unwrap_err();
+        fs::create_dir(&non_git).unwrap();
+        let error = open_existing_workspace(&non_git, &canonical_home, 402).unwrap_err();
         assert!(error.to_string().contains("not a Git worktree"));
 
         let bare = root.join("bare.git");
-        std::fs::create_dir(&bare).unwrap();
+        fs::create_dir(&bare).unwrap();
         run_git(&bare, ["init", "--bare"]);
-        let error = open_existing_workspace(&bare, &canonical_home, 402).unwrap_err();
+        let error = open_existing_workspace(&bare, &canonical_home, 403).unwrap_err();
         assert!(error.to_string().contains("bare Git repositories"));
+        assert!(!canonical_home.join("winds.db").exists());
 
         cleanup_owned_root(&root);
     }
@@ -433,7 +450,7 @@ mod tests {
         let root = test_root("state-boundary");
         let (repo, _) = initialize_repo(&root);
         let inside = repo.join("winds-state");
-        std::fs::create_dir(&inside).unwrap();
+        fs::create_dir(&inside).unwrap();
         let canonical_inside = inside.canonicalize().unwrap();
 
         let error = open_existing_workspace(&repo, &canonical_inside, 500).unwrap_err();
