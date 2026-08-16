@@ -117,13 +117,47 @@ impl TerminalSession {
 
     pub fn interrupt(&mut self) -> Result<()> {
         self.require_active()?;
-        let writer = self
-            .writer
-            .as_mut()
-            .ok_or("terminal session input is already closed")?;
-        writer.write_all(&[0x03])?;
-        writer.flush()?;
-        Ok(())
+
+        let child_pid = self
+            .child
+            .as_ref()
+            .and_then(|child| child.process_id())
+            .ok_or("terminal interrupt unavailable: owned child process id is unknown")?;
+        let child_pid = libc::pid_t::try_from(child_pid)
+            .map_err(|_| "terminal interrupt unavailable: child process id is out of range")?;
+        let process_group = self
+            .master
+            .process_group_leader()
+            .ok_or("terminal interrupt unavailable: foreground PTY process group is unknown")?;
+
+        // portable-pty 0.9.0 establishes the spawned child as a session leader
+        // before attaching this PTY as its controlling terminal. A foreground
+        // process group is therefore signalable only while it still belongs to
+        // the live session led by the exact child handle retained above.
+        let session_leader = unsafe { libc::getsid(process_group) };
+        if session_leader == -1 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() == Some(libc::ESRCH) && self.try_wait()?.is_some() {
+                return Ok(());
+            }
+            return Err(format!(
+                "failed to validate terminal foreground process-group ownership: {error}"
+            )
+            .into());
+        }
+        if session_leader != child_pid {
+            return Err("terminal foreground process group is not owned by this session".into());
+        }
+
+        if unsafe { libc::killpg(process_group, libc::SIGINT) } == 0 {
+            return Ok(());
+        }
+
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ESRCH) && self.try_wait()?.is_some() {
+            return Ok(());
+        }
+        Err(format!("failed to interrupt owned terminal foreground process group: {error}").into())
     }
 
     pub fn try_wait(&mut self) -> Result<Option<TerminalExit>> {
