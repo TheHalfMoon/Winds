@@ -1,0 +1,51 @@
+name: t051-terminal-patch-temporary
+
+on:
+  push:
+    branches: [feat/003-t051-windows-conpty]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: true
+      - name: Apply narrow T051 terminal platform split
+        shell: python
+        run: |
+          from pathlib import Path
+
+          git = Path('src/git.rs')
+          text = git.read_text(encoding='utf-8')
+          old = '#[cfg(unix)]\n#[allow(\n    dead_code,\n    reason = "Spec 003 T050 backend API; persistence/CLI callers land in T053/T057"\n)]\n#[path = "terminal.rs"]\npub(crate) mod terminal;'
+          new = '#[cfg(any(unix, windows))]\n#[allow(\n    dead_code,\n    reason = "Spec 003 T050/T051 backend API; persistence/CLI callers land in T053/T057"\n)]\n#[path = "terminal.rs"]\npub(crate) mod terminal;'
+          if text.count(old) != 1:
+              raise SystemExit(f'terminal module cfg count={text.count(old)}')
+          git.write_text(text.replace(old, new), encoding='utf-8')
+
+          terminal = Path('src/terminal.rs')
+          text = terminal.read_text(encoding='utf-8')
+          start = text.index('    pub fn interrupt(&mut self) -> Result<()> {')
+          end = text.index('\n    pub fn try_wait(&mut self)', start)
+          replacement = '''    pub fn interrupt(&mut self) -> Result<()> {\n        self.require_active()?;\n        self.interrupt_platform()\n    }\n\n    #[cfg(unix)]\n    fn interrupt_platform(&mut self) -> Result<()> {\n        let child_pid = self\n            .child\n            .as_ref()\n            .and_then(|child| child.process_id())\n            .ok_or("terminal interrupt unavailable: owned child process id is unknown")?;\n        let child_pid = libc::pid_t::try_from(child_pid)\n            .map_err(|_| "terminal interrupt unavailable: child process id is out of range")?;\n        let process_group = self\n            .master\n            .as_ref()\n            .ok_or("terminal interrupt unavailable: PTY master is already closed")?\n            .process_group_leader()\n            .ok_or("terminal interrupt unavailable: foreground PTY process group is unknown")?;\n\n        // portable-pty 0.9.0 establishes the spawned child as a session leader\n        // before attaching this PTY as its controlling terminal. A foreground\n        // process group is therefore signalable only while it still belongs to\n        // the live session led by the exact child handle retained above.\n        let session_leader = unsafe { libc::getsid(process_group) };\n        if session_leader == -1 {\n            let error = std::io::Error::last_os_error();\n            if error.raw_os_error() == Some(libc::ESRCH) && self.try_wait()?.is_some() {\n                return Ok(());\n            }\n            return Err(format!(\n                "failed to validate terminal foreground process-group ownership: {error}"\n            )\n            .into());\n        }\n        if session_leader != child_pid {\n            return Err("terminal foreground process group is not owned by this session".into());\n        }\n\n        if unsafe { libc::killpg(process_group, libc::SIGINT) } == 0 {\n            return Ok(());\n        }\n\n        let error = std::io::Error::last_os_error();\n        if error.raw_os_error() == Some(libc::ESRCH) && self.try_wait()?.is_some() {\n            return Ok(());\n        }\n        Err(format!("failed to interrupt owned terminal foreground process group: {error}").into())\n    }\n\n    #[cfg(windows)]\n    fn interrupt_platform(&mut self) -> Result<()> {\n        let writer = self\n            .writer\n            .as_mut()\n            .ok_or("terminal session input is already closed")?;\n        writer.write_all(&[0x03])?;\n        writer.flush()?;\n        Ok(())\n    }\n'''
+          text = text[:start] + replacement + text[end:]
+          text = text.replace('#[cfg(test)]\nmod tests {', '#[cfg(all(test, unix))]\nmod tests {', 1)
+          marker = '\n#[cfg(all(test, windows))]\n#[path = "terminal_windows_tests.rs"]\nmod windows_tests;\n'
+          if marker.strip() not in text:
+              text += marker
+          terminal.write_text(text, encoding='utf-8')
+      - name: Commit platform split
+        shell: bash
+        run: |
+          cargo fmt --all
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/git.rs src/terminal.rs
+          git diff --cached --check
+          git commit -m "feat(winds): extend PTY backend toward native Windows"
+          git push origin "HEAD:$GITHUB_REF_NAME"
