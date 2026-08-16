@@ -340,7 +340,10 @@ mod tests {
             match receiver.recv_timeout(Duration::from_millis(100)) {
                 Ok(OutputEvent::Chunk(chunk)) => {
                     output.extend_from_slice(&chunk);
-                    assert!(output.len() <= OUTPUT_LIMIT, "PTY test output exceeded bound");
+                    assert!(
+                        output.len() <= OUTPUT_LIMIT,
+                        "PTY test output exceeded bound"
+                    );
                     if output.windows(needle.len()).any(|window| window == needle) {
                         return output;
                     }
@@ -397,7 +400,10 @@ mod tests {
         let profile = native_sh_profile();
         let mut session = TerminalSession::start(&profile, root.path(), default_size()).unwrap();
 
-        let resized = TerminalSize { rows: 40, cols: 120 };
+        let resized = TerminalSize {
+            rows: 40,
+            cols: 120,
+        };
         session.resize(resized).unwrap();
         assert_eq!(session.current_size().unwrap(), resized);
         session.close().unwrap();
@@ -457,13 +463,10 @@ mod tests {
         assert!(error.to_string().contains("absolute path"));
 
         let root = TestRoot::new("invalid-size");
-        let error = TerminalSession::start(
-            &profile,
-            root.path(),
-            TerminalSize { rows: 0, cols: 80 },
-        )
-        .err()
-        .expect("zero rows must fail");
+        let error =
+            TerminalSession::start(&profile, root.path(), TerminalSize { rows: 0, cols: 80 })
+                .err()
+                .expect("zero rows must fail");
         assert!(error.to_string().contains("non-zero"));
     }
 }
