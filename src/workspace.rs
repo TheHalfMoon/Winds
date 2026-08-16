@@ -14,7 +14,7 @@ pub struct WorkspaceInspection {
     pub workspace_id: String,
     pub canonical_worktree_root: String,
     pub git_common_dir: String,
-    pub head_oid: String,
+    pub head_oid: Option<String>,
     pub branch: Option<String>,
     pub detached: bool,
     pub dirty: bool,
@@ -63,8 +63,8 @@ fn open_worktree(path: &Path) -> Result<Repo> {
 fn inspect_worktree(repo: &Repo) -> Result<WorkspaceInspection> {
     let canonical_worktree_root = utf8_path(repo.root(), "canonical worktree root")?.to_owned();
     let git_common_dir = utf8_path(&repo.common_dir, "Git common directory")?.to_owned();
-    let head_oid = exact_head(repo)?;
     let branch = branch_name(repo)?;
+    let head_oid = exact_head(repo, branch.as_deref())?;
     let detached = branch.is_none();
     let dirty = !read_only_status(repo)?.is_empty();
     let workspace_id = stable_workspace_id(&canonical_worktree_root, &git_common_dir);
@@ -80,13 +80,41 @@ fn inspect_worktree(repo: &Repo) -> Result<WorkspaceInspection> {
     })
 }
 
-fn exact_head(repo: &Repo) -> Result<String> {
-    let head = run_git_text(repo.root(), ["rev-parse", "--verify", "HEAD^{commit}"])?;
-    let head = strip_git_line_ending(&head);
-    if head.is_empty() {
-        return Err("Git returned an empty HEAD object id".into());
+fn exact_head(repo: &Repo, branch: Option<&str>) -> Result<Option<String>> {
+    let output = git_command(repo.root())
+        .args(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])
+        .output()?;
+    if output.status.success() {
+        let head = String::from_utf8(output.stdout)?;
+        let head = strip_git_line_ending(&head);
+        if head.is_empty() {
+            return Err("Git returned an empty HEAD object id".into());
+        }
+        return Ok(Some(head.to_owned()));
     }
-    Ok(head.to_owned())
+    if output.status.code() != Some(1) {
+        return Err(format!(
+            "failed to resolve workspace HEAD: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
+    }
+
+    let Some(branch) = branch else {
+        return Err("detached workspace HEAD does not resolve to a commit".into());
+    };
+    let full_ref = format!("refs/heads/{branch}");
+    let ref_status = git_command(repo.root())
+        .args(["show-ref", "--verify", "--quiet", full_ref.as_str()])
+        .status()?;
+    match ref_status.code() {
+        Some(1) => Ok(None),
+        Some(0) => Err(format!(
+            "workspace HEAD branch exists but does not resolve to a commit: {full_ref}"
+        )
+        .into()),
+        _ => Err(format!("failed to verify workspace HEAD branch: {full_ref}").into()),
+    }
 }
 
 fn branch_name(repo: &Repo) -> Result<Option<String>> {
@@ -255,10 +283,15 @@ mod tests {
         String::from_utf8(output.stdout).unwrap().trim().to_owned()
     }
 
-    fn initialize_repo(root: &Path) -> (PathBuf, PathBuf) {
+    fn initialize_unborn_repo(root: &Path) -> PathBuf {
         let repo = root.join("repo");
         fs::create_dir(&repo).unwrap();
         run_git(&repo, ["init", "--initial-branch=main"]);
+        repo
+    }
+
+    fn initialize_repo(root: &Path) -> (PathBuf, PathBuf) {
+        let repo = initialize_unborn_repo(root);
         run_git(&repo, ["config", "user.name", "Winds Test"]);
         run_git(&repo, ["config", "user.email", "winds@example.invalid"]);
         let nested = repo.join("nested");
@@ -302,7 +335,12 @@ mod tests {
         assert_eq!(first.branch.as_deref(), Some("main"));
         assert!(!first.detached);
         assert!(!first.dirty);
-        assert!(!first.head_oid.is_empty());
+        assert!(
+            first
+                .head_oid
+                .as_deref()
+                .is_some_and(|head| !head.is_empty())
+        );
 
         let store = Store::open(&canonical_home).unwrap();
         let persisted = store.load_workspace(&first.workspace_id).unwrap();
@@ -331,6 +369,27 @@ mod tests {
     }
 
     #[test]
+    fn unborn_head_is_observed_without_inventing_a_commit() {
+        let root = test_root("unborn");
+        let repo = initialize_unborn_repo(&root);
+        let canonical_home = create_state_root(&root);
+
+        let observed = open_existing_workspace(&repo, &canonical_home, 250).unwrap();
+        assert_eq!(observed.head_oid, None);
+        assert_eq!(observed.branch.as_deref(), Some("main"));
+        assert!(!observed.detached);
+        assert!(!observed.dirty);
+
+        let store = Store::open(&canonical_home).unwrap();
+        let persisted = store.load_workspace(&observed.workspace_id).unwrap();
+        assert_eq!(persisted.created_unix_ms, 250);
+        assert_eq!(persisted.last_opened_unix_ms, 250);
+        drop(store);
+
+        cleanup_owned_root(&root);
+    }
+
+    #[test]
     fn detached_head_is_observed_without_inventing_a_branch() {
         let root = test_root("detached");
         let (repo, _) = initialize_repo(&root);
@@ -338,6 +397,7 @@ mod tests {
         let canonical_home = create_state_root(&root);
 
         let observed = open_existing_workspace(&repo, &canonical_home, 300).unwrap();
+        assert!(observed.head_oid.is_some());
         assert_eq!(observed.branch, None);
         assert!(observed.detached);
         assert!(!observed.dirty);
