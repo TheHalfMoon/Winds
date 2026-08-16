@@ -7,6 +7,8 @@ use std::process::Command;
 
 #[path = "workspace.rs"]
 pub(crate) mod workspace;
+#[path = "workspace_clone.rs"]
+pub(crate) mod workspace_clone;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
