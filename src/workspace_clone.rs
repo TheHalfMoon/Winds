@@ -53,11 +53,7 @@ pub fn clone_and_register_workspace(
         .into());
     }
 
-    let workspace = open_existing_workspace(
-        &reserved_destination,
-        canonical_state_root,
-        now_ms,
-    )?;
+    let workspace = open_existing_workspace(&reserved_destination, canonical_state_root, now_ms)?;
     persist_clone_origin(
         canonical_state_root,
         &workspace.workspace_id,
@@ -151,30 +147,28 @@ fn sanitize_remote_identity(remote: &str) -> Result<String> {
     }
 
     if remote.contains("::") {
-        return Err(
-            "Git remote-helper transport syntax is not supported by Spec 003 T046".into(),
-        );
+        return Err("Git remote-helper transport syntax is not supported by Spec 003 T046".into());
     }
 
     if let Some(sanitized) = sanitize_scp_like_remote(remote) {
         return Ok(sanitized);
     }
 
-    Err("relative local clone remotes are ambiguous; use an absolute path or explicit Git URL".into())
+    Err(
+        "relative local clone remotes are ambiguous; use an absolute path or explicit Git URL"
+            .into(),
+    )
 }
 
 fn sanitize_url_remote(scheme: &str, rest: &str) -> Result<String> {
     let valid_scheme = !scheme.is_empty()
-        && scheme
-            .chars()
-            .enumerate()
-            .all(|(index, ch)| {
-                if index == 0 {
-                    ch.is_ascii_alphabetic()
-                } else {
-                    ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.')
-                }
-            });
+        && scheme.chars().enumerate().all(|(index, ch)| {
+            if index == 0 {
+                ch.is_ascii_alphabetic()
+            } else {
+                ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.')
+            }
+        });
     if !valid_scheme {
         return Err("clone remote has an invalid URL scheme".into());
     }
@@ -301,7 +295,10 @@ mod tests {
         )
         .unwrap();
         fs::write(source.join(".mise.toml"), b"[tools]\nnode = '22'\n").unwrap();
-        run_git(&source, ["add", "--", "tracked.txt", ".envrc", ".mise.toml"]);
+        run_git(
+            &source,
+            ["add", "--", "tracked.txt", ".envrc", ".mise.toml"],
+        );
         run_git(&source, ["commit", "--no-gpg-sign", "-m", "fixture"]);
         let head = run_git(&source, ["rev-parse", "HEAD"]);
 
@@ -345,15 +342,14 @@ mod tests {
         let state_root = create_state_root(&root);
         let destination = root.join("cloned workspace");
 
-        let cloned = clone_and_register_workspace(
-            remote.to_str().unwrap(),
-            &destination,
-            &state_root,
-            100,
-        )
-        .unwrap();
+        let cloned =
+            clone_and_register_workspace(remote.to_str().unwrap(), &destination, &state_root, 100)
+                .unwrap();
 
-        assert_eq!(cloned.workspace.head_oid.as_deref(), Some(source_head.as_str()));
+        assert_eq!(
+            cloned.workspace.head_oid.as_deref(),
+            Some(source_head.as_str())
+        );
         assert_eq!(cloned.workspace.branch.as_deref(), Some("main"));
         assert!(!cloned.workspace.detached);
         assert!(!cloned.workspace.dirty);
@@ -415,23 +411,15 @@ mod tests {
 
         let existing = root.join("existing");
         fs::create_dir(&existing).unwrap();
-        let error = clone_and_register_workspace(
-            remote.to_str().unwrap(),
-            &existing,
-            &state_root,
-            300,
-        )
-        .unwrap_err();
+        let error =
+            clone_and_register_workspace(remote.to_str().unwrap(), &existing, &state_root, 300)
+                .unwrap_err();
         assert!(error.to_string().contains("already exists"));
 
         let inside_state = state_root.join("source-inside-state");
-        let error = clone_and_register_workspace(
-            remote.to_str().unwrap(),
-            &inside_state,
-            &state_root,
-            301,
-        )
-        .unwrap_err();
+        let error =
+            clone_and_register_workspace(remote.to_str().unwrap(), &inside_state, &state_root, 301)
+                .unwrap_err();
         assert!(error.to_string().contains("must not overlap"));
         assert!(!inside_state.exists());
         assert!(!state_root.join("winds.db").exists());
