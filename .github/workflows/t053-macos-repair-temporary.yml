@@ -1,0 +1,226 @@
+name: t053-macos-repair-temporary
+
+on:
+  push:
+    branches: [feat/003-t053-terminal-ledger]
+    paths:
+      - ".github/workflows/t053-macos-repair-temporary.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: true
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+      - name: Apply bounded destructor cleanup repair
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label} count={count}")
+              return text.replace(old, new, 1)
+
+          terminal = Path("src/terminal.rs")
+          text = terminal.read_text(encoding="utf-8")
+          text = replace_once(
+              text,
+              "use std::sync::atomic::{AtomicU64, Ordering};\n",
+              "use std::sync::atomic::{AtomicU64, Ordering};\nuse std::time::{Duration, Instant};\n",
+              "terminal time import",
+          )
+          text = replace_once(
+              text,
+              "    final_exit: Option<TerminalExit>,\n",
+              "    final_exit: Option<TerminalExit>,\n    drop_cleanup_attempted: bool,\n",
+              "terminal drop field",
+          )
+          text = replace_once(
+              text,
+              "            final_exit: None,\n",
+              "            final_exit: None,\n            drop_cleanup_attempted: false,\n",
+              "terminal drop field init",
+          )
+
+          close_marker = '''    pub fn close(&mut self) -> Result<TerminalExit> {
+              self.writer.take();
+              if let Some(exit) = self.try_wait()? {
+                  return Ok(exit);
+              }
+              self.terminate()
+          }
+
+          '''
+          cleanup_method = '''    pub fn close(&mut self) -> Result<TerminalExit> {
+              self.writer.take();
+              if let Some(exit) = self.try_wait()? {
+                  return Ok(exit);
+              }
+              self.terminate()
+          }
+
+              pub(crate) fn cleanup_for_drop(&mut self, timeout: Duration) -> Result<Option<TerminalExit>> {
+              if let Some(exit) = &self.final_exit {
+                  self.drop_cleanup_attempted = true;
+                  return Ok(Some(exit.clone()));
+              }
+              if self.drop_cleanup_attempted {
+                  return Ok(None);
+              }
+              self.drop_cleanup_attempted = true;
+              self.writer.take();
+              if let Some(exit) = self.try_wait()? {
+                  return Ok(Some(exit));
+              }
+
+              let kill_result = self
+                  .child
+                  .as_mut()
+                  .ok_or("terminal session lost its owned child handle")?
+                  .kill();
+              if let Err(kill_error) = kill_result {
+                  if let Some(exit) = self.try_wait()? {
+                      return Ok(Some(exit));
+                  }
+                  return Err(format!(
+                      "failed to request bounded cleanup of owned terminal child: {kill_error}"
+                  )
+                  .into());
+              }
+
+              let started = Instant::now();
+              loop {
+                  if let Some(exit) = self.try_wait()? {
+                      return Ok(Some(exit));
+                  }
+                  if started.elapsed() >= timeout {
+                      return Ok(None);
+                  }
+                  std::thread::sleep(Duration::from_millis(10));
+              }
+          }
+
+          '''
+          text = replace_once(text, close_marker, cleanup_method, "terminal close marker")
+
+          old_drop = '''impl Drop for TerminalSession {
+              fn drop(&mut self) {
+                  let _ = self.close();
+              }
+          }
+          '''
+          new_drop = '''impl Drop for TerminalSession {
+              fn drop(&mut self) {
+                  if self.final_exit.is_none() && !self.drop_cleanup_attempted {
+                      let _ = self.cleanup_for_drop(Duration::from_millis(500));
+                  }
+              }
+          }
+          '''
+          text = replace_once(text, old_drop, new_drop, "terminal Drop")
+
+          test_insert = '''    #[test]
+              fn start_rejects_relative_cwd_and_zero_dimensions_before_spawning() {
+          '''
+          bounded_test = '''    #[test]
+              fn dropping_live_terminal_session_is_bounded() {
+              let root = TestRoot::new("bounded-drop");
+              let profile = native_sh_profile();
+              let session = TerminalSession::start(&profile, root.path(), default_size()).unwrap();
+              let started = Instant::now();
+              drop(session);
+              assert!(
+                  started.elapsed() < Duration::from_secs(2),
+                  "dropping a directly owned live terminal must not block indefinitely"
+              );
+          }
+
+          #[test]
+          fn start_rejects_relative_cwd_and_zero_dimensions_before_spawning() {
+          '''
+          text = replace_once(text, test_insert, bounded_test, "terminal bounded-drop test marker")
+          terminal.write_text(text, encoding="utf-8")
+
+          execution = Path("src/execution.rs")
+          text = execution.read_text(encoding="utf-8")
+          text = replace_once(
+              text,
+              "use std::time::{SystemTime, UNIX_EPOCH};\n",
+              "use std::time::{Duration, SystemTime, UNIX_EPOCH};\n",
+              "execution Duration import",
+          )
+          text = replace_once(
+              text,
+              "        let cleanup_proven = self.session.close().is_ok();\n",
+              "        let cleanup_proven = matches!(\n            self.session.cleanup_for_drop(Duration::from_millis(500)),\n            Ok(Some(_))\n        );\n",
+              "execution Drop cleanup",
+          )
+          text = replace_once(
+              text,
+              "    use std::fs;\n    use std::path::{Path, PathBuf};\n",
+              "    use std::fs;\n    use std::io::Read;\n    use std::path::{Path, PathBuf};\n    use std::thread;\n",
+              "execution test drain imports",
+          )
+
+          helper_marker = '''    fn store_with_workspace(root: &TestRoot) -> Store {
+          '''
+          drain_helper = '''    fn drain_output(mut reader: Box<dyn Read + Send>) -> thread::JoinHandle<()> {
+              thread::spawn(move || {
+                  let mut buffer = [0_u8; 4096];
+                  loop {
+                      match reader.read(&mut buffer) {
+                          Ok(0) | Err(_) => return,
+                          Ok(_) => {}
+                      }
+                  }
+              })
+          }
+
+          fn store_with_workspace(root: &TestRoot) -> Store {
+          '''
+          text = replace_once(text, helper_marker, drain_helper, "execution drain helper marker")
+
+          natural = '''        execution.send_input(b"exit 0\\n").unwrap();
+              let exit = execution.wait().unwrap();
+              assert_eq!(exit.exit_code, 0);
+              drop(execution);
+          '''
+          natural_replacement = '''        let output = drain_output(execution.take_output_reader().unwrap());
+              execution.send_input(b"exit 0\\n").unwrap();
+              let exit = execution.wait().unwrap();
+              assert_eq!(exit.exit_code, 0);
+              drop(execution);
+              output.join().unwrap();
+          '''
+          text = replace_once(text, natural, natural_replacement, "execution natural-exit test")
+          execution.write_text(text, encoding="utf-8")
+      - name: Validate repair on macOS
+        run: |
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo check --locked --all-targets --all-features
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          cargo test --locked --bin winds terminal::tests::dropping_live_terminal_session_is_bounded -- --exact --nocapture --test-threads=1
+          cargo test --locked --bin winds execution::tests -- --nocapture --test-threads=1
+          cargo test --locked --all-targets --all-features
+          git diff --check -- src/terminal.rs src/execution.rs
+      - name: Commit validated repair source only
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/terminal.rs src/execution.rs
+          git diff --cached --check
+          git commit -m "fix(winds): bound terminal destructor cleanup"
+          git push origin "HEAD:$GITHUB_REF_NAME"
