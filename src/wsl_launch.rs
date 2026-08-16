@@ -1,10 +1,15 @@
 use super::Result;
 use super::terminal::{TerminalSession, TerminalSize};
-use super::wsl::{WslDistribution, discover_wsl_distributions};
-use super::Repo;
+use super::wsl::WslDistribution;
+#[cfg(windows)]
+use super::wsl::discover_wsl_distributions;
+#[cfg(windows)]
+use super::{Repo, run_git_text, strip_git_line_ending};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(windows)]
+use std::path::PathBuf;
 
 const WSL_SHELL_EXECUTABLE: &str = "/bin/sh";
 
@@ -32,6 +37,7 @@ pub enum WslCwdResolution {
         windows_workspace_root: String,
         linux_workspace_root: String,
         linux_git_common_dir: String,
+        git_head_oid: String,
     },
     FallbackHome {
         requested_windows_workspace_root: String,
@@ -57,6 +63,7 @@ pub struct WslLaunchedTerminal {
 struct WslWorkspaceAttestation {
     linux_workspace_root: String,
     linux_git_common_dir: String,
+    git_head_oid: String,
 }
 
 #[cfg(windows)]
@@ -81,6 +88,7 @@ pub fn prepare_wsl_terminal_launch(
             windows_workspace_root,
             linux_workspace_root: attestation.linux_workspace_root,
             linux_git_common_dir: attestation.linux_git_common_dir,
+            git_head_oid: attestation.git_head_oid,
         },
         Err(mapping_error) => {
             let linux_home = resolve_linux_home(&launcher, &distribution)?;
@@ -161,6 +169,7 @@ pub fn launch_wsl_terminal(
     if let WslCwdResolution::MappedWorkspace {
         linux_workspace_root,
         linux_git_common_dir,
+        git_head_oid,
         ..
     } = &plan.cwd_resolution
     {
@@ -168,7 +177,8 @@ pub fn launch_wsl_terminal(
         match attest_workspace(&launcher, &distribution, linux_workspace_root, &repo) {
             Ok(attestation)
                 if attestation.linux_workspace_root == *linux_workspace_root
-                    && attestation.linux_git_common_dir == *linux_git_common_dir => {}
+                    && attestation.linux_git_common_dir == *linux_git_common_dir
+                    && attestation.git_head_oid == *git_head_oid => {}
             Ok(_) => {
                 let _ = session.terminate();
                 return Err(
@@ -319,6 +329,19 @@ fn attest_workspace(
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
         "WSL Git common directory",
     )?;
+    let linux_head_oid = run_linux_text_command(
+        launcher,
+        distribution,
+        Some(linux_cwd),
+        "/usr/bin/git",
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+        "WSL Git HEAD",
+    )?;
+    let windows_head = run_git_text(repo.root(), ["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let windows_head_oid = strip_git_line_ending(&windows_head);
+    if windows_head_oid.is_empty() {
+        return Err("Windows Git returned an empty HEAD object id".into());
+    }
 
     let effective_windows = wslpath_to_windows(launcher, distribution, &effective_cwd)?;
     let root_windows = wslpath_to_windows(launcher, distribution, &linux_workspace_root)?;
@@ -331,10 +354,17 @@ fn attest_workspace(
         &repo.common_dir,
         "WSL Git common directory",
     )?;
+    if linux_head_oid != windows_head_oid {
+        return Err(format!(
+            "WSL Git HEAD does not match Windows Git HEAD: WSL {linux_head_oid}, Windows {windows_head_oid}"
+        )
+        .into());
+    }
 
     Ok(WslWorkspaceAttestation {
         linux_workspace_root,
         linux_git_common_dir,
+        git_head_oid: linux_head_oid,
     })
 }
 
@@ -389,6 +419,22 @@ fn wslpath_to_windows(
         return Err("wslpath Linux-to-Windows result is not absolute".into());
     }
     Ok(path)
+}
+
+#[cfg(windows)]
+fn run_linux_text_command(
+    launcher: &Path,
+    distribution: &WslDistribution,
+    cwd: Option<&str>,
+    command: &str,
+    args: &[&str],
+    label: &str,
+) -> Result<String> {
+    use std::ffi::OsString;
+
+    let args: Vec<OsString> = args.iter().map(OsString::from).collect();
+    let output = run_wsl_exec(launcher, &distribution.name, cwd, command, &args)?;
+    parse_single_text(&output, label)
 }
 
 #[cfg(windows)]
@@ -455,8 +501,14 @@ fn run_wsl_exec(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| format!("failed to execute selected WSL distribution: {error}"))?;
-    let stdout = child.stdout.take().ok_or("failed to capture WSL command stdout")?;
-    let stderr = child.stderr.take().ok_or("failed to capture WSL command stderr")?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or("failed to capture WSL command stdout")?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or("failed to capture WSL command stderr")?;
     let (stdout_tx, stdout_rx) = mpsc::sync_channel(1);
     let (stderr_tx, stderr_rx) = mpsc::sync_channel(1);
     thread::spawn(move || {
@@ -501,7 +553,11 @@ fn run_wsl_exec(
 }
 
 #[cfg(windows)]
-fn require_same_canonical_windows_path(observed: &Path, expected: &Path, label: &str) -> Result<()> {
+fn require_same_canonical_windows_path(
+    observed: &Path,
+    expected: &Path,
+    label: &str,
+) -> Result<()> {
     let observed = observed
         .canonicalize()
         .map_err(|error| format!("{label} cannot be canonicalized on Windows: {error}"))?;
@@ -529,9 +585,7 @@ fn parse_single_text(bytes: &[u8], label: &str) -> Result<String> {
 
     let text = decode_wsl_text(bytes)?;
     let mut lines = text.lines();
-    let value = lines
-        .next()
-        .ok_or_else(|| format!("{label} was empty"))?;
+    let value = lines.next().ok_or_else(|| format!("{label} was empty"))?;
     if value.is_empty() || value.contains('\0') {
         return Err(format!("{label} was empty or contained NUL").into());
     }
@@ -551,14 +605,13 @@ fn parse_single_linux_path(bytes: &[u8], label: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        WslExecutionDomain, build_launch_arguments, parse_single_linux_path,
-        stable_profile_id,
+        WslExecutionDomain, build_launch_arguments, parse_single_linux_path, stable_profile_id,
     };
 
     #[test]
     fn launch_arguments_bind_distribution_cwd_and_exact_shell_without_shell_parsing() {
-        let args = build_launch_arguments("Ubuntu Dev", "/mnt/c/work space/repo", "/bin/sh")
-            .unwrap();
+        let args =
+            build_launch_arguments("Ubuntu Dev", "/mnt/c/work space/repo", "/bin/sh").unwrap();
         assert_eq!(
             args,
             [
@@ -580,7 +633,7 @@ mod tests {
     }
 
     #[test]
-    fn Wsl_profile_identity_binds_domain_launcher_and_shell() {
+    fn wsl_profile_identity_binds_domain_launcher_and_shell() {
         let domain = WslExecutionDomain {
             host_os: "windows".to_owned(),
             host_arch: "x86_64".to_owned(),

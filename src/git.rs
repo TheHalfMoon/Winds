@@ -25,6 +25,13 @@ pub(crate) mod workspace_clone;
 pub(crate) mod workspace_inventory;
 #[path = "wsl.rs"]
 pub(crate) mod wsl;
+#[cfg(any(windows, test))]
+#[allow(
+    dead_code,
+    reason = "Spec 003 T052 backend API; persistence/CLI callers land in T053/T057"
+)]
+#[path = "wsl_launch.rs"]
+pub(crate) mod wsl_launch;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
