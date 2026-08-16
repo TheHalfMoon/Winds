@@ -121,6 +121,7 @@ impl Repo {
                 OsStr::new(commit_oid),
             ],
         )?;
+
         run_git_os(
             &self.root,
             [
@@ -134,66 +135,75 @@ impl Repo {
         Ok(())
     }
 
-    pub fn remove_worktree(&self, path: &Path) -> Result<()> {
-        let registered = run_git_bytes(&self.root, ["worktree", "list", "--porcelain", "-z"])?;
-        let expected = path.canonicalize()?;
-        let owned = registered.split(|byte| *byte == 0).any(|entry| {
-            let Some(value) = entry.strip_prefix(b"worktree ") else {
-                return false;
-            };
-            let candidate = PathBuf::from(OsString::from_vec(value.to_vec()));
-            candidate
-                .canonicalize()
-                .is_ok_and(|canonical| canonical == expected)
-        });
-        if !owned {
+    pub fn worktree_head(&self, path: &Path) -> Result<String> {
+        Ok(run_git_text(path, ["rev-parse", "HEAD"])?.trim().to_owned())
+    }
+
+    pub fn worktree_is_clean(&self, path: &Path) -> Result<bool> {
+        Ok(run_git_bytes(
+            path,
+            ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        )?
+        .is_empty())
+    }
+
+    pub fn worktree_paths(&self) -> Result<Vec<PathBuf>> {
+        let output = run_git_bytes(&self.root, ["worktree", "list", "--porcelain", "-z"])?;
+        let mut paths = Vec::new();
+        for field in output.split(|byte| *byte == 0) {
+            if let Some(path) = field.strip_prefix(b"worktree ") {
+                paths.push(PathBuf::from(OsString::from_vec(path.to_vec())));
+            }
+        }
+        Ok(paths)
+    }
+
+    pub fn create_selected_branch(&self, branch: &str, commit_oid: &str) -> Result<()> {
+        let full_ref = format!("refs/heads/{branch}");
+        let spec = format!("{full_ref}^{{commit}}");
+        let existing = git_command(&self.root)
+            .args([
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                "--end-of-options",
+                spec.as_str(),
+            ])
+            .output()?;
+
+        if existing.status.success() {
+            let current = String::from_utf8(existing.stdout)?.trim().to_owned();
+            if current == commit_oid {
+                return Ok(());
+            }
+            return Err(
+                format!("selected branch already exists at different commit: {current}").into(),
+            );
+        }
+        if existing.status.code() != Some(1) {
             return Err(format!(
-                "refusing to remove unregistered candidate worktree: {}",
-                path.display()
+                "failed checking selected branch: {}",
+                String::from_utf8_lossy(&existing.stderr).trim()
             )
             .into());
         }
 
-        let status = Command::new("git")
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_COMMON_DIR")
-            .env_remove("GIT_INDEX_FILE")
-            .env_remove("GIT_OBJECT_DIRECTORY")
-            .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
-            .env_remove("GIT_SHALLOW_FILE")
-            .env_remove("GIT_NAMESPACE")
-            .env_remove("GIT_CONFIG_COUNT")
-            .env_remove("GIT_CONFIG_PARAMETERS")
-            .env_remove("GIT_PREFIX")
-            .env("GIT_NO_REPLACE_OBJECTS", "1")
-            .arg("-c")
-            .arg("core.hooksPath=/dev/null")
-            .arg("-C")
-            .arg(&self.root)
-            .args(["worktree", "remove", "--"])
-            .arg(&expected)
-            .status()?;
-        if !status.success() {
-            return Err(format!(
-                "system Git refused candidate worktree removal: {}",
-                expected.display()
-            )
-            .into());
-        }
+        run_git_text(&self.root, ["branch", branch, commit_oid])?;
         Ok(())
     }
 }
 
-pub(crate) fn git_command(cwd: &Path) -> Command {
+fn git_command(cwd: &Path) -> Command {
     let mut command = Command::new("git");
-    for variable in GIT_CONTEXT_ENV_VARS {
-        command.env_remove(variable);
+    for key in GIT_CONTEXT_ENV_VARS {
+        command.env_remove(key);
     }
     command
         .env("GIT_NO_REPLACE_OBJECTS", "1")
         .arg("-c")
         .arg("core.hooksPath=/dev/null")
+        .arg("-c")
+        .arg("core.fsmonitor=false")
         .arg("-C")
         .arg(cwd);
     command
@@ -205,17 +215,17 @@ where
     S: AsRef<OsStr>,
 {
     let output = git_command(cwd).args(args).output()?;
-    if !output.status.success() {
-        return Err(format!(
-            "system Git command failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )
-        .into());
+    if output.status.success() {
+        return Ok(output.stdout);
     }
-    Ok(output.stdout)
+    Err(format!(
+        "git command failed: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    )
+    .into())
 }
 
-pub(crate) fn run_git_text<I, S>(cwd: &Path, args: I) -> Result<String>
+fn run_git_text<I, S>(cwd: &Path, args: I) -> Result<String>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -228,17 +238,10 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let output = git_command(cwd).args(args).output()?;
-    if !output.status.success() {
-        return Err(format!(
-            "system Git command failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )
-        .into());
-    }
-    Ok(())
+    run_git_bytes(cwd, args).map(|_| ())
 }
 
-pub(crate) fn strip_git_line_ending(value: &str) -> &str {
-    value.strip_suffix("\r\n").or_else(|| value.strip_suffix('\n')).unwrap_or(value)
+fn strip_git_line_ending(value: &str) -> &str {
+    let value = value.strip_suffix('\n').unwrap_or(value);
+    value.strip_suffix('\r').unwrap_or(value)
 }
