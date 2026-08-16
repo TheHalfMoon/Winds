@@ -414,6 +414,10 @@ mod tests {
         let mut inventory = inventory(Vec::new());
         inventory.host_os = "different-os".to_owned();
         let error = discover_native_shell_profiles(&inventory).unwrap_err();
-        assert!(error.to_string().contains("does not match the current execution host"));
+        assert!(
+            error
+                .to_string()
+                .contains("does not match the current execution host")
+        );
     }
 }
