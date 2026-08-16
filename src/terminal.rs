@@ -4,6 +4,7 @@ use portable_pty::{CommandBuilder, ExitStatus, MasterPty, PtySize, native_pty_sy
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
 
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -36,6 +37,13 @@ pub struct TerminalExit {
     pub signal: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TerminalDropCleanupOutcome {
+    ExitedBeforeCleanup(TerminalExit),
+    Terminated(TerminalExit),
+    Unproven,
+}
+
 pub struct TerminalSession {
     session_id: TerminalSessionId,
     profile_id: String,
@@ -45,6 +53,7 @@ pub struct TerminalSession {
     writer: Option<Box<dyn Write + Send>>,
     child: Option<Box<dyn portable_pty::Child + Send + Sync>>,
     final_exit: Option<TerminalExit>,
+    drop_cleanup_attempted: bool,
 }
 
 impl TerminalSession {
@@ -120,6 +129,7 @@ impl TerminalSession {
             writer: Some(writer),
             child: Some(child),
             final_exit: None,
+            drop_cleanup_attempted: false,
         })
     }
 
@@ -283,6 +293,52 @@ impl TerminalSession {
         self.terminate()
     }
 
+    pub(crate) fn cleanup_for_drop(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<TerminalDropCleanupOutcome> {
+        if let Some(exit) = &self.final_exit {
+            self.drop_cleanup_attempted = true;
+            return Ok(TerminalDropCleanupOutcome::ExitedBeforeCleanup(
+                exit.clone(),
+            ));
+        }
+        if self.drop_cleanup_attempted {
+            return Ok(TerminalDropCleanupOutcome::Unproven);
+        }
+        self.drop_cleanup_attempted = true;
+        self.writer.take();
+        if let Some(exit) = self.try_wait()? {
+            return Ok(TerminalDropCleanupOutcome::ExitedBeforeCleanup(exit));
+        }
+
+        let kill_result = self
+            .child
+            .as_mut()
+            .ok_or("terminal session lost its owned child handle")?
+            .kill();
+        if let Err(kill_error) = kill_result {
+            if let Some(exit) = self.try_wait()? {
+                return Ok(TerminalDropCleanupOutcome::ExitedBeforeCleanup(exit));
+            }
+            return Err(format!(
+                "failed to request bounded cleanup of owned terminal child: {kill_error}"
+            )
+            .into());
+        }
+
+        let started = Instant::now();
+        loop {
+            if let Some(exit) = self.try_wait()? {
+                return Ok(TerminalDropCleanupOutcome::Terminated(exit));
+            }
+            if started.elapsed() >= timeout {
+                return Ok(TerminalDropCleanupOutcome::Unproven);
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
     fn require_active(&mut self) -> Result<()> {
         if self.try_wait()?.is_some() {
             return Err("terminal session has already exited".into());
@@ -306,7 +362,9 @@ impl TerminalSession {
 
 impl Drop for TerminalSession {
     fn drop(&mut self) {
-        let _ = self.close();
+        if self.final_exit.is_none() && !self.drop_cleanup_attempted {
+            let _ = self.cleanup_for_drop(Duration::from_millis(500));
+        }
     }
 }
 
@@ -587,6 +645,19 @@ mod tests {
         assert!(!exit.signal.as_deref().unwrap_or_default().is_empty() || exit.exit_code != 0);
         assert_eq!(session.try_wait().unwrap(), Some(exit.clone()));
         assert_eq!(session.close().unwrap(), exit);
+    }
+
+    #[test]
+    fn dropping_live_terminal_session_is_bounded() {
+        let root = TestRoot::new("bounded-drop");
+        let profile = native_sh_profile();
+        let session = TerminalSession::start(&profile, root.path(), default_size()).unwrap();
+        let started = Instant::now();
+        drop(session);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "dropping a directly owned live terminal must not block indefinitely"
+        );
     }
 
     #[test]

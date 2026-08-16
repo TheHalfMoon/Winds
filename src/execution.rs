@@ -1,12 +1,14 @@
 use crate::domain::{ExecutionKind, FactSource, TerminalCloseReason};
 use crate::git::shell_profiles::ShellProfile;
-use crate::git::terminal::{TerminalExit, TerminalSession, TerminalSessionId, TerminalSize};
+use crate::git::terminal::{
+    TerminalDropCleanupOutcome, TerminalExit, TerminalSession, TerminalSessionId, TerminalSize,
+};
 #[cfg(windows)]
 use crate::git::wsl_launch::{WslCwdResolution, WslTerminalLaunchPlan, launch_wsl_terminal};
 use crate::store::{NewExecution, NewTerminalSession, Result, Store, TerminalFinalization};
 use std::io::Read;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub struct TerminalExecution<'store> {
     execution_id: String,
@@ -267,26 +269,25 @@ impl Drop for TerminalExecution<'_> {
             return;
         }
 
-        let already_exited = matches!(self.session.try_wait(), Ok(Some(_)));
-        if already_exited {
-            if let Ok(ended_unix_ms) = unix_ms() {
-                self.persist_or_defer_on_drop(TerminalFinalization::Exited { ended_unix_ms });
-            }
-            return;
-        }
-
-        let cleanup_proven = self.session.close().is_ok();
-        if let Ok(observed_unix_ms) = unix_ms() {
-            let finalization = if cleanup_proven {
-                TerminalFinalization::Interrupted {
+        let observed_unix_ms = match unix_ms() {
+            Ok(value) => value,
+            Err(_) => return,
+        };
+        let finalization = match self.session.cleanup_for_drop(Duration::from_millis(500)) {
+            Ok(TerminalDropCleanupOutcome::ExitedBeforeCleanup(_)) => {
+                TerminalFinalization::Exited {
                     ended_unix_ms: observed_unix_ms,
-                    reason: TerminalCloseReason::ClosedByWinds,
                 }
-            } else {
+            }
+            Ok(TerminalDropCleanupOutcome::Terminated(_)) => TerminalFinalization::Interrupted {
+                ended_unix_ms: observed_unix_ms,
+                reason: TerminalCloseReason::ClosedByWinds,
+            },
+            Ok(TerminalDropCleanupOutcome::Unproven) | Err(_) => {
                 TerminalFinalization::OwnershipLost { observed_unix_ms }
-            };
-            self.persist_or_defer_on_drop(finalization);
-        }
+            }
+        };
+        self.persist_or_defer_on_drop(finalization);
     }
 }
 
@@ -382,8 +383,10 @@ mod tests {
     use crate::git::workspace_inventory::WorkspaceEnvironmentInventory;
     use crate::store::{NewWorkspace, Store};
     use std::fs;
+    use std::io::Read;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::thread;
 
     static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
@@ -427,6 +430,18 @@ mod tests {
             .expect("/bin/sh must be available on supported Unix CI hosts")
     }
 
+    fn drain_output(mut reader: Box<dyn Read + Send>) -> thread::JoinHandle<()> {
+        thread::spawn(move || {
+            let mut buffer = [0_u8; 4096];
+            loop {
+                match reader.read(&mut buffer) {
+                    Ok(0) | Err(_) => return,
+                    Ok(_) => {}
+                }
+            }
+        })
+    }
+
     fn store_with_workspace(root: &TestRoot) -> Store {
         let home = root.path().join("state");
         let store = Store::open(&home).unwrap();
@@ -458,10 +473,12 @@ mod tests {
         )
         .unwrap();
 
+        let output = drain_output(execution.take_output_reader().unwrap());
         execution.send_input(b"exit 0\n").unwrap();
         let exit = execution.wait().unwrap();
         assert_eq!(exit.exit_code, 0);
         drop(execution);
+        output.join().unwrap();
 
         let final_record = store.load_execution("execution-natural").unwrap();
         assert_eq!(final_record.status, ExecutionStatus::Exited);
