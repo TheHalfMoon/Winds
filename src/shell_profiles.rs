@@ -133,12 +133,7 @@ fn build_profile(executable: String) -> ShellProfile {
         .file_name()
         .and_then(|name| name.to_str())
         .map_or_else(|| executable.clone(), str::to_owned);
-    let profile_id = stable_profile_id(
-        &execution_domain,
-        &executable,
-        &arguments,
-        cwd_strategy,
-    );
+    let profile_id = stable_profile_id(&execution_domain, &executable, &arguments, cwd_strategy);
 
     ShellProfile {
         profile_id,
@@ -373,10 +368,9 @@ mod tests {
         let root = test_root("stale");
         let shell = root.join("fixture-shell");
         create_executable(&shell, "#!/bin/sh\n");
-        let mut discovered = discover_native_shell_profiles(&inventory(vec![
-            shell.to_str().unwrap().to_owned(),
-        ]))
-        .unwrap();
+        let mut discovered =
+            discover_native_shell_profiles(&inventory(vec![shell.to_str().unwrap().to_owned()]))
+                .unwrap();
         assert_eq!(discovered.len(), 1);
         let profile = discovered.pop().unwrap();
 
@@ -393,10 +387,9 @@ mod tests {
         let root = test_root("identity");
         let shell = root.join("fixture-shell");
         create_executable(&shell, "#!/bin/sh\n");
-        let mut discovered = discover_native_shell_profiles(&inventory(vec![
-            shell.to_str().unwrap().to_owned(),
-        ]))
-        .unwrap();
+        let mut discovered =
+            discover_native_shell_profiles(&inventory(vec![shell.to_str().unwrap().to_owned()]))
+                .unwrap();
         let mut profile = discovered.pop().unwrap();
 
         profile.display_name = "UX label only".to_owned();
