@@ -1,5 +1,12 @@
 use serde::Serialize;
 
+#[cfg_attr(
+    not(unix),
+    allow(
+        dead_code,
+        reason = "Spec 003 T051 keeps authoritative required-check execution Unix-only; Fail/Timeout remain cross-platform evidence values"
+    )
+)]
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum CheckStatus {

@@ -335,3 +335,9 @@ This research document records conceptual influence only. Before any external ru
 - update strategy.
 
 No donor's popularity or architecture is authority for Winds correctness; every adopted primitive must still satisfy Winds tests, safety boundaries, Ponytail review, and independent review.
+
+## T051 Native Windows Interrupt Reconciliation
+
+Official `windows-latest` ConPTY fixtures were used to test ownership-local interrupt candidates against a real foreground `ping -t` command while retaining the same live `cmd.exe` session. Raw ETX input, Win32-input-mode Ctrl+C encodings, a complete Ctrl+C key chord, and a ConPTY-local Ctrl+Break encoding did not produce the required observable foreground interrupt. The accepted `portable-pty 0.9.0` surface exposes retained-child kill/wait ownership but does not expose creation of a Windows console process group for a targeted control event.
+
+Microsoft documents that `GenerateConsoleCtrlEvent(CTRL_C_EVENT, ...)` cannot be limited to a specific process group, while targeted `CTRL_BREAK_EVENT` requires a process group created with `CREATE_NEW_PROCESS_GROUP` and processes that share the caller's console. Winds therefore rejects process-global signaling as an unsafe substitute. T051 records native-Windows `interrupt` as explicitly unavailable unless an ownership-scoped primitive is later proven; `terminate` remains the proven retained-child termination primitive. The limitation is surfaced rather than reported as success, and the Windows fixture proves the ConPTY session remains usable after the refusal.

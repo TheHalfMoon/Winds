@@ -1,16 +1,19 @@
 use std::error::Error;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
+#[cfg(unix)]
+use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
+#[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[path = "shell_profiles.rs"]
 pub(crate) mod shell_profiles;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[allow(
     dead_code,
-    reason = "Spec 003 T050 backend API; persistence/CLI callers land in T053/T057"
+    reason = "Spec 003 T050/T051 backend API; persistence/CLI callers land in T053/T057"
 )]
 #[path = "terminal.rs"]
 pub(crate) mod terminal;
@@ -163,7 +166,7 @@ impl Repo {
         let mut paths = Vec::new();
         for field in output.split(|byte| *byte == 0) {
             if let Some(path) = field.strip_prefix(b"worktree ") {
-                paths.push(PathBuf::from(OsString::from_vec(path.to_vec())));
+                paths.push(git_path_from_bytes(path)?);
             }
         }
         Ok(paths)
@@ -202,6 +205,18 @@ impl Repo {
         run_git_text(&self.root, ["branch", branch, commit_oid])?;
         Ok(())
     }
+}
+
+#[cfg(unix)]
+fn git_path_from_bytes(path: &[u8]) -> Result<PathBuf> {
+    Ok(PathBuf::from(OsString::from_vec(path.to_vec())))
+}
+
+#[cfg(windows)]
+fn git_path_from_bytes(path: &[u8]) -> Result<PathBuf> {
+    let path = std::str::from_utf8(path)
+        .map_err(|error| format!("Git returned a non-UTF-8 Windows worktree path: {error}"))?;
+    Ok(PathBuf::from(path))
 }
 
 fn git_command(cwd: &Path) -> Command {
