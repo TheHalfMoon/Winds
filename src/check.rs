@@ -118,11 +118,7 @@ pub fn run_check(cwd: &Path, command: &str, timeout: Duration) -> Result<CheckRu
 }
 
 #[cfg(not(unix))]
-pub fn run_check(
-    _cwd: &Path,
-    _command: &str,
-    _timeout: Duration,
-) -> Result<CheckRun, String> {
+pub fn run_check(_cwd: &Path, _command: &str, _timeout: Duration) -> Result<CheckRun, String> {
     Err(
         "required checks are unsupported on native Windows in Spec 003 T051; Winds verification remains Unix-only"
             .to_owned(),
