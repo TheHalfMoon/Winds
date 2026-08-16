@@ -129,7 +129,11 @@ impl TerminalSession {
 
     pub fn interrupt(&mut self) -> Result<()> {
         self.require_active()?;
+        self.interrupt_platform()
+    }
 
+    #[cfg(unix)]
+    fn interrupt_platform(&mut self) -> Result<()> {
         let child_pid = self
             .child
             .as_ref()
@@ -172,6 +176,17 @@ impl TerminalSession {
             return Ok(());
         }
         Err(format!("failed to interrupt owned terminal foreground process group: {error}").into())
+    }
+
+    #[cfg(windows)]
+    fn interrupt_platform(&mut self) -> Result<()> {
+        let writer = self
+            .writer
+            .as_mut()
+            .ok_or("terminal session input is already closed")?;
+        writer.write_all(&[0x03])?;
+        writer.flush()?;
+        Ok(())
     }
 
     pub fn try_wait(&mut self) -> Result<Option<TerminalExit>> {
@@ -274,7 +289,7 @@ fn next_session_id() -> Result<TerminalSessionId> {
     Ok(TerminalSessionId(previous + 1))
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::{TerminalSession, TerminalSize};
     use crate::git::shell_profiles::discover_native_shell_profiles;
@@ -548,3 +563,7 @@ mod tests {
         assert!(error.to_string().contains("non-zero"));
     }
 }
+
+#[cfg(all(test, windows))]
+#[path = "terminal_windows_tests.rs"]
+mod windows_tests;
