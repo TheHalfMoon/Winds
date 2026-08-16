@@ -1,0 +1,337 @@
+name: t052-integrity-fix-temporary
+
+on:
+  push:
+    branches: [feat/003-t052-wsl-launch]
+    paths:
+      - ".github/workflows/t052-integrity-fix-temporary.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: true
+      - name: Harden exact WSL profile and launch plan
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              text = path.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one replacement, found {count}: {old[:80]!r}')
+              path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          git_rs = Path('src/git.rs')
+          replace_once(
+              git_rs,
+              'const GIT_CONTEXT_ENV_VARS: &[&str] = &[',
+              'pub(super) const GIT_CONTEXT_ENV_VARS: &[&str] = &[',
+          )
+
+          launch = Path('src/wsl_launch.rs')
+          replace_once(
+              launch,
+              '#[cfg(windows)]\nuse super::{Repo, run_git_text, strip_git_line_ending};',
+              '#[cfg(windows)]\nuse super::{GIT_CONTEXT_ENV_VARS, Repo, run_git_text, strip_git_line_ending};',
+          )
+          replace_once(
+              launch,
+              '''#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+          pub struct WslTerminalProfile {
+              pub profile_id: String,
+              pub display_name: String,
+              pub execution_domain: WslExecutionDomain,
+              pub launcher_executable: String,
+              pub shell_executable: String,
+          }
+          ''',
+              '''#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+          #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+          pub enum WslCwdStrategy {
+              MappedWorkspaceOrHomeFallback,
+          }
+
+          #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+          pub struct WslTerminalProfile {
+              pub profile_id: String,
+              pub display_name: String,
+              pub execution_domain: WslExecutionDomain,
+              pub launcher_executable: String,
+              pub shell_executable: String,
+              pub shell_arguments: Vec<String>,
+              pub cwd_strategy: WslCwdStrategy,
+          }
+          ''',
+          )
+          replace_once(
+              launch,
+              '''    if plan.profile.shell_executable != WSL_SHELL_EXECUTABLE {
+                  return Err("WSL terminal profile shell executable is unsupported or stale".into());
+              }
+              let expected_profile = build_profile(launcher_text, &distribution);
+          ''',
+              '''    if plan.profile.shell_executable != WSL_SHELL_EXECUTABLE {
+                  return Err("WSL terminal profile shell executable is unsupported or stale".into());
+              }
+              if !plan.profile.shell_arguments.is_empty() {
+                  return Err("WSL terminal profile shell arguments are unsupported or stale".into());
+              }
+              if plan.profile.cwd_strategy != WslCwdStrategy::MappedWorkspaceOrHomeFallback {
+                  return Err("WSL terminal profile cwd strategy is unsupported or stale".into());
+              }
+              let expected_profile = build_profile(launcher_text, &distribution);
+          ''',
+          )
+          replace_once(
+              launch,
+              '''    let arguments = build_launch_arguments(&distribution.name, linux_cwd, WSL_SHELL_EXECUTABLE)?;
+              let mut session = TerminalSession::start_exact_launch(
+          ''',
+              '''    let workspace_path = Path::new(windows_workspace_root);
+              let current_repo = Repo::open(workspace_path)?;
+              let current_root = utf8_windows_path(current_repo.root(), "canonical workspace root")?;
+              if current_root != *windows_workspace_root {
+                  return Err("WSL launch plan workspace root is no longer the canonical Git worktree root".into());
+              }
+              if let WslCwdResolution::FallbackHome { linux_home, .. } = &plan.cwd_resolution {
+                  let current_home = resolve_linux_home(&launcher, &distribution)?;
+                  if current_home != *linux_home {
+                      return Err("WSL fallback home changed after launch preparation".into());
+                  }
+              }
+
+              let arguments = build_launch_arguments(
+                  &distribution.name,
+                  linux_cwd,
+                  &plan.profile.shell_executable,
+                  &plan.profile.shell_arguments,
+              )?;
+              let mut session = TerminalSession::start_exact_launch(
+          ''',
+          )
+          replace_once(
+              launch,
+              '''    let profile_id = stable_profile_id(&execution_domain, launcher, WSL_SHELL_EXECUTABLE);
+              WslTerminalProfile {
+                  profile_id,
+                  display_name: format!("WSL: {} / {}", distribution.name, WSL_SHELL_EXECUTABLE),
+                  execution_domain,
+                  launcher_executable: launcher.to_owned(),
+                  shell_executable: WSL_SHELL_EXECUTABLE.to_owned(),
+              }
+          }
+
+          fn stable_profile_id(domain: &WslExecutionDomain, launcher: &str, shell: &str) -> String {
+          ''',
+              '''    let shell_arguments = Vec::new();
+              let cwd_strategy = WslCwdStrategy::MappedWorkspaceOrHomeFallback;
+              let profile_id = stable_profile_id(
+                  &execution_domain,
+                  launcher,
+                  WSL_SHELL_EXECUTABLE,
+                  &shell_arguments,
+                  cwd_strategy,
+              );
+              WslTerminalProfile {
+                  profile_id,
+                  display_name: format!("WSL: {} / {}", distribution.name, WSL_SHELL_EXECUTABLE),
+                  execution_domain,
+                  launcher_executable: launcher.to_owned(),
+                  shell_executable: WSL_SHELL_EXECUTABLE.to_owned(),
+                  shell_arguments,
+                  cwd_strategy,
+              }
+          }
+
+          fn stable_profile_id(
+              domain: &WslExecutionDomain,
+              launcher: &str,
+              shell: &str,
+              shell_arguments: &[String],
+              cwd_strategy: WslCwdStrategy,
+          ) -> String {
+          ''',
+          )
+          replace_once(
+              launch,
+              '''    digest.update(shell.as_bytes());
+              digest.update(b"\\0");
+              let hex: String = digest
+          ''',
+              '''    digest.update(shell.as_bytes());
+              digest.update(b"\\0");
+              for argument in shell_arguments {
+                  digest.update(argument.as_bytes());
+                  digest.update(b"\\0");
+              }
+              match cwd_strategy {
+                  WslCwdStrategy::MappedWorkspaceOrHomeFallback => {
+                      digest.update(b"MAPPED_WORKSPACE_OR_HOME_FALLBACK\\0")
+                  }
+              }
+              let hex: String = digest
+          ''',
+          )
+          replace_once(
+              launch,
+              '''fn build_launch_arguments(distribution: &str, linux_cwd: &str, shell: &str) -> Result<Vec<String>> {
+              if distribution.is_empty() {
+                  return Err("WSL distribution identity cannot be empty".into());
+              }
+              require_absolute_linux_path(linux_cwd, "WSL terminal cwd")?;
+              require_absolute_linux_path(shell, "WSL shell executable")?;
+              Ok(vec![
+                  "--distribution".to_owned(),
+                  distribution.to_owned(),
+                  "--cd".to_owned(),
+                  linux_cwd.to_owned(),
+                  "--exec".to_owned(),
+                  shell.to_owned(),
+              ])
+          }
+          ''',
+              '''fn build_launch_arguments(
+              distribution: &str,
+              linux_cwd: &str,
+              shell: &str,
+              shell_arguments: &[String],
+          ) -> Result<Vec<String>> {
+              if distribution.is_empty() {
+                  return Err("WSL distribution identity cannot be empty".into());
+              }
+              require_absolute_linux_path(linux_cwd, "WSL terminal cwd")?;
+              require_absolute_linux_path(shell, "WSL shell executable")?;
+              if shell_arguments.iter().any(|argument| argument.contains('\\0')) {
+                  return Err("WSL shell arguments cannot contain NUL".into());
+              }
+              let mut arguments = vec![
+                  "--distribution".to_owned(),
+                  distribution.to_owned(),
+                  "--cd".to_owned(),
+                  linux_cwd.to_owned(),
+                  "--exec".to_owned(),
+                  shell.to_owned(),
+              ];
+              arguments.extend(shell_arguments.iter().cloned());
+              Ok(arguments)
+          }
+          ''',
+          )
+          replace_once(
+              launch,
+              '''    let mut process = Command::new(launcher);
+              process.arg("--distribution").arg(distribution);
+          ''',
+              '''    let mut process = Command::new(launcher);
+              for key in GIT_CONTEXT_ENV_VARS {
+                  process.env_remove(key);
+              }
+              process.arg("--distribution").arg(distribution);
+          ''',
+          )
+          replace_once(
+              launch,
+              '''    use super::{
+                  WslExecutionDomain, build_launch_arguments, parse_single_linux_path, stable_profile_id,
+              };
+          ''',
+              '''    use super::{
+                  WslCwdStrategy, WslExecutionDomain, build_launch_arguments, parse_single_linux_path,
+                  stable_profile_id,
+              };
+          ''',
+          )
+          replace_once(
+              launch,
+              'build_launch_arguments("Ubuntu Dev", "/mnt/c/work space/repo", "/bin/sh").unwrap();',
+              'build_launch_arguments("Ubuntu Dev", "/mnt/c/work space/repo", "/bin/sh", &[]).unwrap();',
+          )
+          replace_once(
+              launch,
+              '''        assert!(build_launch_arguments("Ubuntu", "mnt/c/repo", "/bin/sh").is_err());
+                  assert!(build_launch_arguments("Ubuntu", "/mnt/c/repo\\n/tmp", "/bin/sh").is_err());
+                  assert!(build_launch_arguments("Ubuntu", "/mnt/c/repo", "bin/sh").is_err());
+          ''',
+              '''        assert!(build_launch_arguments("Ubuntu", "mnt/c/repo", "/bin/sh", &[]).is_err());
+                  assert!(build_launch_arguments("Ubuntu", "/mnt/c/repo\\n/tmp", "/bin/sh", &[]).is_err());
+                  assert!(build_launch_arguments("Ubuntu", "/mnt/c/repo", "bin/sh", &[]).is_err());
+                  assert!(build_launch_arguments(
+                      "Ubuntu",
+                      "/mnt/c/repo",
+                      "/bin/sh",
+                      &["bad\\0argument".to_owned()],
+                  )
+                  .is_err());
+          ''',
+          )
+          replace_once(
+              launch,
+              '''        let first = stable_profile_id(&domain, r"C:\\Windows\\System32\\wsl.exe", "/bin/sh");
+                  let same = stable_profile_id(&domain, r"C:\\Windows\\System32\\wsl.exe", "/bin/sh");
+                  let changed = stable_profile_id(&domain, r"C:\\Windows\\System32\\wsl.exe", "/bin/bash");
+                  assert_eq!(first, same);
+                  assert_ne!(first, changed);
+          ''',
+              '''        let strategy = WslCwdStrategy::MappedWorkspaceOrHomeFallback;
+                  let first = stable_profile_id(
+                      &domain,
+                      r"C:\\Windows\\System32\\wsl.exe",
+                      "/bin/sh",
+                      &[],
+                      strategy,
+                  );
+                  let same = stable_profile_id(
+                      &domain,
+                      r"C:\\Windows\\System32\\wsl.exe",
+                      "/bin/sh",
+                      &[],
+                      strategy,
+                  );
+                  let changed_shell = stable_profile_id(
+                      &domain,
+                      r"C:\\Windows\\System32\\wsl.exe",
+                      "/bin/bash",
+                      &[],
+                      strategy,
+                  );
+                  let changed_arguments = stable_profile_id(
+                      &domain,
+                      r"C:\\Windows\\System32\\wsl.exe",
+                      "/bin/sh",
+                      &["-i".to_owned()],
+                      strategy,
+                  );
+                  assert_eq!(first, same);
+                  assert_ne!(first, changed_shell);
+                  assert_ne!(first, changed_arguments);
+          ''',
+          )
+
+      - name: Validate exact source delta
+        shell: bash
+        run: |
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          cargo test --locked --all-targets --all-features
+          git diff --check
+          changed="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' src/git.rs src/wsl_launch.rs | sort)"
+          test "$changed" = "$expected"
+      - name: Commit integrity repair
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/git.rs src/wsl_launch.rs
+          git diff --cached --check
+          git commit -m "fix(winds): validate WSL launch profile and context"
+          git push origin "HEAD:$GITHUB_REF_NAME"
