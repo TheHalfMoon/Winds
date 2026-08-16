@@ -449,13 +449,9 @@ mod tests {
             .unwrap();
         drop(connection);
 
-        let error = clone_and_register_workspace(
-            remote.to_str().unwrap(),
-            &destination,
-            &state_root,
-            350,
-        )
-        .unwrap_err();
+        let error =
+            clone_and_register_workspace(remote.to_str().unwrap(), &destination, &state_root, 350)
+                .unwrap_err();
         assert!(error.to_string().contains("forced clone-origin failure"));
         assert!(destination.is_dir());
 
