@@ -23,6 +23,14 @@ LICENSE_OVERRIDES = {
     / "licenses"
     / "rsqlite-vfs-0.1.1"
     / "LICENSE",
+    ("winapi-i686-pc-windows-gnu", "0.4.0"): REPOSITORY_ROOT
+    / "third-party"
+    / "licenses"
+    / "winapi-rs-0.3.9",
+    ("winapi-x86_64-pc-windows-gnu", "0.4.0"): REPOSITORY_ROOT
+    / "third-party"
+    / "licenses"
+    / "winapi-rs-0.3.9",
 }
 
 
@@ -34,10 +42,27 @@ def copy_override(name: str, version: str, package_dir: Path) -> bool:
     override = LICENSE_OVERRIDES.get((name, version))
     if override is None:
         return False
-    if not override.is_file() or override.is_symlink():
+    if override.is_symlink():
         raise SystemExit(f"invalid license override for {name} {version}: {override}")
+
+    if override.is_file():
+        sources = [(override, Path(override.name))]
+    elif override.is_dir():
+        sources = [
+            (path, path.relative_to(override))
+            for path in sorted(override.rglob("*"))
+            if is_license_file(path)
+        ]
+        if not sources:
+            raise SystemExit(f"license override directory is empty for {name} {version}: {override}")
+    else:
+        raise SystemExit(f"invalid license override for {name} {version}: {override}")
+
     package_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(override, package_dir / "LICENSE")
+    for source_path, relative in sources:
+        destination = package_dir / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source_path, destination)
     print(f"LICENSE_OVERRIDE_USED={name} {version}")
     return True
 
