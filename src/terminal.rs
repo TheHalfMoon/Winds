@@ -260,12 +260,13 @@ fn next_session_id() -> Result<TerminalSessionId> {
 
 #[cfg(test)]
 mod tests {
-    use super::{TerminalExit, TerminalSession, TerminalSize};
+    use super::{TerminalSession, TerminalSize};
     use crate::git::shell_profiles::discover_native_shell_profiles;
     use crate::git::workspace_inventory::WorkspaceEnvironmentInventory;
     use std::ffi::OsStr;
     use std::fs;
     use std::io::Read;
+    use std::os::unix::ffi::OsStrExt;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
@@ -395,15 +396,18 @@ mod tests {
         );
     }
 
-    fn wait_for_exit(session: &mut TerminalSession) -> TerminalExit {
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < deadline {
-            if let Some(exit) = session.try_wait().unwrap() {
-                return exit;
+    fn shell_quote_path(path: &Path) -> Vec<u8> {
+        let mut quoted = Vec::with_capacity(path.as_os_str().as_bytes().len() + 2);
+        quoted.push(b'\'');
+        for byte in path.as_os_str().as_bytes() {
+            if *byte == b'\'' {
+                quoted.extend_from_slice(b"'\\''");
+            } else {
+                quoted.push(*byte);
             }
-            thread::sleep(Duration::from_millis(20));
         }
-        panic!("timed out waiting for terminal session to exit");
+        quoted.push(b'\'');
+        quoted
     }
 
     fn default_size() -> TerminalSize {
@@ -455,23 +459,40 @@ mod tests {
     }
 
     #[test]
-    fn interrupt_reaches_foreground_pty_process_and_produces_observed_exit() {
+    fn interrupt_signals_foreground_job_and_keeps_terminal_shell_usable() {
         let root = TestRoot::new("interrupt");
+        let script = root.path().join("interrupt.sh");
+        fs::write(
+            &script,
+            concat!(
+                "trap 'printf \"\\127\\111\\116\\104\\123\\137\\111\\116\\124\\105\\122\\122\\125\\120\\124\\105\\104\\012\"; exit 130' INT\n",
+                "printf '\\127\\111\\116\\104\\123\\137\\122\\105\\101\\104\\131\\012'\n",
+                "while :; do sleep 1; done\n"
+            ),
+        )
+        .unwrap();
+
         let profile = native_sh_profile();
         let mut session = TerminalSession::start(&profile, root.path(), default_size()).unwrap();
         let output = start_output_reader(session.try_clone_output_reader().unwrap());
 
+        let mut command = b"sh ".to_vec();
+        command.extend_from_slice(&shell_quote_path(&script));
+        command.push(b'\n');
+        session.send_input(&command).unwrap();
+        wait_for_output(&output, b"WINDS_READY");
+
+        session.interrupt().unwrap();
+        wait_for_output(&output, b"WINDS_INTERRUPTED");
+
         session
             .send_input(
-                b"printf '\\127\\111\\116\\104\\123\\137\\122\\105\\101\\104\\131\\012'; exec sleep 30\n",
+                b"printf '\\127\\111\\116\\104\\123\\137\\101\\106\\124\\105\\122\\012'\nexit\n",
             )
             .unwrap();
-        wait_for_output(&output, b"WINDS_READY");
-        session.interrupt().unwrap();
-        let exit = wait_for_exit(&mut session);
-
-        assert!(!exit.signal.as_deref().unwrap_or_default().is_empty() || exit.exit_code != 0);
-        assert_eq!(session.try_wait().unwrap(), Some(exit));
+        wait_for_output(&output, b"WINDS_AFTER");
+        let exit = session.wait().unwrap();
+        assert_eq!(exit.exit_code, 0);
     }
 
     #[test]
