@@ -1,7 +1,7 @@
 use crate::domain::{
     BlobEvidence, CheckEvidence, Eligibility, EvidenceReport, ExecutionEventRecord, ExecutionKind,
-    ExecutionRecord, ExecutionStatus, FactSource, StoredRun, TerminalSessionRecord,
-    WorkspaceRecord,
+    ExecutionRecord, ExecutionStatus, FactSource, StoredRun, TerminalCloseReason,
+    TerminalSessionRecord, WorkspaceRecord,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
@@ -236,6 +236,295 @@ impl Store {
         Ok(())
     }
 
+    pub fn create_terminal_execution(
+        &mut self,
+        execution: NewExecution<'_>,
+        session: NewTerminalSession<'_>,
+        now_ms: i64,
+    ) -> Result<()> {
+        if execution.kind != ExecutionKind::Terminal {
+            return Err("terminal execution persistence requires TERMINAL execution kind".into());
+        }
+        if execution.execution_id != session.execution_id {
+            return Err("terminal execution/session identities do not match".into());
+        }
+        let shell_arguments_json = serde_json::to_string(session.shell_arguments)?;
+        let tx = self.connection.transaction()?;
+        tx.execute(
+            "INSERT INTO executions(
+            execution_id, workspace_id, kind, request_source, execution_domain,
+            status, status_source, requested_unix_ms,
+            started_unix_ms, ended_unix_ms, duration_ms
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?4, ?7, NULL, NULL, NULL)",
+            params![
+                execution.execution_id,
+                execution.workspace_id,
+                execution.kind.as_str(),
+                execution.request_source.as_str(),
+                execution.execution_domain,
+                ExecutionStatus::Requested.as_str(),
+                now_ms,
+            ],
+        )?;
+        insert_execution_event(
+            &tx,
+            execution.execution_id,
+            "ExecutionRequested",
+            execution.request_source,
+            now_ms,
+        )?;
+        tx.execute(
+            "INSERT INTO terminal_sessions(
+            execution_id, profile_id, shell_executable, shell_arguments_json,
+            requested_cwd, initial_cols, initial_rows, close_reason
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)",
+            params![
+                session.execution_id,
+                session.profile_id,
+                session.shell_executable,
+                shell_arguments_json,
+                session.requested_cwd,
+                session.initial_cols.map(i64::from),
+                session.initial_rows.map(i64::from),
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn mark_terminal_running(&mut self, execution_id: &str, now_ms: i64) -> Result<()> {
+        let tx = self.connection.transaction()?;
+        let (status, requested_unix_ms, started_unix_ms) =
+            terminal_execution_state(&tx, execution_id)?;
+        if status != ExecutionStatus::Requested || started_unix_ms.is_some() {
+            return Err(format!(
+                "terminal execution cannot start from persisted state {}: {execution_id}",
+                status.as_str()
+            )
+            .into());
+        }
+        if now_ms < requested_unix_ms {
+            return Err("terminal start time cannot precede its request time".into());
+        }
+        let updated = tx.execute(
+            "UPDATE executions
+         SET status = ?2, status_source = ?3, started_unix_ms = ?4,
+             ended_unix_ms = NULL, duration_ms = NULL
+         WHERE execution_id = ?1 AND status = ?5",
+            params![
+                execution_id,
+                ExecutionStatus::Running.as_str(),
+                FactSource::WindsObserved.as_str(),
+                now_ms,
+                ExecutionStatus::Requested.as_str(),
+            ],
+        )?;
+        if updated != 1 {
+            return Err("terminal RUNNING transition lost its expected REQUESTED row".into());
+        }
+        insert_execution_event(
+            &tx,
+            execution_id,
+            "TerminalStarted",
+            FactSource::WindsObserved,
+            now_ms,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn mark_terminal_failed_to_start(&mut self, execution_id: &str, now_ms: i64) -> Result<()> {
+        let tx = self.connection.transaction()?;
+        let (status, requested_unix_ms, started_unix_ms) =
+            terminal_execution_state(&tx, execution_id)?;
+        if status != ExecutionStatus::Requested || started_unix_ms.is_some() {
+            return Err(format!(
+                "terminal execution cannot fail-to-start from persisted state {}: {execution_id}",
+                status.as_str()
+            )
+            .into());
+        }
+        if now_ms < requested_unix_ms {
+            return Err("terminal failure time cannot precede its request time".into());
+        }
+        let updated = tx.execute(
+            "UPDATE executions
+         SET status = ?2, status_source = ?3, ended_unix_ms = ?4, duration_ms = NULL
+         WHERE execution_id = ?1 AND status = ?5",
+            params![
+                execution_id,
+                ExecutionStatus::FailedToStart.as_str(),
+                FactSource::WindsObserved.as_str(),
+                now_ms,
+                ExecutionStatus::Requested.as_str(),
+            ],
+        )?;
+        if updated != 1 {
+            return Err("FAILED_TO_START transition lost its expected REQUESTED row".into());
+        }
+        set_terminal_close_reason(&tx, execution_id, TerminalCloseReason::FailedToStart)?;
+        insert_execution_event(
+            &tx,
+            execution_id,
+            "TerminalFailedToStart",
+            FactSource::WindsObserved,
+            now_ms,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn mark_terminal_start_persistence_failed(
+        &mut self,
+        execution_id: &str,
+        started_unix_ms: i64,
+        ended_unix_ms: i64,
+    ) -> Result<()> {
+        let tx = self.connection.transaction()?;
+        let (status, requested_unix_ms, persisted_started_unix_ms) =
+            terminal_execution_state(&tx, execution_id)?;
+        if status != ExecutionStatus::Requested || persisted_started_unix_ms.is_some() {
+            return Err(format!(
+            "terminal start-persistence recovery cannot run from persisted state {}: {execution_id}",
+            status.as_str()
+        )
+        .into());
+        }
+        if started_unix_ms < requested_unix_ms || ended_unix_ms < started_unix_ms {
+            return Err("terminal start-persistence recovery timestamps are inconsistent".into());
+        }
+        let duration_ms = ended_unix_ms - started_unix_ms;
+        let updated = tx.execute(
+            "UPDATE executions
+         SET status = ?2, status_source = ?3, started_unix_ms = ?4,
+             ended_unix_ms = ?5, duration_ms = ?6
+         WHERE execution_id = ?1 AND status = ?7",
+            params![
+                execution_id,
+                ExecutionStatus::Interrupted.as_str(),
+                FactSource::WindsObserved.as_str(),
+                started_unix_ms,
+                ended_unix_ms,
+                duration_ms,
+                ExecutionStatus::Requested.as_str(),
+            ],
+        )?;
+        if updated != 1 {
+            return Err("start-persistence recovery lost its expected REQUESTED row".into());
+        }
+        set_terminal_close_reason(
+            &tx,
+            execution_id,
+            TerminalCloseReason::StartPersistenceFailed,
+        )?;
+        insert_execution_event(
+            &tx,
+            execution_id,
+            "TerminalStartPersistenceFailed",
+            FactSource::WindsObserved,
+            ended_unix_ms,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn mark_terminal_exited(&mut self, execution_id: &str, ended_unix_ms: i64) -> Result<()> {
+        finalize_running_terminal(
+            &mut self.connection,
+            execution_id,
+            ExecutionStatus::Exited,
+            TerminalCloseReason::ProcessExited,
+            "TerminalExited",
+            ended_unix_ms,
+        )
+    }
+
+    pub fn mark_terminal_interrupted(
+        &mut self,
+        execution_id: &str,
+        reason: TerminalCloseReason,
+        ended_unix_ms: i64,
+    ) -> Result<()> {
+        if !matches!(
+            reason,
+            TerminalCloseReason::TerminatedByWinds | TerminalCloseReason::ClosedByWinds
+        ) {
+            return Err(
+                "terminal interruption requires a controlled close/terminate reason".into(),
+            );
+        }
+        finalize_running_terminal(
+            &mut self.connection,
+            execution_id,
+            ExecutionStatus::Interrupted,
+            reason,
+            "TerminalInterrupted",
+            ended_unix_ms,
+        )
+    }
+
+    pub fn reconcile_unowned_terminal_sessions_after_restart(
+        &mut self,
+        now_ms: i64,
+    ) -> Result<usize> {
+        let tx = self.connection.transaction()?;
+        let execution_ids = {
+            let mut statement = tx.prepare(
+                "SELECT e.execution_id
+             FROM executions e
+             INNER JOIN terminal_sessions t ON t.execution_id = e.execution_id
+             WHERE e.kind = ?1 AND e.status IN (?2, ?3)
+             ORDER BY e.requested_unix_ms, e.execution_id",
+            )?;
+            statement
+                .query_map(
+                    params![
+                        ExecutionKind::Terminal.as_str(),
+                        ExecutionStatus::Requested.as_str(),
+                        ExecutionStatus::Running.as_str(),
+                    ],
+                    |row| row.get::<_, String>(0),
+                )?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+
+        for execution_id in &execution_ids {
+            let updated = tx.execute(
+                "UPDATE executions
+             SET status = ?2, status_source = ?3,
+                 ended_unix_ms = NULL, duration_ms = NULL
+             WHERE execution_id = ?1 AND status IN (?4, ?5)",
+                params![
+                    execution_id,
+                    ExecutionStatus::OwnershipLost.as_str(),
+                    FactSource::WindsObserved.as_str(),
+                    ExecutionStatus::Requested.as_str(),
+                    ExecutionStatus::Running.as_str(),
+                ],
+            )?;
+            if updated != 1 {
+                return Err(format!(
+                    "terminal ownership-loss reconciliation lost its non-final row: {execution_id}"
+                )
+                .into());
+            }
+            set_terminal_close_reason(
+                &tx,
+                execution_id,
+                TerminalCloseReason::OwnershipLostProcessStateUnknown,
+            )?;
+            insert_execution_event(
+                &tx,
+                execution_id,
+                "TerminalOwnershipLostAfterRestart",
+                FactSource::WindsObserved,
+                now_ms,
+            )?;
+        }
+        tx.commit()?;
+        Ok(execution_ids.len())
+    }
+
     pub fn load_execution(&self, execution_id: &str) -> Result<ExecutionRecord> {
         let row = self
             .connection
@@ -378,6 +667,15 @@ impl Store {
             .optional()?
             .ok_or_else(|| format!("unknown Winds terminal session: {execution_id}"))?;
 
+        let close_reason = row
+            .7
+            .as_deref()
+            .map(|value| {
+                TerminalCloseReason::from_db(value)
+                    .ok_or_else(|| format!("unknown terminal close reason in store: {value}"))
+            })
+            .transpose()?;
+
         Ok(TerminalSessionRecord {
             execution_id: row.0,
             profile_id: row.1,
@@ -386,7 +684,7 @@ impl Store {
             requested_cwd: row.4,
             initial_cols: row.5.map(u16::try_from).transpose()?,
             initial_rows: row.6.map(u16::try_from).transpose()?,
-            close_reason: row.7,
+            close_reason,
         })
     }
 }
@@ -687,6 +985,106 @@ fn open_existing_blob(_path: &Path) -> Result<File> {
     Err("existing evidence blob validation is unsupported on this platform".into())
 }
 
+fn terminal_execution_state(
+    connection: &Connection,
+    execution_id: &str,
+) -> Result<(ExecutionStatus, i64, Option<i64>)> {
+    let row = connection
+        .query_row(
+            "SELECT e.status, e.requested_unix_ms, e.started_unix_ms
+             FROM executions e
+             INNER JOIN terminal_sessions t ON t.execution_id = e.execution_id
+             WHERE e.execution_id = ?1 AND e.kind = ?2",
+            params![execution_id, ExecutionKind::Terminal.as_str()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or_else(|| format!("unknown persisted terminal execution: {execution_id}"))?;
+    let status = ExecutionStatus::from_db(&row.0)
+        .ok_or_else(|| format!("unknown execution status in store: {}", row.0))?;
+    Ok((status, row.1, row.2))
+}
+
+fn set_terminal_close_reason(
+    connection: &Connection,
+    execution_id: &str,
+    reason: TerminalCloseReason,
+) -> Result<()> {
+    let updated = connection.execute(
+        "UPDATE terminal_sessions SET close_reason = ?2 WHERE execution_id = ?1",
+        params![execution_id, reason.as_str()],
+    )?;
+    if updated != 1 {
+        return Err(format!("unknown persisted terminal session: {execution_id}").into());
+    }
+    Ok(())
+}
+
+fn finalize_running_terminal(
+    connection: &mut Connection,
+    execution_id: &str,
+    status: ExecutionStatus,
+    close_reason: TerminalCloseReason,
+    event_kind: &str,
+    ended_unix_ms: i64,
+) -> Result<()> {
+    if !matches!(
+        status,
+        ExecutionStatus::Exited | ExecutionStatus::Interrupted
+    ) {
+        return Err("terminal finalization requires EXITED or INTERRUPTED status".into());
+    }
+    let tx = connection.transaction()?;
+    let (current_status, _requested_unix_ms, started_unix_ms) =
+        terminal_execution_state(&tx, execution_id)?;
+    if current_status != ExecutionStatus::Running {
+        return Err(format!(
+            "terminal execution cannot finalize from persisted state {}: {execution_id}",
+            current_status.as_str()
+        )
+        .into());
+    }
+    let started_unix_ms =
+        started_unix_ms.ok_or("RUNNING terminal execution is missing its observed start time")?;
+    if ended_unix_ms < started_unix_ms {
+        return Err("terminal end time cannot precede its observed start time".into());
+    }
+    let duration_ms = ended_unix_ms - started_unix_ms;
+    let updated = tx.execute(
+        "UPDATE executions
+         SET status = ?2, status_source = ?3,
+             ended_unix_ms = ?4, duration_ms = ?5
+         WHERE execution_id = ?1 AND status = ?6",
+        params![
+            execution_id,
+            status.as_str(),
+            FactSource::WindsObserved.as_str(),
+            ended_unix_ms,
+            duration_ms,
+            ExecutionStatus::Running.as_str(),
+        ],
+    )?;
+    if updated != 1 {
+        return Err("terminal finalization lost its expected RUNNING row".into());
+    }
+    set_terminal_close_reason(&tx, execution_id, close_reason)?;
+    insert_execution_event(
+        &tx,
+        execution_id,
+        event_kind,
+        FactSource::WindsObserved,
+        ended_unix_ms,
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
 fn insert_event(
     connection: &Connection,
     run_id: &str,
@@ -725,7 +1123,7 @@ fn insert_execution_event(
 #[cfg(test)]
 mod persistence_tests {
     use super::{NewExecution, NewTerminalSession, NewWorkspace, Store};
-    use crate::domain::{ExecutionKind, ExecutionStatus, FactSource};
+    use crate::domain::{ExecutionKind, ExecutionStatus, FactSource, TerminalCloseReason};
     use std::fs;
     use std::io::ErrorKind;
     use std::path::{Path, PathBuf};
@@ -909,6 +1307,286 @@ mod persistence_tests {
             rusqlite::params!["execution-1"],
         );
         assert!(invalid_duration.is_err());
+
+        drop(store);
+        cleanup_test_home(&home);
+    }
+
+    #[test]
+    fn terminal_lifecycle_transitions_are_atomic_typed_and_timed() {
+        let home = test_home("terminal-lifecycle");
+        let mut store = Store::open(&home).unwrap();
+        store
+            .create_workspace(
+                NewWorkspace {
+                    workspace_id: "workspace-1",
+                    canonical_worktree_root: "/tmp/example",
+                    git_common_dir: "/tmp/example/.git",
+                },
+                100,
+            )
+            .unwrap();
+        let shell_arguments = Vec::new();
+        store
+            .create_terminal_execution(
+                NewExecution {
+                    execution_id: "execution-1",
+                    workspace_id: "workspace-1",
+                    kind: ExecutionKind::Terminal,
+                    request_source: FactSource::CallerRequested,
+                    execution_domain: "host-linux",
+                },
+                NewTerminalSession {
+                    execution_id: "execution-1",
+                    profile_id: "profile-1",
+                    shell_executable: "/bin/sh",
+                    shell_arguments: &shell_arguments,
+                    requested_cwd: "/tmp/example",
+                    initial_cols: Some(80),
+                    initial_rows: Some(24),
+                },
+                110,
+            )
+            .unwrap();
+        store.mark_terminal_running("execution-1", 120).unwrap();
+        store.mark_terminal_exited("execution-1", 155).unwrap();
+
+        let execution = store.load_execution("execution-1").unwrap();
+        assert_eq!(execution.status, ExecutionStatus::Exited);
+        assert_eq!(execution.status_source, FactSource::WindsObserved);
+        assert_eq!(execution.started_unix_ms, Some(120));
+        assert_eq!(execution.ended_unix_ms, Some(155));
+        assert_eq!(execution.duration_ms, Some(35));
+        let terminal = store.load_terminal_session("execution-1").unwrap();
+        assert_eq!(
+            terminal.close_reason,
+            Some(TerminalCloseReason::ProcessExited)
+        );
+        let events = store.execution_events("execution-1").unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.kind.as_str())
+                .collect::<Vec<_>>(),
+            ["ExecutionRequested", "TerminalStarted", "TerminalExited"]
+        );
+        assert_eq!(events[0].source, FactSource::CallerRequested);
+        assert!(
+            events[1..]
+                .iter()
+                .all(|event| event.source == FactSource::WindsObserved)
+        );
+        assert!(store.mark_terminal_exited("execution-1", 160).is_err());
+
+        drop(store);
+        cleanup_test_home(&home);
+    }
+
+    #[test]
+    fn terminal_failed_and_interrupted_states_are_explicit() {
+        let home = test_home("terminal-final-states");
+        let mut store = Store::open(&home).unwrap();
+        store
+            .create_workspace(
+                NewWorkspace {
+                    workspace_id: "workspace-1",
+                    canonical_worktree_root: "/tmp/example",
+                    git_common_dir: "/tmp/example/.git",
+                },
+                100,
+            )
+            .unwrap();
+        let shell_arguments = Vec::new();
+        for execution_id in ["failed", "interrupted"] {
+            store
+                .create_terminal_execution(
+                    NewExecution {
+                        execution_id,
+                        workspace_id: "workspace-1",
+                        kind: ExecutionKind::Terminal,
+                        request_source: FactSource::CallerRequested,
+                        execution_domain: "host-linux",
+                    },
+                    NewTerminalSession {
+                        execution_id,
+                        profile_id: "profile-1",
+                        shell_executable: "/bin/sh",
+                        shell_arguments: &shell_arguments,
+                        requested_cwd: "/tmp/example",
+                        initial_cols: Some(80),
+                        initial_rows: Some(24),
+                    },
+                    110,
+                )
+                .unwrap();
+        }
+        store.mark_terminal_failed_to_start("failed", 115).unwrap();
+        store.mark_terminal_running("interrupted", 120).unwrap();
+        store
+            .mark_terminal_interrupted("interrupted", TerminalCloseReason::TerminatedByWinds, 150)
+            .unwrap();
+
+        let failed = store.load_execution("failed").unwrap();
+        assert_eq!(failed.status, ExecutionStatus::FailedToStart);
+        assert_eq!(failed.started_unix_ms, None);
+        assert_eq!(failed.ended_unix_ms, Some(115));
+        assert_eq!(failed.duration_ms, None);
+        assert_eq!(
+            store.load_terminal_session("failed").unwrap().close_reason,
+            Some(TerminalCloseReason::FailedToStart)
+        );
+        let interrupted = store.load_execution("interrupted").unwrap();
+        assert_eq!(interrupted.status, ExecutionStatus::Interrupted);
+        assert_eq!(interrupted.duration_ms, Some(30));
+        assert_eq!(
+            store
+                .load_terminal_session("interrupted")
+                .unwrap()
+                .close_reason,
+            Some(TerminalCloseReason::TerminatedByWinds)
+        );
+
+        drop(store);
+        cleanup_test_home(&home);
+    }
+
+    #[test]
+    fn restart_reconciliation_marks_nonfinal_sessions_ownership_lost_without_pid_claims() {
+        let home = test_home("ownership-lost");
+        let mut store = Store::open(&home).unwrap();
+        store
+            .create_workspace(
+                NewWorkspace {
+                    workspace_id: "workspace-1",
+                    canonical_worktree_root: "/tmp/example",
+                    git_common_dir: "/tmp/example/.git",
+                },
+                100,
+            )
+            .unwrap();
+        let shell_arguments = Vec::new();
+        for execution_id in ["requested", "running"] {
+            store
+                .create_terminal_execution(
+                    NewExecution {
+                        execution_id,
+                        workspace_id: "workspace-1",
+                        kind: ExecutionKind::Terminal,
+                        request_source: FactSource::CallerRequested,
+                        execution_domain: "host-linux",
+                    },
+                    NewTerminalSession {
+                        execution_id,
+                        profile_id: "profile-1",
+                        shell_executable: "/bin/sh",
+                        shell_arguments: &shell_arguments,
+                        requested_cwd: "/tmp/example",
+                        initial_cols: Some(80),
+                        initial_rows: Some(24),
+                    },
+                    110,
+                )
+                .unwrap();
+        }
+        store.mark_terminal_running("running", 120).unwrap();
+
+        assert_eq!(
+            store
+                .reconcile_unowned_terminal_sessions_after_restart(200)
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            store
+                .reconcile_unowned_terminal_sessions_after_restart(210)
+                .unwrap(),
+            0
+        );
+        for execution_id in ["requested", "running"] {
+            let execution = store.load_execution(execution_id).unwrap();
+            assert_eq!(execution.status, ExecutionStatus::OwnershipLost);
+            assert_eq!(execution.status_source, FactSource::WindsObserved);
+            assert_eq!(execution.ended_unix_ms, None);
+            assert_eq!(execution.duration_ms, None);
+            assert_eq!(
+                store
+                    .load_terminal_session(execution_id)
+                    .unwrap()
+                    .close_reason,
+                Some(TerminalCloseReason::OwnershipLostProcessStateUnknown)
+            );
+        }
+        assert_eq!(
+            store.load_execution("requested").unwrap().started_unix_ms,
+            None
+        );
+        assert_eq!(
+            store.load_execution("running").unwrap().started_unix_ms,
+            Some(120)
+        );
+
+        let column_names = {
+            let mut statement = store
+                .connection
+                .prepare("PRAGMA table_info(terminal_sessions)")
+                .unwrap();
+            statement
+                .query_map([], |row| row.get::<_, String>(1))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap()
+        };
+        assert!(!column_names.iter().any(|name| name.contains("pid")));
+
+        drop(store);
+        cleanup_test_home(&home);
+    }
+
+    #[test]
+    fn atomic_terminal_request_rolls_back_if_session_insert_fails() {
+        let home = test_home("terminal-request-rollback");
+        let mut store = Store::open(&home).unwrap();
+        store
+            .create_workspace(
+                NewWorkspace {
+                    workspace_id: "workspace-1",
+                    canonical_worktree_root: "/tmp/example",
+                    git_common_dir: "/tmp/example/.git",
+                },
+                100,
+            )
+            .unwrap();
+        let shell_arguments = Vec::new();
+        let result = store.create_terminal_execution(
+            NewExecution {
+                execution_id: "execution-invalid",
+                workspace_id: "workspace-1",
+                kind: ExecutionKind::Terminal,
+                request_source: FactSource::CallerRequested,
+                execution_domain: "host-linux",
+            },
+            NewTerminalSession {
+                execution_id: "execution-invalid",
+                profile_id: "profile-1",
+                shell_executable: "/bin/sh",
+                shell_arguments: &shell_arguments,
+                requested_cwd: "/tmp/example",
+                initial_cols: Some(0),
+                initial_rows: Some(24),
+            },
+            110,
+        );
+        assert!(result.is_err());
+        assert!(store.load_execution("execution-invalid").is_err());
+        let event_count: i64 = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM execution_events WHERE execution_id = ?1",
+                rusqlite::params!["execution-invalid"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(event_count, 0);
 
         drop(store);
         cleanup_test_home(&home);

@@ -186,6 +186,42 @@ pub struct ExecutionEventRecord {
     pub created_unix_ms: i64,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum TerminalCloseReason {
+    ProcessExited,
+    FailedToStart,
+    TerminatedByWinds,
+    ClosedByWinds,
+    StartPersistenceFailed,
+    OwnershipLostProcessStateUnknown,
+}
+
+impl TerminalCloseReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ProcessExited => "PROCESS_EXITED",
+            Self::FailedToStart => "FAILED_TO_START",
+            Self::TerminatedByWinds => "TERMINATED_BY_WINDS",
+            Self::ClosedByWinds => "CLOSED_BY_WINDS",
+            Self::StartPersistenceFailed => "START_PERSISTENCE_FAILED",
+            Self::OwnershipLostProcessStateUnknown => "OWNERSHIP_LOST_PROCESS_STATE_UNKNOWN",
+        }
+    }
+
+    pub(crate) fn from_db(value: &str) -> Option<Self> {
+        match value {
+            "PROCESS_EXITED" => Some(Self::ProcessExited),
+            "FAILED_TO_START" => Some(Self::FailedToStart),
+            "TERMINATED_BY_WINDS" => Some(Self::TerminatedByWinds),
+            "CLOSED_BY_WINDS" => Some(Self::ClosedByWinds),
+            "START_PERSISTENCE_FAILED" => Some(Self::StartPersistenceFailed),
+            "OWNERSHIP_LOST_PROCESS_STATE_UNKNOWN" => Some(Self::OwnershipLostProcessStateUnknown),
+            _ => None,
+        }
+    }
+}
+
 #[allow(
     dead_code,
     reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
@@ -199,7 +235,7 @@ pub struct TerminalSessionRecord {
     pub requested_cwd: String,
     pub initial_cols: Option<u16>,
     pub initial_rows: Option<u16>,
-    pub close_reason: Option<String>,
+    pub close_reason: Option<TerminalCloseReason>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -1,5 +1,10 @@
 mod check;
 mod domain;
+#[allow(
+    dead_code,
+    reason = "Spec 003 T053 terminal-ledger backend API; CLI caller lands in T057"
+)]
+mod execution;
 mod git;
 mod store;
 

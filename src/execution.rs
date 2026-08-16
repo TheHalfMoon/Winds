@@ -1,12 +1,8 @@
 use crate::domain::{ExecutionKind, FactSource, TerminalCloseReason};
 use crate::git::shell_profiles::ShellProfile;
-use crate::git::terminal::{
-    TerminalExit, TerminalSession, TerminalSessionId, TerminalSize,
-};
+use crate::git::terminal::{TerminalExit, TerminalSession, TerminalSessionId, TerminalSize};
 #[cfg(windows)]
-use crate::git::wsl_launch::{
-    WslCwdResolution, WslTerminalLaunchPlan, launch_wsl_terminal,
-};
+use crate::git::wsl_launch::{WslCwdResolution, WslTerminalLaunchPlan, launch_wsl_terminal};
 use crate::store::{NewExecution, NewTerminalSession, Result, Store};
 use std::io::Read;
 use std::path::Path;
@@ -298,8 +294,10 @@ fn finish_started_session(
         };
         let repair_note = match repair {
             Ok(()) if cleanup_proven => "interrupted cleanup state persisted".to_owned(),
-            Ok(()) => "cleanup was not proven; request remains non-final for restart reconciliation"
-                .to_owned(),
+            Ok(()) => {
+                "cleanup was not proven; request remains non-final for restart reconciliation"
+                    .to_owned()
+            }
             Err(error) => format!("cleanup state persistence also failed: {error}"),
         };
         return Err(format!(
@@ -398,7 +396,7 @@ mod tests {
 
     fn store_with_workspace(root: &TestRoot) -> Store {
         let home = root.path().join("state");
-        let mut store = Store::open(&home).unwrap();
+        let store = Store::open(&home).unwrap();
         store
             .create_workspace(
                 NewWorkspace {
@@ -442,7 +440,10 @@ mod tests {
         assert!(final_record.ended_unix_ms.is_some());
         assert!(final_record.duration_ms.is_some());
         let terminal = store.load_terminal_session("execution-natural").unwrap();
-        assert_eq!(terminal.close_reason, Some(TerminalCloseReason::ProcessExited));
+        assert_eq!(
+            terminal.close_reason,
+            Some(TerminalCloseReason::ProcessExited)
+        );
     }
 
     #[test]
