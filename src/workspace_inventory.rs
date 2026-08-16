@@ -370,7 +370,11 @@ mod tests {
         fs::create_dir(worktree.join(".envrc")).unwrap();
 
         let error = inventory_workspace_environment(&workspace).unwrap_err();
-        assert!(error.to_string().contains("manifest path is not a file or symlink"));
+        assert!(
+            error
+                .to_string()
+                .contains("manifest path is not a file or symlink")
+        );
         assert!(error.to_string().contains(".envrc"));
 
         cleanup_owned_root(&root);
