@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::fs::{File, OpenOptions};
+#[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -163,7 +164,7 @@ impl Repo {
         let mut paths = Vec::new();
         for field in output.split(|byte| *byte == 0) {
             if let Some(path) = field.strip_prefix(b"worktree ") {
-                paths.push(PathBuf::from(OsString::from_vec(path.to_vec())));
+                paths.push(git_path_from_bytes(path)?);
             }
         }
         Ok(paths)
@@ -202,6 +203,18 @@ impl Repo {
         run_git_text(&self.root, ["branch", branch, commit_oid])?;
         Ok(())
     }
+}
+
+#[cfg(unix)]
+fn git_path_from_bytes(path: &[u8]) -> Result<PathBuf> {
+    Ok(PathBuf::from(OsString::from_vec(path.to_vec())))
+}
+
+#[cfg(windows)]
+fn git_path_from_bytes(path: &[u8]) -> Result<PathBuf> {
+    let path = std::str::from_utf8(path)
+        .map_err(|error| format!("Git returned a non-UTF-8 Windows worktree path: {error}"))?;
+    Ok(PathBuf::from(path))
 }
 
 fn git_command(cwd: &Path) -> Command {

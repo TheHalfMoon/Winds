@@ -260,10 +260,9 @@ fn add_utf8_absolute_candidate(candidates: &mut BTreeSet<String>, path: &Path) {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ShellCwdStrategy, ShellExecutionDomain, discover_native_shell_profiles,
-        validate_shell_profile_for_launch,
-    };
+    use super::discover_native_shell_profiles;
+    #[cfg(unix)]
+    use super::{ShellCwdStrategy, ShellExecutionDomain, validate_shell_profile_for_launch};
     use crate::git::workspace_inventory::WorkspaceEnvironmentInventory;
     use std::ffi::OsStr;
     use std::fs;

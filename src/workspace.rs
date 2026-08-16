@@ -367,16 +367,20 @@ mod tests {
         assert_eq!(persisted.git_common_dir, first.git_common_dir);
         drop(store);
 
-        let symlinked_repo = root.join("repo-link");
-        std::os::unix::fs::symlink(&repo, &symlinked_repo).unwrap();
-        let via_symlink = open_existing_workspace(&symlinked_repo, &canonical_home, 150).unwrap();
-        assert_eq!(via_symlink.workspace_id, first.workspace_id);
-        assert_eq!(
-            via_symlink.canonical_worktree_root,
-            first.canonical_worktree_root
-        );
-        assert_eq!(via_symlink.git_common_dir, first.git_common_dir);
-        assert_eq!(via_symlink.head_oid, first.head_oid);
+        #[cfg(unix)]
+        {
+            let symlinked_repo = root.join("repo-link");
+            std::os::unix::fs::symlink(&repo, &symlinked_repo).unwrap();
+            let via_symlink =
+                open_existing_workspace(&symlinked_repo, &canonical_home, 150).unwrap();
+            assert_eq!(via_symlink.workspace_id, first.workspace_id);
+            assert_eq!(
+                via_symlink.canonical_worktree_root,
+                first.canonical_worktree_root
+            );
+            assert_eq!(via_symlink.git_common_dir, first.git_common_dir);
+            assert_eq!(via_symlink.head_oid, first.head_oid);
+        }
 
         fs::write(repo.join("untracked.txt"), b"dirty\n").unwrap();
         let second = open_existing_workspace(&repo, &canonical_home, 200).unwrap();
