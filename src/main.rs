@@ -50,6 +50,7 @@ fn verify(flags: HashMap<String, String>) -> Result<()> {
         &flags,
         &["repo", "base", "candidate", "check", "timeout-secs", "home"],
     )?;
+    require_required_check_runtime()?;
     let repo_arg = required(&flags, "repo")?;
     let base_ref = required(&flags, "base")?;
     let candidate_ref = required(&flags, "candidate")?;
@@ -172,6 +173,7 @@ fn verify(flags: HashMap<String, String>) -> Result<()> {
 
 fn promote(flags: HashMap<String, String>) -> Result<()> {
     ensure_allowed_flags(&flags, &["repo", "run", "home"])?;
+    require_required_check_runtime()?;
     let repo_arg = required(&flags, "repo")?;
     let run_id = required(&flags, "run")?;
     let repo = Repo::open(Path::new(repo_arg))?;
@@ -350,6 +352,19 @@ fn recover(flags: HashMap<String, String>) -> Result<()> {
         return Err("one or more Winds runs require manual recovery".into());
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn require_required_check_runtime() -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn require_required_check_runtime() -> Result<()> {
+    Err(
+        "authoritative required-check execution is unsupported on native Windows in Spec 003 T051"
+            .into(),
+    )
 }
 
 fn parse_flags(args: Vec<String>) -> Result<HashMap<String, String>> {

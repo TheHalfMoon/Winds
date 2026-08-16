@@ -264,15 +264,21 @@ mod tests {
     #[cfg(unix)]
     use super::{ShellCwdStrategy, ShellExecutionDomain, validate_shell_profile_for_launch};
     use crate::git::workspace_inventory::WorkspaceEnvironmentInventory;
+    #[cfg(unix)]
     use std::ffi::OsStr;
+    #[cfg(unix)]
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
     use std::path::{Path, PathBuf};
+    #[cfg(unix)]
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    #[cfg(unix)]
     static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
+    #[cfg(unix)]
     fn test_root(name: &str) -> PathBuf {
         let sequence = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!(
@@ -283,6 +289,7 @@ mod tests {
         root
     }
 
+    #[cfg(unix)]
     fn cleanup_owned_root(root: &Path) {
         let canonical_root = root.canonicalize().unwrap();
         let canonical_temp = std::env::temp_dir().canonicalize().unwrap();

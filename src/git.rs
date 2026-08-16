@@ -1,5 +1,7 @@
 use std::error::Error;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsStr;
+#[cfg(unix)]
+use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
