@@ -178,9 +178,19 @@ fn register_observed_workspace(
     store: &Store,
     now_ms: i64,
 ) -> Result<()> {
-    let unknown = format!("unknown Winds workspace: {}", observation.workspace_id);
-    match store.load_workspace(&observation.workspace_id) {
-        Ok(existing) => {
+    let workspace = NewWorkspace {
+        workspace_id: &observation.workspace_id,
+        canonical_worktree_root: &observation.canonical_worktree_root,
+        git_common_dir: &observation.git_common_dir,
+    };
+
+    match store.create_workspace(workspace, now_ms) {
+        Ok(()) => Ok(()),
+        Err(error) if is_sqlite_constraint_violation(error.as_ref()) => {
+            let existing = match store.load_workspace(&observation.workspace_id) {
+                Ok(existing) => existing,
+                Err(_) => return Err(error),
+            };
             if existing.canonical_worktree_root != observation.canonical_worktree_root
                 || existing.git_common_dir != observation.git_common_dir
             {
@@ -190,21 +200,17 @@ fn register_observed_workspace(
                 )
                 .into());
             }
-            store.mark_workspace_opened(&observation.workspace_id, now_ms)?;
+            store.mark_workspace_opened(&observation.workspace_id, now_ms)
         }
-        Err(error) if error.to_string() == unknown => {
-            store.create_workspace(
-                NewWorkspace {
-                    workspace_id: &observation.workspace_id,
-                    canonical_worktree_root: &observation.canonical_worktree_root,
-                    git_common_dir: &observation.git_common_dir,
-                },
-                now_ms,
-            )?;
-        }
-        Err(error) => return Err(error),
+        Err(error) => Err(error),
     }
-    Ok(())
+}
+
+fn is_sqlite_constraint_violation(error: &(dyn std::error::Error + Send + Sync)) -> bool {
+    error
+        .downcast_ref::<rusqlite::Error>()
+        .and_then(rusqlite::Error::sqlite_error_code)
+        == Some(rusqlite::ErrorCode::ConstraintViolation)
 }
 
 fn stable_workspace_id(canonical_worktree_root: &str, git_common_dir: &str) -> String {
