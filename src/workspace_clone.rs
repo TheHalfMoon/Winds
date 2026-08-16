@@ -173,6 +173,11 @@ fn sanitize_url_remote(scheme: &str, rest: &str) -> Result<String> {
         return Err("clone remote has an invalid URL scheme".into());
     }
 
+    let scheme = scheme.to_ascii_lowercase();
+    if !matches!(scheme.as_str(), "http" | "https" | "ssh" | "git" | "file") {
+        return Err("clone remote URL scheme is not supported by Spec 003 T046".into());
+    }
+
     let tail_index = rest
         .char_indices()
         .find_map(|(index, ch)| matches!(ch, '?' | '#').then_some(index))
@@ -185,7 +190,7 @@ fn sanitize_url_remote(scheme: &str, rest: &str) -> Result<String> {
     let authority = raw_authority
         .rsplit_once('@')
         .map_or(raw_authority, |(_, host)| host);
-    if authority.is_empty() && !scheme.eq_ignore_ascii_case("file") {
+    if authority.is_empty() && scheme != "file" {
         return Err("clone remote URL has no host after credential removal".into());
     }
 
@@ -444,6 +449,7 @@ mod tests {
             "example.test:org/repo.git"
         );
         assert!(sanitize_remote_identity("ext::sh -c 'echo unsafe'").is_err());
+        assert!(sanitize_remote_identity("custom://example.test/org/repo.git").is_err());
         assert!(sanitize_remote_identity("../relative/repo.git").is_err());
     }
 }
