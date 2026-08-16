@@ -1,0 +1,891 @@
+name: t053-drop-repair-temporary
+
+on:
+  push:
+    branches: [feat/003-t053-terminal-ledger]
+    paths:
+      - ".github/workflows/t053-drop-repair-temporary.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: true
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+      - name: Apply ledger-aware drop ownership repair
+        shell: python
+        run: |
+          from pathlib import Path
+
+          # Store owns a small in-process retry queue for finalizations that could not be
+          # committed during wrapper Drop. Nothing process-related is persisted in it.
+          path = Path('src/store.rs')
+          text = path.read_text(encoding='utf-8')
+          old_store = '''pub struct Store {
+              connection: Connection,
+              home: PathBuf,
+          }
+          '''
+          new_store = '''pub struct Store {
+              connection: Connection,
+              home: PathBuf,
+              deferred_terminal_finalizations: Vec<DeferredTerminalFinalization>,
+          }
+
+          #[derive(Debug, Clone, Copy)]
+          pub(crate) enum TerminalFinalization {
+              Exited {
+                  ended_unix_ms: i64,
+              },
+              Interrupted {
+                  ended_unix_ms: i64,
+                  reason: TerminalCloseReason,
+              },
+              OwnershipLost {
+                  observed_unix_ms: i64,
+              },
+          }
+
+          #[derive(Debug, Clone)]
+          struct DeferredTerminalFinalization {
+              execution_id: String,
+              finalization: TerminalFinalization,
+          }
+          '''
+          if text.count(old_store) != 1:
+              raise SystemExit(f'Store struct marker count={text.count(old_store)}')
+          text = text.replace(old_store, new_store, 1)
+
+          old_open = '''        Ok(Self {
+              connection,
+              home: home.to_path_buf(),
+          })
+          '''
+          new_open = '''        Ok(Self {
+              connection,
+              home: home.to_path_buf(),
+              deferred_terminal_finalizations: Vec::new(),
+          })
+          '''
+          if text.count(old_open) != 1:
+              raise SystemExit(f'Store open constructor count={text.count(old_open)}')
+          text = text.replace(old_open, new_open, 1)
+
+          marker = '''    pub fn reconcile_unowned_terminal_sessions_after_restart(
+          '''
+          if text.count(marker) != 1:
+              raise SystemExit(f'reconciliation marker count={text.count(marker)}')
+          methods = r'''    pub(crate) fn apply_terminal_finalization(
+              &mut self,
+              execution_id: &str,
+              finalization: TerminalFinalization,
+          ) -> Result<()> {
+              match finalization {
+                  TerminalFinalization::Exited { ended_unix_ms } => {
+                      self.mark_terminal_exited(execution_id, ended_unix_ms)
+                  }
+                  TerminalFinalization::Interrupted {
+                      ended_unix_ms,
+                      reason,
+                  } => self.mark_terminal_interrupted(execution_id, reason, ended_unix_ms),
+                  TerminalFinalization::OwnershipLost { observed_unix_ms } => {
+                      self.mark_terminal_ownership_lost(
+                          execution_id,
+                          "TerminalOwnershipLostAfterCleanupFailure",
+                          observed_unix_ms,
+                      )
+                  }
+              }
+          }
+
+          pub(crate) fn defer_terminal_finalization(
+              &mut self,
+              execution_id: &str,
+              finalization: TerminalFinalization,
+          ) {
+              if let Some(existing) = self
+                  .deferred_terminal_finalizations
+                  .iter_mut()
+                  .find(|pending| pending.execution_id == execution_id)
+              {
+                  existing.finalization = finalization;
+                  return;
+              }
+              self.deferred_terminal_finalizations
+                  .push(DeferredTerminalFinalization {
+                      execution_id: execution_id.to_owned(),
+                      finalization,
+                  });
+          }
+
+          pub fn retry_deferred_terminal_finalizations(&mut self) -> Result<usize> {
+              let pending = std::mem::take(&mut self.deferred_terminal_finalizations);
+              let mut completed = 0_usize;
+              let mut failed = Vec::new();
+              let mut failures = Vec::new();
+              for item in pending {
+                  match self.apply_terminal_finalization(&item.execution_id, item.finalization) {
+                      Ok(()) => completed += 1,
+                      Err(error) => {
+                          failures.push(format!("{}: {error}", item.execution_id));
+                          failed.push(item);
+                      }
+                  }
+              }
+              self.deferred_terminal_finalizations = failed;
+              if failures.is_empty() {
+                  Ok(completed)
+              } else {
+                  Err(format!(
+                      "{} deferred terminal finalization(s) remain pending: {}",
+                      failures.len(),
+                      failures.join("; ")
+                  )
+                  .into())
+              }
+          }
+
+          pub fn pending_terminal_finalization_count(&self) -> usize {
+              self.deferred_terminal_finalizations.len()
+          }
+
+          fn mark_terminal_ownership_lost(
+              &mut self,
+              execution_id: &str,
+              event_kind: &str,
+              observed_unix_ms: i64,
+          ) -> Result<()> {
+              let tx = self.connection.transaction()?;
+              let (status, requested_unix_ms, _started_unix_ms) =
+                  terminal_execution_state(&tx, execution_id)?;
+              if !matches!(status, ExecutionStatus::Requested | ExecutionStatus::Running) {
+                  return Err(format!(
+                      "terminal ownership cannot be lost from persisted state {}: {execution_id}",
+                      status.as_str()
+                  )
+                  .into());
+              }
+              if observed_unix_ms < requested_unix_ms {
+                  return Err("terminal ownership-loss observation cannot precede its request time".into());
+              }
+              let updated = tx.execute(
+                  "UPDATE executions
+                   SET status = ?2, status_source = ?3,
+                       ended_unix_ms = NULL, duration_ms = NULL
+                   WHERE execution_id = ?1 AND status IN (?4, ?5)",
+                  params![
+                      execution_id,
+                      ExecutionStatus::OwnershipLost.as_str(),
+                      FactSource::WindsObserved.as_str(),
+                      ExecutionStatus::Requested.as_str(),
+                      ExecutionStatus::Running.as_str(),
+                  ],
+              )?;
+              if updated != 1 {
+                  return Err("terminal ownership-loss transition lost its expected non-final row".into());
+              }
+              set_terminal_close_reason(
+                  &tx,
+                  execution_id,
+                  TerminalCloseReason::OwnershipLostProcessStateUnknown,
+              )?;
+              insert_execution_event(
+                  &tx,
+                  execution_id,
+                  event_kind,
+                  FactSource::WindsObserved,
+                  observed_unix_ms,
+              )?;
+              tx.commit()?;
+              Ok(())
+          }
+
+          '''
+          text = text.replace(marker, methods + marker, 1)
+
+          # Explicit post-restart reconciliation retries any in-process deferred finalizations
+          # first. On a real restart this queue is empty by construction.
+          old_reconcile = '''    pub fn reconcile_unowned_terminal_sessions_after_restart(
+              &mut self,
+              now_ms: i64,
+          ) -> Result<usize> {
+              let tx = self.connection.transaction()?;
+          '''
+          new_reconcile = '''    pub fn reconcile_unowned_terminal_sessions_after_restart(
+              &mut self,
+              now_ms: i64,
+          ) -> Result<usize> {
+              self.retry_deferred_terminal_finalizations()?;
+              let tx = self.connection.transaction()?;
+          '''
+          if text.count(old_reconcile) != 1:
+              raise SystemExit(f'reconciliation body marker count={text.count(old_reconcile)}')
+          text = text.replace(old_reconcile, new_reconcile, 1)
+
+          # Store-level proof that a deferred finalization remains retryable after wrapper loss.
+          module_end_marker = '\n}\n\n#[cfg(all(test, unix))]\nmod tests {'
+          module_start = text.find('#[cfg(test)]\nmod persistence_tests {')
+          module_end = text.find(module_end_marker, module_start)
+          if module_start < 0 or module_end < 0:
+              raise SystemExit(f'persistence test bounds invalid start={module_start} end={module_end}')
+          retry_test = r'''
+
+              #[test]
+              fn deferred_terminal_finalization_can_be_retried_after_owner_drop() {
+                  let home = test_home("terminal-deferred-finalization");
+                  let mut store = Store::open(&home).unwrap();
+                  store
+                      .create_workspace(
+                          NewWorkspace {
+                              workspace_id: "workspace-1",
+                              canonical_worktree_root: "/tmp/example",
+                              git_common_dir: "/tmp/example/.git",
+                          },
+                          100,
+                      )
+                      .unwrap();
+                  let shell_arguments = Vec::new();
+                  store
+                      .create_terminal_execution(
+                          NewExecution {
+                              execution_id: "execution-deferred",
+                              workspace_id: "workspace-1",
+                              kind: ExecutionKind::Terminal,
+                              request_source: FactSource::CallerRequested,
+                              execution_domain: "host-linux",
+                          },
+                          NewTerminalSession {
+                              execution_id: "execution-deferred",
+                              profile_id: "profile-1",
+                              shell_executable: "/bin/sh",
+                              shell_arguments: &shell_arguments,
+                              requested_cwd: "/tmp/example",
+                              initial_cols: Some(80),
+                              initial_rows: Some(24),
+                          },
+                          110,
+                      )
+                      .unwrap();
+                  store.mark_terminal_running("execution-deferred", 120).unwrap();
+                  store.defer_terminal_finalization(
+                      "execution-deferred",
+                      TerminalFinalization::Interrupted {
+                          ended_unix_ms: 150,
+                          reason: TerminalCloseReason::ClosedByWinds,
+                      },
+                  );
+                  assert_eq!(store.pending_terminal_finalization_count(), 1);
+                  assert_eq!(store.retry_deferred_terminal_finalizations().unwrap(), 1);
+                  assert_eq!(store.pending_terminal_finalization_count(), 0);
+                  let execution = store.load_execution("execution-deferred").unwrap();
+                  assert_eq!(execution.status, ExecutionStatus::Interrupted);
+                  assert_eq!(execution.duration_ms, Some(30));
+                  assert_eq!(
+                      store
+                          .load_terminal_session("execution-deferred")
+                          .unwrap()
+                          .close_reason,
+                      Some(TerminalCloseReason::ClosedByWinds)
+                  );
+
+                  drop(store);
+                  cleanup_test_home(&home);
+              }
+          '''
+          text = text[:module_end] + retry_test + text[module_end:]
+          path.write_text(text, encoding='utf-8')
+
+          # Rewrite the private wrapper around an exclusive Store borrow so destruction itself
+          # remains ledger-aware. This is an internal T053 API; T057 has not landed callers yet.
+          execution = r'''use crate::domain::{ExecutionKind, FactSource, TerminalCloseReason};
+          use crate::git::shell_profiles::ShellProfile;
+          use crate::git::terminal::{TerminalExit, TerminalSession, TerminalSessionId, TerminalSize};
+          #[cfg(windows)]
+          use crate::git::wsl_launch::{WslCwdResolution, WslTerminalLaunchPlan, launch_wsl_terminal};
+          use crate::store::{
+              NewExecution, NewTerminalSession, Result, Store, TerminalFinalization,
+          };
+          use std::io::Read;
+          use std::path::Path;
+          use std::time::{SystemTime, UNIX_EPOCH};
+
+          pub struct TerminalExecution<'store> {
+              execution_id: String,
+              store: &'store mut Store,
+              session: TerminalSession,
+              pending_final: Option<TerminalFinalization>,
+              final_recorded: bool,
+          }
+
+          impl<'store> TerminalExecution<'store> {
+              pub fn start_native(
+                  store: &'store mut Store,
+                  execution_id: &str,
+                  workspace_id: &str,
+                  profile: &ShellProfile,
+                  cwd: &Path,
+                  size: TerminalSize,
+              ) -> Result<Self> {
+                  store.retry_deferred_terminal_finalizations()?;
+                  let requested_cwd = utf8_path(cwd, "terminal requested cwd")?;
+                  let execution_domain = serde_json::to_string(&profile.execution_domain)?;
+                  let requested_unix_ms = unix_ms()?;
+                  store.create_terminal_execution(
+                      NewExecution {
+                          execution_id,
+                          workspace_id,
+                          kind: ExecutionKind::Terminal,
+                          request_source: FactSource::CallerRequested,
+                          execution_domain: &execution_domain,
+                      },
+                      NewTerminalSession {
+                          execution_id,
+                          profile_id: &profile.profile_id,
+                          shell_executable: &profile.executable,
+                          shell_arguments: &profile.arguments,
+                          requested_cwd,
+                          initial_cols: Some(size.cols),
+                          initial_rows: Some(size.rows),
+                      },
+                      requested_unix_ms,
+                  )?;
+
+                  match TerminalSession::start(profile, cwd, size) {
+                      Ok(session) => finish_started_session(store, execution_id, session),
+                      Err(error) => fail_launch(store, execution_id, error),
+                  }
+              }
+
+              #[cfg(windows)]
+              pub fn start_wsl(
+                  store: &'store mut Store,
+                  execution_id: &str,
+                  workspace_id: &str,
+                  plan: &WslTerminalLaunchPlan,
+                  size: TerminalSize,
+              ) -> Result<Self> {
+                  store.retry_deferred_terminal_finalizations()?;
+                  let requested_cwd = match &plan.cwd_resolution {
+                      WslCwdResolution::MappedWorkspace {
+                          linux_workspace_root,
+                          ..
+                      } => linux_workspace_root.as_str(),
+                      WslCwdResolution::FallbackHome { linux_home, .. } => linux_home.as_str(),
+                  };
+                  let execution_domain = serde_json::to_string(&plan.profile.execution_domain)?;
+                  let requested_unix_ms = unix_ms()?;
+                  store.create_terminal_execution(
+                      NewExecution {
+                          execution_id,
+                          workspace_id,
+                          kind: ExecutionKind::Terminal,
+                          request_source: FactSource::CallerRequested,
+                          execution_domain: &execution_domain,
+                      },
+                      NewTerminalSession {
+                          execution_id,
+                          profile_id: &plan.profile.profile_id,
+                          shell_executable: &plan.profile.shell_executable,
+                          shell_arguments: &plan.profile.shell_arguments,
+                          requested_cwd,
+                          initial_cols: Some(size.cols),
+                          initial_rows: Some(size.rows),
+                      },
+                      requested_unix_ms,
+                  )?;
+
+                  match launch_wsl_terminal(plan, size) {
+                      Ok(launched) => finish_started_session(store, execution_id, launched.session),
+                      Err(error) => fail_launch(store, execution_id, error),
+                  }
+              }
+
+              pub fn execution_id(&self) -> &str {
+                  &self.execution_id
+              }
+
+              pub fn session_id(&self) -> TerminalSessionId {
+                  self.session.session_id()
+              }
+
+              pub fn profile_id(&self) -> &str {
+                  self.session.profile_id()
+              }
+
+              pub fn start_cwd(&self) -> &Path {
+                  self.session.start_cwd()
+              }
+
+              pub fn take_output_reader(&mut self) -> Result<Box<dyn Read + Send>> {
+                  self.session.take_output_reader()
+              }
+
+              pub fn send_input(&mut self, bytes: &[u8]) -> Result<()> {
+                  if self.try_wait()?.is_some() {
+                      return Err("terminal execution has already exited".into());
+                  }
+                  self.session.send_input(bytes)
+              }
+
+              pub fn resize(&mut self, size: TerminalSize) -> Result<()> {
+                  if self.try_wait()?.is_some() {
+                      return Err("terminal execution has already exited".into());
+                  }
+                  self.session.resize(size)
+              }
+
+              pub fn current_size(&self) -> Result<TerminalSize> {
+                  self.session.current_size()
+              }
+
+              pub fn interrupt(&mut self) -> Result<()> {
+                  if self.try_wait()?.is_some() {
+                      return Err("terminal execution has already exited".into());
+                  }
+                  self.session.interrupt()
+              }
+
+              pub fn try_wait(&mut self) -> Result<Option<TerminalExit>> {
+                  if self.pending_final.is_some() {
+                      self.persist_pending_final()?;
+                  }
+                  if self.final_recorded {
+                      return self.session.try_wait();
+                  }
+
+                  let exit = self.session.try_wait()?;
+                  if exit.is_some() {
+                      self.pending_final = Some(TerminalFinalization::Exited {
+                          ended_unix_ms: unix_ms()?,
+                      });
+                      self.persist_pending_final()?;
+                  }
+                  Ok(exit)
+              }
+
+              pub fn wait(&mut self) -> Result<TerminalExit> {
+                  if self.pending_final.is_some() {
+                      self.persist_pending_final()?;
+                      return self.session.wait();
+                  }
+                  if self.final_recorded {
+                      return self.session.wait();
+                  }
+
+                  let exit = self.session.wait()?;
+                  self.pending_final = Some(TerminalFinalization::Exited {
+                      ended_unix_ms: unix_ms()?,
+                  });
+                  self.persist_pending_final()?;
+                  Ok(exit)
+              }
+
+              pub fn terminate(&mut self) -> Result<TerminalExit> {
+                  if self.pending_final.is_some() {
+                      self.persist_pending_final()?;
+                      return self.session.wait();
+                  }
+                  if self.final_recorded {
+                      return self.session.wait();
+                  }
+                  if let Some(exit) = self.session.try_wait()? {
+                      self.pending_final = Some(TerminalFinalization::Exited {
+                          ended_unix_ms: unix_ms()?,
+                      });
+                      self.persist_pending_final()?;
+                      return Ok(exit);
+                  }
+
+                  let exit = self.session.terminate()?;
+                  self.pending_final = Some(TerminalFinalization::Interrupted {
+                      ended_unix_ms: unix_ms()?,
+                      reason: TerminalCloseReason::TerminatedByWinds,
+                  });
+                  self.persist_pending_final()?;
+                  Ok(exit)
+              }
+
+              pub fn close(&mut self) -> Result<TerminalExit> {
+                  if self.pending_final.is_some() {
+                      self.persist_pending_final()?;
+                      return self.session.wait();
+                  }
+                  if self.final_recorded {
+                      return self.session.wait();
+                  }
+                  if let Some(exit) = self.session.try_wait()? {
+                      self.pending_final = Some(TerminalFinalization::Exited {
+                          ended_unix_ms: unix_ms()?,
+                      });
+                      self.persist_pending_final()?;
+                      return Ok(exit);
+                  }
+
+                  let exit = self.session.close()?;
+                  self.pending_final = Some(TerminalFinalization::Interrupted {
+                      ended_unix_ms: unix_ms()?,
+                      reason: TerminalCloseReason::ClosedByWinds,
+                  });
+                  self.persist_pending_final()?;
+                  Ok(exit)
+              }
+
+              fn persist_pending_final(&mut self) -> Result<()> {
+                  let Some(pending) = self.pending_final else {
+                      return Ok(());
+                  };
+                  self.store
+                      .apply_terminal_finalization(&self.execution_id, pending)?;
+                  self.pending_final = None;
+                  self.final_recorded = true;
+                  Ok(())
+              }
+
+              fn persist_or_defer_on_drop(&mut self, finalization: TerminalFinalization) {
+                  match self
+                      .store
+                      .apply_terminal_finalization(&self.execution_id, finalization)
+                  {
+                      Ok(()) => {
+                          self.pending_final = None;
+                          self.final_recorded = true;
+                      }
+                      Err(_) => {
+                          self.store
+                              .defer_terminal_finalization(&self.execution_id, finalization);
+                      }
+                  }
+              }
+          }
+
+          impl Drop for TerminalExecution<'_> {
+              fn drop(&mut self) {
+                  if self.final_recorded {
+                      return;
+                  }
+                  if let Some(pending) = self.pending_final {
+                      self.persist_or_defer_on_drop(pending);
+                      return;
+                  }
+
+                  let already_exited = matches!(self.session.try_wait(), Ok(Some(_)));
+                  if already_exited {
+                      if let Ok(ended_unix_ms) = unix_ms() {
+                          self.persist_or_defer_on_drop(TerminalFinalization::Exited {
+                              ended_unix_ms,
+                          });
+                      }
+                      return;
+                  }
+
+                  let cleanup_proven = self.session.close().is_ok();
+                  if let Ok(observed_unix_ms) = unix_ms() {
+                      let finalization = if cleanup_proven {
+                          TerminalFinalization::Interrupted {
+                              ended_unix_ms: observed_unix_ms,
+                              reason: TerminalCloseReason::ClosedByWinds,
+                          }
+                      } else {
+                          TerminalFinalization::OwnershipLost { observed_unix_ms }
+                      };
+                      self.persist_or_defer_on_drop(finalization);
+                  }
+              }
+          }
+
+          pub fn reconcile_terminal_executions_after_restart(store: &mut Store) -> Result<usize> {
+              store.reconcile_unowned_terminal_sessions_after_restart(unix_ms()?)
+          }
+
+          fn finish_started_session<'store>(
+              store: &'store mut Store,
+              execution_id: &str,
+              mut session: TerminalSession,
+          ) -> Result<TerminalExecution<'store>> {
+              let started_unix_ms = match unix_ms() {
+                  Ok(value) => value,
+                  Err(error) => {
+                      let cleanup = session.terminate();
+                      return Err(format!(
+                          "terminal child started but start time could not be recorded: {error}; owned child cleanup {}",
+                          if cleanup.is_ok() { "succeeded" } else { "failed" }
+                      )
+                      .into());
+                  }
+              };
+
+              if let Err(persist_error) = store.mark_terminal_running(execution_id, started_unix_ms) {
+                  let cleanup = session.terminate();
+                  let cleanup_proven = cleanup.is_ok();
+                  let repair = if cleanup_proven {
+                      let ended_unix_ms = unix_ms().unwrap_or(started_unix_ms);
+                      store.mark_terminal_start_persistence_failed(
+                          execution_id,
+                          started_unix_ms,
+                          ended_unix_ms,
+                      )
+                  } else {
+                      Ok(())
+                  };
+                  let repair_note = match repair {
+                      Ok(()) if cleanup_proven => "interrupted cleanup state persisted".to_owned(),
+                      Ok(()) => {
+                          "cleanup was not proven; request remains non-final for restart reconciliation"
+                              .to_owned()
+                      }
+                      Err(error) => format!("cleanup state persistence also failed: {error}"),
+                  };
+                  return Err(format!(
+                      "terminal child started but RUNNING persistence failed: {persist_error}; owned child cleanup {}; {repair_note}",
+                      if cleanup_proven { "succeeded" } else { "failed" }
+                  )
+                  .into());
+              }
+
+              Ok(TerminalExecution {
+                  execution_id: execution_id.to_owned(),
+                  store,
+                  session,
+                  pending_final: None,
+                  final_recorded: false,
+              })
+          }
+
+          fn fail_launch<'store>(
+              store: &'store mut Store,
+              execution_id: &str,
+              launch_error: Box<dyn std::error::Error + Send + Sync>,
+          ) -> Result<TerminalExecution<'store>> {
+              let failed_unix_ms = unix_ms()?;
+              match store.mark_terminal_failed_to_start(execution_id, failed_unix_ms) {
+                  Ok(()) => Err(format!("terminal launch failed: {launch_error}").into()),
+                  Err(persist_error) => Err(format!(
+                      "terminal launch failed: {launch_error}; FAILED_TO_START persistence also failed: {persist_error}"
+                  )
+                  .into()),
+              }
+          }
+
+          fn utf8_path<'a>(path: &'a Path, label: &str) -> Result<&'a str> {
+              path.to_str()
+                  .ok_or_else(|| format!("{label} is not valid UTF-8").into())
+          }
+
+          fn unix_ms() -> Result<i64> {
+              let millis = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
+              Ok(i64::try_from(millis)?)
+          }
+
+          #[cfg(all(test, unix))]
+          mod tests {
+              use super::TerminalExecution;
+              use crate::domain::{ExecutionStatus, FactSource, TerminalCloseReason};
+              use crate::git::shell_profiles::{ShellProfile, discover_native_shell_profiles};
+              use crate::git::terminal::TerminalSize;
+              use crate::git::workspace_inventory::WorkspaceEnvironmentInventory;
+              use crate::store::{NewWorkspace, Store};
+              use std::fs;
+              use std::path::{Path, PathBuf};
+              use std::sync::atomic::{AtomicU64, Ordering};
+
+              static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
+
+              struct TestRoot(PathBuf);
+
+              impl TestRoot {
+                  fn new(name: &str) -> Self {
+                      let sequence = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
+                      let path = std::env::temp_dir().join(format!(
+                          "winds-t053-{name}-{}-{sequence}",
+                          std::process::id()
+                      ));
+                      fs::create_dir(&path).unwrap();
+                      Self(path)
+                  }
+
+                  fn path(&self) -> &Path {
+                      &self.0
+                  }
+              }
+
+              impl Drop for TestRoot {
+                  fn drop(&mut self) {
+                      let _ = fs::remove_dir_all(&self.0);
+                  }
+              }
+
+              fn native_sh_profile() -> ShellProfile {
+                  let inventory = WorkspaceEnvironmentInventory {
+                      host_os: std::env::consts::OS.to_owned(),
+                      host_arch: std::env::consts::ARCH.to_owned(),
+                      canonical_worktree_root: "/unused/worktree".to_owned(),
+                      git_common_dir: "/unused/git-common".to_owned(),
+                      shell_candidates: vec!["/bin/sh".to_owned()],
+                      detected_manifests: Vec::new(),
+                  };
+                  discover_native_shell_profiles(&inventory)
+                      .unwrap()
+                      .into_iter()
+                      .find(|profile| profile.executable == "/bin/sh")
+                      .expect("/bin/sh must be available on supported Unix CI hosts")
+              }
+
+              fn store_with_workspace(root: &TestRoot) -> Store {
+                  let home = root.path().join("state");
+                  let store = Store::open(&home).unwrap();
+                  store
+                      .create_workspace(
+                          NewWorkspace {
+                              workspace_id: "workspace-1",
+                              canonical_worktree_root: root.path().to_str().unwrap(),
+                              git_common_dir: root.path().join(".git").to_str().unwrap(),
+                          },
+                          1,
+                      )
+                      .unwrap();
+                  store
+              }
+
+              #[test]
+              fn native_terminal_records_running_then_natural_exit() {
+                  let root = TestRoot::new("natural-exit");
+                  let mut store = store_with_workspace(&root);
+                  let profile = native_sh_profile();
+                  let mut execution = TerminalExecution::start_native(
+                      &mut store,
+                      "execution-natural",
+                      "workspace-1",
+                      &profile,
+                      root.path(),
+                      TerminalSize { rows: 24, cols: 80 },
+                  )
+                  .unwrap();
+
+                  execution.send_input(b"exit 0\n").unwrap();
+                  let exit = execution.wait().unwrap();
+                  assert_eq!(exit.exit_code, 0);
+                  drop(execution);
+
+                  let final_record = store.load_execution("execution-natural").unwrap();
+                  assert_eq!(final_record.status, ExecutionStatus::Exited);
+                  assert_eq!(final_record.status_source, FactSource::WindsObserved);
+                  assert!(final_record.started_unix_ms.is_some());
+                  assert!(final_record.ended_unix_ms.is_some());
+                  assert!(final_record.duration_ms.is_some());
+                  let terminal = store.load_terminal_session("execution-natural").unwrap();
+                  assert_eq!(terminal.close_reason, Some(TerminalCloseReason::ProcessExited));
+              }
+
+              #[test]
+              fn controlled_terminate_records_interrupted() {
+                  let root = TestRoot::new("terminate");
+                  let mut store = store_with_workspace(&root);
+                  let profile = native_sh_profile();
+                  let mut execution = TerminalExecution::start_native(
+                      &mut store,
+                      "execution-terminate",
+                      "workspace-1",
+                      &profile,
+                      root.path(),
+                      TerminalSize { rows: 24, cols: 80 },
+                  )
+                  .unwrap();
+
+                  execution.terminate().unwrap();
+                  drop(execution);
+                  let final_record = store.load_execution("execution-terminate").unwrap();
+                  assert_eq!(final_record.status, ExecutionStatus::Interrupted);
+                  let terminal = store.load_terminal_session("execution-terminate").unwrap();
+                  assert_eq!(
+                      terminal.close_reason,
+                      Some(TerminalCloseReason::TerminatedByWinds)
+                  );
+              }
+
+              #[test]
+              fn dropping_live_terminal_closes_owned_child_and_finalizes_ledger() {
+                  let root = TestRoot::new("drop-live");
+                  let mut store = store_with_workspace(&root);
+                  let profile = native_sh_profile();
+                  let execution = TerminalExecution::start_native(
+                      &mut store,
+                      "execution-drop",
+                      "workspace-1",
+                      &profile,
+                      root.path(),
+                      TerminalSize { rows: 24, cols: 80 },
+                  )
+                  .unwrap();
+
+                  drop(execution);
+                  let final_record = store.load_execution("execution-drop").unwrap();
+                  assert_eq!(final_record.status, ExecutionStatus::Interrupted);
+                  assert_eq!(final_record.status_source, FactSource::WindsObserved);
+                  assert!(final_record.ended_unix_ms.is_some());
+                  assert!(final_record.duration_ms.is_some());
+                  let terminal = store.load_terminal_session("execution-drop").unwrap();
+                  assert_eq!(
+                      terminal.close_reason,
+                      Some(TerminalCloseReason::ClosedByWinds)
+                  );
+                  assert_eq!(store.pending_terminal_finalization_count(), 0);
+              }
+
+              #[test]
+              fn launch_failure_records_failed_to_start_without_duration() {
+                  let root = TestRoot::new("failed-start");
+                  let mut store = store_with_workspace(&root);
+                  let profile = native_sh_profile();
+                  let missing = root.path().join("missing-cwd");
+                  let result = TerminalExecution::start_native(
+                      &mut store,
+                      "execution-failed",
+                      "workspace-1",
+                      &profile,
+                      &missing,
+                      TerminalSize { rows: 24, cols: 80 },
+                  );
+                  assert!(result.is_err());
+
+                  let final_record = store.load_execution("execution-failed").unwrap();
+                  assert_eq!(final_record.status, ExecutionStatus::FailedToStart);
+                  assert_eq!(final_record.started_unix_ms, None);
+                  assert_eq!(final_record.duration_ms, None);
+                  let terminal = store.load_terminal_session("execution-failed").unwrap();
+                  assert_eq!(
+                      terminal.close_reason,
+                      Some(TerminalCloseReason::FailedToStart)
+                  );
+              }
+          }
+          '''
+          Path('src/execution.rs').write_text(execution, encoding='utf-8')
+
+      - name: Validate drop repair on Ubuntu
+        run: |
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo check --locked --all-targets --all-features
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          cargo test --locked --bin winds store::persistence_tests -- --test-threads=1
+          cargo test --locked --bin winds execution::tests -- --test-threads=1
+          cargo test --locked --all-targets --all-features
+          git diff --check -- src/store.rs src/execution.rs
+      - name: Commit validated drop repair
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/store.rs src/execution.rs
+          git diff --cached --check
+          git commit -m "fix(winds): keep terminal drop ledger-aware"
+          git push origin "HEAD:$GITHUB_REF_NAME"
