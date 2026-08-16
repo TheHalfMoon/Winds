@@ -29,11 +29,19 @@ pub fn open_existing_workspace(
     canonical_state_root: &Path,
     now_ms: i64,
 ) -> Result<WorkspaceInspection> {
+    let observation = inspect_existing_workspace(path, canonical_state_root)?;
+    let store = Store::open(canonical_state_root)?;
+    register_observed_workspace(&observation, &store, now_ms)?;
+    Ok(observation)
+}
+
+pub(super) fn inspect_existing_workspace(
+    path: &Path,
+    canonical_state_root: &Path,
+) -> Result<WorkspaceInspection> {
     let repo = open_worktree(path)?;
     let observation = inspect_worktree(&repo)?;
     require_canonical_external_state_root(&repo, canonical_state_root)?;
-    let store = Store::open(canonical_state_root)?;
-    register_observed_workspace(&observation, &store, now_ms)?;
     Ok(observation)
 }
 

@@ -85,6 +85,9 @@ impl Store {
         connection.execute_batch(include_str!(
             "../migrations/0002_workspace_execution_ledger.sql"
         ))?;
+        connection.execute_batch(include_str!(
+            "../migrations/0003_workspace_clone_origins.sql"
+        ))?;
         Ok(Self {
             connection,
             home: home.to_path_buf(),
@@ -145,6 +148,63 @@ impl Store {
             .optional()?
             .ok_or_else(|| format!("unknown Winds workspace: {workspace_id}"))?;
         Ok(workspace)
+    }
+
+    pub fn register_cloned_workspace(
+        &mut self,
+        workspace: NewWorkspace<'_>,
+        remote_identity: &str,
+        now_ms: i64,
+    ) -> Result<()> {
+        let tx = self.connection.transaction()?;
+        let existing = tx
+            .query_row(
+                "SELECT canonical_worktree_root, git_common_dir
+                 FROM workspaces WHERE workspace_id = ?1",
+                params![workspace.workspace_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+
+        if let Some((canonical_worktree_root, git_common_dir)) = existing {
+            if canonical_worktree_root != workspace.canonical_worktree_root
+                || git_common_dir != workspace.git_common_dir
+            {
+                return Err(format!(
+                    "stored workspace identity conflicts with observed Git identity: {}",
+                    workspace.workspace_id
+                )
+                .into());
+            }
+            tx.execute(
+                "UPDATE workspaces SET last_opened_unix_ms = ?2 WHERE workspace_id = ?1",
+                params![workspace.workspace_id, now_ms],
+            )?;
+        } else {
+            tx.execute(
+                "INSERT INTO workspaces(
+                    workspace_id, canonical_worktree_root, git_common_dir,
+                    created_unix_ms, last_opened_unix_ms
+                 ) VALUES (?1, ?2, ?3, ?4, ?4)",
+                params![
+                    workspace.workspace_id,
+                    workspace.canonical_worktree_root,
+                    workspace.git_common_dir,
+                    now_ms,
+                ],
+            )?;
+        }
+
+        tx.execute(
+            "INSERT INTO workspace_clone_origins(workspace_id, remote_identity, recorded_unix_ms)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(workspace_id) DO UPDATE SET
+                 remote_identity = excluded.remote_identity,
+                 recorded_unix_ms = excluded.recorded_unix_ms",
+            params![workspace.workspace_id, remote_identity, now_ms],
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     pub fn create_execution(&mut self, execution: NewExecution<'_>, now_ms: i64) -> Result<()> {
