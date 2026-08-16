@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 const OUTPUT_LIMIT: usize = 128 * 1024;
+const CURSOR_POSITION_QUERY: &[u8] = b"\x1b[6n";
+const TEST_CURSOR_POSITION_RESPONSE: &[u8] = b"\x1b[1;1R";
 
 struct TestRoot(PathBuf);
 
@@ -130,6 +132,19 @@ fn wait_for_output(receiver: &Receiver<OutputEvent>, needle: &[u8]) -> Vec<u8> {
     );
 }
 
+fn complete_headless_terminal_startup(
+    session: &mut TerminalSession,
+    output: &Receiver<OutputEvent>,
+) {
+    // ConPTY exposes terminal query traffic to its host. A real terminal frontend
+    // answers DECXCPR; this focused headless fixture supplies the minimal valid
+    // response so command execution is tested rather than terminal emulation.
+    wait_for_output(output, CURSOR_POSITION_QUERY);
+    session
+        .send_input(TEST_CURSOR_POSITION_RESPONSE)
+        .expect("headless ConPTY fixture must answer cursor-position query");
+}
+
 fn default_size() -> TerminalSize {
     TerminalSize { rows: 24, cols: 80 }
 }
@@ -146,6 +161,7 @@ fn conpty_streams_input_output_from_exact_start_cwd_and_observes_exit() {
 
     let output = start_output_reader(session.take_output_reader().unwrap());
     assert!(session.take_output_reader().is_err());
+    complete_headless_terminal_startup(&mut session, &output);
     session
         .send_input(b"cd\r\necho WINDS_READY\r\nexit\r\n")
         .unwrap();
@@ -185,6 +201,7 @@ fn conpty_interrupts_foreground_command_and_keeps_cmd_usable() {
     let mut session = TerminalSession::start(&profile, root.path(), default_size()).unwrap();
     let output = start_output_reader(session.take_output_reader().unwrap());
 
+    complete_headless_terminal_startup(&mut session, &output);
     session
         .send_input(b"echo WINDS_READY & ping -t 127.0.0.1\r\n")
         .unwrap();
@@ -204,6 +221,7 @@ fn conpty_terminate_reaps_the_exact_owned_child() {
     let mut session = TerminalSession::start(&profile, root.path(), default_size()).unwrap();
     let output = start_output_reader(session.take_output_reader().unwrap());
 
+    complete_headless_terminal_startup(&mut session, &output);
     session
         .send_input(b"echo WINDS_READY\r\nping -t 127.0.0.1\r\n")
         .unwrap();
