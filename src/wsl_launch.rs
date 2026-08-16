@@ -650,7 +650,7 @@ mod tests {
     #[test]
     fn parses_exact_single_absolute_linux_path_without_trimming_spaces() {
         assert_eq!(
-            parse_single_linux_path(b"/mnt/c/work space/trailing \\r\\n", "mapped path").unwrap(),
+            parse_single_linux_path(b"/mnt/c/work space/trailing \r\n", "mapped path").unwrap(),
             "/mnt/c/work space/trailing "
         );
         assert!(parse_single_linux_path(b"relative\n", "mapped path").is_err());
