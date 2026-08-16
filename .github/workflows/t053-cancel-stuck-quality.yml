@@ -1,0 +1,44 @@
+name: t053-cancel-stuck-quality
+
+on:
+  push:
+    branches: [ci/t053-obsolete-run-cleanup]
+    paths:
+      - ".github/workflows/t053-cancel-stuck-quality.yml"
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cancel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Cancel stuck quality run 308 only
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: python
+        run: |
+          import os
+          import urllib.request
+          import urllib.error
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          run_id = 31970328446
+          request = urllib.request.Request(
+              f"https://api.github.com/repos/{repo}/actions/runs/{run_id}/cancel",
+              method="POST",
+              headers={
+                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                  "Accept": "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=30) as response:
+                  if response.status != 202:
+                      raise SystemExit(f"unexpected cancellation status {response.status}")
+          except urllib.error.HTTPError as error:
+              if error.code != 409:
+                  raise
