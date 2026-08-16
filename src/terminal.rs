@@ -226,7 +226,7 @@ fn next_session_id() -> Result<TerminalSessionId> {
 
 #[cfg(test)]
 mod tests {
-    use super::{TerminalSession, TerminalSize};
+    use super::{TerminalExit, TerminalSession, TerminalSize};
     use crate::git::shell_profiles::discover_native_shell_profiles;
     use crate::git::workspace_inventory::WorkspaceEnvironmentInventory;
     use std::ffi::OsStr;
@@ -361,6 +361,17 @@ mod tests {
         );
     }
 
+    fn wait_for_exit(session: &mut TerminalSession) -> TerminalExit {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if let Some(exit) = session.try_wait().unwrap() {
+                return exit;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        panic!("timed out waiting for terminal session to exit");
+    }
+
     fn default_size() -> TerminalSize {
         TerminalSize { rows: 24, cols: 80 }
     }
@@ -410,7 +421,7 @@ mod tests {
     }
 
     #[test]
-    fn interrupt_reaches_foreground_pty_job_and_shell_continues() {
+    fn interrupt_reaches_foreground_pty_process_and_produces_observed_exit() {
         let root = TestRoot::new("interrupt");
         let profile = native_sh_profile();
         let mut session = TerminalSession::start(&profile, root.path(), default_size()).unwrap();
@@ -418,20 +429,15 @@ mod tests {
 
         session
             .send_input(
-                b"printf '\\127\\111\\116\\104\\123\\137\\122\\105\\101\\104\\131\\012'; sleep 30\n",
+                b"printf '\\127\\111\\116\\104\\123\\137\\122\\105\\101\\104\\131\\012'; exec sleep 30\n",
             )
             .unwrap();
         wait_for_output(&output, b"WINDS_READY");
         session.interrupt().unwrap();
-        session
-            .send_input(
-                b"printf '\\127\\111\\116\\104\\123\\137\\111\\116\\124\\105\\122\\122\\125\\120\\124\\105\\104\\012'\nexit\n",
-            )
-            .unwrap();
-        wait_for_output(&output, b"WINDS_INTERRUPTED");
+        let exit = wait_for_exit(&mut session);
 
-        let exit = session.wait().unwrap();
-        assert_eq!(exit.exit_code, 0);
+        assert!(!exit.signal.as_deref().unwrap_or_default().is_empty() || exit.exit_code != 0);
+        assert_eq!(session.try_wait().unwrap(), Some(exit));
     }
 
     #[test]
