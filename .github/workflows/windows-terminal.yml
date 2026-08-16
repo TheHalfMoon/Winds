@@ -7,6 +7,7 @@ on:
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - "src/check.rs"
+      - "src/command.rs"
       - "src/domain.rs"
       - "src/execution.rs"
       - "src/git.rs"
@@ -18,6 +19,7 @@ on:
       - "src/workspace.rs"
       - "src/wsl.rs"
       - "src/wsl_launch.rs"
+      - "migrations/0004_shell_commands.sql"
       - ".github/workflows/windows-terminal.yml"
   push:
     branches: [main]
@@ -26,6 +28,7 @@ on:
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - "src/check.rs"
+      - "src/command.rs"
       - "src/domain.rs"
       - "src/execution.rs"
       - "src/git.rs"
@@ -37,6 +40,7 @@ on:
       - "src/workspace.rs"
       - "src/wsl.rs"
       - "src/wsl_launch.rs"
+      - "migrations/0004_shell_commands.sql"
       - ".github/workflows/windows-terminal.yml"
 
 permissions:
@@ -66,3 +70,5 @@ jobs:
         run: cargo test --locked --bin winds wsl_launch::tests -- --test-threads=1
       - name: Terminal ledger persistence tests
         run: cargo test --locked --bin winds store::persistence_tests -- --test-threads=1
+      - name: Explicit command observability tests
+        run: cargo test --locked --bin winds command::tests -- --test-threads=1
