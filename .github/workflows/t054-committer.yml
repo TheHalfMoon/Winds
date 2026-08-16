@@ -35,17 +35,13 @@ jobs:
         with:
           toolchain: 1.97.1
           components: rustfmt, clippy
-      - name: Apply exact validated T054 patch
-        shell: bash
-        run: |
-          set -euo pipefail
-          python tools/.github/t054_patch.py target
-          python tools/.github/t054_postpatch.py target
-      - name: Validate exact source delta
+      - name: Apply and validate exact six-file T054 patch
         shell: bash
         working-directory: target
         run: |
           set -euo pipefail
+          python ../tools/.github/t054_patch.py .
+          python ../tools/.github/t054_postpatch.py .
           cargo fmt --all
           cargo fmt --all -- --check
           cargo check --locked --all-targets --all-features
@@ -63,15 +59,26 @@ jobs:
           actual=$(git status --short | awk '{print $2}' | sort)
           test "$actual" = "$(printf '%s\n' "$expected" | sort)"
           git diff --check
-      - name: Commit and push only if remote feature head is unchanged
+      - name: Commit five non-workflow files only
         shell: bash
         working-directory: target
         run: |
           set -euo pipefail
+          git restore -- .github/workflows/windows-terminal.yml
+          expected=$(cat <<'EOF'
+          migrations/0004_shell_commands.sql
+          src/command.rs
+          src/domain.rs
+          src/main.rs
+          src/store.rs
+          EOF
+          )
+          actual=$(git status --short | awk '{print $2}' | sort)
+          test "$actual" = "$(printf '%s\n' "$expected" | sort)"
           git fetch origin feat/003-t054-command-records
           test "$(git rev-parse FETCH_HEAD)" = "1a26fbf2f1d34690d615432e2dba7095a4b6955f"
           git config user.name "winds-ci"
           git config user.email "winds-ci@users.noreply.github.com"
-          git add .github/workflows/windows-terminal.yml migrations/0004_shell_commands.sql src/command.rs src/domain.rs src/main.rs src/store.rs
+          git add migrations/0004_shell_commands.sql src/command.rs src/domain.rs src/main.rs src/store.rs
           git commit -m "feat(winds): add explicit command records"
           git push origin HEAD:feat/003-t054-command-records
