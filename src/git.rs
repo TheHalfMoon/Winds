@@ -5,14 +5,14 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "shell_profiles.rs"]
+pub(crate) mod shell_profiles;
 #[path = "workspace.rs"]
 pub(crate) mod workspace;
 #[path = "workspace_clone.rs"]
 pub(crate) mod workspace_clone;
 #[path = "workspace_inventory.rs"]
 pub(crate) mod workspace_inventory;
-#[path = "shell_profiles.rs"]
-pub(crate) mod shell_profiles;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
