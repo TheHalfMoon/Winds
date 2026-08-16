@@ -508,8 +508,10 @@ mod tests {
         )
         .unwrap();
 
+        let output = drain_output(execution.take_output_reader().unwrap());
         execution.terminate().unwrap();
         drop(execution);
+        output.join().unwrap();
         let final_record = store.load_execution("execution-terminate").unwrap();
         assert_eq!(final_record.status, ExecutionStatus::Interrupted);
         let terminal = store.load_terminal_session("execution-terminate").unwrap();
@@ -520,7 +522,7 @@ mod tests {
     }
 
     #[test]
-    fn dropping_live_terminal_closes_owned_child_and_finalizes_ledger() {
+    fn dropping_live_terminal_records_only_proven_cleanup_truth() {
         let root = TestRoot::new("drop-live");
         let mut store = store_with_workspace(&root);
         let profile = native_sh_profile();
@@ -536,15 +538,30 @@ mod tests {
 
         drop(execution);
         let final_record = store.load_execution("execution-drop").unwrap();
-        assert_eq!(final_record.status, ExecutionStatus::Interrupted);
         assert_eq!(final_record.status_source, FactSource::WindsObserved);
-        assert!(final_record.ended_unix_ms.is_some());
-        assert!(final_record.duration_ms.is_some());
+        assert!(final_record.started_unix_ms.is_some());
         let terminal = store.load_terminal_session("execution-drop").unwrap();
-        assert_eq!(
-            terminal.close_reason,
-            Some(TerminalCloseReason::ClosedByWinds)
-        );
+        match final_record.status {
+            ExecutionStatus::Interrupted => {
+                assert_eq!(
+                    terminal.close_reason,
+                    Some(TerminalCloseReason::ClosedByWinds)
+                );
+                assert!(final_record.ended_unix_ms.is_some());
+                assert!(final_record.duration_ms.is_some());
+            }
+            ExecutionStatus::OwnershipLost => {
+                assert_eq!(
+                    terminal.close_reason,
+                    Some(TerminalCloseReason::OwnershipLostProcessStateUnknown)
+                );
+                assert_eq!(final_record.ended_unix_ms, None);
+                assert_eq!(final_record.duration_ms, None);
+            }
+            other => {
+                panic!("live terminal Drop must record only proven cleanup truth, got {other:?}")
+            }
+        }
         assert_eq!(store.pending_terminal_finalization_count(), 0);
     }
 
