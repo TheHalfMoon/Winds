@@ -1,0 +1,53 @@
+name: t052-clippy-fix-temporary
+
+on:
+  push:
+    branches: [feat/003-t052-wsl-launch]
+    paths:
+      - ".github/workflows/t052-clippy-fix-temporary.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: true
+      - name: Remove unused Windows import only
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('src/wsl_launch.rs')
+          text = path.read_text(encoding='utf-8')
+          old = '''fn wslpath_to_linux(
+              launcher: &Path,
+              distribution: &WslDistribution,
+              windows_path: &Path,
+          ) -> Result<String> {
+              use std::ffi::OsString;
+
+          '''
+          new = '''fn wslpath_to_linux(
+              launcher: &Path,
+              distribution: &WslDistribution,
+              windows_path: &Path,
+          ) -> Result<String> {
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one unused import block, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+      - name: Validate and commit
+        shell: bash
+        run: |
+          cargo fmt --all -- --check
+          git diff --check
+          test "$(git diff --name-only)" = "src/wsl_launch.rs"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/wsl_launch.rs
+          git commit -m "fix(winds): remove unused WSL launch import"
+          git push origin "HEAD:$GITHUB_REF_NAME"
