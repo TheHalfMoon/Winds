@@ -1,9 +1,8 @@
-use super::{Repo, Result, git_command, run_git_bytes, run_git_text, strip_git_line_ending};
+use super::{Repo, Result, git_command, run_git_text, strip_git_line_ending};
 use crate::store::{NewWorkspace, Store};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::ffi::OsStr;
-use std::fs;
 use std::path::Path;
 
 #[allow(
@@ -27,12 +26,14 @@ pub struct WorkspaceInspection {
 )]
 pub fn open_existing_workspace(
     path: &Path,
+    canonical_state_root: &Path,
     store: &Store,
     now_ms: i64,
 ) -> Result<WorkspaceInspection> {
     let repo = open_worktree(path)?;
     let observation = inspect_worktree(&repo)?;
-    register_observed_workspace(&repo, &observation, store, now_ms)?;
+    require_canonical_external_state_root(&repo, canonical_state_root)?;
+    register_observed_workspace(&observation, store, now_ms)?;
     Ok(observation)
 }
 
@@ -131,8 +132,20 @@ fn read_only_status(repo: &Repo) -> Result<Vec<u8>> {
     .into())
 }
 
+fn require_canonical_external_state_root(repo: &Repo, state_root: &Path) -> Result<()> {
+    if !state_root.is_absolute() {
+        return Err("Winds state root must be an absolute canonical path".into());
+    }
+    let canonical = state_root
+        .canonicalize()
+        .map_err(|error| format!("Winds state root cannot be canonicalized: {error}"))?;
+    if canonical != state_root {
+        return Err("Winds state root must be supplied in canonical form".into());
+    }
+    repo.require_external_state_path(&canonical)
+}
+
 fn register_observed_workspace(
-    repo: &Repo,
     observation: &WorkspaceInspection,
     store: &Store,
     now_ms: i64,
@@ -163,15 +176,6 @@ fn register_observed_workspace(
         }
         Err(error) => return Err(error),
     }
-
-    // The Store is supplied by a caller that has already resolved Winds state outside
-    // the checkout. Preserve the existing repository-boundary guard for that caller.
-    // This check also makes it impossible to mistake the repository root itself for
-    // an acceptable state location in follow-on wiring.
-    repo.require_external_state_path(Path::new("."))
-        .err()
-        .map(|_| ())
-        .unwrap_or(());
     Ok(())
 }
 
@@ -283,9 +287,13 @@ mod tests {
         let (repo, nested) = initialize_repo(&root);
         let home = root.join("winds-home");
         let store = Store::open(&home).unwrap();
+        let canonical_home = home.canonicalize().unwrap();
 
-        let first = open_existing_workspace(&nested, &store, 100).unwrap();
-        assert_eq!(first.canonical_worktree_root, repo.canonicalize().unwrap().to_str().unwrap());
+        let first = open_existing_workspace(&nested, &canonical_home, &store, 100).unwrap();
+        assert_eq!(
+            first.canonical_worktree_root,
+            repo.canonicalize().unwrap().to_str().unwrap()
+        );
         assert!(Path::new(&first.git_common_dir).is_absolute());
         assert_eq!(first.branch.as_deref(), Some("main"));
         assert!(!first.detached);
@@ -295,11 +303,14 @@ mod tests {
         let persisted = store.load_workspace(&first.workspace_id).unwrap();
         assert_eq!(persisted.created_unix_ms, 100);
         assert_eq!(persisted.last_opened_unix_ms, 100);
-        assert_eq!(persisted.canonical_worktree_root, first.canonical_worktree_root);
+        assert_eq!(
+            persisted.canonical_worktree_root,
+            first.canonical_worktree_root
+        );
         assert_eq!(persisted.git_common_dir, first.git_common_dir);
 
         fs::write(repo.join("untracked.txt"), b"dirty\n").unwrap();
-        let second = open_existing_workspace(&repo, &store, 200).unwrap();
+        let second = open_existing_workspace(&repo, &canonical_home, &store, 200).unwrap();
         assert_eq!(second.workspace_id, first.workspace_id);
         assert_eq!(second.head_oid, first.head_oid);
         assert!(second.dirty);
@@ -319,8 +330,9 @@ mod tests {
         run_git(&repo, ["checkout", "--detach", "HEAD"]);
         let home = root.join("winds-home");
         let store = Store::open(&home).unwrap();
+        let canonical_home = home.canonicalize().unwrap();
 
-        let observed = open_existing_workspace(&repo, &store, 300).unwrap();
+        let observed = open_existing_workspace(&repo, &canonical_home, &store, 300).unwrap();
         assert_eq!(observed.branch, None);
         assert!(observed.detached);
         assert!(!observed.dirty);
@@ -334,21 +346,41 @@ mod tests {
         let root = test_root("invalid");
         let home = root.join("winds-home");
         let store = Store::open(&home).unwrap();
+        let canonical_home = home.canonicalize().unwrap();
 
         let missing = root.join("missing");
-        let error = open_existing_workspace(&missing, &store, 400).unwrap_err();
+        let error = open_existing_workspace(&missing, &canonical_home, &store, 400).unwrap_err();
         assert!(error.to_string().contains("does not exist"));
 
         let non_git = root.join("plain");
         fs::create_dir(&non_git).unwrap();
-        let error = open_existing_workspace(&non_git, &store, 401).unwrap_err();
+        let error = open_existing_workspace(&non_git, &canonical_home, &store, 401).unwrap_err();
         assert!(error.to_string().contains("not a Git worktree"));
 
         let bare = root.join("bare.git");
         fs::create_dir(&bare).unwrap();
         run_git(&bare, ["init", "--bare"]);
-        let error = open_existing_workspace(&bare, &store, 402).unwrap_err();
+        let error = open_existing_workspace(&bare, &canonical_home, &store, 402).unwrap_err();
         assert!(error.to_string().contains("bare Git repositories"));
+
+        drop(store);
+        cleanup_owned_root(&root);
+    }
+
+    #[test]
+    fn registration_rejects_state_root_inside_the_checkout() {
+        let root = test_root("state-boundary");
+        let (repo, _) = initialize_repo(&root);
+        let home = root.join("winds-home");
+        let store = Store::open(&home).unwrap();
+        let inside = repo.join("winds-state");
+        fs::create_dir(&inside).unwrap();
+        let canonical_inside = inside.canonicalize().unwrap();
+
+        let error = open_existing_workspace(&repo, &canonical_inside, &store, 500).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Winds state must live outside the source checkout"));
 
         drop(store);
         cleanup_owned_root(&root);
