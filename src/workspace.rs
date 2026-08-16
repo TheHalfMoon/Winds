@@ -378,9 +378,11 @@ mod tests {
         let canonical_inside = inside.canonicalize().unwrap();
 
         let error = open_existing_workspace(&repo, &canonical_inside, &store, 500).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("Winds state must live outside the source checkout"));
+        assert!(
+            error
+                .to_string()
+                .contains("Winds state must live outside the source checkout")
+        );
 
         drop(store);
         cleanup_owned_root(&root);
