@@ -386,8 +386,6 @@ fn wslpath_to_linux(
     distribution: &WslDistribution,
     windows_path: &Path,
 ) -> Result<String> {
-    use std::ffi::OsString;
-
     let output = run_wsl_exec(
         launcher,
         &distribution.name,
