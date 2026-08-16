@@ -73,9 +73,18 @@ No newly introduced package declares GPL, LGPL, AGPL, SSPL, or another copyleft/
 
 ## 3. Redistribution / notice posture
 
-T050 copies no donor source into Winds. `portable-pty` is consumed as an exact crates.io dependency. The MIT/BSD/Apache family licenses above are compatible with the Winds dependency posture, subject to their normal notice/attribution obligations.
+T050 copies no donor runtime source into Winds. `portable-pty` is consumed as an exact crates.io dependency. The MIT/BSD/Apache family licenses above are compatible with the Winds dependency posture, subject to their normal notice/attribution obligations.
 
-Before a public binary/package distribution process is declared complete, that distribution process must preserve applicable third-party notices for the actual shipped dependency set. This audit does not claim that Cargo metadata alone satisfies redistribution notice obligations.
+The first exact-head release-candidate packaging run exposed a real notice gap rather than being waived: the crates.io payloads resolved for `winapi-i686-pc-windows-gnu 0.4.0` and `winapi-x86_64-pc-windows-gnu 0.4.0` did not expose a license file to Winds' release collector. The upstream `winapi-rs` tag `0.3.9` resolves to commit `796a8e6c2971dc2ff1bcff166e6671284f9b5b6b`; its root `Cargo.toml` declares those exact target dependencies at version `0.4`, and the target-crate manifests identify the exact package names/versions, declare `MIT/Apache-2.0`, and include `LICENSE-MIT` and `LICENSE-APACHE` in their intended package source.
+
+Winds therefore preserves byte-for-byte copies of those two upstream license texts under `third-party/licenses/winapi-rs-0.3.9/` and maps both exact target-package/version tuples to that directory in the release collector. The copied Git blob identities match upstream exactly:
+
+- `LICENSE-MIT`: `6f1b4c850cd2bd0d165f122c0274afc95e10a851`
+- `LICENSE-APACHE`: `8dada3edaf50dbc082c9a125058f25def75e625a`
+
+This is a notice-text fallback only; no `winapi-rs` runtime source is copied or adapted. The release collector remains fail-closed for any other locked package lacking distributable license/notice material.
+
+Before a public binary/package distribution process is declared complete, that distribution process must continue to preserve applicable third-party notices for the actual shipped dependency set. Cargo metadata alone is not treated as satisfying redistribution notice obligations.
 
 ## 4. Runtime-source facts used by T050
 
