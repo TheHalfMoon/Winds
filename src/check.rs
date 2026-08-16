@@ -1,13 +1,22 @@
 use crate::domain::CheckStatus;
+#[cfg(unix)]
 use std::io::{Read, Result as IoResult};
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::Path;
+#[cfg(unix)]
 use std::process::{Command, Stdio};
+#[cfg(unix)]
 use std::sync::mpsc;
+#[cfg(unix)]
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
+#[cfg(unix)]
 const OUTPUT_CAP_BYTES: usize = 1_048_576;
+#[cfg(unix)]
 const STREAM_CLOSE_GRACE: Duration = Duration::from_secs(1);
 
 #[derive(Debug)]
@@ -25,6 +34,7 @@ pub struct CheckRun {
     pub stderr: CapturedStream,
 }
 
+#[cfg(unix)]
 pub fn run_check(cwd: &Path, command: &str, timeout: Duration) -> Result<CheckRun, String> {
     let started = Instant::now();
     let mut child = Command::new("/bin/sh")
@@ -107,6 +117,19 @@ pub fn run_check(cwd: &Path, command: &str, timeout: Duration) -> Result<CheckRu
     })
 }
 
+#[cfg(not(unix))]
+pub fn run_check(
+    _cwd: &Path,
+    _command: &str,
+    _timeout: Duration,
+) -> Result<CheckRun, String> {
+    Err(
+        "required checks are unsupported on native Windows in Spec 003 T051; Winds verification remains Unix-only"
+            .to_owned(),
+    )
+}
+
+#[cfg(unix)]
 fn child_exited_without_reaping(pid: u32) -> Result<bool, String> {
     // waitid + WNOWAIT observes child exit without releasing its pid, which keeps the process-group
     // identity stable until Winds has signalled any surviving descendants.
@@ -128,6 +151,7 @@ fn child_exited_without_reaping(pid: u32) -> Result<bool, String> {
     Ok(unsafe { info.si_pid() } != 0)
 }
 
+#[cfg(unix)]
 fn receive_stream(
     receiver: mpsc::Receiver<IoResult<CapturedStream>>,
     name: &str,
@@ -142,6 +166,7 @@ fn receive_stream(
         .map_err(|error| format!("failed reading check {name}: {error}"))
 }
 
+#[cfg(unix)]
 fn read_capped<R: Read>(mut reader: R) -> IoResult<CapturedStream> {
     let mut captured = Vec::new();
     let mut truncated = false;
@@ -166,6 +191,7 @@ fn read_capped<R: Read>(mut reader: R) -> IoResult<CapturedStream> {
     })
 }
 
+#[cfg(unix)]
 fn terminate_process_group(pid: u32) {
     let group = format!("-{pid}");
     let term = Command::new("/bin/kill")
