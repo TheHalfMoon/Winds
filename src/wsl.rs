@@ -2,11 +2,36 @@ use super::Result;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 #[cfg(windows)]
+use std::ffi::OsString;
+#[cfg(windows)]
 use std::fs;
+#[cfg(any(windows, test))]
+use std::io::{self, Read};
+#[cfg(windows)]
+use std::os::windows::ffi::OsStringExt;
 #[cfg(windows)]
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
-use std::process::Command;
+use std::process::{Command, Stdio};
+#[cfg(windows)]
+use std::thread;
+
+#[cfg(any(windows, test))]
+const WSL_OUTPUT_CAP_BYTES: usize = 1024 * 1024;
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    #[link_name = "GetSystemDirectoryW"]
+    fn get_system_directory_w(buffer: *mut u16, size: u32) -> u32;
+}
+
+#[cfg(any(windows, test))]
+#[derive(Debug, PartialEq, Eq)]
+struct BoundedBytes {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
 
 #[allow(
     dead_code,
@@ -47,11 +72,9 @@ pub fn discover_wsl_distributions() -> Result<Vec<WslDistribution>> {
 
 #[cfg(windows)]
 fn system_wsl_executable() -> Result<PathBuf> {
-    let system_root = std::env::var_os("SystemRoot")
-        .ok_or("WSL discovery unavailable: SystemRoot is not defined")?;
-    let executable = PathBuf::from(system_root).join("System32").join("wsl.exe");
+    let executable = system_directory()?.join("wsl.exe");
     if !executable.is_absolute() {
-        return Err("WSL discovery unavailable: SystemRoot is not absolute".into());
+        return Err("WSL discovery unavailable: Windows system directory is not absolute".into());
     }
     let metadata = fs::metadata(&executable).map_err(|error| {
         format!(
@@ -70,30 +93,113 @@ fn system_wsl_executable() -> Result<PathBuf> {
 }
 
 #[cfg(windows)]
+fn system_directory() -> Result<PathBuf> {
+    let mut buffer = vec![0_u16; 260];
+    loop {
+        let size = u32::try_from(buffer.len())
+            .map_err(|_| "WSL discovery unavailable: system-directory buffer is too large")?;
+        // SAFETY: `buffer` is writable for `size` UTF-16 code units, and the Win32 API
+        // writes at most that many units. We inspect the returned length before reading it.
+        let length = unsafe { get_system_directory_w(buffer.as_mut_ptr(), size) };
+        if length == 0 {
+            return Err(format!(
+                "WSL discovery unavailable: GetSystemDirectoryW failed: {}",
+                io::Error::last_os_error()
+            )
+            .into());
+        }
+
+        let length = usize::try_from(length)
+            .map_err(|_| "WSL discovery unavailable: invalid system-directory length")?;
+        if length < buffer.len() {
+            return Ok(PathBuf::from(OsString::from_wide(&buffer[..length])));
+        }
+        buffer.resize(length, 0);
+    }
+}
+
+#[cfg(windows)]
 fn run_wsl<const N: usize>(executable: &Path, args: [&str; N]) -> Result<Vec<u8>> {
-    let output = Command::new(executable)
+    let mut child = Command::new(executable)
         .args(args)
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|error| {
             format!(
                 "WSL discovery unavailable: failed to execute {}: {error}",
                 executable.display()
             )
         })?;
-    if !output.status.success() {
-        let stderr = decode_wsl_text(&output.stderr)
-            .unwrap_or_else(|_| String::from_utf8_lossy(&output.stderr).into_owned());
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or("WSL discovery unavailable: failed to capture wsl.exe stdout")?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or("WSL discovery unavailable: failed to capture wsl.exe stderr")?;
+
+    let stdout_reader = thread::spawn(move || read_capped(stdout));
+    let stderr_reader = thread::spawn(move || read_capped(stderr));
+    let status = child
+        .wait()
+        .map_err(|error| format!("WSL discovery failed waiting for wsl.exe: {error}"))?;
+    let stdout = join_reader(stdout_reader, "stdout")?;
+    let stderr = join_reader(stderr_reader, "stderr")?;
+
+    if !status.success() {
+        let stderr_text = decode_wsl_text(&stderr.bytes)
+            .unwrap_or_else(|_| String::from_utf8_lossy(&stderr.bytes).into_owned());
+        let suffix = if stderr.truncated { " [truncated]" } else { "" };
         return Err(format!(
-            "WSL discovery command failed with status {}: {}",
-            output.status,
-            stderr.trim()
+            "WSL discovery command failed with status {status}: {}{suffix}",
+            stderr_text.trim()
         )
         .into());
     }
-    if output.stdout.len() > 1024 * 1024 {
-        return Err("WSL discovery output exceeded the 1 MiB safety bound".into());
+    if stdout.truncated || stderr.truncated {
+        return Err("WSL discovery output exceeded the 1 MiB per-stream safety bound".into());
     }
-    Ok(output.stdout)
+    Ok(stdout.bytes)
+}
+
+#[cfg(windows)]
+fn join_reader(
+    handle: thread::JoinHandle<io::Result<BoundedBytes>>,
+    name: &str,
+) -> Result<BoundedBytes> {
+    handle
+        .join()
+        .map_err(|_| format!("WSL discovery {name} reader thread panicked"))?
+        .map_err(|error| format!("WSL discovery failed reading {name}: {error}").into())
+}
+
+#[cfg(any(windows, test))]
+fn read_capped<R: Read>(mut reader: R) -> io::Result<BoundedBytes> {
+    let mut captured = Vec::new();
+    let mut truncated = false;
+    let mut buffer = [0_u8; 8192];
+
+    loop {
+        let count = reader.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        let remaining = WSL_OUTPUT_CAP_BYTES.saturating_sub(captured.len());
+        let keep = remaining.min(count);
+        captured.extend_from_slice(&buffer[..keep]);
+        if keep < count {
+            truncated = true;
+        }
+    }
+
+    Ok(BoundedBytes {
+        bytes: captured,
+        truncated,
+    })
 }
 
 fn parse_quiet_names(bytes: &[u8]) -> Result<Vec<String>> {
@@ -130,7 +236,7 @@ fn reconcile_verbose_rows(
         if let Some(without_default_marker) = row.strip_prefix('*') {
             row = without_default_marker.trim_start();
         }
-        if row.is_empty() {
+        if row.is_empty() || !verbose_line_looks_like_distribution(row) {
             continue;
         }
 
@@ -140,13 +246,10 @@ fn reconcile_verbose_rows(
         });
 
         let Some(name) = matched_name else {
-            if verbose_line_looks_like_distribution(row) {
-                return Err(format!(
-                    "WSL discovery is ambiguous: verbose output contains a distribution absent from --list --quiet: {row:?}"
-                )
-                .into());
-            }
-            continue;
+            return Err(format!(
+                "WSL discovery is ambiguous: verbose output contains a distribution absent from --list --quiet: {row:?}"
+            )
+            .into());
         };
 
         let suffix = row[name.len()..].trim();
@@ -199,7 +302,7 @@ fn parse_wsl_version(value: &str, name: &str) -> Result<u8> {
 fn verbose_line_looks_like_distribution(row: &str) -> bool {
     row.split_whitespace()
         .next_back()
-        .is_some_and(|field| matches!(field.parse::<u8>(), Ok(1 | 2)))
+        .is_some_and(|field| field.parse::<u8>().is_ok())
 }
 
 fn decode_wsl_text(bytes: &[u8]) -> Result<String> {
@@ -228,7 +331,8 @@ fn decode_wsl_text(bytes: &[u8]) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_wsl_text, parse_quiet_names, reconcile_verbose_rows};
+    use super::{decode_wsl_text, parse_quiet_names, read_capped, reconcile_verbose_rows};
+    use std::io::Cursor;
 
     fn utf16le(value: &str) -> Vec<u8> {
         value
@@ -272,6 +376,21 @@ mod tests {
     }
 
     #[test]
+    fn ignores_verbose_header_when_distribution_name_matches_header_token() {
+        let names = parse_quiet_names(b"NAME\r\n").unwrap();
+        let distributions = reconcile_verbose_rows(
+            names,
+            b"  NAME        STATE      VERSION\r\n  NAME        Running    2\r\n",
+        )
+        .unwrap();
+
+        assert_eq!(distributions.len(), 1);
+        assert_eq!(distributions[0].name, "NAME");
+        assert_eq!(distributions[0].state, "Running");
+        assert_eq!(distributions[0].version, 2);
+    }
+
+    #[test]
     fn rejects_verbose_identity_drift_between_supported_wsl_queries() {
         let names = parse_quiet_names(b"Ubuntu\r\n").unwrap();
         let error = reconcile_verbose_rows(
@@ -281,6 +400,14 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("absent from --list --quiet"));
+    }
+
+    #[test]
+    fn rejects_unsupported_wsl_version() {
+        let names = parse_quiet_names(b"Ubuntu\r\n").unwrap();
+        let error = reconcile_verbose_rows(names, b"Ubuntu Running 3\r\n").unwrap_err();
+
+        assert!(error.to_string().contains("unsupported version"));
     }
 
     #[test]
@@ -310,6 +437,15 @@ mod tests {
 
         let error = decode_wsl_text(&[b'U', 0, b'b']).unwrap_err();
         assert!(error.to_string().contains("malformed UTF-16LE"));
+    }
+
+    #[test]
+    fn capped_reader_bounds_memory_and_reports_truncation() {
+        let input = vec![b'x'; super::WSL_OUTPUT_CAP_BYTES + 17];
+        let captured = read_capped(Cursor::new(input)).unwrap();
+
+        assert_eq!(captured.bytes.len(), super::WSL_OUTPUT_CAP_BYTES);
+        assert!(captured.truncated);
     }
 
     #[cfg(not(windows))]
