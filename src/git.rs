@@ -11,6 +11,8 @@ pub(crate) mod workspace;
 pub(crate) mod workspace_clone;
 #[path = "workspace_inventory.rs"]
 pub(crate) mod workspace_inventory;
+#[path = "shell_profiles.rs"]
+pub(crate) mod shell_profiles;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
