@@ -21,46 +21,32 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
+          import re
 
           path = Path('src/wsl_launch.rs')
           text = path.read_text(encoding='utf-8')
 
-          old = '''    if plan.profile.shell_executable != WSL_SHELL_EXECUTABLE {
-              return Err("WSL terminal profile shell executable is unsupported or stale".into());
-          }
-          if !plan.profile.shell_arguments.is_empty() {
-              return Err("WSL terminal profile shell arguments are unsupported or stale".into());
-          }
-          if plan.profile.cwd_strategy != WslCwdStrategy::MappedWorkspaceOrHomeFallback {
-              return Err("WSL terminal profile cwd strategy is unsupported or stale".into());
-          }
-          let expected_profile = build_profile(launcher_text, &distribution);
-          if expected_profile.profile_id != plan.profile.profile_id {
-              return Err("WSL terminal profile identity does not match its launch data".into());
-          }
-          '''
-          new = '''    let expected_profile = build_profile(launcher_text, &distribution);
-          validate_profile_for_launch(&plan.profile, &expected_profile)?;
-          '''
-          if text.count(old) != 1:
-              raise SystemExit(f'expected one profile validation block, found {text.count(old)}')
-          text = text.replace(old, new, 1)
+          profile_pattern = re.compile(
+              r'    if plan\.profile\.shell_executable != WSL_SHELL_EXECUTABLE \{.*?'
+              r'    if expected_profile\.profile_id != plan\.profile\.profile_id \{.*?\n    \}\n\n',
+              re.S,
+          )
+          text, count = profile_pattern.subn(
+              '    let expected_profile = build_profile(launcher_text, &distribution);\n'
+              '    validate_profile_for_launch(&plan.profile, &expected_profile)?;\n\n',
+              text,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit(f'profile validation replacement count={count}')
 
-          old = '''    let arguments = build_launch_arguments(
-              &distribution.name,
-              linux_cwd,
-              &plan.profile.shell_executable,
-              &plan.profile.shell_arguments,
-          )?;
-          let session = TerminalSession::start_exact_launch(
-              &plan.profile.profile_id,
-              &launcher,
-              &arguments,
-              Path::new(windows_workspace_root),
-              size,
-          )?;
-          '''
-          new = '''    let arguments = build_launch_arguments(
+          launch_pattern = re.compile(
+              r'    let arguments = build_launch_arguments\(\n.*?'
+              r'    let session = TerminalSession::start_exact_launch\(\n.*?\n    \)\?;\n\n'
+              r'(?=    if let WslCwdResolution::MappedWorkspace)',
+              re.S,
+          )
+          launch_replacement = '''    let arguments = build_launch_arguments(
               &distribution.name,
               linux_cwd,
               &expected_profile.shell_executable,
@@ -73,22 +59,21 @@ jobs:
               Path::new(windows_workspace_root),
               size,
           )?;
-          '''
-          if text.count(old) != 1:
-              raise SystemExit(f'expected one launch-data block, found {text.count(old)}')
-          text = text.replace(old, new, 1)
 
-          old = '''    Ok(WslLaunchedTerminal {
-              session,
-              profile: plan.profile.clone(),
-              cwd_resolution: plan.cwd_resolution.clone(),
-          })
-          }
-
-          #[cfg(windows)]
-          fn fail_after_started_wsl_session(
           '''
-          new = '''    Ok(WslLaunchedTerminal {
+          text, count = launch_pattern.subn(launch_replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'launch data replacement count={count}')
+
+          return_pattern = re.compile(
+              r'    Ok\(WslLaunchedTerminal \{\n'
+              r'        session,\n'
+              r'        profile: plan\.profile\.clone\(\),\n'
+              r'        cwd_resolution: plan\.cwd_resolution\.clone\(\),\n'
+              r'    \}\)\n\}\n\n'
+              r'(?=#\[cfg\(windows\)\]\nfn fail_after_started_wsl_session)',
+          )
+          helper = '''    Ok(WslLaunchedTerminal {
               session,
               profile: expected_profile,
               cwd_resolution: plan.cwd_resolution.clone(),
@@ -120,31 +105,32 @@ jobs:
               Ok(())
           }
 
-          #[cfg(windows)]
-          fn fail_after_started_wsl_session(
           '''
-          if text.count(old) != 1:
-              raise SystemExit(f'expected one launched-terminal return block, found {text.count(old)}')
-          text = text.replace(old, new, 1)
+          text, count = return_pattern.subn(helper, text, count=1)
+          if count != 1:
+              raise SystemExit(f'return/helper insertion count={count}')
 
-          old = '''    use super::{
-              WslCwdStrategy, WslExecutionDomain, build_launch_arguments, parse_single_linux_path,
-              stable_profile_id,
-          };
-          '''
-          new = '''    use super::{
+          import_pattern = re.compile(
+              r'    use super::\{\n'
+              r'        WslCwdStrategy, WslExecutionDomain, build_launch_arguments, parse_single_linux_path,\n'
+              r'        stable_profile_id,\n'
+              r'    \};\n'
+          )
+          import_replacement = '''    use super::{
               WslCwdStrategy, WslExecutionDomain, WslTerminalProfile, build_launch_arguments,
               parse_single_linux_path, stable_profile_id, validate_profile_for_launch,
           };
           '''
-          if text.count(old) != 1:
-              raise SystemExit(f'expected one test import block, found {text.count(old)}')
-          text = text.replace(old, new, 1)
+          text, count = import_pattern.subn(import_replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'test import replacement count={count}')
 
           marker = '''    #[test]
           fn parses_exact_single_absolute_linux_path_without_trimming_spaces() {
           '''
-          test = '''    #[test]
+          if text.count(marker) != 1:
+              raise SystemExit(f'test insertion marker count={text.count(marker)}')
+          regression = '''    #[test]
           fn launch_validation_rejects_tampered_host_domain_but_ignores_ux_label() {
               let domain = WslExecutionDomain {
                   host_os: "windows".to_owned(),
@@ -185,13 +171,8 @@ jobs:
               assert!(error.to_string().contains("execution domain"));
           }
 
-          #[test]
-          fn parses_exact_single_absolute_linux_path_without_trimming_spaces() {
           '''
-          if text.count(marker) != 1:
-              raise SystemExit(f'expected one test insertion marker, found {text.count(marker)}')
-          text = text.replace(marker, test, 1)
-
+          text = text.replace(marker, regression + marker, 1)
           path.write_text(text, encoding='utf-8')
 
       - name: Validate repair
