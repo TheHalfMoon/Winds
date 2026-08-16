@@ -95,7 +95,9 @@ fn manifest_path_present(worktree_root: &Path, relative: &str) -> Result<bool> {
     if let Some(parent) = relative_path.parent() {
         for component in parent.components() {
             let Component::Normal(name) = component else {
-                return Err(format!("manifest path contains an unsafe component: {relative}").into());
+                return Err(
+                    format!("manifest path contains an unsafe component: {relative}").into(),
+                );
             };
             current_parent.push(name);
             match fs::symlink_metadata(&current_parent) {
@@ -343,7 +345,11 @@ mod tests {
         fs::write(worktree.join(".devcontainer"), b"not a directory\n").unwrap();
 
         let error = inventory_workspace_environment(&workspace).unwrap_err();
-        assert!(error.to_string().contains("manifest parent is not a directory"));
+        assert!(
+            error
+                .to_string()
+                .contains("manifest parent is not a directory")
+        );
         assert!(
             error
                 .to_string()
@@ -364,7 +370,11 @@ mod tests {
         symlink(&outside, worktree.join(".devcontainer")).unwrap();
 
         let error = inventory_workspace_environment(&workspace).unwrap_err();
-        assert!(error.to_string().contains("manifest parent must not be a symlink"));
+        assert!(
+            error
+                .to_string()
+                .contains("manifest parent must not be a symlink")
+        );
         assert!(
             error
                 .to_string()
