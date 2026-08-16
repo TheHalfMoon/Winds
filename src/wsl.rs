@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[cfg(windows)]
 use std::fs;
 #[cfg(windows)]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::process::Command;
 
@@ -70,7 +70,7 @@ fn system_wsl_executable() -> Result<PathBuf> {
 }
 
 #[cfg(windows)]
-fn run_wsl<const N: usize>(executable: &PathBuf, args: [&str; N]) -> Result<Vec<u8>> {
+fn run_wsl<const N: usize>(executable: &Path, args: [&str; N]) -> Result<Vec<u8>> {
     let output = Command::new(executable).args(args).output().map_err(|error| {
         format!(
             "WSL discovery unavailable: failed to execute {}: {error}",
