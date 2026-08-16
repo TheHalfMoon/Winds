@@ -184,7 +184,16 @@ impl TerminalSession {
             .writer
             .as_mut()
             .ok_or("terminal session input is already closed")?;
-        writer.write_all(&[0x03])?;
+
+        // ConPTY keeps Win32 Input Mode enabled. Microsoft Terminal serializes a
+        // KEY_EVENT_RECORD losslessly as: CSI Vk;Sc;Uc;Kd;Cs;Rc _. Represent
+        // Ctrl+C as a C key down/up pair with Unicode ETX and LEFT_CTRL_PRESSED.
+        // The scan code is intentionally zero: W32IM defines omitted/zero Sc as
+        // valid, avoiding keyboard-layout assumptions and any global console signal.
+        const CTRL_C_KEY_DOWN: &[u8] = b"\x1b[67;0;3;1;8;1_";
+        const CTRL_C_KEY_UP: &[u8] = b"\x1b[67;0;3;0;8;1_";
+        writer.write_all(CTRL_C_KEY_DOWN)?;
+        writer.write_all(CTRL_C_KEY_UP)?;
         writer.flush()?;
         Ok(())
     }
