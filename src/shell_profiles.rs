@@ -1,6 +1,7 @@
 use super::Result;
 use super::workspace_inventory::WorkspaceEnvironmentInventory;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::ErrorKind;
@@ -36,6 +37,7 @@ pub enum ShellCwdStrategy {
 )]
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct ShellProfile {
+    pub profile_id: String,
     pub display_name: String,
     pub execution_domain: ShellExecutionDomain,
     pub executable: String,
@@ -77,6 +79,16 @@ pub fn validate_shell_profile_for_launch(profile: &ShellProfile) -> Result<()> {
     if !Path::new(&profile.executable).is_absolute() {
         return Err("shell profile executable must be an absolute path".into());
     }
+
+    let expected_id = stable_profile_id(
+        &profile.execution_domain,
+        &profile.executable,
+        &profile.arguments,
+        profile.cwd_strategy,
+    );
+    if profile.profile_id != expected_id {
+        return Err("shell profile identity does not match its launch data".into());
+    }
     if !candidate_is_usable(Path::new(&profile.executable))? {
         return Err(format!(
             "shell profile executable is no longer usable: {}",
@@ -117,18 +129,56 @@ fn build_profile(executable: String) -> ShellProfile {
         os: std::env::consts::OS.to_owned(),
         arch: std::env::consts::ARCH.to_owned(),
     };
+    let arguments = Vec::new();
+    let cwd_strategy = ShellCwdStrategy::WorkspaceRoot;
     let display_name = Path::new(&executable)
         .file_name()
         .and_then(|name| name.to_str())
         .map_or_else(|| executable.clone(), str::to_owned);
+    let profile_id = stable_profile_id(&execution_domain, &executable, &arguments, cwd_strategy);
 
     ShellProfile {
+        profile_id,
         display_name,
         execution_domain,
         executable,
-        arguments: Vec::new(),
-        cwd_strategy: ShellCwdStrategy::WorkspaceRoot,
+        arguments,
+        cwd_strategy,
     }
+}
+
+fn stable_profile_id(
+    domain: &ShellExecutionDomain,
+    executable: &str,
+    arguments: &[String],
+    cwd_strategy: ShellCwdStrategy,
+) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"WindsShellProfileV1\0");
+    match domain {
+        ShellExecutionDomain::NativeHost { os, arch } => {
+            digest.update(b"NATIVE_HOST\0");
+            digest.update(os.as_bytes());
+            digest.update(b"\0");
+            digest.update(arch.as_bytes());
+            digest.update(b"\0");
+        }
+    }
+    digest.update(executable.as_bytes());
+    digest.update(b"\0");
+    for argument in arguments {
+        digest.update(argument.as_bytes());
+        digest.update(b"\0");
+    }
+    match cwd_strategy {
+        ShellCwdStrategy::WorkspaceRoot => digest.update(b"WORKSPACE_ROOT\0"),
+    }
+    let hex: String = digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("shell-profile-{hex}")
 }
 
 fn candidate_is_usable(path: &Path) -> Result<bool> {
@@ -303,6 +353,7 @@ mod tests {
                 arch: std::env::consts::ARCH.to_owned(),
             }
         );
+        assert!(profile.profile_id.starts_with("shell-profile-"));
         assert!(!marker.exists());
         validate_shell_profile_for_launch(profile).unwrap();
         assert!(!marker.exists());
@@ -334,7 +385,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn display_name_is_ux_only_while_launch_data_stays_explicit() {
+    fn stable_profile_identity_binds_launch_data_but_not_display_name() {
         let root = test_root("identity");
         let shell = root.join("fixture-shell");
         create_executable(&shell, "#!/bin/sh\n");
@@ -342,17 +393,13 @@ mod tests {
             discover_native_shell_profiles(&inventory(vec![shell.to_str().unwrap().to_owned()]))
                 .unwrap();
         let mut profile = discovered.pop().unwrap();
-        let executable = profile.executable.clone();
-        let arguments = profile.arguments.clone();
-        let domain = profile.execution_domain.clone();
-        let cwd_strategy = profile.cwd_strategy;
 
         profile.display_name = "UX label only".to_owned();
         validate_shell_profile_for_launch(&profile).unwrap();
-        assert_eq!(profile.executable, executable);
-        assert_eq!(profile.arguments, arguments);
-        assert_eq!(profile.execution_domain, domain);
-        assert_eq!(profile.cwd_strategy, cwd_strategy);
+
+        profile.arguments.push("--changed".to_owned());
+        let error = validate_shell_profile_for_launch(&profile).unwrap_err();
+        assert!(error.to_string().contains("identity does not match"));
 
         cleanup_owned_root(&root);
     }
