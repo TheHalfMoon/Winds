@@ -1,6 +1,6 @@
 use crate::domain::{ExecutionKind, ExecutionStatus, FactSource};
 use crate::git::shell_profiles::ShellExecutionDomain;
-use crate::store::{NewExecution, NewShellCommand, Result, ShellCommandFinalization, Store};
+use crate::store::{NewExecution, NewShellCommand, Result, Store};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -18,14 +18,14 @@ pub struct ExplicitCommandRequest<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExplicitCommandResult {
     pub exit_code: Option<i32>,
-    pub duration_ms: u64,
+    pub duration_ms: Option<u64>,
 }
 
 pub fn run_explicit_command(
     store: &mut Store,
     request: ExplicitCommandRequest<'_>,
 ) -> Result<ExplicitCommandResult> {
-    store.retry_deferred_shell_command_finalizations()?;
+    store.finalize_observed_shell_commands()?;
     if request.execution_id.is_empty() || request.workspace_id.is_empty() {
         return Err("explicit command requires non-empty execution/workspace identity".into());
     }
@@ -72,7 +72,7 @@ pub fn run_explicit_command(
     {
         Ok(child) => child,
         Err(error) => {
-            let failed_unix_ms = unix_ms()?;
+            let failed_unix_ms = unix_ms().ok();
             let persist =
                 store.mark_shell_command_failed_to_start(request.execution_id, failed_unix_ms);
             return match persist {
@@ -85,23 +85,12 @@ pub fn run_explicit_command(
         }
     };
 
-    let started_unix_ms = match unix_ms() {
-        Ok(value) => value,
-        Err(error) => {
-            let cleanup_proven = cleanup_owned_child(&mut child);
-            return Err(format!(
-                "explicit command child started but start time could not be recorded: {error}; owned-child cleanup {}",
-                if cleanup_proven { "succeeded" } else { "failed" }
-            )
-            .into());
-        }
-    };
-
+    let started_unix_ms = unix_ms().ok();
     if let Err(persist_error) =
         store.mark_shell_command_running(request.execution_id, started_unix_ms)
     {
         let cleanup_proven = cleanup_owned_child(&mut child);
-        let ended_unix_ms = unix_ms().unwrap_or(started_unix_ms);
+        let ended_unix_ms = unix_ms().ok();
         let repair = if cleanup_proven {
             store.mark_shell_command_start_persistence_failed(
                 request.execution_id,
@@ -127,7 +116,7 @@ pub fn run_explicit_command(
         Ok(status) => status,
         Err(wait_error) => {
             let cleanup_proven = cleanup_owned_child(&mut child);
-            let ended_unix_ms = unix_ms().unwrap_or(started_unix_ms);
+            let ended_unix_ms = unix_ms().ok();
             let persist = if cleanup_proven {
                 store.mark_shell_command_interrupted(request.execution_id, ended_unix_ms)
             } else {
@@ -141,16 +130,18 @@ pub fn run_explicit_command(
             .into());
         }
     };
-    let ended_unix_ms = unix_ms()?;
+    let ended_unix_ms = unix_ms().ok();
     let exit_code = status.code();
-    let finalization = ShellCommandFinalization {
-        exit_code,
-        ended_unix_ms,
-    };
-    if let Err(error) = store.apply_shell_command_finalization(request.execution_id, finalization) {
-        store.defer_shell_command_finalization(request.execution_id, finalization);
+    store
+        .record_shell_command_exit_observation(request.execution_id, exit_code, ended_unix_ms)
+        .map_err(|error| {
+            format!(
+                "explicit command exited but its durable exit observation could not be persisted: {error}"
+            )
+        })?;
+    if let Err(error) = store.finalize_shell_command_from_observation(request.execution_id) {
         return Err(format!(
-            "explicit command exited but final ledger persistence failed and remains retryable: {error}"
+            "explicit command exited and its durable exit observation is persisted, but final execution-state persistence remains pending: {error}"
         )
         .into());
     }
@@ -160,7 +151,7 @@ pub fn run_explicit_command(
     }
     Ok(ExplicitCommandResult {
         exit_code,
-        duration_ms: execution.duration_ms.unwrap_or(0),
+        duration_ms: execution.duration_ms,
     })
 }
 
@@ -177,6 +168,8 @@ fn validate_executable(path: &Path) -> Result<String> {
     Ok(value.to_owned())
 }
 
+// This validates caller-requested cwd against the current filesystem view. It is not an
+// OS sandbox or a hostile concurrent-rename containment primitive.
 fn validate_workspace_cwd(store: &Store, workspace_id: &str, cwd: &Path) -> Result<String> {
     if !cwd.is_absolute() {
         return Err("explicit command cwd must be an absolute path".into());
@@ -312,6 +305,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.exit_code, Some(7));
+        assert!(result.duration_ms.is_some());
         let execution = store.load_execution("command-1").unwrap();
         assert_eq!(execution.kind, ExecutionKind::ShellCommand);
         assert_eq!(execution.request_source, FactSource::CallerRequested);
@@ -328,10 +322,11 @@ mod tests {
         assert_eq!(command.cwd_source, FactSource::CallerRequested);
         assert_eq!(command.exit_code, Some(7));
         assert_eq!(command.exit_source, Some(FactSource::WindsObserved));
+        assert!(command.observed_end_unix_ms.is_some());
     }
 
     #[test]
-    fn marker_like_child_output_cannot_create_shell_reported_telemetry() {
+    fn parser_free_explicit_run_does_not_upgrade_marker_like_output_authority() {
         let root = TestRoot::new("spoof");
         let mut store = store_with_workspace(&root);
         let cwd = workspace_path(&root);
@@ -354,6 +349,7 @@ mod tests {
             1
         );
         let command = store.load_shell_command("command-spoof").unwrap();
+        assert_eq!(command.arguments, arguments);
         assert_eq!(command.command_source, FactSource::CallerRequested);
         assert_eq!(command.exit_source, Some(FactSource::WindsObserved));
         let events = store.execution_events("command-spoof").unwrap();
@@ -390,6 +386,7 @@ mod tests {
         let command = store.load_shell_command("command-failed").unwrap();
         assert_eq!(command.exit_code, None);
         assert_eq!(command.exit_source, None);
+        assert_eq!(command.observed_end_unix_ms, None);
     }
 
     #[test]
@@ -447,7 +444,7 @@ mod tests {
             )
             .unwrap();
         store
-            .mark_shell_command_running("command-restart", 11)
+            .mark_shell_command_running("command-restart", Some(11))
             .unwrap();
         let reconciled = store
             .reconcile_unowned_shell_commands_after_restart(20)
@@ -460,5 +457,170 @@ mod tests {
         let command = store.load_shell_command("command-restart").unwrap();
         assert_eq!(command.exit_code, None);
         assert_eq!(command.exit_source, None);
+        assert_eq!(command.observed_end_unix_ms, None);
+    }
+
+    #[test]
+    fn lifecycle_repairs_remain_final_when_wall_clock_is_unavailable() {
+        let root = TestRoot::new("clock-repairs");
+        let mut store = store_with_workspace(&root);
+        let cwd = workspace_path(&root);
+        let (executable, arguments) = command_parts(0, false);
+
+        store
+            .create_shell_command_execution(
+                NewExecution {
+                    execution_id: "command-clock-failed",
+                    workspace_id: "workspace-1",
+                    kind: ExecutionKind::ShellCommand,
+                    request_source: FactSource::CallerRequested,
+                    execution_domain: "native-test",
+                },
+                NewShellCommand {
+                    execution_id: "command-clock-failed",
+                    executable: executable.to_str().unwrap(),
+                    arguments: &arguments,
+                    command_source: FactSource::CallerRequested,
+                    requested_cwd: cwd.to_str().unwrap(),
+                    cwd_source: FactSource::CallerRequested,
+                },
+                10,
+            )
+            .unwrap();
+        store
+            .mark_shell_command_failed_to_start("command-clock-failed", None)
+            .unwrap();
+        let failed = store.load_execution("command-clock-failed").unwrap();
+        assert_eq!(failed.status, ExecutionStatus::FailedToStart);
+        assert_eq!(failed.started_unix_ms, None);
+        assert_eq!(failed.ended_unix_ms, None);
+        assert_eq!(failed.duration_ms, None);
+
+        store
+            .create_shell_command_execution(
+                NewExecution {
+                    execution_id: "command-clock-interrupted",
+                    workspace_id: "workspace-1",
+                    kind: ExecutionKind::ShellCommand,
+                    request_source: FactSource::CallerRequested,
+                    execution_domain: "native-test",
+                },
+                NewShellCommand {
+                    execution_id: "command-clock-interrupted",
+                    executable: executable.to_str().unwrap(),
+                    arguments: &arguments,
+                    command_source: FactSource::CallerRequested,
+                    requested_cwd: cwd.to_str().unwrap(),
+                    cwd_source: FactSource::CallerRequested,
+                },
+                20,
+            )
+            .unwrap();
+        store
+            .mark_shell_command_running("command-clock-interrupted", None)
+            .unwrap();
+        store
+            .mark_shell_command_interrupted("command-clock-interrupted", None)
+            .unwrap();
+        let interrupted = store.load_execution("command-clock-interrupted").unwrap();
+        assert_eq!(interrupted.status, ExecutionStatus::Interrupted);
+        assert_eq!(interrupted.started_unix_ms, None);
+        assert_eq!(interrupted.ended_unix_ms, None);
+        assert_eq!(interrupted.duration_ms, None);
+    }
+
+    #[test]
+    fn durable_exit_observation_survives_store_restart_before_finalization() {
+        let root = TestRoot::new("durable-exit");
+        let mut store = store_with_workspace(&root);
+        let cwd = workspace_path(&root);
+        let (executable, arguments) = command_parts(9, false);
+        store
+            .create_shell_command_execution(
+                NewExecution {
+                    execution_id: "command-durable",
+                    workspace_id: "workspace-1",
+                    kind: ExecutionKind::ShellCommand,
+                    request_source: FactSource::CallerRequested,
+                    execution_domain: "native-test",
+                },
+                NewShellCommand {
+                    execution_id: "command-durable",
+                    executable: executable.to_str().unwrap(),
+                    arguments: &arguments,
+                    command_source: FactSource::CallerRequested,
+                    requested_cwd: cwd.to_str().unwrap(),
+                    cwd_source: FactSource::CallerRequested,
+                },
+                10,
+            )
+            .unwrap();
+        store
+            .mark_shell_command_running("command-durable", Some(11))
+            .unwrap();
+        store
+            .record_shell_command_exit_observation("command-durable", Some(9), Some(20))
+            .unwrap();
+        drop(store);
+
+        let mut reopened = Store::open(&root.path().join("state")).unwrap();
+        let ownership_lost = reopened
+            .reconcile_unowned_shell_commands_after_restart(30)
+            .unwrap();
+        assert_eq!(ownership_lost, 0);
+        let execution = reopened.load_execution("command-durable").unwrap();
+        assert_eq!(execution.status, ExecutionStatus::Exited);
+        assert_eq!(execution.ended_unix_ms, Some(20));
+        assert_eq!(execution.duration_ms, Some(9));
+        let command = reopened.load_shell_command("command-durable").unwrap();
+        assert_eq!(command.exit_code, Some(9));
+        assert_eq!(command.exit_source, Some(FactSource::WindsObserved));
+        assert_eq!(command.observed_end_unix_ms, Some(20));
+    }
+
+    #[test]
+    fn observed_exit_without_wall_clock_finalizes_with_unknown_timing() {
+        let root = TestRoot::new("clock-unknown");
+        let mut store = store_with_workspace(&root);
+        let cwd = workspace_path(&root);
+        let (executable, arguments) = command_parts(0, false);
+        store
+            .create_shell_command_execution(
+                NewExecution {
+                    execution_id: "command-clock-unknown",
+                    workspace_id: "workspace-1",
+                    kind: ExecutionKind::ShellCommand,
+                    request_source: FactSource::CallerRequested,
+                    execution_domain: "native-test",
+                },
+                NewShellCommand {
+                    execution_id: "command-clock-unknown",
+                    executable: executable.to_str().unwrap(),
+                    arguments: &arguments,
+                    command_source: FactSource::CallerRequested,
+                    requested_cwd: cwd.to_str().unwrap(),
+                    cwd_source: FactSource::CallerRequested,
+                },
+                10,
+            )
+            .unwrap();
+        store
+            .mark_shell_command_running("command-clock-unknown", None)
+            .unwrap();
+        store
+            .record_shell_command_exit_observation("command-clock-unknown", Some(0), None)
+            .unwrap();
+        store
+            .finalize_shell_command_from_observation("command-clock-unknown")
+            .unwrap();
+        let execution = store.load_execution("command-clock-unknown").unwrap();
+        assert_eq!(execution.status, ExecutionStatus::Exited);
+        assert_eq!(execution.started_unix_ms, None);
+        assert_eq!(execution.ended_unix_ms, None);
+        assert_eq!(execution.duration_ms, None);
+        let command = store.load_shell_command("command-clock-unknown").unwrap();
+        assert_eq!(command.exit_code, Some(0));
+        assert_eq!(command.exit_source, Some(FactSource::WindsObserved));
+        assert_eq!(command.observed_end_unix_ms, None);
     }
 }

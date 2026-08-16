@@ -255,6 +255,7 @@ pub struct ShellCommandRecord {
     pub cwd_source: FactSource,
     pub exit_code: Option<i32>,
     pub exit_source: Option<FactSource>,
+    pub observed_end_unix_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]

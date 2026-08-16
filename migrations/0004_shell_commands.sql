@@ -7,6 +7,9 @@ CREATE TABLE IF NOT EXISTS shell_commands (
     cwd_source TEXT NOT NULL,
     exit_code INTEGER,
     exit_source TEXT,
-    CHECK (exit_code IS NULL OR exit_source IS NOT NULL)
+    observed_end_unix_ms INTEGER,
+    CHECK (
+        (exit_source IS NULL AND exit_code IS NULL AND observed_end_unix_ms IS NULL)
+        OR exit_source IS NOT NULL
+    )
 );
-
