@@ -331,18 +331,35 @@ mod tests {
         fs::create_dir(&directory).unwrap();
         let missing = root.join("missing-shell");
 
+        let Some(shell_utf8) = shell.to_str().map(str::to_owned) else {
+            cleanup_owned_root(&root);
+            return;
+        };
+        let Some(non_executable_utf8) = non_executable.to_str().map(str::to_owned) else {
+            cleanup_owned_root(&root);
+            return;
+        };
+        let Some(directory_utf8) = directory.to_str().map(str::to_owned) else {
+            cleanup_owned_root(&root);
+            return;
+        };
+        let Some(missing_utf8) = missing.to_str().map(str::to_owned) else {
+            cleanup_owned_root(&root);
+            return;
+        };
+
         let discovered = discover_native_shell_profiles(&inventory(vec![
-            missing.to_str().unwrap().to_owned(),
-            shell.to_str().unwrap().to_owned(),
-            non_executable.to_str().unwrap().to_owned(),
-            directory.to_str().unwrap().to_owned(),
-            shell.to_str().unwrap().to_owned(),
+            missing_utf8,
+            shell_utf8.clone(),
+            non_executable_utf8,
+            directory_utf8,
+            shell_utf8.clone(),
         ]))
         .unwrap();
 
         assert_eq!(discovered.len(), 1);
         let profile = &discovered[0];
-        assert_eq!(profile.executable, shell.to_str().unwrap());
+        assert_eq!(profile.executable, shell_utf8);
         assert!(profile.arguments.is_empty());
         assert_eq!(profile.display_name, "fixture-shell");
         assert_eq!(profile.cwd_strategy, ShellCwdStrategy::WorkspaceRoot);
@@ -370,9 +387,11 @@ mod tests {
         let root = test_root("stale");
         let shell = root.join("fixture-shell");
         create_executable(&shell, "#!/bin/sh\n");
-        let mut discovered =
-            discover_native_shell_profiles(&inventory(vec![shell.to_str().unwrap().to_owned()]))
-                .unwrap();
+        let Some(shell_utf8) = shell.to_str().map(str::to_owned) else {
+            cleanup_owned_root(&root);
+            return;
+        };
+        let mut discovered = discover_native_shell_profiles(&inventory(vec![shell_utf8])).unwrap();
         assert_eq!(discovered.len(), 1);
         let profile = discovered.pop().unwrap();
 
@@ -389,9 +408,11 @@ mod tests {
         let root = test_root("identity");
         let shell = root.join("fixture-shell");
         create_executable(&shell, "#!/bin/sh\n");
-        let mut discovered =
-            discover_native_shell_profiles(&inventory(vec![shell.to_str().unwrap().to_owned()]))
-                .unwrap();
+        let Some(shell_utf8) = shell.to_str().map(str::to_owned) else {
+            cleanup_owned_root(&root);
+            return;
+        };
+        let mut discovered = discover_native_shell_profiles(&inventory(vec![shell_utf8])).unwrap();
         let mut profile = discovered.pop().unwrap();
 
         profile.display_name = "UX label only".to_owned();
