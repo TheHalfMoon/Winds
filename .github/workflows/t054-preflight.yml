@@ -5,6 +5,7 @@ on:
     branches: [ci/t053-obsolete-run-cleanup]
     paths:
       - ".github/t054_patch.py"
+      - ".github/t054_postpatch.py"
       - ".github/workflows/t054-preflight.yml"
 
 permissions:
@@ -45,15 +46,7 @@ jobs:
         run: |
           set -euo pipefail
           python tools/.github/t054_patch.py target
-          python - <<'PY'
-          from pathlib import Path
-          path = Path("target/migrations/0004_shell_commands.sql")
-          text = path.read_text(encoding="utf-8")
-          speculative = "\nCREATE INDEX IF NOT EXISTS idx_shell_commands_executable\n    ON shell_commands(executable, execution_id);\n"
-          if text.count(speculative) != 1:
-              raise SystemExit("expected exactly one speculative executable index")
-          path.write_text(text.replace(speculative, "\n", 1), encoding="utf-8")
-          PY
+          python tools/.github/t054_postpatch.py target
       - name: Verify intended patch surface
         shell: bash
         working-directory: target
