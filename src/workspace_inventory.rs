@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 use std::fs;
 #[cfg(unix)]
 use std::fs::File;
+use std::io::ErrorKind;
 #[cfg(unix)]
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -52,8 +53,8 @@ pub fn inventory_workspace_environment(
         host_arch: std::env::consts::ARCH.to_owned(),
         canonical_worktree_root: workspace.canonical_worktree_root.clone(),
         git_common_dir: workspace.git_common_dir.clone(),
-        shell_candidates: discover_shell_candidates(),
-        detected_manifests: detect_manifests(&worktree_root),
+        shell_candidates: discover_shell_candidates()?,
+        detected_manifests: detect_manifests(&worktree_root)?,
     })
 }
 
@@ -74,27 +75,35 @@ fn require_current_canonical_directory(value: &str, label: &str) -> Result<PathB
     Ok(canonical)
 }
 
-fn detect_manifests(worktree_root: &Path) -> Vec<String> {
-    MANIFEST_PATHS
-        .iter()
-        .filter_map(|relative| {
-            let metadata = fs::symlink_metadata(worktree_root.join(relative)).ok()?;
-            let kind = metadata.file_type();
-            (kind.is_file() || kind.is_symlink()).then(|| (*relative).to_owned())
-        })
-        .collect()
+fn detect_manifests(worktree_root: &Path) -> Result<Vec<String>> {
+    let mut detected = Vec::new();
+    for relative in MANIFEST_PATHS {
+        match fs::symlink_metadata(worktree_root.join(relative)) {
+            Ok(metadata) => {
+                let kind = metadata.file_type();
+                if kind.is_file() || kind.is_symlink() {
+                    detected.push((*relative).to_owned());
+                }
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!("manifest path cannot be inspected ({relative}): {error}").into());
+            }
+        }
+    }
+    Ok(detected)
 }
 
-fn discover_shell_candidates() -> Vec<String> {
+fn discover_shell_candidates() -> Result<Vec<String>> {
     let mut candidates = BTreeSet::new();
     add_environment_shell_candidate(&mut candidates, "SHELL");
     add_environment_shell_candidate(&mut candidates, "COMSPEC");
 
-    for candidate in system_shell_candidates() {
+    for candidate in system_shell_candidates()? {
         add_shell_candidate(&mut candidates, &candidate);
     }
 
-    candidates.into_iter().collect()
+    Ok(candidates.into_iter().collect())
 }
 
 fn add_environment_shell_candidate(candidates: &mut BTreeSet<String>, variable: &str) {
@@ -119,29 +128,32 @@ fn add_shell_candidate(candidates: &mut BTreeSet<String>, value: &str) {
 }
 
 #[cfg(unix)]
-fn system_shell_candidates() -> Vec<String> {
-    let Ok(file) = File::open("/etc/shells") else {
-        return Vec::new();
+fn system_shell_candidates() -> Result<Vec<String>> {
+    let file = match File::open("/etc/shells") {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("/etc/shells cannot be inspected: {error}").into()),
     };
     parse_system_shells(BufReader::new(file))
 }
 
 #[cfg(not(unix))]
-fn system_shell_candidates() -> Vec<String> {
-    Vec::new()
+fn system_shell_candidates() -> Result<Vec<String>> {
+    Ok(Vec::new())
 }
 
 #[cfg(unix)]
-fn parse_system_shells(reader: impl BufRead) -> Vec<String> {
+fn parse_system_shells(reader: impl BufRead) -> Result<Vec<String>> {
     let mut candidates = BTreeSet::new();
-    for line in reader.lines().map_while(std::result::Result::ok) {
+    for line in reader.lines() {
+        let line = line.map_err(|error| format!("/etc/shells cannot be read completely: {error}"))?;
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
         add_shell_candidate(&mut candidates, line);
     }
-    candidates.into_iter().collect()
+    Ok(candidates.into_iter().collect())
 }
 
 #[cfg(test)]
@@ -276,13 +288,26 @@ mod tests {
         cleanup_owned_root(&root);
     }
 
+    #[test]
+    fn manifest_metadata_ambiguity_fails_closed_instead_of_looking_absent() {
+        let root = test_root("manifest-ambiguity");
+        let (workspace, worktree) = fixture_workspace(&root);
+        fs::write(worktree.join(".devcontainer"), b"not a directory\n").unwrap();
+
+        let error = inventory_workspace_environment(&workspace).unwrap_err();
+        assert!(error.to_string().contains("manifest path cannot be inspected"));
+        assert!(error.to_string().contains(".devcontainer/devcontainer.json"));
+
+        cleanup_owned_root(&root);
+    }
+
     #[cfg(unix)]
     #[test]
     fn system_shell_parser_is_nonexecuting_deterministic_and_fail_closed() {
         let input = Cursor::new(
             b"# system shells\n/bin/zsh\n/bin/bash\nrelative-shell\n/bin/zsh\n\n/usr/bin/fish\n",
         );
-        let parsed = parse_system_shells(input);
+        let parsed = parse_system_shells(input).unwrap();
         assert_eq!(
             parsed,
             vec![
