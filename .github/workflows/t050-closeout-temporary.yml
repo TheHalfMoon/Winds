@@ -1,0 +1,44 @@
+name: t050-closeout-temporary
+
+on:
+  push:
+    branches: [docs/003-t050-closeout]
+
+permissions:
+  contents: write
+
+jobs:
+  closeout:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: true
+      - name: Record exact T050 canonical evidence
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('specs/003-workspace-execution-spine/tasks.md')
+          text = path.read_text(encoding='utf-8')
+          old = '- [ ] **T050** Implement the smallest PTY-backed interactive terminal controller on Linux/macOS using the accepted T043 dependency/primitive. Support exact session identity, start cwd, input/output streaming, resize, interrupt, observed exit, terminate/close, and reaping only for resources/processes Winds can prove it owns.'
+          new = '- [x] **T050** Implement the smallest PTY-backed interactive terminal controller on Linux/macOS using the accepted T043 dependency/primitive. Support exact session identity, start cwd, input/output streaming, resize, interrupt, observed exit, terminate/close, and reaping only for resources/processes Winds can prove it owns. **Canonical evidence:** PR #23 exact implementation head `f9346f95f3949432538e8cbe9e7c9b7acd1dcf6c` passed quality #209, release-candidate #75, Ubuntu/macOS format+Clippy+tests, SC-001 100-cycle soak, Linux x86-64 and macOS arm64 release builds/license bundles/artifacts, final exact-head correctness/safety and Ponytail review, Qodo exact-head review recommending the implementation as the best fit for T050, CodeRabbit exact-head review with no blocking correctness/safety issue, and zero unresolved review threads. `portable-pty` is exact-pinned to `0.9.0`; Cargo generated the committed lockfile under Rust 1.97.1; the exact transitive/license audit is recorded in `docs/provenance/portable-pty-0.9.0-lock-audit.md`; and the fail-closed release collector was extended only for the two exact `winapi-*-pc-windows-gnu 0.4.0` package tuples using byte-for-byte upstream MIT/Apache texts from `retep998/winapi-rs` tag `0.3.9`. PR #23 merged as canonical main `44999cc3e383ceb28d23028428d0c9f2b7e997f7`; post-merge quality #210 passed on that exact main. The accepted Unix-only slice revalidates the exact T048 profile before launch, requires a canonical absolute directory cwd, creates a real PTY, exposes one output consumer, supports input/resize/current-size, validates live PTY-session ownership before foreground-group SIGINT, observes/caches final child exit, and terminates/reaps only through the retained child handle. It does not claim durable session identity, restart attachment, descendant-tree cleanup, T051 native-Windows/ConPTY support, T052 WSL launch/mapping, T053 persistence, T054 telemetry, T057 CLI, terminal rendering, daemon/public protocol, MCP/ACP/plugin, or Agent Fleet behavior.'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected exactly one T050 unchecked line, found {text.count(old)}')
+          text = text.replace(old, new)
+          if '- [ ] **T051**' not in text:
+              raise SystemExit('T051 must remain unchecked')
+          path.write_text(text, encoding='utf-8')
+      - name: Commit closeout
+        shell: bash
+        run: |
+          test "$GITHUB_REF_NAME" = "docs/003-t050-closeout"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add specs/003-workspace-execution-spine/tasks.md
+          git diff --cached --check
+          git diff --cached --name-only | grep -Fx 'specs/003-workspace-execution-spine/tasks.md'
+          test "$(git diff --cached --name-only | wc -l | tr -d ' ')" = "1"
+          git commit -m "docs(winds): close T050 Unix PTY lifecycle"
+          git push origin "HEAD:$GITHUB_REF_NAME"
