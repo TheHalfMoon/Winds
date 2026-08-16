@@ -35,7 +35,7 @@ pub(crate) mod wsl_launch;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
-const GIT_CONTEXT_ENV_VARS: &[&str] = &[
+pub(super) const GIT_CONTEXT_ENV_VARS: &[&str] = &[
     "GIT_DIR",
     "GIT_WORK_TREE",
     "GIT_COMMON_DIR",
