@@ -4,56 +4,56 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[cfg(windows)]
+#[test]
+fn native_windows_refuses_authoritative_required_checks_without_mutation() {
+    let root = unique_temp_dir("winds-walking-skeleton");
+    let repo = root.join("repo with spaces");
+    let winds_home = root.join("winds-home");
+    fs::create_dir_all(&repo).unwrap();
+    git(&repo, ["init", "-b", "main"]);
+    git(
+        &repo,
+        ["config", "user.email", "winds-test@example.invalid"],
+    );
+    git(&repo, ["config", "user.name", "Winds Test"]);
+    fs::write(repo.join("result.txt"), "base\n").unwrap();
+    git(&repo, ["add", "result.txt"]);
+    git(&repo, ["commit", "-m", "base"]);
+    let head = git_text(&repo, ["rev-parse", "HEAD"]);
+
+    let unsupported = winds(
+        &winds_home,
+        [
+            "verify",
+            "--repo",
+            repo.to_str().unwrap(),
+            "--base",
+            &head,
+            "--candidate",
+            &head,
+            "--check",
+            "true",
+        ],
+    );
+    assert!(!unsupported.status.success());
+    assert!(
+        String::from_utf8_lossy(&unsupported.stderr)
+            .contains("authoritative required-check execution is unsupported on native Windows"),
+        "unexpected native-Windows verification refusal: {}",
+        String::from_utf8_lossy(&unsupported.stderr)
+    );
+    assert!(!winds_home.exists());
+    assert_eq!(git_text(&repo, ["branch", "--show-current"]), "main");
+    assert_eq!(git_text(&repo, ["rev-parse", "HEAD"]), head);
+    assert!(git_bytes(&repo, ["status", "--porcelain=v1", "-z"]).is_empty());
+
+    remove_owned_temp_dir(&root);
+}
+
+#[cfg(unix)]
 #[test]
 fn verifies_blocks_and_promotes_without_touching_primary_checkout() {
-    #[cfg(windows)]
-    {
-        let root = unique_temp_dir("winds-walking-skeleton");
-        let repo = root.join("repo with spaces");
-        let winds_home = root.join("winds-home");
-        fs::create_dir_all(&repo).unwrap();
-        git(&repo, ["init", "-b", "main"]);
-        git(
-            &repo,
-            ["config", "user.email", "winds-test@example.invalid"],
-        );
-        git(&repo, ["config", "user.name", "Winds Test"]);
-        fs::write(repo.join("result.txt"), "base\n").unwrap();
-        git(&repo, ["add", "result.txt"]);
-        git(&repo, ["commit", "-m", "base"]);
-        let head = git_text(&repo, ["rev-parse", "HEAD"]);
-
-        let unsupported = winds(
-            &winds_home,
-            [
-                "verify",
-                "--repo",
-                repo.to_str().unwrap(),
-                "--base",
-                &head,
-                "--candidate",
-                &head,
-                "--check",
-                "true",
-            ],
-        );
-        assert!(!unsupported.status.success());
-        assert!(
-            String::from_utf8_lossy(&unsupported.stderr).contains(
-                "authoritative required-check execution is unsupported on native Windows"
-            ),
-            "unexpected native-Windows verification refusal: {}",
-            String::from_utf8_lossy(&unsupported.stderr)
-        );
-        assert!(!winds_home.exists());
-        assert_eq!(git_text(&repo, ["branch", "--show-current"]), "main");
-        assert_eq!(git_text(&repo, ["rev-parse", "HEAD"]), head);
-        assert!(git_bytes(&repo, ["status", "--porcelain=v1", "-z"]).is_empty());
-
-        remove_owned_temp_dir(&root);
-        return;
-    }
-
     let root = unique_temp_dir("winds-walking-skeleton");
     let repo = root.join("repo with spaces");
     let winds_home = root.join("winds-home");
@@ -382,6 +382,7 @@ fn winds<const N: usize>(home: &Path, args: [&str; N]) -> Output {
         .unwrap()
 }
 
+#[cfg(unix)]
 fn winds_with_env<const N: usize>(home: &Path, args: [&str; N], key: &str, value: &str) -> Output {
     Command::new(env!("CARGO_BIN_EXE_winds"))
         .args(args)
