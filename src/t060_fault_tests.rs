@@ -133,7 +133,10 @@ fn create_typed_terminal_request(store: &mut Store, execution_id: &str, requeste
         .unwrap();
 }
 
-fn wait_for_marker(mut reader: Box<dyn Read + Send>, marker: &'static [u8]) -> thread::JoinHandle<()> {
+fn wait_for_marker(
+    mut reader: Box<dyn Read + Send>,
+    marker: &'static [u8],
+) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let mut observed = Vec::new();
         let mut buffer = [0_u8; 4096];
@@ -150,7 +153,10 @@ fn wait_for_marker(mut reader: Box<dyn Read + Send>, marker: &'static [u8]) -> t
                         observed.len() <= OUTPUT_BOUND,
                         "PTY fixture output exceeded bound"
                     );
-                    if observed.windows(marker.len()).any(|window| window == marker) {
+                    if observed
+                        .windows(marker.len())
+                        .any(|window| window == marker)
+                    {
                         return;
                     }
                 }
@@ -209,9 +215,11 @@ fn input_and_resize_racing_with_exit_never_reopen_final_session() {
 
     assert_eq!(final_exit.exit_code, 0);
     assert!(execution.send_input(b"echo impossible\n").is_err());
-    assert!(execution
-        .resize(TerminalSize { rows: 30, cols: 90 })
-        .is_err());
+    assert!(
+        execution
+            .resize(TerminalSize { rows: 30, cols: 90 })
+            .is_err()
+    );
     assert_eq!(execution.try_wait().unwrap(), Some(final_exit));
     drop(execution);
 
@@ -370,7 +378,9 @@ fn sqlite_running_failure_after_child_spawn_is_repaired_to_interrupted() {
         &workspace,
         DEFAULT_SIZE,
     );
-    let error = result.err().expect("RUNNING persistence failure must surface");
+    let error = result
+        .err()
+        .expect("RUNNING persistence failure must surface");
     assert!(
         error
             .to_string()
