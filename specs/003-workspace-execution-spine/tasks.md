@@ -57,6 +57,7 @@ This checklist records implementation/evidence truth for Spec 003. A checked ite
 ## Explicit Follow-On Specifications
 
 These are product goals, **not hidden unchecked work inside Spec 003**:
+
 - **Spec 004 - SQL Studio**: secret-safe connection profiles, schema/catalog intelligence, query editor/history, explicit transaction/write safety, dialect-aware parsing, timing/rows/results/export, EXPLAIN/plan evidence, and workspace-linked query executions.
 - **Spec 005 - LLM Observatory**: provider/model traces, input/output/cache/reasoning tokens, total/streaming latency, retries/errors/rate limits, exact or unknown cost with pricing provenance, budgets/aggregates, tool/subagent spans, payload privacy, and OpenTelemetry-aligned export.
 - **Later UI slice**: graphical workspace organization, panes/tabs, embedded terminal renderer, SQL data grid/plan visualization, and LLM timeline dashboards built on the proven backend records.
