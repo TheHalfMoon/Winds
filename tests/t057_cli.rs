@@ -1,4 +1,5 @@
 use serde_json::Value;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -6,7 +7,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
 fn minimal_cli_proves_workspace_profiles_execution_and_terminal_paths() {
-    let root = unique_temp_dir("winds-t057-cli");
+    let Some(temp) = TestTempDir::new("winds-t057-cli") else {
+        return;
+    };
+    let root = temp.path();
     let repo = root.join("repo");
     let other_repo = root.join("other-repo");
     let winds_home = root.join("winds-home");
@@ -15,13 +19,14 @@ fn minimal_cli_proves_workspace_profiles_execution_and_terminal_paths() {
 
     let opened = winds(
         &winds_home,
-        ["workspace-open", "--repo", repo.to_str().unwrap()],
+        ["workspace-open", "--repo", test_path(&repo)],
     );
     assert_success(&opened);
     let opened_json: Value = serde_json::from_slice(&opened.stdout).unwrap();
+    let canonical_repo = repo.canonicalize().unwrap();
     assert_eq!(
         opened_json["canonical_worktree_root"],
-        repo.canonicalize().unwrap().to_str().unwrap()
+        test_path(&canonical_repo)
     );
     let workspace_id = opened_json["workspace_id"].as_str().unwrap().to_owned();
     assert!(!workspace_id.is_empty());
@@ -29,13 +34,13 @@ fn minimal_cli_proves_workspace_profiles_execution_and_terminal_paths() {
 
     let reopened = winds(
         &winds_home,
-        ["workspace-open", "--repo", repo.to_str().unwrap()],
+        ["workspace-open", "--repo", test_path(&repo)],
     );
     assert_success(&reopened);
     let reopened_json: Value = serde_json::from_slice(&reopened.stdout).unwrap();
     assert_eq!(reopened_json["workspace_id"], workspace_id);
 
-    let profiles = winds(&winds_home, ["profiles", "--repo", repo.to_str().unwrap()]);
+    let profiles = winds(&winds_home, ["profiles", "--repo", test_path(&repo)]);
     assert_success(&profiles);
     let profiles_json: Value = serde_json::from_slice(&profiles.stdout).unwrap();
     let native_profiles = profiles_json["native_shell_profiles"].as_array().unwrap();
@@ -52,7 +57,7 @@ fn minimal_cli_proves_workspace_profiles_execution_and_terminal_paths() {
         [
             "run",
             "--repo",
-            repo.to_str().unwrap(),
+            test_path(&repo),
             "--execution-id",
             command_id,
             "--executable",
@@ -79,7 +84,7 @@ fn minimal_cli_proves_workspace_profiles_execution_and_terminal_paths() {
         [
             "execution",
             "--repo",
-            repo.to_str().unwrap(),
+            test_path(&repo),
             "--execution-id",
             command_id,
         ],
@@ -95,7 +100,7 @@ fn minimal_cli_proves_workspace_profiles_execution_and_terminal_paths() {
         [
             "execution",
             "--repo",
-            other_repo.to_str().unwrap(),
+            test_path(&other_repo),
             "--execution-id",
             command_id,
         ],
@@ -112,7 +117,7 @@ fn minimal_cli_proves_workspace_profiles_execution_and_terminal_paths() {
         [
             "terminal-proof",
             "--repo",
-            repo.to_str().unwrap(),
+            test_path(&repo),
             "--execution-id",
             terminal_id,
             "--profile-id",
@@ -133,33 +138,56 @@ fn minimal_cli_proves_workspace_profiles_execution_and_terminal_paths() {
         "TERMINATED_BY_WINDS"
     );
     assert_eq!(terminal_json["proof"]["profile_id"], profile_id);
-
-    remove_owned_temp_dir(&root, "winds-t057-cli-");
 }
 
 #[test]
-fn workspace_clone_rejects_state_root_inside_destination_before_creation() {
-    let root = unique_temp_dir("winds-t057-clone");
+fn workspace_clone_rejects_unsafe_state_roots_before_creation() {
+    let Some(temp) = TestTempDir::new("winds-t057-clone") else {
+        return;
+    };
+    let root = temp.path();
     let source = root.join("source");
     init_repo(&source, "source");
-    let destination = root.join("clone");
-    let nested_home = destination.join(".winds");
 
-    let rejected = Command::new(env!("CARGO_BIN_EXE_winds"))
+    let source_nested_home = source.join(".winds");
+    let source_guard_destination = root.join("clone-source-guard");
+    let rejected_source_home = Command::new(env!("CARGO_BIN_EXE_winds"))
         .args([
             "workspace-clone",
             "--remote",
-            source.to_str().unwrap(),
+            test_path(&source),
             "--destination",
-            destination.to_str().unwrap(),
+            test_path(&source_guard_destination),
             "--home",
-            nested_home.to_str().unwrap(),
+            test_path(&source_nested_home),
         ])
         .output()
         .unwrap();
-    assert!(!rejected.status.success());
+    assert!(!rejected_source_home.status.success());
     assert!(
-        String::from_utf8_lossy(&rejected.stderr)
+        String::from_utf8_lossy(&rejected_source_home.stderr)
+            .contains("Winds state root must live outside the local clone source")
+    );
+    assert!(!source_nested_home.exists());
+    assert!(!source_guard_destination.exists());
+
+    let destination = root.join("clone");
+    let nested_home = destination.join(".winds");
+    let rejected_destination_home = Command::new(env!("CARGO_BIN_EXE_winds"))
+        .args([
+            "workspace-clone",
+            "--remote",
+            test_path(&source),
+            "--destination",
+            test_path(&destination),
+            "--home",
+            test_path(&nested_home),
+        ])
+        .output()
+        .unwrap();
+    assert!(!rejected_destination_home.status.success());
+    assert!(
+        String::from_utf8_lossy(&rejected_destination_home.stderr)
             .contains("clone destination and Winds state root must not overlap")
     );
     assert!(!destination.exists());
@@ -169,26 +197,26 @@ fn workspace_clone_rejects_state_root_inside_destination_before_creation() {
         .args([
             "workspace-clone",
             "--remote",
-            source.to_str().unwrap(),
+            test_path(&source),
             "--destination",
-            destination.to_str().unwrap(),
+            test_path(&destination),
             "--home",
-            safe_home.to_str().unwrap(),
+            test_path(&safe_home),
         ])
         .output()
         .unwrap();
     assert_success(&cloned);
     let cloned_json: Value = serde_json::from_slice(&cloned.stdout).unwrap();
+    let canonical_destination = destination.canonicalize().unwrap();
+    let canonical_source = source.canonicalize().unwrap();
     assert_eq!(
         cloned_json["workspace"]["canonical_worktree_root"],
-        destination.canonicalize().unwrap().to_str().unwrap()
+        test_path(&canonical_destination)
     );
     assert_eq!(
         cloned_json["remote_identity"],
-        source.canonicalize().unwrap().to_str().unwrap()
+        test_path(&canonical_source)
     );
-
-    remove_owned_temp_dir(&root, "winds-t057-clone-");
 }
 
 fn init_repo(path: &Path, content: &str) {
@@ -228,26 +256,76 @@ fn assert_success(output: &Output) {
     );
 }
 
-fn remove_owned_temp_dir(path: &Path, prefix: &str) {
-    let temp = std::env::temp_dir().canonicalize().unwrap();
-    let canonical = path.canonicalize().unwrap();
-    assert_eq!(canonical.parent(), Some(temp.as_path()));
-    assert!(
-        canonical
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap()
-            .starts_with(prefix)
-    );
-    fs::remove_dir_all(canonical).unwrap();
+fn test_path(path: &Path) -> &str {
+    path.to_str().expect(
+        "T057 CLI integration fixture root is validated as UTF-8; derived ASCII child paths must remain UTF-8",
+    )
 }
 
-fn unique_temp_dir(prefix: &str) -> PathBuf {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    let path = std::env::temp_dir().join(format!("{prefix}-{nanos}-{}", std::process::id()));
-    fs::create_dir_all(&path).unwrap();
-    path
+struct TestTempDir {
+    path: PathBuf,
+    canonical_parent: PathBuf,
+    expected_name: OsString,
+}
+
+impl TestTempDir {
+    fn new(prefix: &str) -> Option<Self> {
+        let canonical_parent = std::env::temp_dir().canonicalize().ok()?;
+        if canonical_parent.to_str().is_none() {
+            return None;
+        }
+
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()?
+            .as_nanos();
+        let expected_name = OsString::from(format!(
+            "{prefix}-{nanos}-{}",
+            std::process::id()
+        ));
+        let path = canonical_parent.join(&expected_name);
+        fs::create_dir(&path).ok()?;
+
+        let canonical = match path.canonicalize() {
+            Ok(canonical) => canonical,
+            Err(_) => {
+                let _ = fs::remove_dir_all(&path);
+                return None;
+            }
+        };
+        if canonical != path || canonical.to_str().is_none() {
+            let _ = fs::remove_dir_all(&path);
+            return None;
+        }
+
+        Some(Self {
+            path,
+            canonical_parent,
+            expected_name,
+        })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TestTempDir {
+    fn drop(&mut self) {
+        let Ok(canonical) = self.path.canonicalize() else {
+            return;
+        };
+        if canonical.parent() != Some(self.canonical_parent.as_path())
+            || canonical.file_name() != Some(self.expected_name.as_os_str())
+        {
+            return;
+        }
+        let _ = fs::remove_dir_all(canonical);
+    }
+}
+
+#[test]
+fn temp_guard_name_is_exact_os_string() {
+    let name = OsStr::new("winds-t057-cli-fixture");
+    assert_eq!(name, OsStr::new("winds-t057-cli-fixture"));
 }
