@@ -2,7 +2,7 @@ use super::workspace::{WorkspaceInspection, inspect_existing_workspace};
 use super::{Result, git_command};
 use crate::store::{NewWorkspace, Store};
 use serde::Serialize;
-use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -32,14 +32,16 @@ pub fn clone_and_register_workspace(
     let parent = reserved_destination
         .parent()
         .ok_or("clone destination has no parent directory")?;
+    let git_remote = git_remote_argument(remote)?;
+    let git_destination = git_cli_local_path(&reserved_destination)?;
 
     let status = git_command(parent)
         .arg("-c")
         .arg("core.askPass=")
         .arg("clone")
         .arg("--")
-        .arg(OsStr::new(remote))
-        .arg(&reserved_destination)
+        .arg(&git_remote)
+        .arg(&git_destination)
         .env_remove("GIT_ASKPASS")
         .env_remove("SSH_ASKPASS")
         .env_remove("GIT_SSH")
@@ -132,6 +134,50 @@ fn reserve_clone_destination(destination: &Path, canonical_state_root: &Path) ->
     }
 
     Ok(planned)
+}
+
+fn git_remote_argument(remote: &str) -> Result<OsString> {
+    let local_path = Path::new(remote);
+    if local_path.is_absolute() {
+        return Ok(git_cli_local_path(local_path)?.into_os_string());
+    }
+    Ok(OsString::from(remote))
+}
+
+#[cfg(not(windows))]
+fn git_cli_local_path(path: &Path) -> Result<PathBuf> {
+    Ok(path.to_path_buf())
+}
+
+#[cfg(windows)]
+fn git_cli_local_path(path: &Path) -> Result<PathBuf> {
+    let value = path.to_str().ok_or("local Git path is not valid UTF-8")?;
+    if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+        let mut components = rest.split('\\');
+        let server = components.next().unwrap_or_default();
+        let share = components.next().unwrap_or_default();
+        if server.is_empty() || share.is_empty() {
+            return Err(
+                "Windows verbatim UNC path must include non-empty server and share components"
+                    .into(),
+            );
+        }
+        return Ok(PathBuf::from(format!(r"\\{rest}")));
+    }
+    if let Some(rest) = value.strip_prefix(r"\\?\") {
+        let bytes = rest.as_bytes();
+        let ordinary_drive_path = bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'\\' | b'/');
+        if !ordinary_drive_path {
+            return Err(
+                "Windows verbatim local Git path cannot be represented safely for Git CLI".into(),
+            );
+        }
+        return Ok(PathBuf::from(rest));
+    }
+    Ok(path.to_path_buf())
 }
 
 fn sanitize_remote_identity(remote: &str) -> Result<String> {
@@ -239,6 +285,8 @@ fn sanitize_scp_like_remote(remote: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use super::git_cli_local_path;
     use super::{clone_and_register_workspace, sanitize_remote_identity};
     use crate::store::Store;
     use rusqlite::{Connection, params};
@@ -379,6 +427,7 @@ mod tests {
             .unwrap();
         assert_eq!(remote_identity, cloned.remote_identity);
         assert_eq!(recorded_unix_ms, 100);
+        drop(connection);
 
         cleanup_owned_root(&root);
     }
@@ -469,6 +518,7 @@ mod tests {
             .unwrap();
         assert_eq!(workspace_count, 0);
         assert_eq!(origin_count, 0);
+        drop(connection);
 
         cleanup_owned_root(&root);
     }
@@ -500,5 +550,21 @@ mod tests {
         assert!(sanitize_remote_identity("ext::sh -c 'echo unsafe'").is_err());
         assert!(sanitize_remote_identity("custom://example.test/org/repo.git").is_err());
         assert!(sanitize_remote_identity("../relative/repo.git").is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_git_cli_local_path_removes_only_supported_verbatim_prefixes() {
+        assert_eq!(
+            git_cli_local_path(Path::new(r"\\?\C:\Temp\Winds Clone")).unwrap(),
+            PathBuf::from(r"C:\Temp\Winds Clone")
+        );
+        assert_eq!(
+            git_cli_local_path(Path::new(r"\\?\UNC\server\share\Winds Clone")).unwrap(),
+            PathBuf::from(r"\\server\share\Winds Clone")
+        );
+        assert!(git_cli_local_path(Path::new(r"\\?\UNC\server")).is_err());
+        assert!(git_cli_local_path(Path::new(r"\\?\UNC\")).is_err());
+        assert!(git_cli_local_path(Path::new(r"\\?\Volume{abc}\repo")).is_err());
     }
 }

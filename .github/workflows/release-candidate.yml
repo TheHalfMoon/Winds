@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - .github/workflows/release-candidate.yml
+      - .github/workflows/windows-terminal.yml
       - scripts/release/**
       - third-party/licenses/**
       - rust-toolchain.toml

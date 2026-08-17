@@ -6,20 +6,9 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
-      - "src/check.rs"
-      - "src/command.rs"
-      - "src/domain.rs"
-      - "src/execution.rs"
-      - "src/git.rs"
-      - "src/main.rs"
-      - "src/shell_profiles.rs"
-      - "src/store.rs"
-      - "src/terminal.rs"
-      - "src/terminal_windows_tests.rs"
-      - "src/workspace.rs"
-      - "src/wsl.rs"
-      - "src/wsl_launch.rs"
-      - "migrations/0004_shell_commands.sql"
+      - "src/**"
+      - "tests/**"
+      - "migrations/**"
       - ".github/workflows/windows-terminal.yml"
   push:
     branches: [main]
@@ -27,29 +16,40 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
-      - "src/check.rs"
-      - "src/command.rs"
-      - "src/domain.rs"
-      - "src/execution.rs"
-      - "src/git.rs"
-      - "src/main.rs"
-      - "src/shell_profiles.rs"
-      - "src/store.rs"
-      - "src/terminal.rs"
-      - "src/terminal_windows_tests.rs"
-      - "src/workspace.rs"
-      - "src/wsl.rs"
-      - "src/wsl_launch.rs"
-      - "migrations/0004_shell_commands.sql"
+      - "src/**"
+      - "tests/**"
+      - "migrations/**"
       - ".github/workflows/windows-terminal.yml"
 
 permissions:
   contents: read
 
 jobs:
+  unix-terminal-integration:
+    name: unix-terminal-integration (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04
+          - macos-15
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.97.1
+      - name: PTY lifecycle integration
+        run: cargo test --locked --bin winds git::terminal::tests -- --test-threads=1
+      - name: CLI terminal proof integration
+        run: cargo test --locked --test t057_cli minimal_cli_proves_workspace_profiles_execution_and_terminal_paths -- --test-threads=1
+
   native-windows-terminal:
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -64,6 +64,8 @@ jobs:
         run: cargo check --locked --all-targets --all-features
       - name: Clippy touched surface
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - name: Full Spec 003 touched-surface tests
+        run: cargo test --locked --all-targets --all-features -- --test-threads=1
       - name: Native Windows ConPTY lifecycle tests
         run: cargo test --locked --bin winds terminal::windows_tests -- --test-threads=1
       - name: WSL launch unit tests
