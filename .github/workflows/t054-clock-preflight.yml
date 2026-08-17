@@ -40,7 +40,7 @@ jobs:
         with:
           toolchain: 1.97.1
           components: rustfmt, clippy
-      - name: Apply uncommitted monotonic timing repair
+      - name: Apply uncommitted clock-regression repair
         shell: bash
         run: |
           set -euo pipefail
@@ -50,15 +50,7 @@ jobs:
         working-directory: target
         run: |
           set -euo pipefail
-          expected=$(cat <<'EOF'
-          migrations/0004_shell_commands.sql
-          src/command.rs
-          src/domain.rs
-          src/store.rs
-          EOF
-          )
-          actual=$(git status --short | awk '{print $2}' | sort)
-          test "$actual" = "$(printf '%s\n' "$expected" | sort)"
+          test "$(git status --short | awk '{print $2}')" = "src/command.rs"
           git diff --check
       - name: Format
         working-directory: target
@@ -89,13 +81,5 @@ jobs:
         working-directory: target
         run: |
           set -euo pipefail
-          expected=$(cat <<'EOF'
-          migrations/0004_shell_commands.sql
-          src/command.rs
-          src/domain.rs
-          src/store.rs
-          EOF
-          )
-          actual=$(git status --short | awk '{print $2}' | sort)
-          test "$actual" = "$(printf '%s\n' "$expected" | sort)"
+          test "$(git status --short | awk '{print $2}')" = "src/command.rs"
           git diff --check
