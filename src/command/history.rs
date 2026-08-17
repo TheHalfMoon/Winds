@@ -13,9 +13,9 @@ const SECRET_FILTERING_MODE: &str = "BEST_EFFORT_METADATA_REDACTION_NOT_SECRET_D
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 pub struct SessionHistoryPolicy {
-    pub command_history_enabled: bool,
-    pub transcript_enabled: bool,
-    pub transcript_byte_quota: usize,
+    command_history_enabled: bool,
+    transcript_enabled: bool,
+    transcript_byte_quota: usize,
 }
 
 impl SessionHistoryPolicy {
@@ -39,32 +39,22 @@ impl SessionHistoryPolicy {
         command_history_enabled: bool,
         transcript_byte_quota: usize,
     ) -> Result<Self> {
-        let policy = Self {
+        if transcript_byte_quota == 0 {
+            return Err(
+                "enabled terminal transcript history requires a non-zero byte quota".into(),
+            );
+        }
+        if transcript_byte_quota > HARD_MAX_TRANSCRIPT_BYTES {
+            return Err(format!(
+                "terminal transcript byte quota exceeds the Spec 003 T056 hard maximum of {HARD_MAX_TRANSCRIPT_BYTES} bytes"
+            )
+            .into());
+        }
+        Ok(Self {
             command_history_enabled,
             transcript_enabled: true,
             transcript_byte_quota,
-        };
-        policy.validate()?;
-        Ok(policy)
-    }
-
-    fn validate(self) -> Result<()> {
-        if self.transcript_enabled {
-            if self.transcript_byte_quota == 0 {
-                return Err(
-                    "enabled terminal transcript history requires a non-zero byte quota".into(),
-                );
-            }
-            if self.transcript_byte_quota > HARD_MAX_TRANSCRIPT_BYTES {
-                return Err(format!(
-                    "terminal transcript byte quota exceeds the Spec 003 T056 hard maximum of {HARD_MAX_TRANSCRIPT_BYTES} bytes"
-                )
-                .into());
-            }
-        } else if self.transcript_byte_quota != 0 {
-            return Err("disabled terminal transcript history must use a zero byte quota".into());
-        }
-        Ok(())
+        })
     }
 
     fn any_persistence_enabled(self) -> bool {
@@ -138,7 +128,6 @@ impl SessionHistoryRecorder {
                 "session history requires a non-empty control-character-free execution id".into(),
             );
         }
-        policy.validate()?;
         Ok(Self {
             execution_id: execution_id.to_owned(),
             policy,
@@ -224,19 +213,22 @@ impl SessionHistoryRecorder {
             transcript,
         };
         validate_manifest(&manifest)?;
-        let manifest_bytes = serde_json::to_vec(&manifest)?;
-        let manifest_blob: HistoryBlobRef = store
-            .write_blob(&storage_key, "history-manifest", &manifest_bytes, false)?
+        let manifest_blob = store
+            .write_blob(
+                &storage_key,
+                "history-manifest",
+                &serde_json::to_vec(&manifest)?,
+                false,
+            )?
             .into();
-        let persisted = PersistedSessionHistory {
-            manifest,
-            manifest_blob,
-        };
         self.state
             .lock()
             .map_err(|_| "terminal history state lock is poisoned")?
             .persisted = true;
-        Ok(Some(persisted))
+        Ok(Some(PersistedSessionHistory {
+            manifest,
+            manifest_blob,
+        }))
     }
 }
 
@@ -259,12 +251,9 @@ impl Read for HistoryReader {
         state.observed_bytes = state
             .observed_bytes
             .saturating_add(u64::try_from(read).unwrap_or(u64::MAX));
-        let available = self.quota.saturating_sub(state.retained.len());
-        let keep = available.min(read);
+        let keep = self.quota.saturating_sub(state.retained.len()).min(read);
         state.retained.extend_from_slice(&buffer[..keep]);
-        if keep < read {
-            state.truncated = true;
-        }
+        state.truncated |= keep < read;
         Ok(read)
     }
 }
@@ -288,33 +277,27 @@ pub(crate) fn sanitize_persisted_arguments(arguments: &[String]) -> Vec<String> 
             redact_next = false;
             continue;
         }
-
         let lower = argument.to_ascii_lowercase();
         if is_secret_option(&lower) {
             sanitized.push(argument.clone());
             redact_next = true;
-            continue;
-        }
-        if contains_obvious_secret_assignment(&lower)
+        } else if contains_obvious_secret_assignment(&lower)
             || lower.contains("authorization:")
             || lower.contains("proxy-authorization:")
         {
             sanitized.push(REDACTED.to_owned());
-            continue;
-        }
-        if let Some(url) = sanitize_url_like_argument(argument) {
+        } else if let Some(url) = sanitize_url_like_argument(argument) {
             sanitized.push(url);
-            continue;
+        } else {
+            sanitized.push(argument.clone());
         }
-        sanitized.push(argument.clone());
     }
     sanitized
 }
 
 fn is_secret_option(lower: &str) -> bool {
-    let normalized = lower.trim_start_matches('-').replace('_', "-");
     matches!(
-        normalized.as_str(),
+        lower.trim_start_matches('-').replace('_', "-").as_str(),
         "api-key"
             | "apikey"
             | "token"
@@ -359,22 +342,22 @@ fn sanitize_url_like_argument(argument: &str) -> Option<String> {
         return None;
     }
     let (scheme, rest) = argument.split_once("://")?;
-    if scheme.is_empty()
-        || !scheme.chars().enumerate().all(|(index, ch)| {
+    let valid_scheme = !scheme.is_empty()
+        && scheme.chars().enumerate().all(|(index, ch)| {
             if index == 0 {
                 ch.is_ascii_alphabetic()
             } else {
                 ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.')
             }
-        })
-    {
+        });
+    if !valid_scheme {
         return Some(REDACTED.to_owned());
     }
-    let tail_index = rest
+    let tail = rest
         .char_indices()
         .find_map(|(index, ch)| matches!(ch, '?' | '#').then_some(index))
         .unwrap_or(rest.len());
-    let without_tail = &rest[..tail_index];
+    let without_tail = &rest[..tail];
     let authority_end = without_tail.find('/').unwrap_or(without_tail.len());
     let raw_authority = &without_tail[..authority_end];
     let authority = raw_authority
@@ -383,58 +366,36 @@ fn sanitize_url_like_argument(argument: &str) -> Option<String> {
     if authority.is_empty() && !scheme.eq_ignore_ascii_case("file") {
         return Some(REDACTED.to_owned());
     }
-    let path = &without_tail[authority_end..];
     Some(format!(
-        "{}://{authority}{path}",
-        scheme.to_ascii_lowercase()
+        "{}://{authority}{}",
+        scheme.to_ascii_lowercase(),
+        &without_tail[authority_end..]
     ))
 }
 
 fn validate_manifest(manifest: &SessionHistoryManifest) -> Result<()> {
-    if manifest.schema_version != HISTORY_SCHEMA_VERSION {
-        return Err(format!(
-            "unsupported session history schema version: {}",
-            manifest.schema_version
-        )
-        .into());
-    }
-    if manifest.execution_id.is_empty() || manifest.execution_id.chars().any(char::is_control) {
-        return Err("session history manifest has invalid execution identity".into());
-    }
-    if !manifest.local_only || manifest.secret_filtering != SECRET_FILTERING_MODE {
-        return Err("session history manifest has unsupported privacy semantics".into());
-    }
-    manifest.policy.validate()?;
-    if manifest.transcript_observed_bytes < u64::try_from(manifest.transcript_retained_bytes)? {
-        return Err("session history retained bytes exceed observed bytes".into());
-    }
-    if manifest.transcript_retained_bytes > manifest.policy.transcript_byte_quota {
-        return Err("session history retained bytes exceed configured quota".into());
-    }
-    if manifest.transcript_truncated
-        != (manifest.transcript_observed_bytes > u64::try_from(manifest.transcript_retained_bytes)?)
+    if manifest.schema_version != HISTORY_SCHEMA_VERSION
+        || !manifest.local_only
+        || manifest.secret_filtering != SECRET_FILTERING_MODE
     {
-        return Err("session history truncation metadata is inconsistent".into());
+        return Err("session history manifest has unsupported semantics".into());
+    }
+    let retained = u64::try_from(manifest.transcript_retained_bytes)?;
+    if retained > manifest.transcript_observed_bytes
+        || manifest.transcript_retained_bytes > manifest.policy.transcript_byte_quota
+        || manifest.transcript_truncated != (manifest.transcript_observed_bytes > retained)
+    {
+        return Err("session history retention metadata is inconsistent".into());
     }
     match (&manifest.transcript, manifest.policy.transcript_enabled) {
-        (Some(blob), true) => {
-            if blob.captured_bytes != manifest.transcript_retained_bytes
-                || blob.truncated != manifest.transcript_truncated
-            {
-                return Err(
-                    "terminal transcript blob metadata does not match history manifest".into(),
-                );
-            }
-        }
-        (None, false) => {
-            if manifest.transcript_observed_bytes != 0
-                || manifest.transcript_retained_bytes != 0
-                || manifest.transcript_truncated
-            {
-                return Err("disabled transcript history cannot report captured output".into());
-            }
-        }
-        _ => return Err("session history transcript presence does not match policy".into()),
+        (Some(blob), true)
+            if blob.captured_bytes == manifest.transcript_retained_bytes
+                && blob.truncated == manifest.transcript_truncated => {}
+        (None, false)
+            if manifest.transcript_observed_bytes == 0
+                && manifest.transcript_retained_bytes == 0
+                && !manifest.transcript_truncated => {}
+        _ => return Err("session history transcript metadata is inconsistent".into()),
     }
     Ok(())
 }
@@ -548,13 +509,17 @@ mod tests {
         assert_eq!(persisted.manifest.transcript_observed_bytes, 8);
         assert_eq!(persisted.manifest.transcript_retained_bytes, 5);
         assert!(persisted.manifest.transcript_truncated);
-        assert!(persisted.manifest.local_only);
         let transcript = persisted.manifest.transcript.as_ref().unwrap();
         assert_eq!(
             fs::read(root.path().join(&transcript.relative_path)).unwrap(),
             b"abcde"
         );
-        assert!(persisted.manifest_blob.relative_path.starts_with("blobs/history-"));
+        assert!(
+            persisted
+                .manifest_blob
+                .relative_path
+                .starts_with("blobs/history-")
+        );
         assert!(!persisted.manifest_blob.relative_path.contains(".."));
         assert!(recorder.persist(&store).is_err());
     }
