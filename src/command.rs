@@ -1,3 +1,6 @@
+pub(crate) mod history;
+
+use self::history::{SessionHistoryPolicy, persisted_arguments};
 use crate::domain::{ExecutionKind, ExecutionStatus, FactSource, WorkspaceRecord};
 use crate::git::{observe_worktree_state, shell_profiles::ShellExecutionDomain};
 use crate::store::git_observation::{
@@ -28,6 +31,18 @@ pub fn run_explicit_command(
     store: &mut Store,
     request: ExplicitCommandRequest<'_>,
 ) -> Result<ExplicitCommandResult> {
+    run_explicit_command_with_history_policy(
+        store,
+        request,
+        SessionHistoryPolicy::command_history_only(),
+    )
+}
+
+pub fn run_explicit_command_with_history_policy(
+    store: &mut Store,
+    request: ExplicitCommandRequest<'_>,
+    history_policy: SessionHistoryPolicy,
+) -> Result<ExplicitCommandResult> {
     store.finalize_observed_shell_commands()?;
     if request.execution_id.is_empty() || request.workspace_id.is_empty() {
         return Err("explicit command requires non-empty execution/workspace identity".into());
@@ -46,6 +61,7 @@ pub fn run_explicit_command(
         os: std::env::consts::OS.to_owned(),
         arch: std::env::consts::ARCH.to_owned(),
     })?;
+    let persisted_arguments = persisted_arguments(request.arguments, history_policy);
     let requested_unix_ms = unix_ms()?;
     store.create_shell_command_execution(
         NewExecution {
@@ -58,7 +74,7 @@ pub fn run_explicit_command(
         NewShellCommand {
             execution_id: request.execution_id,
             executable: &executable,
-            arguments: request.arguments,
+            arguments: &persisted_arguments,
             command_source: FactSource::CallerRequested,
             requested_cwd: &cwd,
             cwd_source: FactSource::CallerRequested,
@@ -298,7 +314,11 @@ fn unix_ms() -> Result<i64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExplicitCommandRequest, non_regressing_wall_time, run_explicit_command};
+    use super::history::SessionHistoryPolicy;
+    use super::{
+        ExplicitCommandRequest, non_regressing_wall_time, run_explicit_command,
+        run_explicit_command_with_history_policy,
+    };
     use crate::domain::{ExecutionKind, ExecutionStatus, FactSource};
     use crate::store::git_observation::{GitObservationAvailability, GitObservationBoundary};
     use crate::store::{NewExecution, NewShellCommand, NewWorkspace, Store};
@@ -315,7 +335,7 @@ mod tests {
         fn new(name: &str) -> Self {
             let sequence = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
             let path = std::env::temp_dir().join(format!(
-                "winds-t055-{name}-{}-{sequence}",
+                "winds-t056-{name}-{}-{sequence}",
                 std::process::id()
             ));
             fs::create_dir(&path).unwrap();
@@ -500,6 +520,16 @@ mod tests {
         "rmdir /s /q .git"
     }
 
+    #[cfg(unix)]
+    fn secret_assignment_script() -> &'static str {
+        "API_KEY=super-secret; exit 0"
+    }
+
+    #[cfg(windows)]
+    fn secret_assignment_script() -> &'static str {
+        "set API_KEY=super-secret & exit /B 0"
+    }
+
     #[test]
     fn regressed_wall_clock_is_discarded_instead_of_corrupting_lifecycle_truth() {
         assert_eq!(non_regressing_wall_time(Some(9), 10, None), None);
@@ -549,6 +579,62 @@ mod tests {
         assert!(git_observations.iter().all(|observation| {
             observation.availability == GitObservationAvailability::Unavailable
         }));
+    }
+
+    #[test]
+    fn explicit_command_redacts_obvious_secret_metadata_without_changing_runtime_arguments() {
+        let root = TestRoot::new("secret-metadata");
+        let mut store = store_with_workspace(&root);
+        let cwd = workspace_path(&root);
+        let (executable, arguments) = shell_script(secret_assignment_script());
+        let result = run_explicit_command(
+            &mut store,
+            ExplicitCommandRequest {
+                execution_id: "command-secret",
+                workspace_id: "workspace-1",
+                executable: &executable,
+                arguments: &arguments,
+                cwd: &cwd,
+            },
+        )
+        .unwrap();
+        assert_eq!(result.exit_code, Some(0));
+        let command = store.load_shell_command("command-secret").unwrap();
+        assert_eq!(command.arguments.len(), arguments.len());
+        assert!(
+            command
+                .arguments
+                .iter()
+                .any(|argument| argument == "<winds:redacted>")
+        );
+        assert!(!command.arguments.join(" ").contains("super-secret"));
+    }
+
+    #[test]
+    fn explicit_command_policy_can_disable_command_argument_history() {
+        let root = TestRoot::new("history-disabled");
+        let mut store = store_with_workspace(&root);
+        let cwd = workspace_path(&root);
+        let (executable, arguments) = command_parts(0, false);
+        run_explicit_command_with_history_policy(
+            &mut store,
+            ExplicitCommandRequest {
+                execution_id: "command-history-disabled",
+                workspace_id: "workspace-1",
+                executable: &executable,
+                arguments: &arguments,
+                cwd: &cwd,
+            },
+            SessionHistoryPolicy::disabled(),
+        )
+        .unwrap();
+        let command = store
+            .load_shell_command("command-history-disabled")
+            .unwrap();
+        assert_eq!(
+            command.arguments,
+            vec!["<winds:history-disabled>".to_owned()]
+        );
     }
 
     #[test]
