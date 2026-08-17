@@ -11,7 +11,10 @@ use crate::git::workspace_inventory::inventory_workspace_environment;
 #[cfg(windows)]
 use crate::git::wsl::discover_wsl_distributions;
 use crate::store::Store;
-use crate::{Result, ensure_allowed_flags, required, resolve_without_creation, unix_ms, utf8_path, winds_home};
+use crate::{
+    Result, ensure_allowed_flags, required, resolve_without_creation, unix_ms, utf8_path,
+    winds_home,
+};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -115,14 +118,7 @@ fn run_command(flags: HashMap<String, String>) -> Result<()> {
 fn terminal_proof(flags: HashMap<String, String>) -> Result<()> {
     ensure_allowed_flags(
         &flags,
-        &[
-            "repo",
-            "execution-id",
-            "profile-id",
-            "rows",
-            "cols",
-            "home",
-        ],
+        &["repo", "execution-id", "profile-id", "rows", "cols", "home"],
     )?;
     let repo_arg = required(&flags, "repo")?;
     let execution_id = required(&flags, "execution-id")?;
@@ -178,11 +174,10 @@ fn execution(flags: HashMap<String, String>) -> Result<()> {
 
 fn execution_snapshot(store: &Store, execution_id: &str) -> Result<Value> {
     let execution = store.load_execution(execution_id)?;
-    let execution_domain: Value = serde_json::from_str(&execution.execution_domain).map_err(|error| {
-        format!(
-            "persisted execution domain is not valid JSON for {execution_id}: {error}"
-        )
-    })?;
+    let execution_domain: Value =
+        serde_json::from_str(&execution.execution_domain).map_err(|error| {
+            format!("persisted execution domain is not valid JSON for {execution_id}: {error}")
+        })?;
     let events = store
         .execution_events(execution_id)?
         .into_iter()
