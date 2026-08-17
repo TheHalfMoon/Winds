@@ -246,7 +246,7 @@ fn interrupt_then_close_escalates_only_while_session_is_still_owned() {
     .unwrap();
     let marker = wait_for_marker(execution.take_output_reader().unwrap(), b"T060_READY");
     execution
-        .send_input(b"trap '' INT; printf 'T060_READY\\n'; while :; do :; done\n")
+        .send_input(b"trap '' INT; printf 'T060_READY\\n'; read _\n")
         .unwrap();
     marker.join().unwrap();
 
