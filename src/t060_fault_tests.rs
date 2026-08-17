@@ -19,7 +19,6 @@ use std::time::{Duration, Instant};
 
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 const DEFAULT_SIZE: TerminalSize = TerminalSize { rows: 24, cols: 80 };
-const OUTPUT_BOUND: usize = 64 * 1024;
 
 struct TestRoot(PathBuf);
 
@@ -133,42 +132,16 @@ fn create_typed_terminal_request(store: &mut Store, execution_id: &str, requeste
         .unwrap();
 }
 
-fn wait_for_marker(
-    mut reader: Box<dyn Read + Send>,
-    marker: &'static [u8],
-) -> thread::JoinHandle<()> {
-    thread::spawn(move || {
-        let mut observed = Vec::new();
-        let mut buffer = [0_u8; 4096];
-        loop {
-            match reader.read(&mut buffer) {
-                Ok(0) => panic!(
-                    "PTY closed before marker {:?}; observed {:?}",
-                    String::from_utf8_lossy(marker),
-                    String::from_utf8_lossy(&observed)
-                ),
-                Ok(count) => {
-                    observed.extend_from_slice(&buffer[..count]);
-                    assert!(
-                        observed.len() <= OUTPUT_BOUND,
-                        "PTY fixture output exceeded bound"
-                    );
-                    if observed
-                        .windows(marker.len())
-                        .any(|window| window == marker)
-                    {
-                        return;
-                    }
-                }
-                Err(error) if error.raw_os_error() == Some(libc::EIO) => panic!(
-                    "PTY closed before marker {:?}; observed {:?}",
-                    String::from_utf8_lossy(marker),
-                    String::from_utf8_lossy(&observed)
-                ),
-                Err(error) => panic!("PTY marker reader failed: {error}"),
-            }
-        }
-    })
+fn wait_for_file(path: &Path, description: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !path.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for {description}: {}",
+            path.display()
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
 }
 
 fn write_executable(path: &Path, bytes: &[u8]) {
@@ -235,6 +208,8 @@ fn interrupt_then_close_escalates_only_while_session_is_still_owned() {
     let mut store = store_with_workspace(&root);
     let profile = native_sh_profile();
     let workspace = fs::canonicalize(root.workspace()).unwrap();
+    let ready_marker = workspace.join(".t060-interrupt-ready");
+    let reset_marker = workspace.join(".t060-interrupt-reset");
     let mut execution = TerminalExecution::start_native(
         &mut store,
         "t060-interrupt-close",
@@ -244,24 +219,20 @@ fn interrupt_then_close_escalates_only_while_session_is_still_owned() {
         DEFAULT_SIZE,
     )
     .unwrap();
-    let marker = wait_for_marker(execution.take_output_reader().unwrap(), b"T060_READY");
+
     execution
-        .send_input(b"trap '' INT; printf 'T060_%s\\n' READY; read _\n")
+        .send_input(b"trap '' INT; : > .t060-interrupt-ready; read _\n")
         .unwrap();
-    let marker_deadline = Instant::now() + Duration::from_secs(5);
-    while !marker.is_finished() {
-        if Instant::now() >= marker_deadline {
-            let _ = execution.close();
-            let _ = marker.join();
-            panic!("terminal did not emit the readiness marker inside fixture deadline");
-        }
-        thread::sleep(Duration::from_millis(5));
-    }
-    marker.join().unwrap();
+    wait_for_file(&ready_marker, "interrupt readiness marker");
 
     execution.interrupt().unwrap();
     thread::sleep(Duration::from_millis(20));
     assert_eq!(execution.try_wait().unwrap(), None);
+
+    execution
+        .send_input(b"\ntrap - INT; : > .t060-interrupt-reset; exec sleep 30\n")
+        .unwrap();
+    wait_for_file(&reset_marker, "post-interrupt reset marker");
     execution.close().unwrap();
     drop(execution);
 
