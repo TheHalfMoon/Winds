@@ -1,13 +1,14 @@
 mod check;
+mod cli_workspace;
 #[allow(
     dead_code,
-    reason = "Spec 003 T054 explicit-command backend API; CLI caller lands in T057"
+    reason = "Spec 003 command backend includes lifecycle surfaces beyond the minimal T057 CLI caller"
 )]
 mod command;
 mod domain;
 #[allow(
     dead_code,
-    reason = "Spec 003 T053 terminal-ledger backend API; CLI caller lands in T057"
+    reason = "Spec 003 terminal backend includes lifecycle surfaces beyond the minimal T057 CLI caller"
 )]
 mod execution;
 mod git;
@@ -51,6 +52,8 @@ fn run() -> Result<()> {
         "verify" => verify(flags),
         "promote" => promote(flags),
         "recover" => recover(flags),
+        "workspace-open" | "workspace-clone" | "profiles" | "run" | "terminal-proof"
+        | "execution" => cli_workspace::dispatch(command.as_str(), flags),
         _ => Err(usage().into()),
     }
 }
@@ -473,5 +476,5 @@ fn unix_ms() -> Result<i64> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  winds verify --repo PATH --base REF --candidate REF --check COMMAND [--timeout-secs N] [--home PATH]\n  winds promote --repo PATH --run RUN_ID [--home PATH]\n  winds recover --repo PATH [--home PATH]"
+    "usage:\n  winds verify --repo PATH --base REF --candidate REF --check COMMAND [--timeout-secs N] [--home PATH]\n  winds promote --repo PATH --run RUN_ID [--home PATH]\n  winds recover --repo PATH [--home PATH]\n  winds workspace-open --repo PATH [--home PATH]\n  winds workspace-clone --remote REMOTE --destination ABS_PATH [--home PATH]\n  winds profiles --repo PATH [--home PATH]\n  winds run --repo PATH --execution-id ID --executable ABS_PATH [--args-json JSON_ARRAY] [--history command|disabled] [--home PATH]\n  winds terminal-proof --repo PATH --execution-id ID --profile-id PROFILE_ID [--rows N] [--cols N] [--home PATH]\n  winds execution --repo PATH --execution-id ID [--home PATH]"
 }
