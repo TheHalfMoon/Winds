@@ -311,14 +311,15 @@ fn interrupt_then_close_escalates_only_while_session_is_still_owned() {
 
     let record = store.load_execution("t060-interrupt-close").unwrap();
     assert_eq!(record.status_source, FactSource::WindsObserved);
-    let terminal = store
-        .load_terminal_session("t060-interrupt-close")
-        .unwrap();
+    let terminal = store.load_terminal_session("t060-interrupt-close").unwrap();
     if close_proven {
         assert_eq!(record.status, ExecutionStatus::Interrupted);
         assert!(record.ended_unix_ms.is_some());
         assert!(record.duration_ms.is_some());
-        assert_eq!(terminal.close_reason, Some(TerminalCloseReason::ClosedByWinds));
+        assert_eq!(
+            terminal.close_reason,
+            Some(TerminalCloseReason::ClosedByWinds)
+        );
     } else {
         assert_eq!(record.status, ExecutionStatus::OwnershipLost);
         assert_eq!(record.ended_unix_ms, None);
