@@ -14,6 +14,9 @@ pub(crate) mod shell_profiles;
 #[cfg(test)]
 #[path = "t059_negative_tests.rs"]
 mod t059_negative_tests;
+#[cfg(all(test, unix))]
+#[path = "t060_fault_tests.rs"]
+mod t060_fault_tests;
 #[cfg(any(unix, windows))]
 #[allow(
     dead_code,
