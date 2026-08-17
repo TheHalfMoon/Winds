@@ -1,4 +1,5 @@
 use crate::store::Result;
+use rusqlite::{Connection, OpenFlags, params};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::fs::{self, DirBuilder, OpenOptions};
@@ -7,7 +8,7 @@ use std::io::{Read, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 pub(crate) const HARD_MAX_TRANSCRIPT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_EXECUTION_ID_BYTES: usize = 512;
@@ -15,7 +16,6 @@ const HISTORY_SCHEMA_VERSION: u32 = 1;
 const REDACTED: &str = "<winds:redacted>";
 const HISTORY_DISABLED: &str = "<winds:history-disabled>";
 const SECRET_FILTERING_MODE: &str = "BEST_EFFORT_METADATA_REDACTION_NOT_SECRET_DETECTION";
-static HISTORY_WRITE_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 pub struct SessionHistoryPolicy {
@@ -121,7 +121,7 @@ struct TranscriptState {
 pub(crate) struct SessionHistoryRecorder {
     execution_id: String,
     policy: SessionHistoryPolicy,
-    history_root: Option<PathBuf>,
+    state_root: Option<PathBuf>,
     state: Arc<Mutex<TranscriptState>>,
 }
 
@@ -136,7 +136,9 @@ impl SessionHistoryRecorder {
         state_root: &Path,
     ) -> Result<Self> {
         if !policy.transcript_enabled {
-            return Err("local terminal history recorder requires transcript history to be enabled".into());
+            return Err(
+                "local terminal history recorder requires transcript history to be enabled".into(),
+            );
         }
         Self::new(execution_id, policy, Some(state_root))
     }
@@ -150,16 +152,19 @@ impl SessionHistoryRecorder {
             || execution_id.len() > MAX_EXECUTION_ID_BYTES
             || execution_id.chars().any(char::is_control)
         {
-            return Err("session history execution id is empty, too long, or contains control characters".into());
+            return Err(
+                "session history execution id is empty, too long, or contains control characters"
+                    .into(),
+            );
         }
-        let history_root = match state_root {
-            Some(root) => Some(canonical_history_root(root)?),
+        let state_root = match state_root {
+            Some(root) => Some(validate_state_root(root)?),
             None => None,
         };
         Ok(Self {
             execution_id: execution_id.to_owned(),
             policy,
-            history_root,
+            state_root,
             state: Arc::new(Mutex::new(TranscriptState::default())),
         })
     }
@@ -212,7 +217,10 @@ impl SessionHistoryRecorder {
                 .lock()
                 .map_err(|_| "terminal history state lock is poisoned")?;
             if !state.reader_taken {
-                return Err("terminal transcript history cannot be persisted before an output reader was captured".into());
+                return Err(
+                    "terminal transcript history cannot be persisted before an output reader was captured"
+                        .into(),
+                );
             }
             if state.persisted {
                 return Err("session history has already been persisted".into());
@@ -224,10 +232,10 @@ impl SessionHistoryRecorder {
                 state.quota_truncated,
             )
         };
-        let history_root = self
-            .history_root
+        let state_root = self
+            .state_root
             .as_ref()
-            .ok_or("enabled transcript history is missing its local history root")?;
+            .ok_or("enabled transcript history is missing its local state root")?;
         let storage_key = history_storage_key(&self.execution_id);
         let transcript_truncated = quota_truncated || !capture_complete;
         let transcript_digest = lower_sha256(&retained);
@@ -275,35 +283,35 @@ impl SessionHistoryRecorder {
             .into());
         }
 
-        let _write_guard = HISTORY_WRITE_LOCK
-            .lock()
-            .map_err(|_| "terminal history write lock is poisoned")?;
-        prune_for_write(
-            history_root,
-            &storage_key,
-            required_bytes,
-            self.policy.total_history_byte_quota,
-        )?;
-        let session_dir = history_root.join(&storage_key);
-        create_private_directory(&session_dir)?;
-        let write_result = (|| -> Result<()> {
-            write_private_file(&session_dir.join(transcript_name), &retained)?;
-            write_private_file(&session_dir.join(manifest_name), &manifest_bytes)?;
+        with_history_write_lock(state_root, &self.execution_id, |history_root| {
+            prune_for_write(
+                history_root,
+                &storage_key,
+                required_bytes,
+                self.policy.total_history_byte_quota,
+            )?;
+            let session_dir = history_root.join(&storage_key);
+            create_private_directory(&session_dir)?;
+            let write_result = (|| -> Result<()> {
+                write_private_file(&session_dir.join(&transcript_name), &retained)?;
+                write_private_file(&session_dir.join(&manifest_name), &manifest_bytes)?;
+                Ok(())
+            })();
+            if let Err(error) = write_result {
+                let _ = fs::remove_dir_all(&session_dir);
+                return Err(error);
+            }
+            let usage = history_logical_bytes(history_root)?;
+            if usage > self.policy.total_history_byte_quota {
+                let _ = fs::remove_dir_all(&session_dir);
+                return Err(format!(
+                    "terminal history quota verification failed after write: {usage} > {}",
+                    self.policy.total_history_byte_quota
+                )
+                .into());
+            }
             Ok(())
-        })();
-        if let Err(error) = write_result {
-            let _ = fs::remove_dir_all(&session_dir);
-            return Err(error);
-        }
-        let usage = history_logical_bytes(history_root)?;
-        if usage > self.policy.total_history_byte_quota {
-            let _ = fs::remove_dir_all(&session_dir);
-            return Err(format!(
-                "terminal history quota verification failed after write: {usage} > {}",
-                self.policy.total_history_byte_quota
-            )
-            .into());
-        }
+        })?;
         self.state
             .lock()
             .map_err(|_| "terminal history state lock is poisoned")?
@@ -473,17 +481,53 @@ fn sanitize_url_like_argument(argument: &str) -> Option<String> {
     ))
 }
 
-fn canonical_history_root(state_root: &Path) -> Result<PathBuf> {
+fn validate_state_root(state_root: &Path) -> Result<PathBuf> {
     if !state_root.is_absolute() {
         return Err("terminal history state root must be absolute".into());
     }
-    let canonical_state_root = fs::canonicalize(state_root)?;
-    if !canonical_state_root.is_dir() {
+    let canonical = fs::canonicalize(state_root)?;
+    if !canonical.is_dir() {
         return Err("terminal history state root must be a directory".into());
     }
-    let history_root = canonical_state_root.join("history");
-    ensure_private_directory(&history_root)?;
-    Ok(history_root)
+    let db = canonical.join("winds.db");
+    let metadata = fs::symlink_metadata(&db)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err("terminal history state root must contain the real Winds database".into());
+    }
+    Ok(canonical)
+}
+
+fn with_history_write_lock<T>(
+    state_root: &Path,
+    execution_id: &str,
+    operation: impl FnOnce(&Path) -> Result<T>,
+) -> Result<T> {
+    let database = state_root.join("winds.db");
+    let connection = Connection::open_with_flags(&database, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+    connection.busy_timeout(Duration::from_secs(5))?;
+    connection.execute_batch("BEGIN IMMEDIATE")?;
+    let result = (|| -> Result<T> {
+        let terminal_count: i64 = connection.query_row(
+            "SELECT COUNT(*) FROM executions WHERE execution_id = ?1 AND kind = 'TERMINAL'",
+            params![execution_id],
+            |row| row.get(0),
+        )?;
+        if terminal_count != 1 {
+            return Err(
+                "terminal history state root does not contain the matching terminal execution"
+                    .into(),
+            );
+        }
+        let history_root = state_root.join("history");
+        ensure_private_directory(&history_root)?;
+        operation(&history_root)
+    })();
+    let rollback = connection.execute_batch("ROLLBACK");
+    match (result, rollback) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error.into()),
+    }
 }
 
 fn ensure_private_directory(path: &Path) -> Result<()> {
@@ -653,6 +697,8 @@ mod tests {
         SessionHistoryRecorder, history_logical_bytes, persisted_arguments, prune_for_write,
         sanitize_persisted_arguments,
     };
+    use crate::domain::{ExecutionKind, FactSource};
+    use crate::store::{NewExecution, NewTerminalSession, NewWorkspace, Store};
     use std::fs;
     use std::io::{Cursor, Read};
     use std::path::{Path, PathBuf};
@@ -682,6 +728,60 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
         }
+    }
+
+    fn state_with_terminal_executions(root: &TestRoot, execution_ids: &[&str]) -> PathBuf {
+        let state_root = root.path().join("state");
+        let workspace_root = root.path().join("workspace");
+        fs::create_dir(&workspace_root).unwrap();
+        let workspace_root = fs::canonicalize(workspace_root).unwrap();
+        let mut store = Store::open(&state_root).unwrap();
+        store
+            .create_workspace(
+                NewWorkspace {
+                    workspace_id: "workspace-history",
+                    canonical_worktree_root: workspace_root.to_str().unwrap(),
+                    git_common_dir: workspace_root.join(".git").to_str().unwrap(),
+                },
+                1,
+            )
+            .unwrap();
+        let no_arguments: Vec<String> = Vec::new();
+        for (index, execution_id) in execution_ids.iter().enumerate() {
+            store
+                .create_terminal_execution(
+                    NewExecution {
+                        execution_id,
+                        workspace_id: "workspace-history",
+                        kind: ExecutionKind::Terminal,
+                        request_source: FactSource::CallerRequested,
+                        execution_domain: "native-test",
+                    },
+                    NewTerminalSession {
+                        execution_id,
+                        profile_id: "history-test-profile",
+                        shell_executable: "/history-test-shell",
+                        shell_arguments: &no_arguments,
+                        requested_cwd: workspace_root.to_str().unwrap(),
+                        initial_cols: Some(80),
+                        initial_rows: Some(24),
+                    },
+                    i64::try_from(index + 2).unwrap(),
+                )
+                .unwrap();
+        }
+        drop(store);
+        fs::canonicalize(state_root).unwrap()
+    }
+
+    fn capture_all(recorder: &SessionHistoryRecorder, bytes: &[u8]) {
+        let mut reader = recorder
+            .wrap_output_reader(Box::new(Cursor::new(bytes.to_vec())))
+            .unwrap();
+        let mut observed = Vec::new();
+        reader.read_to_end(&mut observed).unwrap();
+        assert_eq!(observed, bytes);
+        drop(reader);
     }
 
     #[test]
@@ -732,32 +832,30 @@ mod tests {
     #[test]
     fn bounded_transcript_records_quota_and_complete_capture_truth() {
         let root = TestRoot::new("bounded");
+        let state_root = state_with_terminal_executions(&root, &["execution-one"]);
         let policy = SessionHistoryPolicy::local_bounded(true, 5, 16_384).unwrap();
-        let recorder = SessionHistoryRecorder::new_local("execution-one", policy, root.path()).unwrap();
-        let mut reader = recorder
-            .wrap_output_reader(Box::new(Cursor::new(b"abcdefgh".to_vec())))
-            .unwrap();
-        let mut observed = Vec::new();
-        reader.read_to_end(&mut observed).unwrap();
-        drop(reader);
+        let recorder =
+            SessionHistoryRecorder::new_local("execution-one", policy, &state_root).unwrap();
+        capture_all(&recorder, b"abcdefgh");
         let persisted = recorder.persist().unwrap().unwrap();
-        assert_eq!(observed, b"abcdefgh");
         assert_eq!(persisted.manifest.transcript_observed_bytes, 8);
         assert_eq!(persisted.manifest.transcript_retained_bytes, 5);
         assert!(persisted.manifest.transcript_capture_complete);
         assert!(persisted.manifest.transcript_truncated);
         assert_eq!(
-            fs::read(root.path().join(&persisted.manifest.transcript.relative_path)).unwrap(),
+            fs::read(state_root.join(&persisted.manifest.transcript.relative_path)).unwrap(),
             b"abcde"
         );
-        assert!(history_logical_bytes(&root.path().join("history")).unwrap() <= 16_384);
+        assert!(history_logical_bytes(&state_root.join("history")).unwrap() <= 16_384);
     }
 
     #[test]
     fn early_reader_drop_is_explicitly_truncated_not_falsely_complete() {
         let root = TestRoot::new("incomplete");
+        let state_root = state_with_terminal_executions(&root, &["execution-two"]);
         let policy = SessionHistoryPolicy::local_bounded(false, 8, 16_384).unwrap();
-        let recorder = SessionHistoryRecorder::new_local("execution-two", policy, root.path()).unwrap();
+        let recorder =
+            SessionHistoryRecorder::new_local("execution-two", policy, &state_root).unwrap();
         let mut reader = recorder
             .wrap_output_reader(Box::new(Cursor::new(b"abcdefgh".to_vec())))
             .unwrap();
@@ -775,15 +873,50 @@ mod tests {
     #[test]
     fn transcript_history_cannot_persist_before_output_reader_capture() {
         let root = TestRoot::new("no-reader");
+        let state_root = state_with_terminal_executions(&root, &["execution-three"]);
         let policy = SessionHistoryPolicy::local_bounded(false, 8, 16_384).unwrap();
-        let recorder = SessionHistoryRecorder::new_local("execution-three", policy, root.path()).unwrap();
+        let recorder =
+            SessionHistoryRecorder::new_local("execution-three", policy, &state_root).unwrap();
         assert!(recorder.persist().is_err());
-        assert_eq!(history_logical_bytes(&root.path().join("history")).unwrap(), 0);
+        assert!(!state_root.join("history").exists());
     }
 
     #[test]
-    fn total_quota_prunes_old_sessions_before_new_write() {
+    fn wrong_state_root_cannot_receive_terminal_history() {
+        let root = TestRoot::new("wrong-root");
+        let correct = state_with_terminal_executions(&root, &["execution-four"]);
+        let other_root = TestRoot::new("other-state");
+        let other = state_with_terminal_executions(&other_root, &["other-execution"]);
+        let policy = SessionHistoryPolicy::local_bounded(false, 8, 16_384).unwrap();
+        let recorder = SessionHistoryRecorder::new_local("execution-four", policy, &other).unwrap();
+        capture_all(&recorder, b"safe");
+        assert!(recorder.persist().is_err());
+        assert!(!other.join("history").exists());
+        assert!(!correct.join("history").exists());
+    }
+
+    #[test]
+    fn total_quota_prunes_old_sessions_across_repeated_terminal_history() {
         let root = TestRoot::new("retention");
+        let state_root = state_with_terminal_executions(
+            &root,
+            &["retention-one", "retention-two", "retention-three"],
+        );
+        let policy = SessionHistoryPolicy::local_bounded(false, 4, 1_024).unwrap();
+        for execution_id in ["retention-one", "retention-two", "retention-three"] {
+            let recorder =
+                SessionHistoryRecorder::new_local(execution_id, policy, &state_root).unwrap();
+            capture_all(&recorder, b"abcdefgh");
+            recorder.persist().unwrap().unwrap();
+            assert!(history_logical_bytes(&state_root.join("history")).unwrap() <= 1_024);
+        }
+        let retained_count = fs::read_dir(state_root.join("history")).unwrap().count();
+        assert!(retained_count < 3);
+    }
+
+    #[test]
+    fn quota_helper_prunes_existing_sessions_before_new_write() {
+        let root = TestRoot::new("retention-helper");
         let history = root.path().join("history");
         fs::create_dir(&history).unwrap();
         for name in ["session-a", "session-b"] {
