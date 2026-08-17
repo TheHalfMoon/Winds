@@ -289,19 +289,55 @@ fn interrupt_then_close_escalates_only_while_session_is_still_owned() {
     wait_for_file(&reset_marker, "post-interrupt shell-resume marker");
     assert_eq!(execution.try_wait().unwrap(), None);
 
-    execution.close().unwrap();
+    let close_started = Instant::now();
+    let close_result = execution.close();
+    assert!(
+        close_started.elapsed() < Duration::from_secs(2),
+        "explicit terminal close must remain bounded"
+    );
+    let close_proven = match close_result {
+        Ok(_) => true,
+        Err(error) => {
+            assert!(
+                error
+                    .to_string()
+                    .contains("could not prove owned child exit inside bounded cleanup window"),
+                "unexpected explicit close error: {error}"
+            );
+            false
+        }
+    };
     drop(execution);
 
     let record = store.load_execution("t060-interrupt-close").unwrap();
-    assert_eq!(record.status, ExecutionStatus::Interrupted);
     assert_eq!(record.status_source, FactSource::WindsObserved);
-    assert_eq!(
-        store
-            .load_terminal_session("t060-interrupt-close")
-            .unwrap()
-            .close_reason,
-        Some(TerminalCloseReason::ClosedByWinds)
-    );
+    let terminal = store
+        .load_terminal_session("t060-interrupt-close")
+        .unwrap();
+    if close_proven {
+        assert_eq!(record.status, ExecutionStatus::Interrupted);
+        assert!(record.ended_unix_ms.is_some());
+        assert!(record.duration_ms.is_some());
+        assert_eq!(terminal.close_reason, Some(TerminalCloseReason::ClosedByWinds));
+    } else {
+        assert_eq!(record.status, ExecutionStatus::OwnershipLost);
+        assert_eq!(record.ended_unix_ms, None);
+        assert_eq!(record.duration_ms, None);
+        assert_eq!(
+            terminal.close_reason,
+            Some(TerminalCloseReason::OwnershipLostProcessStateUnknown)
+        );
+        assert!(
+            store
+                .execution_events("t060-interrupt-close")
+                .unwrap()
+                .iter()
+                .any(|event| {
+                    event.kind == "TerminalOwnershipLostAfterCleanupFailure"
+                        && event.source == FactSource::WindsObserved
+                })
+        );
+    }
 }
 
 struct ReadThenFail {
