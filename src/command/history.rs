@@ -56,22 +56,33 @@ impl SessionHistoryPolicy {
         }
         if transcript_byte_quota > HARD_MAX_TRANSCRIPT_BYTES {
             return Err(format!(
-                "terminal transcript byte quota exceeds the Spec 003 T056 hard maximum of {HARD_MAX_TRANSCRIPT_BYTES} bytes"
+                "terminal transcript byte quota exceeds the Winds implementation safety maximum of {HARD_MAX_TRANSCRIPT_BYTES} bytes"
             )
             .into());
         }
-        if total_history_byte_quota < u64::try_from(transcript_byte_quota)? {
-            return Err(
-                "total terminal history byte quota must be at least the per-session transcript quota"
-                    .into(),
-            );
-        }
-        Ok(Self {
+        let policy = Self {
             command_history_enabled,
             transcript_enabled: true,
             transcript_byte_quota,
             total_history_byte_quota,
-        })
+        };
+        let minimum_storage_key = history_storage_key("x");
+        let (_, minimum_manifest_bytes, _) = build_history_manifest(
+            "x",
+            policy,
+            &minimum_storage_key,
+            u64::MAX,
+            &[],
+            false,
+            true,
+        )?;
+        if u64::try_from(minimum_manifest_bytes.len())? > total_history_byte_quota {
+            return Err(
+                "total terminal history byte quota is too small for mandatory history metadata"
+                    .into(),
+            );
+        }
+        Ok(policy)
     }
 }
 
@@ -114,6 +125,7 @@ struct TranscriptState {
     retained: Vec<u8>,
     quota_truncated: bool,
     reader_taken: bool,
+    reader_active: bool,
     capture_complete: bool,
     persisted: bool,
 }
@@ -157,6 +169,26 @@ impl SessionHistoryRecorder {
                     .into(),
             );
         }
+        if policy.transcript_enabled {
+            let storage_key = history_storage_key(execution_id);
+            let (_, maximum_empty_manifest_bytes, _) = build_history_manifest(
+                execution_id,
+                policy,
+                &storage_key,
+                u64::MAX,
+                &[],
+                false,
+                true,
+            )?;
+            if u64::try_from(maximum_empty_manifest_bytes.len())?
+                > policy.total_history_byte_quota
+            {
+                return Err(
+                    "terminal history quota cannot hold mandatory metadata for this execution"
+                        .into(),
+                );
+            }
+        }
         let state_root = match state_root {
             Some(root) => Some(validate_state_root(root)?),
             None => None,
@@ -191,10 +223,12 @@ impl SessionHistoryRecorder {
             return Err("terminal history was already persisted before output capture".into());
         }
         state.reader_taken = true;
+        state.reader_active = true;
         drop(state);
+        let total_quota = usize::try_from(self.policy.total_history_byte_quota).unwrap_or(usize::MAX);
         Ok(Box::new(HistoryReader {
             inner: reader,
-            quota: self.policy.transcript_byte_quota,
+            quota: self.policy.transcript_byte_quota.min(total_quota),
             state: Arc::clone(&self.state),
             eof_observed: false,
         }))
@@ -204,18 +238,18 @@ impl SessionHistoryRecorder {
         if !self.policy.transcript_enabled {
             return Ok(None);
         }
-        if Arc::strong_count(&self.state) != 1 {
-            return Err(
-                "drop the terminal output reader before persisting transcript history so retention metadata is final"
-                    .into(),
-            );
-        }
 
         let (observed_bytes, retained, capture_complete, quota_truncated) = {
             let state = self
                 .state
                 .lock()
                 .map_err(|_| "terminal history state lock is poisoned")?;
+            if state.reader_active {
+                return Err(
+                    "drop the terminal output reader before persisting transcript history so retention metadata is final"
+                        .into(),
+                );
+            }
             if !state.reader_taken {
                 return Err(
                     "terminal transcript history cannot be persisted before an output reader was captured"
@@ -237,31 +271,39 @@ impl SessionHistoryRecorder {
             .as_ref()
             .ok_or("enabled transcript history is missing its local state root")?;
         let storage_key = history_storage_key(&self.execution_id);
-        let transcript_truncated = quota_truncated || !capture_complete;
-        let transcript_digest = lower_sha256(&retained);
-        let transcript_name = format!("transcript.{transcript_digest}.bin");
-        let transcript_relative = PathBuf::from("history")
-            .join(&storage_key)
-            .join(&transcript_name);
-        let transcript = HistoryBlobRef {
-            relative_path: utf8_relative(&transcript_relative)?,
-            sha256: transcript_digest,
-            captured_bytes: retained.len(),
+        let mut retained = retained;
+        let (manifest, manifest_bytes, transcript_name, required_bytes) = loop {
+            let retained_bytes = u64::try_from(retained.len())?;
+            let transcript_truncated =
+                quota_truncated || !capture_complete || observed_bytes > retained_bytes;
+            let (manifest, manifest_bytes, transcript_name) = build_history_manifest(
+                &self.execution_id,
+                self.policy,
+                &storage_key,
+                observed_bytes,
+                &retained,
+                capture_complete,
+                transcript_truncated,
+            )?;
+            let required_bytes = retained_bytes
+                .checked_add(u64::try_from(manifest_bytes.len())?)
+                .ok_or("terminal history logical byte size overflowed")?;
+            if required_bytes <= self.policy.total_history_byte_quota {
+                break (manifest, manifest_bytes, transcript_name, required_bytes);
+            }
+            let manifest_bytes_u64 = u64::try_from(manifest_bytes.len())?;
+            let available_for_transcript = self
+                .policy
+                .total_history_byte_quota
+                .checked_sub(manifest_bytes_u64)
+                .ok_or("terminal history quota cannot hold mandatory manifest metadata")?;
+            let available_for_transcript =
+                usize::try_from(available_for_transcript).unwrap_or(usize::MAX);
+            if available_for_transcript >= retained.len() {
+                return Err("terminal history quota accounting did not converge".into());
+            }
+            retained.truncate(available_for_transcript);
         };
-        let manifest = SessionHistoryManifest {
-            schema_version: HISTORY_SCHEMA_VERSION,
-            execution_id: self.execution_id.clone(),
-            local_only: true,
-            secret_filtering: SECRET_FILTERING_MODE.to_owned(),
-            policy: self.policy,
-            transcript_observed_bytes: observed_bytes,
-            transcript_retained_bytes: retained.len(),
-            transcript_capture_complete: capture_complete,
-            transcript_truncated,
-            transcript,
-        };
-        validate_manifest(&manifest)?;
-        let manifest_bytes = serde_json::to_vec(&manifest)?;
         let manifest_digest = lower_sha256(&manifest_bytes);
         let manifest_name = format!("manifest.{manifest_digest}.json");
         let manifest_relative = PathBuf::from("history")
@@ -272,16 +314,6 @@ impl SessionHistoryRecorder {
             sha256: manifest_digest,
             captured_bytes: manifest_bytes.len(),
         };
-        let required_bytes = u64::try_from(retained.len())?
-            .checked_add(u64::try_from(manifest_bytes.len())?)
-            .ok_or("terminal history logical byte size overflowed")?;
-        if required_bytes > self.policy.total_history_byte_quota {
-            return Err(format!(
-                "one terminal history record requires {required_bytes} bytes, exceeding its total history quota of {} bytes",
-                self.policy.total_history_byte_quota
-            )
-            .into());
-        }
 
         with_history_write_lock(state_root, &self.execution_id, |history_root| {
             prune_for_write(
@@ -298,17 +330,28 @@ impl SessionHistoryRecorder {
                 Ok(())
             })();
             if let Err(error) = write_result {
-                let _ = fs::remove_dir_all(&session_dir);
-                return Err(error);
+                return match remove_owned_history_session(history_root, &session_dir) {
+                    Ok(()) => Err(error),
+                    Err(cleanup_error) => Err(format!(
+                        "terminal history write failed: {error}; owned-session cleanup also failed: {cleanup_error}"
+                    )
+                    .into()),
+                };
             }
             let usage = history_logical_bytes(history_root)?;
             if usage > self.policy.total_history_byte_quota {
-                let _ = fs::remove_dir_all(&session_dir);
-                return Err(format!(
-                    "terminal history quota verification failed after write: {usage} > {}",
-                    self.policy.total_history_byte_quota
-                )
-                .into());
+                return match remove_owned_history_session(history_root, &session_dir) {
+                    Ok(()) => Err(format!(
+                        "terminal history quota verification failed after write: {usage} > {}",
+                        self.policy.total_history_byte_quota
+                    )
+                    .into()),
+                    Err(cleanup_error) => Err(format!(
+                        "terminal history quota verification failed after write: {usage} > {}; owned-session cleanup also failed: {cleanup_error}",
+                        self.policy.total_history_byte_quota
+                    )
+                    .into()),
+                };
             }
             Ok(())
         })?;
@@ -332,6 +375,9 @@ struct HistoryReader {
 
 impl Read for HistoryReader {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
         let read = self.inner.read(buffer)?;
         if read == 0 {
             self.eof_observed = true;
@@ -357,11 +403,11 @@ impl Read for HistoryReader {
 
 impl Drop for HistoryReader {
     fn drop(&mut self) {
-        if self.eof_observed {
-            return;
-        }
         if let Ok(mut state) = self.state.lock() {
-            state.capture_complete = false;
+            state.reader_active = false;
+            if !self.eof_observed {
+                state.capture_complete = false;
+            }
         }
     }
 }
@@ -392,6 +438,8 @@ pub(crate) fn sanitize_persisted_arguments(arguments: &[String]) -> Vec<String> 
         } else if contains_obvious_secret_assignment(&lower)
             || lower.contains("authorization:")
             || lower.contains("proxy-authorization:")
+            || (argument.chars().any(char::is_whitespace)
+                && contains_sensitive_url_like_token(argument))
         {
             sanitized.push(REDACTED.to_owned());
         } else if let Some(url) = sanitize_url_like_argument(argument) {
@@ -445,20 +493,43 @@ fn contains_obvious_secret_assignment(lower: &str) -> bool {
     .any(|marker| lower.contains(marker))
 }
 
-fn sanitize_url_like_argument(argument: &str) -> Option<String> {
-    if argument.chars().any(char::is_whitespace) {
-        return None;
-    }
-    let (scheme, rest) = argument.split_once("://")?;
-    let valid_scheme = !scheme.is_empty()
+fn contains_sensitive_url_like_token(argument: &str) -> bool {
+    argument.split_whitespace().any(|token| {
+        let token = token.trim_matches(|ch: char| {
+            matches!(ch, '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';')
+        });
+        let Some((scheme, rest)) = token.split_once("://") else {
+            return false;
+        };
+        if !is_valid_url_scheme(scheme) {
+            return false;
+        }
+        let authority_end = rest
+            .char_indices()
+            .find_map(|(index, ch)| matches!(ch, '/' | '?' | '#').then_some(index))
+            .unwrap_or(rest.len());
+        let authority = &rest[..authority_end];
+        authority.contains('@') || rest.contains('?') || rest.contains('#')
+    })
+}
+
+fn is_valid_url_scheme(scheme: &str) -> bool {
+    !scheme.is_empty()
         && scheme.chars().enumerate().all(|(index, ch)| {
             if index == 0 {
                 ch.is_ascii_alphabetic()
             } else {
                 ch.is_ascii_alphanumeric() || matches!(ch, '+' | '-' | '.')
             }
-        });
-    if !valid_scheme {
+        })
+}
+
+fn sanitize_url_like_argument(argument: &str) -> Option<String> {
+    if argument.chars().any(char::is_whitespace) {
+        return None;
+    }
+    let (scheme, rest) = argument.split_once("://")?;
+    if !is_valid_url_scheme(scheme) {
         return Some(REDACTED.to_owned());
     }
     let tail = rest
@@ -508,13 +579,16 @@ fn with_history_write_lock<T>(
     connection.execute_batch("BEGIN IMMEDIATE")?;
     let result = (|| -> Result<T> {
         let terminal_count: i64 = connection.query_row(
-            "SELECT COUNT(*) FROM executions WHERE execution_id = ?1 AND kind = 'TERMINAL'",
-            params![execution_id],
+            "SELECT COUNT(*)
+             FROM executions e
+             INNER JOIN terminal_sessions t ON t.execution_id = e.execution_id
+             WHERE e.execution_id = ?1 AND e.kind = ?2",
+            params![execution_id, crate::domain::ExecutionKind::Terminal.as_str()],
             |row| row.get(0),
         )?;
         if terminal_count != 1 {
             return Err(
-                "terminal history state root does not contain the matching terminal execution"
+                "terminal history state root does not contain the matching complete terminal execution"
                     .into(),
             );
         }
@@ -578,6 +652,9 @@ fn prune_for_write(
     required_bytes: u64,
     total_quota: u64,
 ) -> Result<()> {
+    if !is_history_storage_key(new_storage_key) {
+        return Err("terminal history storage key is invalid".into());
+    }
     if history_root.join(new_storage_key).exists() {
         return Err("terminal history for this execution already exists or is incomplete".into());
     }
@@ -598,12 +675,39 @@ fn prune_for_write(
         if existing <= budget {
             break;
         }
-        fs::remove_dir_all(&entry.path)?;
+        remove_owned_history_session(history_root, &entry.path)?;
         existing = existing.saturating_sub(entry.logical_bytes);
     }
     if existing > budget {
         return Err("terminal history quota could not be satisfied by retention pruning".into());
     }
+    Ok(())
+}
+
+fn remove_owned_history_session(history_root: &Path, target: &Path) -> Result<()> {
+    let history_metadata = fs::symlink_metadata(history_root)?;
+    if history_metadata.file_type().is_symlink() || !history_metadata.is_dir() {
+        return Err("terminal history root must be a real owned directory before deletion".into());
+    }
+    let target_metadata = fs::symlink_metadata(target)?;
+    if target_metadata.file_type().is_symlink() || !target_metadata.is_dir() {
+        return Err("terminal history deletion target must be a real directory".into());
+    }
+    let canonical_history_root = fs::canonicalize(history_root)?;
+    let canonical_target = fs::canonicalize(target)?;
+    if canonical_target == canonical_history_root
+        || canonical_target.parent() != Some(canonical_history_root.as_path())
+    {
+        return Err("terminal history deletion target is outside the owned history root".into());
+    }
+    let name = canonical_target
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or("terminal history deletion target name is not valid UTF-8")?;
+    if !is_history_storage_key(name) {
+        return Err("terminal history deletion target is not an owned session directory".into());
+    }
+    fs::remove_dir_all(&canonical_target)?;
     Ok(())
 }
 
@@ -620,7 +724,7 @@ fn retained_history_dirs(history_root: &Path) -> Result<Vec<RetainedHistoryDir>>
             .to_str()
             .ok_or("terminal history directory name is not valid UTF-8")?
             .to_owned();
-        if !name.starts_with("session-") {
+        if !is_history_storage_key(&name) {
             return Err("terminal history root contains an unrecognized directory".into());
         }
         entries.push(RetainedHistoryDir {
@@ -630,6 +734,16 @@ fn retained_history_dirs(history_root: &Path) -> Result<Vec<RetainedHistoryDir>>
         });
     }
     Ok(entries)
+}
+
+fn is_history_storage_key(name: &str) -> bool {
+    let Some(digest) = name.strip_prefix("session-") else {
+        return false;
+    };
+    digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn session_logical_bytes(session_dir: &Path) -> Result<u64> {
@@ -654,6 +768,42 @@ fn history_logical_bytes(history_root: &Path) -> Result<u64> {
             sum.checked_add(entry.logical_bytes)
                 .ok_or_else(|| "terminal history logical byte size overflowed".into())
         })
+}
+
+fn build_history_manifest(
+    execution_id: &str,
+    policy: SessionHistoryPolicy,
+    storage_key: &str,
+    observed_bytes: u64,
+    retained: &[u8],
+    capture_complete: bool,
+    transcript_truncated: bool,
+) -> Result<(SessionHistoryManifest, Vec<u8>, String)> {
+    let transcript_digest = lower_sha256(retained);
+    let transcript_name = format!("transcript.{transcript_digest}.bin");
+    let transcript_relative = PathBuf::from("history")
+        .join(storage_key)
+        .join(&transcript_name);
+    let transcript = HistoryBlobRef {
+        relative_path: utf8_relative(&transcript_relative)?,
+        sha256: transcript_digest,
+        captured_bytes: retained.len(),
+    };
+    let manifest = SessionHistoryManifest {
+        schema_version: HISTORY_SCHEMA_VERSION,
+        execution_id: execution_id.to_owned(),
+        local_only: true,
+        secret_filtering: SECRET_FILTERING_MODE.to_owned(),
+        policy,
+        transcript_observed_bytes: observed_bytes,
+        transcript_retained_bytes: retained.len(),
+        transcript_capture_complete: capture_complete,
+        transcript_truncated,
+        transcript,
+    };
+    validate_manifest(&manifest)?;
+    let manifest_bytes = serde_json::to_vec(&manifest)?;
+    Ok((manifest, manifest_bytes, transcript_name))
 }
 
 fn validate_manifest(manifest: &SessionHistoryManifest) -> Result<()> {
@@ -695,7 +845,8 @@ fn utf8_relative(path: &Path) -> Result<String> {
 mod tests {
     use super::{
         HARD_MAX_TRANSCRIPT_BYTES, HISTORY_DISABLED, REDACTED, SessionHistoryPolicy,
-        SessionHistoryRecorder, history_logical_bytes, persisted_arguments, prune_for_write,
+        SessionHistoryRecorder, history_logical_bytes, history_storage_key, lower_sha256,
+        persisted_arguments, prune_for_write, remove_owned_history_session,
         sanitize_persisted_arguments,
     };
     use crate::domain::{ExecutionKind, FactSource};
@@ -801,7 +952,8 @@ mod tests {
             SessionHistoryPolicy::local_bounded(false, HARD_MAX_TRANSCRIPT_BYTES + 1, u64::MAX)
                 .is_err()
         );
-        assert!(SessionHistoryPolicy::local_bounded(false, 10, 9).is_err());
+        assert!(SessionHistoryPolicy::local_bounded(false, 10, 10).is_err());
+        assert!(SessionHistoryPolicy::local_bounded(false, 1_024, 1_024).is_ok());
         assert!(SessionHistoryPolicy::local_bounded(false, 10, 10_000).is_ok());
     }
 
@@ -813,6 +965,9 @@ mod tests {
             "PASSWORD=hunter2".to_owned(),
             "https://user:pass@example.com/repo?token=abc#frag".to_owned(),
             "Authorization: Bearer abc".to_owned(),
+            "curl https://user:pass@example.com/repo".to_owned(),
+            "curl https://example.com/repo?opaque=value#frag".to_owned(),
+            "curl https://example.com/repo".to_owned(),
             "ordinary".to_owned(),
         ];
         let sanitized = sanitize_persisted_arguments(&arguments);
@@ -821,13 +976,17 @@ mod tests {
         assert_eq!(sanitized[2], REDACTED);
         assert_eq!(sanitized[3], REDACTED);
         assert_eq!(sanitized[4], REDACTED);
-        assert_eq!(sanitized[5], "ordinary");
+        assert_eq!(sanitized[5], REDACTED);
+        assert_eq!(sanitized[6], REDACTED);
+        assert_eq!(sanitized[7], "curl https://example.com/repo");
+        assert_eq!(sanitized[8], "ordinary");
         let joined = sanitized.join(" ");
         assert!(!joined.contains("super-secret"));
         assert!(!joined.contains("hunter2"));
         assert!(!joined.contains("user:pass"));
         assert!(!joined.contains("token=abc"));
         assert!(!joined.contains("Bearer abc"));
+        assert!(!joined.contains("opaque=value"));
     }
 
     #[test]
@@ -847,7 +1006,61 @@ mod tests {
             fs::read(state_root.join(&persisted.manifest.transcript.relative_path)).unwrap(),
             b"abcde"
         );
+        let manifest_bytes =
+            fs::read(state_root.join(&persisted.manifest_blob.relative_path)).unwrap();
+        assert_eq!(manifest_bytes.len(), persisted.manifest_blob.captured_bytes);
+        assert_eq!(lower_sha256(&manifest_bytes), persisted.manifest_blob.sha256);
         assert!(history_logical_bytes(&state_root.join("history")).unwrap() <= 16_384);
+    }
+
+    #[test]
+    fn total_quota_can_equal_transcript_limit_and_reserves_manifest_space_by_truncation() {
+        let root = TestRoot::new("quota-equality");
+        let state_root = state_with_terminal_executions(&root, &["quota-equality"]);
+        let policy = SessionHistoryPolicy::local_bounded(false, 1_024, 1_024).unwrap();
+        let recorder =
+            SessionHistoryRecorder::new_local("quota-equality", policy, &state_root).unwrap();
+        capture_all(&recorder, &vec![b'x'; 1_024]);
+        let persisted = recorder.persist().unwrap().unwrap();
+        assert!(persisted.manifest.transcript_retained_bytes < 1_024);
+        assert!(persisted.manifest.transcript_truncated);
+        assert!(history_logical_bytes(&state_root.join("history")).unwrap() <= 1_024);
+    }
+
+    #[test]
+    fn active_output_reader_blocks_persistence_until_drop() {
+        let root = TestRoot::new("active-reader");
+        let state_root = state_with_terminal_executions(&root, &["active-reader"]);
+        let policy = SessionHistoryPolicy::local_bounded(false, 8, 16_384).unwrap();
+        let recorder =
+            SessionHistoryRecorder::new_local("active-reader", policy, &state_root).unwrap();
+        let reader = recorder
+            .wrap_output_reader(Box::new(Cursor::new(b"abcdefgh".to_vec())))
+            .unwrap();
+        assert!(recorder.persist().is_err());
+        drop(reader);
+        let persisted = recorder.persist().unwrap().unwrap();
+        assert!(!persisted.manifest.transcript_capture_complete);
+        assert!(persisted.manifest.transcript_truncated);
+    }
+
+    #[test]
+    fn zero_length_read_does_not_fake_eof_or_complete_capture() {
+        let root = TestRoot::new("zero-read");
+        let state_root = state_with_terminal_executions(&root, &["zero-read"]);
+        let policy = SessionHistoryPolicy::local_bounded(false, 8, 16_384).unwrap();
+        let recorder =
+            SessionHistoryRecorder::new_local("zero-read", policy, &state_root).unwrap();
+        let mut reader = recorder
+            .wrap_output_reader(Box::new(Cursor::new(b"abcdefgh".to_vec())))
+            .unwrap();
+        let mut empty = [];
+        assert_eq!(reader.read(&mut empty).unwrap(), 0);
+        drop(reader);
+        let persisted = recorder.persist().unwrap().unwrap();
+        assert!(!persisted.manifest.transcript_capture_complete);
+        assert!(persisted.manifest.transcript_truncated);
+        assert_eq!(persisted.manifest.transcript_observed_bytes, 0);
     }
 
     #[test]
@@ -878,6 +1091,50 @@ mod tests {
         let policy = SessionHistoryPolicy::local_bounded(false, 8, 16_384).unwrap();
         let recorder =
             SessionHistoryRecorder::new_local("execution-three", policy, &state_root).unwrap();
+        assert!(recorder.persist().is_err());
+        assert!(!state_root.join("history").exists());
+    }
+
+    #[test]
+    fn incomplete_terminal_row_cannot_receive_history() {
+        let root = TestRoot::new("missing-terminal-row");
+        let state_root = root.path().join("state");
+        let workspace_root = root.path().join("workspace");
+        fs::create_dir(&workspace_root).unwrap();
+        let workspace_root = fs::canonicalize(workspace_root).unwrap();
+        let mut store = Store::open(&state_root).unwrap();
+        store
+            .create_workspace(
+                NewWorkspace {
+                    workspace_id: "workspace-history",
+                    canonical_worktree_root: workspace_root.to_str().unwrap(),
+                    git_common_dir: workspace_root.join(".git").to_str().unwrap(),
+                },
+                1,
+            )
+            .unwrap();
+        store
+            .create_execution(
+                NewExecution {
+                    execution_id: "missing-terminal-row",
+                    workspace_id: "workspace-history",
+                    kind: ExecutionKind::Terminal,
+                    request_source: FactSource::CallerRequested,
+                    execution_domain: "native-test",
+                },
+                2,
+            )
+            .unwrap();
+        drop(store);
+        let state_root = fs::canonicalize(state_root).unwrap();
+        let policy = SessionHistoryPolicy::local_bounded(false, 8, 16_384).unwrap();
+        let recorder = SessionHistoryRecorder::new_local(
+            "missing-terminal-row",
+            policy,
+            &state_root,
+        )
+        .unwrap();
+        capture_all(&recorder, b"safe");
         assert!(recorder.persist().is_err());
         assert!(!state_root.join("history").exists());
     }
@@ -920,13 +1177,51 @@ mod tests {
         let root = TestRoot::new("retention-helper");
         let history = root.path().join("history");
         fs::create_dir(&history).unwrap();
-        for name in ["session-a", "session-b"] {
-            let dir = history.join(name);
+        for execution_id in ["a", "b"] {
+            let dir = history.join(history_storage_key(execution_id));
             fs::create_dir(&dir).unwrap();
             fs::write(dir.join("blob"), b"1234").unwrap();
         }
         assert_eq!(history_logical_bytes(&history).unwrap(), 8);
-        prune_for_write(&history, "session-new", 8, 8).unwrap();
+        prune_for_write(&history, &history_storage_key("new"), 8, 8).unwrap();
         assert_eq!(history_logical_bytes(&history).unwrap(), 0);
+    }
+
+    #[test]
+    fn recursive_history_delete_rejects_root_outside_and_unrecognized_targets() {
+        let root = TestRoot::new("delete-ownership");
+        let history = root.path().join("history");
+        fs::create_dir(&history).unwrap();
+        let owned = history.join(history_storage_key("owned"));
+        fs::create_dir(&owned).unwrap();
+        fs::write(owned.join("blob"), b"safe").unwrap();
+        remove_owned_history_session(&history, &owned).unwrap();
+        assert!(!owned.exists());
+
+        assert!(remove_owned_history_session(&history, &history).is_err());
+
+        let outside = root.path().join(history_storage_key("outside"));
+        fs::create_dir(&outside).unwrap();
+        assert!(remove_owned_history_session(&history, &outside).is_err());
+
+        let unexpected = history.join("session-not-a-sha256");
+        fs::create_dir(&unexpected).unwrap();
+        assert!(remove_owned_history_session(&history, &unexpected).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recursive_history_delete_rejects_symlink_target() {
+        use std::os::unix::fs::symlink;
+
+        let root = TestRoot::new("delete-symlink");
+        let history = root.path().join("history");
+        fs::create_dir(&history).unwrap();
+        let outside = root.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        let link = history.join(history_storage_key("linked"));
+        symlink(&outside, &link).unwrap();
+        assert!(remove_owned_history_session(&history, &link).is_err());
+        assert!(outside.exists());
     }
 }
