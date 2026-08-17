@@ -180,8 +180,7 @@ impl SessionHistoryRecorder {
                 false,
                 true,
             )?;
-            if u64::try_from(maximum_empty_manifest_bytes.len())?
-                > policy.total_history_byte_quota
+            if u64::try_from(maximum_empty_manifest_bytes.len())? > policy.total_history_byte_quota
             {
                 return Err(
                     "terminal history quota cannot hold mandatory metadata for this execution"
@@ -225,7 +224,8 @@ impl SessionHistoryRecorder {
         state.reader_taken = true;
         state.reader_active = true;
         drop(state);
-        let total_quota = usize::try_from(self.policy.total_history_byte_quota).unwrap_or(usize::MAX);
+        let total_quota =
+            usize::try_from(self.policy.total_history_byte_quota).unwrap_or(usize::MAX);
         Ok(Box::new(HistoryReader {
             inner: reader,
             quota: self.policy.transcript_byte_quota.min(total_quota),
@@ -496,7 +496,10 @@ fn contains_obvious_secret_assignment(lower: &str) -> bool {
 fn contains_sensitive_url_like_token(argument: &str) -> bool {
     argument.split_whitespace().any(|token| {
         let token = token.trim_matches(|ch: char| {
-            matches!(ch, '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';')
+            matches!(
+                ch,
+                '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';'
+            )
         });
         let Some((scheme, rest)) = token.split_once("://") else {
             return false;
@@ -583,7 +586,10 @@ fn with_history_write_lock<T>(
              FROM executions e
              INNER JOIN terminal_sessions t ON t.execution_id = e.execution_id
              WHERE e.execution_id = ?1 AND e.kind = ?2",
-            params![execution_id, crate::domain::ExecutionKind::Terminal.as_str()],
+            params![
+                execution_id,
+                crate::domain::ExecutionKind::Terminal.as_str()
+            ],
             |row| row.get(0),
         )?;
         if terminal_count != 1 {
@@ -1009,7 +1015,10 @@ mod tests {
         let manifest_bytes =
             fs::read(state_root.join(&persisted.manifest_blob.relative_path)).unwrap();
         assert_eq!(manifest_bytes.len(), persisted.manifest_blob.captured_bytes);
-        assert_eq!(lower_sha256(&manifest_bytes), persisted.manifest_blob.sha256);
+        assert_eq!(
+            lower_sha256(&manifest_bytes),
+            persisted.manifest_blob.sha256
+        );
         assert!(history_logical_bytes(&state_root.join("history")).unwrap() <= 16_384);
     }
 
@@ -1049,8 +1058,7 @@ mod tests {
         let root = TestRoot::new("zero-read");
         let state_root = state_with_terminal_executions(&root, &["zero-read"]);
         let policy = SessionHistoryPolicy::local_bounded(false, 8, 16_384).unwrap();
-        let recorder =
-            SessionHistoryRecorder::new_local("zero-read", policy, &state_root).unwrap();
+        let recorder = SessionHistoryRecorder::new_local("zero-read", policy, &state_root).unwrap();
         let mut reader = recorder
             .wrap_output_reader(Box::new(Cursor::new(b"abcdefgh".to_vec())))
             .unwrap();
@@ -1128,12 +1136,8 @@ mod tests {
         drop(store);
         let state_root = fs::canonicalize(state_root).unwrap();
         let policy = SessionHistoryPolicy::local_bounded(false, 8, 16_384).unwrap();
-        let recorder = SessionHistoryRecorder::new_local(
-            "missing-terminal-row",
-            policy,
-            &state_root,
-        )
-        .unwrap();
+        let recorder =
+            SessionHistoryRecorder::new_local("missing-terminal-row", policy, &state_root).unwrap();
         capture_all(&recorder, b"safe");
         assert!(recorder.persist().is_err());
         assert!(!state_root.join("history").exists());
