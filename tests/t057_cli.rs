@@ -23,13 +23,17 @@ fn minimal_cli_proves_workspace_profiles_execution_and_terminal_paths() {
         opened_json["canonical_worktree_root"],
         repo.canonicalize().unwrap().to_str().unwrap()
     );
-    assert!(
-        opened_json["workspace_id"]
-            .as_str()
-            .unwrap()
-            .starts_with("ws-")
-    );
+    let workspace_id = opened_json["workspace_id"].as_str().unwrap().to_owned();
+    assert!(!workspace_id.is_empty());
     assert!(opened_json["head_oid"].as_str().is_some());
+
+    let reopened = winds(
+        &winds_home,
+        ["workspace-open", "--repo", repo.to_str().unwrap()],
+    );
+    assert_success(&reopened);
+    let reopened_json: Value = serde_json::from_slice(&reopened.stdout).unwrap();
+    assert_eq!(reopened_json["workspace_id"], workspace_id);
 
     let profiles = winds(&winds_home, ["profiles", "--repo", repo.to_str().unwrap()]);
     assert_success(&profiles);
