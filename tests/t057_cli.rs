@@ -1,5 +1,5 @@
 use serde_json::Value;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -17,10 +17,7 @@ fn minimal_cli_proves_workspace_profiles_execution_and_terminal_paths() {
     init_repo(&repo, "primary");
     init_repo(&other_repo, "other");
 
-    let opened = winds(
-        &winds_home,
-        ["workspace-open", "--repo", test_path(&repo)],
-    );
+    let opened = winds(&winds_home, ["workspace-open", "--repo", test_path(&repo)]);
     assert_success(&opened);
     let opened_json: Value = serde_json::from_slice(&opened.stdout).unwrap();
     let canonical_repo = repo.canonicalize().unwrap();
@@ -32,10 +29,7 @@ fn minimal_cli_proves_workspace_profiles_execution_and_terminal_paths() {
     assert!(!workspace_id.is_empty());
     assert!(opened_json["head_oid"].as_str().is_some());
 
-    let reopened = winds(
-        &winds_home,
-        ["workspace-open", "--repo", test_path(&repo)],
-    );
+    let reopened = winds(&winds_home, ["workspace-open", "--repo", test_path(&repo)]);
     assert_success(&reopened);
     let reopened_json: Value = serde_json::from_slice(&reopened.stdout).unwrap();
     assert_eq!(reopened_json["workspace_id"], workspace_id);
@@ -213,10 +207,7 @@ fn workspace_clone_rejects_unsafe_state_roots_before_creation() {
         cloned_json["workspace"]["canonical_worktree_root"],
         test_path(&canonical_destination)
     );
-    assert_eq!(
-        cloned_json["remote_identity"],
-        test_path(&canonical_source)
-    );
+    assert_eq!(cloned_json["remote_identity"], test_path(&canonical_source));
 }
 
 fn init_repo(path: &Path, content: &str) {
@@ -279,10 +270,7 @@ impl TestTempDir {
             .duration_since(UNIX_EPOCH)
             .ok()?
             .as_nanos();
-        let expected_name = OsString::from(format!(
-            "{prefix}-{nanos}-{}",
-            std::process::id()
-        ));
+        let expected_name = OsString::from(format!("{prefix}-{nanos}-{}", std::process::id()));
         let path = canonical_parent.join(&expected_name);
         fs::create_dir(&path).ok()?;
 
@@ -322,10 +310,4 @@ impl Drop for TestTempDir {
         }
         let _ = fs::remove_dir_all(canonical);
     }
-}
-
-#[test]
-fn temp_guard_name_is_exact_os_string() {
-    let name = OsStr::new("winds-t057-cli-fixture");
-    assert_eq!(name, OsStr::new("winds-t057-cli-fixture"));
 }
