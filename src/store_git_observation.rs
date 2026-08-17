@@ -101,7 +101,9 @@ impl Store {
                 )
             })?;
         if kind != ExecutionKind::ShellCommand.as_str() {
-            return Err("Git command-boundary observations require SHELL_COMMAND execution kind".into());
+            return Err(
+                "Git command-boundary observations require SHELL_COMMAND execution kind".into(),
+            );
         }
 
         tx.execute(
@@ -198,7 +200,9 @@ impl Store {
     }
 }
 
-fn validate_new_observation(observation: &NewExecutionGitObservation<'_>) -> Result<Option<&'static str>> {
+fn validate_new_observation(
+    observation: &NewExecutionGitObservation<'_>,
+) -> Result<Option<&'static str>> {
     if observation.execution_id.is_empty() {
         return Err("Git observation requires non-empty execution identity".into());
     }
@@ -213,7 +217,9 @@ fn validate_new_observation(observation: &NewExecutionGitObservation<'_>) -> Res
                 || observation.dirty.is_some()
                 || observation.worktree_state_sha256.is_some()
             {
-                return Err("UNAVAILABLE Git observation cannot contain synthesized Git state".into());
+                return Err(
+                    "UNAVAILABLE Git observation cannot contain synthesized Git state".into(),
+                );
             }
             Ok(None)
         }
@@ -230,7 +236,9 @@ fn validate_new_observation(observation: &NewExecutionGitObservation<'_>) -> Res
             validate_optional_nonempty(observation.head_oid, "Git HEAD object id")?;
             validate_optional_nonempty(observation.branch, "Git branch")?;
             if !is_lower_hex_sha256(digest) {
-                return Err("Git worktree-state digest must be a lowercase SHA-256 hex value".into());
+                return Err(
+                    "Git worktree-state digest must be a lowercase SHA-256 hex value".into(),
+                );
             }
             if detached {
                 if observation.branch.is_some() {
@@ -323,9 +331,7 @@ fn is_lower_hex_sha256(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        GitObservationAvailability, GitObservationBoundary, NewExecutionGitObservation,
-    };
+    use super::{GitObservationAvailability, GitObservationBoundary, NewExecutionGitObservation};
     use crate::domain::{ExecutionKind, FactSource};
     use crate::store::{NewExecution, NewShellCommand, NewWorkspace, Store};
     use rusqlite::Connection;
@@ -413,9 +419,7 @@ mod tests {
             })
             .unwrap();
 
-        let observations = store
-            .load_execution_git_observations("command-1")
-            .unwrap();
+        let observations = store.load_execution_git_observations("command-1").unwrap();
         assert_eq!(observations.len(), 2);
         assert_eq!(observations[0].boundary, GitObservationBoundary::Before);
         assert_eq!(
@@ -445,7 +449,9 @@ mod tests {
             .unwrap();
         let evidence_reports: i64 = store
             .connection
-            .query_row("SELECT COUNT(*) FROM evidence_reports", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM evidence_reports", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(candidate_events, 0);
         assert_eq!(evidence_reports, 0);
@@ -560,10 +566,14 @@ mod tests {
             .execute_batch(include_str!("../migrations/0001_init.sql"))
             .unwrap();
         connection
-            .execute_batch(include_str!("../migrations/0002_workspace_execution_ledger.sql"))
+            .execute_batch(include_str!(
+                "../migrations/0002_workspace_execution_ledger.sql"
+            ))
             .unwrap();
         connection
-            .execute_batch(include_str!("../migrations/0003_workspace_clone_origins.sql"))
+            .execute_batch(include_str!(
+                "../migrations/0003_workspace_clone_origins.sql"
+            ))
             .unwrap();
         connection
             .execute_batch(include_str!("../migrations/0004_shell_commands.sql"))

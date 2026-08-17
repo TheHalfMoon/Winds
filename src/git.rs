@@ -420,7 +420,10 @@ mod git_observation_tests {
 
     #[test]
     fn worktree_state_digest_is_sha256_over_exact_porcelain_bytes() {
-        assert_eq!(GIT_WORKTREE_STATE_FORMAT, "GIT_STATUS_PORCELAIN_V1_Z_SHA256_V1");
+        assert_eq!(
+            GIT_WORKTREE_STATE_FORMAT,
+            "GIT_STATUS_PORCELAIN_V1_Z_SHA256_V1"
+        );
         assert_eq!(
             sha256_hex(b""),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"

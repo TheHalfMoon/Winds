@@ -300,9 +300,7 @@ fn unix_ms() -> Result<i64> {
 mod tests {
     use super::{ExplicitCommandRequest, non_regressing_wall_time, run_explicit_command};
     use crate::domain::{ExecutionKind, ExecutionStatus, FactSource};
-    use crate::store::git_observation::{
-        GitObservationAvailability, GitObservationBoundary,
-    };
+    use crate::store::git_observation::{GitObservationAvailability, GitObservationBoundary};
     use crate::store::{NewExecution, NewShellCommand, NewWorkspace, Store};
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -546,9 +544,7 @@ mod tests {
         assert_eq!(command.exit_code, Some(7));
         assert_eq!(command.exit_source, Some(FactSource::WindsObserved));
         assert!(command.observed_end_unix_ms.is_some());
-        let git_observations = store
-            .load_execution_git_observations("command-1")
-            .unwrap();
+        let git_observations = store.load_execution_git_observations("command-1").unwrap();
         assert_eq!(git_observations.len(), 2);
         assert!(git_observations.iter().all(|observation| {
             observation.availability == GitObservationAvailability::Unavailable
@@ -738,9 +734,7 @@ mod tests {
             },
         )
         .unwrap();
-        let observations = store
-            .load_execution_git_observations("git-commit")
-            .unwrap();
+        let observations = store.load_execution_git_observations("git-commit").unwrap();
         assert_eq!(observations[0].dirty, Some(false));
         assert_eq!(observations[1].dirty, Some(false));
         assert_ne!(observations[0].head_oid, observations[1].head_oid);
@@ -763,9 +757,7 @@ mod tests {
             },
         )
         .unwrap();
-        let observations = store
-            .load_execution_git_observations("git-branch")
-            .unwrap();
+        let observations = store.load_execution_git_observations("git-branch").unwrap();
         assert_eq!(observations[0].head_oid, observations[1].head_oid);
         assert_eq!(observations[0].branch.as_deref(), Some("main"));
         assert_eq!(observations[1].branch.as_deref(), Some("t055-observed"));
@@ -819,7 +811,10 @@ mod tests {
         .unwrap();
         assert_eq!(result.exit_code, Some(0));
         assert_eq!(
-            store.load_execution("git-after-unavailable").unwrap().status,
+            store
+                .load_execution("git-after-unavailable")
+                .unwrap()
+                .status,
             ExecutionStatus::Exited
         );
         let observations = store
