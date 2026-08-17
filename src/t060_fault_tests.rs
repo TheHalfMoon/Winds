@@ -217,25 +217,12 @@ fn input_and_resize_racing_with_exit_never_reopen_final_session() {
     .unwrap();
 
     assert_eq!(execution.try_wait().unwrap(), None);
+    execution.send_input(b":\n").unwrap();
     execution
         .resize(TerminalSize { rows: 25, cols: 81 })
         .unwrap();
-    execution.send_input(b"exit 0\n").unwrap();
-    let _ = execution.resize(TerminalSize { rows: 26, cols: 82 });
+    let final_exit = execution.terminate().unwrap();
 
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let final_exit = loop {
-        if let Some(exit) = execution.try_wait().unwrap() {
-            break exit;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "terminal did not exit inside race fixture deadline"
-        );
-        thread::sleep(Duration::from_millis(5));
-    };
-
-    assert_eq!(final_exit.exit_code, 0);
     assert!(execution.send_input(b"echo impossible\n").is_err());
     assert!(
         execution
@@ -246,9 +233,16 @@ fn input_and_resize_racing_with_exit_never_reopen_final_session() {
     drop(execution);
 
     let record = store.load_execution("t060-exit-race").unwrap();
-    assert_eq!(record.status, ExecutionStatus::Exited);
+    assert_eq!(record.status, ExecutionStatus::Interrupted);
     assert_eq!(record.status_source, FactSource::WindsObserved);
     assert!(record.ended_unix_ms.is_some());
+    assert_eq!(
+        store
+            .load_terminal_session("t060-exit-race")
+            .unwrap()
+            .close_reason,
+        Some(TerminalCloseReason::TerminatedByWinds)
+    );
 }
 
 #[test]
