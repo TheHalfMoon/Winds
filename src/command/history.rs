@@ -547,6 +547,7 @@ fn ensure_private_directory(path: &Path) -> Result<()> {
 
 fn create_private_directory(path: &Path) -> Result<()> {
     let mut builder = DirBuilder::new();
+    builder.recursive(false);
     #[cfg(unix)]
     builder.mode(0o700);
     builder.create(path)?;
