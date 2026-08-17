@@ -46,8 +46,11 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
+
           path = Path("tools/.github/t055_patch.py")
           text = path.read_text(encoding="utf-8")
+
+          # Repair the malformed scratch-only migration literal.
           start = text.index("    migration.write_text(\n")
           end = text.index("\n\n    domain = root / \"src/domain.rs\"", start)
           replacement = '''    migration.write_text(
@@ -71,7 +74,39 @@ jobs:
           """,
               encoding="utf-8",
           )'''
-          path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
+          text = text[:start] + replacement + text[end:]
+
+          # Scope the top-level command-domain import matcher; the same short import
+          # also appears inside the test module and must not be treated as ambiguous.
+          old = '''    text = replace_once(
+              text,
+              "use crate::domain::{ExecutionKind, ExecutionStatus, FactSource};\\n",
+              "use crate::domain::{ExecutionKind, ExecutionStatus, FactSource, WorkspaceRecord};\\n",
+              "command workspace record import",
+          )'''
+          new = '''    text = replace_once(
+              text,
+              "use crate::domain::{ExecutionKind, ExecutionStatus, FactSource};\\nuse crate::git::shell_profiles::ShellExecutionDomain;\\n",
+              "use crate::domain::{ExecutionKind, ExecutionStatus, FactSource, WorkspaceRecord};\\nuse crate::git::shell_profiles::ShellExecutionDomain;\\n",
+              "command workspace record import",
+          )'''
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one command import helper block, found {text.count(old)}")
+          text = text.replace(old, new, 1)
+
+          # Remove a scratch-only no-op guard that targets the test-module import and
+          # adds no product behavior or validation value.
+          guard = '''    text = replace_once(
+              text,
+              "    use crate::domain::{ExecutionKind, ExecutionStatus, FactSource};\\n",
+              "    use crate::domain::{ExecutionKind, ExecutionStatus, FactSource};\\n",
+              "command test domain import guard",
+          )
+'''
+          if text.count(guard) != 1:
+              raise SystemExit(f"expected one no-op test import guard, found {text.count(guard)}")
+          text = text.replace(guard, "", 1)
+          path.write_text(text, encoding="utf-8")
           PY
           python tools/.github/t055_patch.py target
       - name: Verify intended patch surface
