@@ -11,6 +11,9 @@ use std::process::Command;
 
 #[path = "shell_profiles.rs"]
 pub(crate) mod shell_profiles;
+#[cfg(test)]
+#[path = "t059_negative_tests.rs"]
+mod t059_negative_tests;
 #[cfg(any(unix, windows))]
 #[allow(
     dead_code,
