@@ -1064,7 +1064,9 @@ mod tests {
                 OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
             )
             .unwrap();
-            connection.execute_batch("BEGIN IMMEDIATE; ROLLBACK").unwrap();
+            connection
+                .execute_batch("BEGIN IMMEDIATE; ROLLBACK")
+                .unwrap();
             Ok(())
         })
         .unwrap();
