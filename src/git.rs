@@ -36,7 +36,8 @@ pub(crate) mod wsl_launch;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
-pub(crate) const GIT_WORKTREE_STATE_FORMAT: &str = "GIT_STATUS_PORCELAIN_V1_Z_SHA256_V1";
+pub(crate) const GIT_WORKTREE_STATE_FORMAT: &str =
+    "GIT_STATUS_PORCELAIN_V2_BRANCH_Z_NO_RENAMES_SHA256_V1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WorktreeStateObservation {
@@ -69,20 +70,7 @@ pub(crate) fn observe_worktree_state(
         .into());
     }
 
-    let branch = observed_branch_name(&repo)?;
-    let head_oid = observed_head_oid(&repo, branch.as_deref())?;
-    let detached = branch.is_none();
-    let status = observed_status_bytes(&repo)?;
-    let dirty = !status.is_empty();
-    let worktree_state_sha256 = sha256_hex(&status);
-
-    Ok(WorktreeStateObservation {
-        head_oid,
-        branch,
-        detached,
-        dirty,
-        worktree_state_sha256,
-    })
+    parse_worktree_status(&observed_status_bytes(&repo)?)
 }
 
 const GIT_CONTEXT_ENV_VARS: &[&str] = &[
@@ -264,89 +252,97 @@ impl Repo {
     }
 }
 
-fn observed_branch_name(repo: &Repo) -> Result<Option<String>> {
-    let output = git_command(repo.root())
-        .args(["symbolic-ref", "--quiet", "--short", "HEAD"])
-        .output()?;
-    match output.status.code() {
-        Some(0) => {
-            let branch = String::from_utf8(output.stdout)?;
-            let branch = strip_git_line_ending(&branch);
-            if branch.is_empty() {
-                return Err("Git returned an empty branch name".into());
-            }
-            Ok(Some(branch.to_owned()))
-        }
-        Some(1) => Ok(None),
-        _ => Err(format!(
-            "failed to determine workspace branch state: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )
-        .into()),
-    }
-}
-
-fn observed_head_oid(repo: &Repo, branch: Option<&str>) -> Result<Option<String>> {
-    let output = git_command(repo.root())
-        .args(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])
-        .output()?;
-    if output.status.success() {
-        let head = String::from_utf8(output.stdout)?;
-        let head = strip_git_line_ending(&head);
-        if head.is_empty() {
-            return Err("Git returned an empty HEAD object id".into());
-        }
-        return Ok(Some(head.to_owned()));
-    }
-    if output.status.code() != Some(1) {
-        return Err(format!(
-            "failed to resolve workspace HEAD: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )
-        .into());
-    }
-
-    let Some(branch) = branch else {
-        return Err("detached workspace HEAD does not resolve to a commit".into());
-    };
-    let full_ref = format!("refs/heads/{branch}");
-    let ref_status = git_command(repo.root())
-        .args(["show-ref", "--verify", "--quiet", full_ref.as_str()])
-        .status()?;
-    match ref_status.code() {
-        Some(1) => Ok(None),
-        Some(0) => Err(format!(
-            "workspace HEAD branch exists but does not resolve to a commit: {full_ref}"
-        )
-        .into()),
-        _ => Err(format!("failed to verify workspace HEAD branch: {full_ref}").into()),
-    }
-}
-
 fn observed_status_bytes(repo: &Repo) -> Result<Vec<u8>> {
     let output = git_command(repo.root())
         .env("GIT_OPTIONAL_LOCKS", "0")
         .args([
             "status",
-            "--porcelain=v1",
+            "--porcelain=v2",
+            "--branch",
+            "--no-ahead-behind",
             "-z",
             "--untracked-files=all",
             "--ignore-submodules=none",
+            "--no-renames",
         ])
         .output()?;
     if output.status.success() {
         return Ok(output.stdout);
     }
     Err(format!(
-        "failed to inspect workspace dirty state: {}",
+        "failed to inspect workspace Git state: {}",
         String::from_utf8_lossy(&output.stderr).trim()
     )
     .into())
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+fn parse_worktree_status(bytes: &[u8]) -> Result<WorktreeStateObservation> {
+    let mut head_oid: Option<Option<String>> = None;
+    let mut branch: Option<Option<String>> = None;
+    let mut dirty = false;
+    let mut worktree_hasher = Sha256::new();
+
+    for field in bytes.split(|byte| *byte == 0).filter(|field| !field.is_empty()) {
+        if let Some(value) = field.strip_prefix(b"# branch.oid ") {
+            if head_oid.is_some() {
+                return Err("Git status returned duplicate branch.oid headers".into());
+            }
+            let value = std::str::from_utf8(value)?;
+            head_oid = Some(if value == "(initial)" {
+                None
+            } else if value.is_empty() {
+                return Err("Git status returned an empty branch.oid value".into());
+            } else {
+                Some(value.to_owned())
+            });
+            continue;
+        }
+        if let Some(value) = field.strip_prefix(b"# branch.head ") {
+            if branch.is_some() {
+                return Err("Git status returned duplicate branch.head headers".into());
+            }
+            let value = std::str::from_utf8(value)?;
+            branch = Some(if value == "(detached)" {
+                None
+            } else if value.is_empty() {
+                return Err("Git status returned an empty branch.head value".into());
+            } else {
+                Some(value.to_owned())
+            });
+            continue;
+        }
+        if field.starts_with(b"# ") {
+            continue;
+        }
+
+        dirty = true;
+        worktree_hasher.update(field);
+        worktree_hasher.update([0]);
+    }
+
+    let head_oid = head_oid.ok_or("Git status omitted the required branch.oid header")?;
+    let branch = branch.ok_or("Git status omitted the required branch.head header")?;
+    let detached = branch.is_none();
+    if detached && head_oid.is_none() {
+        return Err("Git status reported detached HEAD without an exact object id".into());
+    }
+    let worktree_state_sha256 = hex_digest(worktree_hasher.finalize());
+
+    Ok(WorktreeStateObservation {
+        head_oid,
+        branch,
+        detached,
+        dirty,
+        worktree_state_sha256,
+    })
+}
+
+fn hex_digest(digest: impl AsRef<[u8]>) -> String {
+    digest
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 #[cfg(unix)]
@@ -416,18 +412,69 @@ fn strip_git_line_ending(value: &str) -> &str {
 
 #[cfg(test)]
 mod git_observation_tests {
-    use super::{GIT_WORKTREE_STATE_FORMAT, sha256_hex};
+    use super::{GIT_WORKTREE_STATE_FORMAT, parse_worktree_status};
 
     #[test]
-    fn worktree_state_digest_is_sha256_over_exact_porcelain_bytes() {
+    fn clean_attached_status_parses_branch_and_empty_state_digest() {
+        let observation = parse_worktree_status(
+            b"# branch.oid 0123456789abcdef\0# branch.head main\0",
+        )
+        .unwrap();
+        assert_eq!(observation.head_oid.as_deref(), Some("0123456789abcdef"));
+        assert_eq!(observation.branch.as_deref(), Some("main"));
+        assert!(!observation.detached);
+        assert!(!observation.dirty);
         assert_eq!(
-            GIT_WORKTREE_STATE_FORMAT,
-            "GIT_STATUS_PORCELAIN_V1_Z_SHA256_V1"
-        );
-        assert_eq!(
-            sha256_hex(b""),
+            observation.worktree_state_sha256,
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
-        assert_ne!(sha256_hex(b" M tracked.txt\0"), sha256_hex(b""));
+        assert_eq!(
+            GIT_WORKTREE_STATE_FORMAT,
+            "GIT_STATUS_PORCELAIN_V2_BRANCH_Z_NO_RENAMES_SHA256_V1"
+        );
+    }
+
+    #[test]
+    fn status_digest_excludes_branch_headers_but_includes_exact_worktree_records() {
+        let main = parse_worktree_status(
+            b"# branch.oid abc\0# branch.head main\0? untracked.txt\0",
+        )
+        .unwrap();
+        let other_branch = parse_worktree_status(
+            b"# branch.oid abc\0# branch.head other\0? untracked.txt\0",
+        )
+        .unwrap();
+        let different_state = parse_worktree_status(
+            b"# branch.oid abc\0# branch.head main\0? different.txt\0",
+        )
+        .unwrap();
+        assert!(main.dirty);
+        assert_eq!(main.worktree_state_sha256, other_branch.worktree_state_sha256);
+        assert_ne!(main.worktree_state_sha256, different_state.worktree_state_sha256);
+    }
+
+    #[test]
+    fn unborn_and_detached_headers_remain_explicit() {
+        let unborn =
+            parse_worktree_status(b"# branch.oid (initial)\0# branch.head main\0").unwrap();
+        assert_eq!(unborn.head_oid, None);
+        assert_eq!(unborn.branch.as_deref(), Some("main"));
+        assert!(!unborn.detached);
+
+        let detached =
+            parse_worktree_status(b"# branch.oid deadbeef\0# branch.head (detached)\0").unwrap();
+        assert_eq!(detached.head_oid.as_deref(), Some("deadbeef"));
+        assert_eq!(detached.branch, None);
+        assert!(detached.detached);
+    }
+
+    #[test]
+    fn missing_or_inconsistent_branch_headers_fail_closed() {
+        assert!(parse_worktree_status(b"# branch.head main\0").is_err());
+        assert!(parse_worktree_status(b"# branch.oid abc\0").is_err());
+        assert!(
+            parse_worktree_status(b"# branch.oid (initial)\0# branch.head (detached)\0")
+                .is_err()
+        );
     }
 }
