@@ -46,6 +46,8 @@ Persistence does not elevate any of these records into authenticated-human autho
 
 The existing verification path binds evidence to the exact verification candidate/base under its accepted candidate-worktree and evidence rules. Workspace terminal history and execution-ledger records do not bypass or replace those rules.
 
+Here, verification isolation means separation of the candidate worktree and evidence path from ordinary workspace activity. It does not mean that `winds verify` is an OS, filesystem, network, or credential sandbox.
+
 Therefore:
 
 - a successful workspace command is not a successful verification run;
