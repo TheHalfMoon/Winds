@@ -72,7 +72,7 @@ pub fn run_explicit_command(
     {
         Ok(child) => child,
         Err(error) => {
-            let failed_unix_ms = unix_ms().ok();
+            let failed_unix_ms = trustworthy_wall_time_after(requested_unix_ms, None);
             let persist =
                 store.mark_shell_command_failed_to_start(request.execution_id, failed_unix_ms);
             return match persist {
@@ -85,12 +85,12 @@ pub fn run_explicit_command(
         }
     };
 
-    let started_unix_ms = unix_ms().ok();
+    let started_unix_ms = trustworthy_wall_time_after(requested_unix_ms, None);
     if let Err(persist_error) =
         store.mark_shell_command_running(request.execution_id, started_unix_ms)
     {
         let cleanup_proven = cleanup_owned_child(&mut child);
-        let ended_unix_ms = unix_ms().ok();
+        let ended_unix_ms = trustworthy_wall_time_after(requested_unix_ms, started_unix_ms);
         let repair = if cleanup_proven {
             store.mark_shell_command_start_persistence_failed(
                 request.execution_id,
@@ -116,7 +116,7 @@ pub fn run_explicit_command(
         Ok(status) => status,
         Err(wait_error) => {
             let cleanup_proven = cleanup_owned_child(&mut child);
-            let ended_unix_ms = unix_ms().ok();
+            let ended_unix_ms = trustworthy_wall_time_after(requested_unix_ms, started_unix_ms);
             let persist = if cleanup_proven {
                 store.mark_shell_command_interrupted(request.execution_id, ended_unix_ms)
             } else {
@@ -130,7 +130,7 @@ pub fn run_explicit_command(
             .into());
         }
     };
-    let ended_unix_ms = unix_ms().ok();
+    let ended_unix_ms = trustworthy_wall_time_after(requested_unix_ms, started_unix_ms);
     let exit_code = status.code();
     store
         .record_shell_command_exit_observation(request.execution_id, exit_code, ended_unix_ms)
@@ -203,6 +203,24 @@ fn cleanup_owned_child(child: &mut Child) -> bool {
     }
 }
 
+fn trustworthy_wall_time_after(
+    requested_unix_ms: i64,
+    started_unix_ms: Option<i64>,
+) -> Option<i64> {
+    non_regressing_wall_time(unix_ms().ok(), requested_unix_ms, started_unix_ms)
+}
+
+fn non_regressing_wall_time(
+    candidate_unix_ms: Option<i64>,
+    requested_unix_ms: i64,
+    started_unix_ms: Option<i64>,
+) -> Option<i64> {
+    candidate_unix_ms.filter(|candidate| {
+        *candidate >= requested_unix_ms
+            && started_unix_ms.is_none_or(|started| *candidate >= started)
+    })
+}
+
 fn unix_ms() -> Result<i64> {
     let millis = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
     Ok(i64::try_from(millis)?)
@@ -210,7 +228,7 @@ fn unix_ms() -> Result<i64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExplicitCommandRequest, run_explicit_command};
+    use super::{ExplicitCommandRequest, non_regressing_wall_time, run_explicit_command};
     use crate::domain::{ExecutionKind, ExecutionStatus, FactSource};
     use crate::store::{NewExecution, NewShellCommand, NewWorkspace, Store};
     use std::fs;
@@ -285,6 +303,14 @@ mod tests {
             format!("exit /B {exit_code}")
         };
         (executable, vec!["/D".to_owned(), "/C".to_owned(), body])
+    }
+
+    #[test]
+    fn regressed_wall_clock_is_discarded_instead_of_corrupting_lifecycle_truth() {
+        assert_eq!(non_regressing_wall_time(Some(9), 10, None), None);
+        assert_eq!(non_regressing_wall_time(Some(10), 10, Some(11)), None);
+        assert_eq!(non_regressing_wall_time(Some(12), 10, Some(11)), Some(12));
+        assert_eq!(non_regressing_wall_time(None, 10, Some(11)), None);
     }
 
     #[test]
