@@ -497,7 +497,7 @@ mod tests {
 
     #[cfg(windows)]
     fn hide_git_metadata_script() -> &'static str {
-        "move .git .git-hidden >NUL"
+        "ren .git .git-hidden"
     }
 
     #[test]
