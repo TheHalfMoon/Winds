@@ -206,7 +206,7 @@ fn input_and_resize_racing_with_exit_never_reopen_final_session() {
     let mut store = store_with_workspace(&root);
     let workspace = fs::canonicalize(root.workspace()).unwrap();
     let wrapper = workspace.join("t060-exit-race-child");
-    write_executable(&wrapper, b"#!/bin/sh\nsleep 1\nexit 0\n");
+    write_executable(&wrapper, b"#!/bin/sh\nIFS= read -r _ || :\nexit 0\n");
     let profile = profile_for_candidate(&wrapper);
     let mut execution = TerminalExecution::start_native(
         &mut store,
@@ -218,29 +218,23 @@ fn input_and_resize_racing_with_exit_never_reopen_final_session() {
     )
     .unwrap();
 
+    assert_eq!(execution.try_wait().unwrap(), None);
+    execution
+        .resize(TerminalSize { rows: 25, cols: 81 })
+        .unwrap();
+    execution.send_input(b"exit-now\n").unwrap();
+    let _ = execution.resize(TerminalSize { rows: 26, cols: 82 });
+
     let deadline = Instant::now() + Duration::from_secs(5);
-    let mut final_exit = None;
-    for _ in 0..32 {
+    let final_exit = loop {
         if let Some(exit) = execution.try_wait().unwrap() {
-            final_exit = Some(exit);
-            break;
+            break exit;
         }
-        let _ = execution.send_input(b"race-input\n");
-        let _ = execution.resize(TerminalSize { rows: 25, cols: 81 });
-        thread::sleep(Duration::from_millis(25));
-    }
-    let final_exit = match final_exit {
-        Some(exit) => exit,
-        None => loop {
-            if let Some(exit) = execution.try_wait().unwrap() {
-                break exit;
-            }
-            assert!(
-                Instant::now() < deadline,
-                "terminal did not exit inside race fixture deadline"
-            );
-            thread::sleep(Duration::from_millis(5));
-        },
+        assert!(
+            Instant::now() < deadline,
+            "terminal did not exit inside race fixture deadline"
+        );
+        thread::sleep(Duration::from_millis(5));
     };
 
     assert_eq!(final_exit.exit_code, 0);
@@ -267,6 +261,11 @@ fn interrupt_then_close_escalates_only_while_session_is_still_owned() {
     let workspace = fs::canonicalize(root.workspace()).unwrap();
     let ready_marker = workspace.join(".t060-interrupt-ready");
     let reset_marker = workspace.join(".t060-interrupt-reset");
+    let interrupt_child = workspace.join("t060-interrupt-child.sh");
+    write_executable(
+        &interrupt_child,
+        b"#!/bin/sh\ntrap 'exit 130' INT\n: > .t060-interrupt-ready\nwhile :; do sleep 1; done\n",
+    );
     let mut execution = TerminalExecution::start_native(
         &mut store,
         "t060-interrupt-close",
@@ -278,7 +277,7 @@ fn interrupt_then_close_escalates_only_while_session_is_still_owned() {
     .unwrap();
 
     execution
-        .send_input(b": > .t060-interrupt-ready; sleep 30\n")
+        .send_input(b"sh ./t060-interrupt-child.sh\n")
         .unwrap();
     wait_for_file(&ready_marker, "interrupt readiness marker");
 
