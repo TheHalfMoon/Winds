@@ -1,0 +1,65 @@
+name: t054-closeout-committer
+
+on:
+  push:
+    branches: [ci/t053-obsolete-run-cleanup]
+    paths:
+      - ".github/workflows/t054-closeout-committer.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  commit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact closeout branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: docs/003-t054-closeout
+          fetch-depth: 2
+      - name: Verify exact closeout base
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "5d2de82c32137b8aea372412c103a69c158a6db7"
+      - name: Apply exact T054 closeout only
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("specs/003-workspace-execution-spine/tasks.md")
+          text = path.read_text(encoding="utf-8")
+          lines = text.splitlines(keepends=True)
+          t054 = [i for i, line in enumerate(lines) if line.startswith("- [ ] **T054** ")]
+          t055 = [line for line in lines if line.startswith("- [ ] **T055** ")]
+          if len(t054) != 1:
+              raise SystemExit(f"expected exactly one open T054 line, found {len(t054)}")
+          if len(t055) != 1:
+              raise SystemExit(f"expected exactly one open T055 line, found {len(t055)}")
+          original_t055 = t055[0]
+          lines[t054[0]] = "- [x] **T054** Add command-level records only for shells with a reliable ephemeral lifecycle integration or an explicit Winds-run command. Capture command/cwd/exit/duration where available without scraping arbitrary PTY keystrokes or editing persistent shell profiles. Hook-emitted command telemetry MUST remain explicitly shell-reported rather than `WINDS_OBSERVED` unless an independently protected Winds observation proves the fact; test marker spoof/confusion by child output. **Canonical evidence:** PR #31 final exact acceptance head `f400f01167c5cf90cbe3235e7477fb98b9213818` passed quality #318, windows-terminal #100 on official `windows-latest`, release-candidate #172, SC-001 100-cycle soak, Linux x86-64 and macOS arm64 release builds/artifacts, final correctness/safety and Ponytail review, Qodo fresh exact-head delta review with no actionable correctness/safety/active-spec issues, and zero unresolved review threads. PR #31 merged with expected-head and unchanged-main guards as canonical main `5d2de82c32137b8aea372412c103a69c158a6db7`; post-merge quality #319 and windows-terminal #101 passed on that exact canonical main. The accepted slice adds an explicit structured Winds-run command path with direct absolute executable plus argv semantics, caller-requested executable/arguments/cwd provenance, Winds-observed lifecycle and durable exit facts, conservative failed/interrupted/ownership-lost reconciliation, restart finalize-before-ownership-loss behavior, and non-regressing optional wall-clock evidence so unavailable/regressed timing cannot fabricate timestamps or strand a proven exit as falsely live. It intentionally adds no shell hook or marker parser, no arbitrary PTY keystroke inference, no persistent shell-profile edits, no stdout/stderr retention or broad history/secret policy before T056, no CLI/timeline surface before T057, no broad Windows or real Windows+WSL2 claim before T061/T062, and no daemon/public IPC/plugin/MCP/ACP/Agent Fleet behavior.\n"
+          updated = "".join(lines)
+          updated_t055 = [line for line in updated.splitlines(keepends=True) if line.startswith("- [ ] **T055** ")]
+          if updated_t055 != [original_t055]:
+              raise SystemExit("T055 changed during T054 closeout")
+          path.write_text(updated, encoding="utf-8")
+          PY
+          test "$(git diff --name-only)" = "specs/003-workspace-execution-spine/tasks.md"
+          git diff --check
+          grep -F -- '- [x] **T054**' specs/003-workspace-execution-spine/tasks.md >/dev/null
+          grep -F -- '- [ ] **T055**' specs/003-workspace-execution-spine/tasks.md >/dev/null
+      - name: Commit only if remote closeout head is unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin docs/003-t054-closeout
+          test "$(git rev-parse FETCH_HEAD)" = "5d2de82c32137b8aea372412c103a69c158a6db7"
+          git config user.name "winds-ci"
+          git config user.email "winds-ci@users.noreply.github.com"
+          git add specs/003-workspace-execution-spine/tasks.md
+          git commit -m "docs(winds): close T054 command observability"
+          git push origin HEAD:docs/003-t054-closeout
