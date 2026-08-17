@@ -333,11 +333,12 @@ mod tests {
     #[test]
     fn inventory_fails_when_workspace_identity_paths_are_stale_or_noncanonical() {
         let root = test_root("stale-paths");
-        let (mut workspace, worktree) = fixture_workspace(&root);
-        workspace.canonical_worktree_root = worktree.join("..").to_str().unwrap().to_owned();
+        let (workspace, worktree) = fixture_workspace(&root);
+        let moved = root.join("repo-moved");
+        fs::rename(&worktree, &moved).unwrap();
 
         let error = inventory_workspace_environment(&workspace).unwrap_err();
-        assert!(error.to_string().contains("no longer canonical"));
+        assert!(error.to_string().contains("cannot be canonicalized"));
 
         cleanup_owned_root(&root);
     }
