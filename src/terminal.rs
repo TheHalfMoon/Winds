@@ -286,11 +286,14 @@ impl TerminalSession {
     }
 
     pub fn close(&mut self) -> Result<TerminalExit> {
-        self.writer.take();
-        if let Some(exit) = self.try_wait()? {
-            return Ok(exit);
+        match self.cleanup_for_drop(Duration::from_millis(500))? {
+            TerminalDropCleanupOutcome::ExitedBeforeCleanup(exit)
+            | TerminalDropCleanupOutcome::Terminated(exit) => Ok(exit),
+            TerminalDropCleanupOutcome::Unproven => Err(
+                "terminal close could not prove owned child exit inside bounded cleanup window"
+                    .into(),
+            ),
         }
-        self.terminate()
     }
 
     pub(crate) fn cleanup_for_drop(
