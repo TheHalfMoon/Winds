@@ -23,18 +23,23 @@ fn minimal_cli_proves_workspace_profiles_execution_and_terminal_paths() {
         opened_json["canonical_worktree_root"],
         repo.canonicalize().unwrap().to_str().unwrap()
     );
-    assert!(opened_json["workspace_id"].as_str().unwrap().starts_with("ws-"));
+    assert!(
+        opened_json["workspace_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("ws-")
+    );
     assert!(opened_json["head_oid"].as_str().is_some());
 
-    let profiles = winds(
-        &winds_home,
-        ["profiles", "--repo", repo.to_str().unwrap()],
-    );
+    let profiles = winds(&winds_home, ["profiles", "--repo", repo.to_str().unwrap()]);
     assert_success(&profiles);
     let profiles_json: Value = serde_json::from_slice(&profiles.stdout).unwrap();
     let native_profiles = profiles_json["native_shell_profiles"].as_array().unwrap();
     assert!(!native_profiles.is_empty());
-    let profile_id = native_profiles[0]["profile_id"].as_str().unwrap().to_owned();
+    let profile_id = native_profiles[0]["profile_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
     assert!(profiles_json["wsl"]["availability"].as_str().is_some());
 
     let command_id = "t057-command-proof";
@@ -59,7 +64,10 @@ fn minimal_cli_proves_workspace_profiles_execution_and_terminal_paths() {
     assert_eq!(command_json["execution"]["execution_id"], command_id);
     assert_eq!(command_json["execution"]["kind"], "SHELL_COMMAND");
     assert_eq!(command_json["execution"]["status"], "EXITED");
-    assert_eq!(command_json["execution"]["shell_command"]["arguments"][0], "<winds:history-disabled>");
+    assert_eq!(
+        command_json["execution"]["shell_command"]["arguments"][0],
+        "<winds:history-disabled>"
+    );
     assert_eq!(command_json["result"]["exit_code"], 1);
 
     let inspected = winds(
