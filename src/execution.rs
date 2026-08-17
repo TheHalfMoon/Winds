@@ -1,3 +1,7 @@
+use crate::command::history::{
+    PersistedSessionHistory, SessionHistoryPolicy, SessionHistoryRecorder,
+    sanitize_persisted_arguments,
+};
 use crate::domain::{ExecutionKind, FactSource, TerminalCloseReason};
 use crate::git::shell_profiles::ShellProfile;
 use crate::git::terminal::{
@@ -14,6 +18,7 @@ pub struct TerminalExecution<'store> {
     execution_id: String,
     store: &'store mut Store,
     session: TerminalSession,
+    history: SessionHistoryRecorder,
     pending_final: Option<TerminalFinalization>,
     final_recorded: bool,
 }
@@ -27,9 +32,31 @@ impl<'store> TerminalExecution<'store> {
         cwd: &Path,
         size: TerminalSize,
     ) -> Result<Self> {
+        Self::start_native_with_history_policy(
+            store,
+            execution_id,
+            workspace_id,
+            profile,
+            cwd,
+            size,
+            SessionHistoryPolicy::disabled(),
+        )
+    }
+
+    pub fn start_native_with_history_policy(
+        store: &'store mut Store,
+        execution_id: &str,
+        workspace_id: &str,
+        profile: &ShellProfile,
+        cwd: &Path,
+        size: TerminalSize,
+        history_policy: SessionHistoryPolicy,
+    ) -> Result<Self> {
         store.retry_deferred_terminal_finalizations()?;
+        let history = SessionHistoryRecorder::new(execution_id, history_policy)?;
         let requested_cwd = utf8_path(cwd, "terminal requested cwd")?;
         let execution_domain = serde_json::to_string(&profile.execution_domain)?;
+        let persisted_shell_arguments = sanitize_persisted_arguments(&profile.arguments);
         let requested_unix_ms = unix_ms()?;
         store.create_terminal_execution(
             NewExecution {
@@ -43,7 +70,7 @@ impl<'store> TerminalExecution<'store> {
                 execution_id,
                 profile_id: &profile.profile_id,
                 shell_executable: &profile.executable,
-                shell_arguments: &profile.arguments,
+                shell_arguments: &persisted_shell_arguments,
                 requested_cwd,
                 initial_cols: Some(size.cols),
                 initial_rows: Some(size.rows),
@@ -52,7 +79,7 @@ impl<'store> TerminalExecution<'store> {
         )?;
 
         match TerminalSession::start(profile, cwd, size) {
-            Ok(session) => finish_started_session(store, execution_id, session),
+            Ok(session) => finish_started_session(store, execution_id, session, history),
             Err(error) => fail_launch(store, execution_id, error),
         }
     }
@@ -65,7 +92,27 @@ impl<'store> TerminalExecution<'store> {
         plan: &WslTerminalLaunchPlan,
         size: TerminalSize,
     ) -> Result<Self> {
+        Self::start_wsl_with_history_policy(
+            store,
+            execution_id,
+            workspace_id,
+            plan,
+            size,
+            SessionHistoryPolicy::disabled(),
+        )
+    }
+
+    #[cfg(windows)]
+    pub fn start_wsl_with_history_policy(
+        store: &'store mut Store,
+        execution_id: &str,
+        workspace_id: &str,
+        plan: &WslTerminalLaunchPlan,
+        size: TerminalSize,
+        history_policy: SessionHistoryPolicy,
+    ) -> Result<Self> {
         store.retry_deferred_terminal_finalizations()?;
+        let history = SessionHistoryRecorder::new(execution_id, history_policy)?;
         let requested_cwd = match &plan.cwd_resolution {
             WslCwdResolution::MappedWorkspace {
                 linux_workspace_root,
@@ -74,6 +121,7 @@ impl<'store> TerminalExecution<'store> {
             WslCwdResolution::FallbackHome { linux_home, .. } => linux_home.as_str(),
         };
         let execution_domain = serde_json::to_string(&plan.profile.execution_domain)?;
+        let persisted_shell_arguments = sanitize_persisted_arguments(&plan.profile.shell_arguments);
         let requested_unix_ms = unix_ms()?;
         store.create_terminal_execution(
             NewExecution {
@@ -87,7 +135,7 @@ impl<'store> TerminalExecution<'store> {
                 execution_id,
                 profile_id: &plan.profile.profile_id,
                 shell_executable: &plan.profile.shell_executable,
-                shell_arguments: &plan.profile.shell_arguments,
+                shell_arguments: &persisted_shell_arguments,
                 requested_cwd,
                 initial_cols: Some(size.cols),
                 initial_rows: Some(size.rows),
@@ -96,7 +144,7 @@ impl<'store> TerminalExecution<'store> {
         )?;
 
         match launch_wsl_terminal(plan, size) {
-            Ok(launched) => finish_started_session(store, execution_id, launched.session),
+            Ok(launched) => finish_started_session(store, execution_id, launched.session, history),
             Err(error) => fail_launch(store, execution_id, error),
         }
     }
@@ -117,8 +165,17 @@ impl<'store> TerminalExecution<'store> {
         self.session.start_cwd()
     }
 
+    pub fn history_policy(&self) -> SessionHistoryPolicy {
+        self.history.policy()
+    }
+
     pub fn take_output_reader(&mut self) -> Result<Box<dyn Read + Send>> {
-        self.session.take_output_reader()
+        let reader = self.session.take_output_reader()?;
+        self.history.wrap_output_reader(reader)
+    }
+
+    pub fn persist_history(&mut self) -> Result<Option<PersistedSessionHistory>> {
+        self.history.persist(&*self.store)
     }
 
     pub fn send_input(&mut self, bytes: &[u8]) -> Result<()> {
@@ -299,6 +356,7 @@ fn finish_started_session<'store>(
     store: &'store mut Store,
     execution_id: &str,
     mut session: TerminalSession,
+    history: SessionHistoryRecorder,
 ) -> Result<TerminalExecution<'store>> {
     let started_unix_ms = match unix_ms() {
         Ok(value) => value,
@@ -344,6 +402,7 @@ fn finish_started_session<'store>(
         execution_id: execution_id.to_owned(),
         store,
         session,
+        history,
         pending_final: None,
         final_recorded: false,
     })
@@ -377,6 +436,9 @@ fn unix_ms() -> Result<i64> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::TerminalExecution;
+    use crate::command::history::{
+        SessionHistoryPolicy, load_persisted_session_history, read_persisted_transcript,
+    };
     use crate::domain::{ExecutionStatus, FactSource, TerminalCloseReason};
     use crate::git::shell_profiles::{ShellProfile, discover_native_shell_profiles};
     use crate::git::terminal::TerminalSize;
@@ -396,7 +458,7 @@ mod tests {
         fn new(name: &str) -> Self {
             let sequence = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
             let path = std::env::temp_dir().join(format!(
-                "winds-t053-{name}-{}-{sequence}",
+                "winds-t056-{name}-{}-{sequence}",
                 std::process::id()
             ));
             fs::create_dir(&path).unwrap();
@@ -442,6 +504,14 @@ mod tests {
         })
     }
 
+    fn collect_output(mut reader: Box<dyn Read + Send>) -> thread::JoinHandle<Vec<u8>> {
+        thread::spawn(move || {
+            let mut output = Vec::new();
+            reader.read_to_end(&mut output).unwrap();
+            output
+        })
+    }
+
     fn store_with_workspace(root: &TestRoot) -> Store {
         let home = root.path().join("state");
         let store = Store::open(&home).unwrap();
@@ -473,10 +543,12 @@ mod tests {
         )
         .unwrap();
 
+        assert_eq!(execution.history_policy(), SessionHistoryPolicy::disabled());
         let output = drain_output(execution.take_output_reader().unwrap());
         execution.send_input(b"exit 0\n").unwrap();
         let exit = execution.wait().unwrap();
         assert_eq!(exit.exit_code, 0);
+        assert!(execution.persist_history().unwrap().is_none());
         drop(execution);
         output.join().unwrap();
 
@@ -491,6 +563,46 @@ mod tests {
             terminal.close_reason,
             Some(TerminalCloseReason::ProcessExited)
         );
+    }
+
+    #[test]
+    fn bounded_transcript_history_is_explicit_and_records_final_truncation_metadata() {
+        let root = TestRoot::new("bounded-history");
+        let state_home = root.path().join("state");
+        let mut store = store_with_workspace(&root);
+        let profile = native_sh_profile();
+        let policy = SessionHistoryPolicy::local_bounded(false, 5).unwrap();
+        let mut execution = TerminalExecution::start_native_with_history_policy(
+            &mut store,
+            "execution-bounded-history",
+            "workspace-1",
+            &profile,
+            root.path(),
+            TerminalSize { rows: 24, cols: 80 },
+            policy,
+        )
+        .unwrap();
+
+        let output = collect_output(execution.take_output_reader().unwrap());
+        execution.send_input(b"printf 'abcdefgh'; exit 0\n").unwrap();
+        let exit = execution.wait().unwrap();
+        assert_eq!(exit.exit_code, 0);
+        let live_output = output.join().unwrap();
+        assert!(live_output.len() > 5);
+        let persisted = execution.persist_history().unwrap().unwrap();
+        assert_eq!(persisted.manifest.policy, policy);
+        assert_eq!(persisted.manifest.transcript_retained_bytes, 5);
+        assert!(persisted.manifest.transcript_observed_bytes > 5);
+        assert!(persisted.manifest.transcript_truncated);
+        drop(execution);
+
+        let loaded = load_persisted_session_history(&state_home, "execution-bounded-history")
+            .unwrap()
+            .unwrap();
+        let transcript = read_persisted_transcript(&state_home, &loaded)
+            .unwrap()
+            .unwrap();
+        assert_eq!(transcript.len(), 5);
     }
 
     #[test]
