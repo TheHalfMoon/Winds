@@ -1,3 +1,4 @@
+use sha2::{Digest, Sha256};
 use std::error::Error;
 use std::ffi::OsStr;
 #[cfg(unix)]
@@ -34,6 +35,55 @@ pub(crate) mod wsl;
 pub(crate) mod wsl_launch;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
+
+pub(crate) const GIT_WORKTREE_STATE_FORMAT: &str = "GIT_STATUS_PORCELAIN_V1_Z_SHA256_V1";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WorktreeStateObservation {
+    pub head_oid: Option<String>,
+    pub branch: Option<String>,
+    pub detached: bool,
+    pub dirty: bool,
+    pub worktree_state_sha256: String,
+}
+
+pub(crate) fn observe_worktree_state(
+    expected_root: &Path,
+    expected_common_dir: &Path,
+) -> Result<WorktreeStateObservation> {
+    let repo = Repo::open(expected_root)?;
+    if repo.root != expected_root {
+        return Err(format!(
+            "registered workspace root no longer matches observed Git root: expected {}, observed {}",
+            expected_root.display(),
+            repo.root.display()
+        )
+        .into());
+    }
+    if repo.common_dir != expected_common_dir {
+        return Err(format!(
+            "registered Git common directory no longer matches observed Git identity: expected {}, observed {}",
+            expected_common_dir.display(),
+            repo.common_dir.display()
+        )
+        .into());
+    }
+
+    let branch = observed_branch_name(&repo)?;
+    let head_oid = observed_head_oid(&repo, branch.as_deref())?;
+    let detached = branch.is_none();
+    let status = observed_status_bytes(&repo)?;
+    let dirty = !status.is_empty();
+    let worktree_state_sha256 = sha256_hex(&status);
+
+    Ok(WorktreeStateObservation {
+        head_oid,
+        branch,
+        detached,
+        dirty,
+        worktree_state_sha256,
+    })
+}
 
 const GIT_CONTEXT_ENV_VARS: &[&str] = &[
     "GIT_DIR",
@@ -214,6 +264,91 @@ impl Repo {
     }
 }
 
+fn observed_branch_name(repo: &Repo) -> Result<Option<String>> {
+    let output = git_command(repo.root())
+        .args(["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .output()?;
+    match output.status.code() {
+        Some(0) => {
+            let branch = String::from_utf8(output.stdout)?;
+            let branch = strip_git_line_ending(&branch);
+            if branch.is_empty() {
+                return Err("Git returned an empty branch name".into());
+            }
+            Ok(Some(branch.to_owned()))
+        }
+        Some(1) => Ok(None),
+        _ => Err(format!(
+            "failed to determine workspace branch state: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into()),
+    }
+}
+
+fn observed_head_oid(repo: &Repo, branch: Option<&str>) -> Result<Option<String>> {
+    let output = git_command(repo.root())
+        .args(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])
+        .output()?;
+    if output.status.success() {
+        let head = String::from_utf8(output.stdout)?;
+        let head = strip_git_line_ending(&head);
+        if head.is_empty() {
+            return Err("Git returned an empty HEAD object id".into());
+        }
+        return Ok(Some(head.to_owned()));
+    }
+    if output.status.code() != Some(1) {
+        return Err(format!(
+            "failed to resolve workspace HEAD: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
+    }
+
+    let Some(branch) = branch else {
+        return Err("detached workspace HEAD does not resolve to a commit".into());
+    };
+    let full_ref = format!("refs/heads/{branch}");
+    let ref_status = git_command(repo.root())
+        .args(["show-ref", "--verify", "--quiet", full_ref.as_str()])
+        .status()?;
+    match ref_status.code() {
+        Some(1) => Ok(None),
+        Some(0) => Err(format!(
+            "workspace HEAD branch exists but does not resolve to a commit: {full_ref}"
+        )
+        .into()),
+        _ => Err(format!("failed to verify workspace HEAD branch: {full_ref}").into()),
+    }
+}
+
+fn observed_status_bytes(repo: &Repo) -> Result<Vec<u8>> {
+    let output = git_command(repo.root())
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .args([
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+        ])
+        .output()?;
+    if output.status.success() {
+        return Ok(output.stdout);
+    }
+    Err(format!(
+        "failed to inspect workspace dirty state: {}",
+        String::from_utf8_lossy(&output.stderr).trim()
+    )
+    .into())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 #[cfg(unix)]
 fn git_path_from_bytes(path: &[u8]) -> Result<PathBuf> {
     Ok(PathBuf::from(OsString::from_vec(path.to_vec())))
@@ -277,4 +412,19 @@ where
 fn strip_git_line_ending(value: &str) -> &str {
     let value = value.strip_suffix('\n').unwrap_or(value);
     value.strip_suffix('\r').unwrap_or(value)
+}
+
+#[cfg(test)]
+mod git_observation_tests {
+    use super::{GIT_WORKTREE_STATE_FORMAT, sha256_hex};
+
+    #[test]
+    fn worktree_state_digest_is_sha256_over_exact_porcelain_bytes() {
+        assert_eq!(GIT_WORKTREE_STATE_FORMAT, "GIT_STATUS_PORCELAIN_V1_Z_SHA256_V1");
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_ne!(sha256_hex(b" M tracked.txt\0"), sha256_hex(b""));
+    }
 }

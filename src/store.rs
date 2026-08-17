@@ -12,6 +12,9 @@ use std::io::{ErrorKind, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
+#[path = "store_git_observation.rs"]
+pub(crate) mod git_observation;
+
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
 pub struct Store {
@@ -123,6 +126,9 @@ impl Store {
             "../migrations/0003_workspace_clone_origins.sql"
         ))?;
         connection.execute_batch(include_str!("../migrations/0004_shell_commands.sql"))?;
+        connection.execute_batch(include_str!(
+            "../migrations/0005_execution_git_observations.sql"
+        ))?;
         Ok(Self {
             connection,
             home: home.to_path_buf(),
