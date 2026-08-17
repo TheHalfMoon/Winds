@@ -246,8 +246,17 @@ fn interrupt_then_close_escalates_only_while_session_is_still_owned() {
     .unwrap();
     let marker = wait_for_marker(execution.take_output_reader().unwrap(), b"T060_READY");
     execution
-        .send_input(b"trap '' INT; printf 'T060_READY\\n'; read _\n")
+        .send_input(b"trap '' INT; printf 'T060_%s\\n' READY; read _\n")
         .unwrap();
+    let marker_deadline = Instant::now() + Duration::from_secs(5);
+    while !marker.is_finished() {
+        if Instant::now() >= marker_deadline {
+            let _ = execution.close();
+            let _ = marker.join();
+            panic!("terminal did not emit the readiness marker inside fixture deadline");
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
     marker.join().unwrap();
 
     execution.interrupt().unwrap();
@@ -429,10 +438,22 @@ fn sqlite_exit_finalization_failure_is_deferred_then_retried_without_false_succe
     )
     .unwrap();
     execution.send_input(b"exit 0\n").unwrap();
-    assert!(
-        execution.wait().is_err(),
-        "durability failure must not report success"
-    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match execution.try_wait() {
+            Ok(None) => {}
+            Ok(Some(exit)) => panic!(
+                "durability failure falsely reported terminal success with exit {:?}",
+                exit
+            ),
+            Err(_) => break,
+        }
+        assert!(
+            Instant::now() < deadline,
+            "terminal did not reach the injected finalization failure inside fixture deadline"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
     drop(execution);
 
     assert_eq!(store.pending_terminal_finalization_count(), 1);
