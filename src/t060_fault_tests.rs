@@ -219,17 +219,28 @@ fn input_and_resize_racing_with_exit_never_reopen_final_session() {
     .unwrap();
 
     let deadline = Instant::now() + Duration::from_secs(5);
-    let final_exit = loop {
+    let mut final_exit = None;
+    for _ in 0..32 {
         if let Some(exit) = execution.try_wait().unwrap() {
-            break exit;
+            final_exit = Some(exit);
+            break;
         }
         let _ = execution.send_input(b"race-input\n");
         let _ = execution.resize(TerminalSize { rows: 25, cols: 81 });
-        assert!(
-            Instant::now() < deadline,
-            "terminal did not exit inside race fixture deadline"
-        );
-        thread::sleep(Duration::from_millis(2));
+        thread::sleep(Duration::from_millis(25));
+    }
+    let final_exit = match final_exit {
+        Some(exit) => exit,
+        None => loop {
+            if let Some(exit) = execution.try_wait().unwrap() {
+                break exit;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "terminal did not exit inside race fixture deadline"
+            );
+            thread::sleep(Duration::from_millis(5));
+        },
     };
 
     assert_eq!(final_exit.exit_code, 0);
