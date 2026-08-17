@@ -421,6 +421,7 @@ mod tests {
             .unwrap();
         assert_eq!(remote_identity, cloned.remote_identity);
         assert_eq!(recorded_unix_ms, 100);
+        drop(connection);
 
         cleanup_owned_root(&root);
     }
@@ -511,6 +512,7 @@ mod tests {
             .unwrap();
         assert_eq!(workspace_count, 0);
         assert_eq!(origin_count, 0);
+        drop(connection);
 
         cleanup_owned_root(&root);
     }
