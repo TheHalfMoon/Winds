@@ -1118,11 +1118,11 @@ impl Store {
     ) -> Result<usize> {
         self.retry_deferred_terminal_finalizations()?;
         let tx = self.connection.transaction()?;
-        let execution_ids = {
+        let executions = {
             let mut statement = tx.prepare(
-                "SELECT e.execution_id
+                "SELECT e.execution_id, t.execution_id
              FROM executions e
-             INNER JOIN terminal_sessions t ON t.execution_id = e.execution_id
+             LEFT JOIN terminal_sessions t ON t.execution_id = e.execution_id
              WHERE e.kind = ?1 AND e.status IN (?2, ?3)
              ORDER BY e.requested_unix_ms, e.execution_id",
             )?;
@@ -1133,12 +1133,17 @@ impl Store {
                         ExecutionStatus::Requested.as_str(),
                         ExecutionStatus::Running.as_str(),
                     ],
-                    |row| row.get::<_, String>(0),
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                        ))
+                    },
                 )?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         };
 
-        for execution_id in &execution_ids {
+        for (execution_id, terminal_session_id) in &executions {
             let updated = tx.execute(
                 "UPDATE executions
              SET status = ?2, status_source = ?3,
@@ -1158,11 +1163,13 @@ impl Store {
                 )
                 .into());
             }
-            set_terminal_close_reason(
-                &tx,
-                execution_id,
-                TerminalCloseReason::OwnershipLostProcessStateUnknown,
-            )?;
+            if terminal_session_id.is_some() {
+                set_terminal_close_reason(
+                    &tx,
+                    execution_id,
+                    TerminalCloseReason::OwnershipLostProcessStateUnknown,
+                )?;
+            }
             insert_execution_event(
                 &tx,
                 execution_id,
@@ -1172,7 +1179,7 @@ impl Store {
             )?;
         }
         tx.commit()?;
-        Ok(execution_ids.len())
+        Ok(executions.len())
     }
 
     pub fn load_execution(&self, execution_id: &str) -> Result<ExecutionRecord> {
