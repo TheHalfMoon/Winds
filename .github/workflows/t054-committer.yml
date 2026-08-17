@@ -20,7 +20,7 @@ jobs:
           ref: ci/t053-obsolete-run-cleanup
           path: tools
           persist-credentials: false
-      - name: Checkout target feature branch
+      - name: Checkout exact T054 feature head
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: feat/003-t054-command-records
@@ -30,55 +30,33 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git -C target rev-parse HEAD)" = "1a26fbf2f1d34690d615432e2dba7095a4b6955f"
+          test "$(git -C target rev-parse HEAD)" = "0dc4775e11563e14410cedb680ed765839d9bee5"
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
         with:
           toolchain: 1.97.1
           components: rustfmt, clippy
-      - name: Apply and validate exact six-file T054 patch
+      - name: Apply and validate exact clock-regression repair
         shell: bash
         working-directory: target
         run: |
           set -euo pipefail
-          python ../tools/.github/t054_patch.py .
-          python ../tools/.github/t054_postpatch.py .
+          python ../tools/.github/t054_clock_patch.py .
           cargo fmt --all
           cargo fmt --all -- --check
           cargo check --locked --all-targets --all-features
           cargo clippy --locked --all-targets --all-features -- -D warnings
           cargo test --locked --all-targets --all-features
-          expected=$(cat <<'EOF'
-          .github/workflows/windows-terminal.yml
-          migrations/0004_shell_commands.sql
-          src/command.rs
-          src/domain.rs
-          src/main.rs
-          src/store.rs
-          EOF
-          )
-          actual=$(git status --short | awk '{print $2}' | sort)
-          test "$actual" = "$(printf '%s\n' "$expected" | sort)"
+          test "$(git status --short | awk '{print $2}')" = "src/command.rs"
           git diff --check
-      - name: Commit five non-workflow files only
+      - name: Commit only if remote feature head is unchanged
         shell: bash
         working-directory: target
         run: |
           set -euo pipefail
-          git restore -- .github/workflows/windows-terminal.yml
-          expected=$(cat <<'EOF'
-          migrations/0004_shell_commands.sql
-          src/command.rs
-          src/domain.rs
-          src/main.rs
-          src/store.rs
-          EOF
-          )
-          actual=$(git status --short | awk '{print $2}' | sort)
-          test "$actual" = "$(printf '%s\n' "$expected" | sort)"
           git fetch origin feat/003-t054-command-records
-          test "$(git rev-parse FETCH_HEAD)" = "1a26fbf2f1d34690d615432e2dba7095a4b6955f"
+          test "$(git rev-parse FETCH_HEAD)" = "0dc4775e11563e14410cedb680ed765839d9bee5"
           git config user.name "winds-ci"
           git config user.email "winds-ci@users.noreply.github.com"
-          git add migrations/0004_shell_commands.sql src/command.rs src/domain.rs src/main.rs src/store.rs
-          git commit -m "feat(winds): add explicit command records"
+          git add src/command.rs
+          git commit -m "fix(winds): reject regressed command wall timestamps"
           git push origin HEAD:feat/003-t054-command-records
