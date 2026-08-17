@@ -204,8 +204,10 @@ impl Drop for ChildGuard {
 fn input_and_resize_racing_with_exit_never_reopen_final_session() {
     let root = TestRoot::new("exit-race");
     let mut store = store_with_workspace(&root);
-    let profile = native_sh_profile();
     let workspace = fs::canonicalize(root.workspace()).unwrap();
+    let wrapper = workspace.join("t060-exit-race-child");
+    write_executable(&wrapper, b"#!/bin/sh\nsleep 1\nexit 0\n");
+    let profile = profile_for_candidate(&wrapper);
     let mut execution = TerminalExecution::start_native(
         &mut store,
         "t060-exit-race",
@@ -216,13 +218,12 @@ fn input_and_resize_racing_with_exit_never_reopen_final_session() {
     )
     .unwrap();
 
-    execution.send_input(b"sleep 0.05; exit 0\n").unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     let final_exit = loop {
         if let Some(exit) = execution.try_wait().unwrap() {
             break exit;
         }
-        let _ = execution.send_input(b":\n");
+        let _ = execution.send_input(b"race-input\n");
         let _ = execution.resize(TerminalSize { rows: 25, cols: 81 });
         assert!(
             Instant::now() < deadline,
@@ -266,18 +267,17 @@ fn interrupt_then_close_escalates_only_while_session_is_still_owned() {
     .unwrap();
 
     execution
-        .send_input(b"trap '' INT; : > .t060-interrupt-ready; read _\n")
+        .send_input(b": > .t060-interrupt-ready; sleep 30\n")
         .unwrap();
     wait_for_file(&ready_marker, "interrupt readiness marker");
 
     execution.interrupt().unwrap();
-    thread::sleep(Duration::from_millis(20));
+    execution
+        .send_input(b": > .t060-interrupt-reset\n")
+        .unwrap();
+    wait_for_file(&reset_marker, "post-interrupt shell-resume marker");
     assert_eq!(execution.try_wait().unwrap(), None);
 
-    execution
-        .send_input(b"\ntrap - INT; : > .t060-interrupt-reset; exec sleep 30\n")
-        .unwrap();
-    wait_for_file(&reset_marker, "post-interrupt reset marker");
     execution.close().unwrap();
     drop(execution);
 
@@ -431,7 +431,9 @@ fn sqlite_exit_finalization_failure_is_deferred_then_retried_without_false_succe
     let root = TestRoot::new("sqlite-finalize");
     let mut store = store_with_workspace(&root);
     let workspace = fs::canonicalize(root.workspace()).unwrap();
-    let profile = native_sh_profile();
+    let wrapper = workspace.join("t060-finalize-child");
+    write_executable(&wrapper, b"#!/bin/sh\nsleep 1\nexit 0\n");
+    let profile = profile_for_candidate(&wrapper);
     let injector = fault_connection(&root);
     injector
         .execute_batch(
@@ -453,7 +455,6 @@ fn sqlite_exit_finalization_failure_is_deferred_then_retried_without_false_succe
         DEFAULT_SIZE,
     )
     .unwrap();
-    execution.send_input(b"exit 0\n").unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         match execution.try_wait() {
