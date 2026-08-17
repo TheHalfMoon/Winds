@@ -1,0 +1,101 @@
+name: t054-clock-preflight
+
+on:
+  push:
+    branches: [ci/t053-obsolete-run-cleanup]
+    paths:
+      - ".github/t054_clock_patch.py"
+      - ".github/workflows/t054-clock-preflight.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - name: Checkout validation tools
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ci/t053-obsolete-run-cleanup
+          path: tools
+          persist-credentials: false
+      - name: Checkout exact T054 candidate
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: feat/003-t054-command-records
+          path: target
+          persist-credentials: false
+      - name: Verify exact target head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C target rev-parse HEAD)" = "0dc4775e11563e14410cedb680ed765839d9bee5"
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+      - name: Apply uncommitted monotonic timing repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/.github/t054_clock_patch.py target
+      - name: Verify intended patch surface
+        shell: bash
+        working-directory: target
+        run: |
+          set -euo pipefail
+          expected=$(cat <<'EOF'
+          migrations/0004_shell_commands.sql
+          src/command.rs
+          src/domain.rs
+          src/store.rs
+          EOF
+          )
+          actual=$(git status --short | awk '{print $2}' | sort)
+          test "$actual" = "$(printf '%s\n' "$expected" | sort)"
+          git diff --check
+      - name: Format
+        working-directory: target
+        run: cargo fmt --all
+      - name: Format check
+        working-directory: target
+        run: cargo fmt --all -- --check
+      - name: Compile
+        working-directory: target
+        run: cargo check --locked --all-targets --all-features
+      - name: Clippy
+        working-directory: target
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - name: Full tests on Unix
+        if: runner.os != 'Windows'
+        working-directory: target
+        run: cargo test --locked --all-targets --all-features
+      - name: Focused command tests on Windows
+        if: runner.os == 'Windows'
+        working-directory: target
+        run: cargo test --locked --bin winds command::tests -- --test-threads=1
+      - name: Persistence tests on Windows
+        if: runner.os == 'Windows'
+        working-directory: target
+        run: cargo test --locked --bin winds store::persistence_tests -- --test-threads=1
+      - name: Re-verify patch surface after formatting
+        shell: bash
+        working-directory: target
+        run: |
+          set -euo pipefail
+          expected=$(cat <<'EOF'
+          migrations/0004_shell_commands.sql
+          src/command.rs
+          src/domain.rs
+          src/store.rs
+          EOF
+          )
+          actual=$(git status --short | awk '{print $2}' | sort)
+          test "$actual" = "$(printf '%s\n' "$expected" | sort)"
+          git diff --check
