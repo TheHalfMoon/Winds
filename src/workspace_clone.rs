@@ -2,7 +2,7 @@ use super::workspace::{WorkspaceInspection, inspect_existing_workspace};
 use super::{Result, git_command};
 use crate::store::{NewWorkspace, Store};
 use serde::Serialize;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
