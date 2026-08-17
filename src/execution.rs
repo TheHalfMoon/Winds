@@ -1,6 +1,5 @@
 use crate::command::history::{
-    PersistedSessionHistory, SessionHistoryPolicy, SessionHistoryRecorder,
-    sanitize_persisted_arguments,
+    PersistedSessionHistory, SessionHistoryPolicy, SessionHistoryRecorder, persisted_arguments,
 };
 use crate::domain::{ExecutionKind, FactSource, TerminalCloseReason};
 use crate::git::shell_profiles::ShellProfile;
@@ -15,13 +14,13 @@ use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy)]
-pub struct LocalTerminalHistory<'a> {
+pub(crate) struct LocalTerminalHistory<'a> {
     policy: SessionHistoryPolicy,
     state_root: &'a Path,
 }
 
 impl<'a> LocalTerminalHistory<'a> {
-    pub const fn new(policy: SessionHistoryPolicy, state_root: &'a Path) -> Self {
+    pub(crate) const fn new(policy: SessionHistoryPolicy, state_root: &'a Path) -> Self {
         Self { policy, state_root }
     }
 }
@@ -57,7 +56,7 @@ impl<'store> TerminalExecution<'store> {
         )
     }
 
-    pub fn start_native_with_local_history(
+    pub(crate) fn start_native_with_local_history(
         store: &'store mut Store,
         execution_id: &str,
         workspace_id: &str,
@@ -94,7 +93,7 @@ impl<'store> TerminalExecution<'store> {
     }
 
     #[cfg(windows)]
-    pub fn start_wsl_with_local_history(
+    pub(crate) fn start_wsl_with_local_history(
         store: &'store mut Store,
         execution_id: &str,
         workspace_id: &str,
@@ -322,7 +321,7 @@ fn start_native_with_recorder<'store>(
 ) -> Result<TerminalExecution<'store>> {
     let requested_cwd = utf8_path(cwd, "terminal requested cwd")?;
     let execution_domain = serde_json::to_string(&profile.execution_domain)?;
-    let persisted_shell_arguments = sanitize_persisted_arguments(&profile.arguments);
+    let persisted_shell_arguments = persisted_arguments(&profile.arguments, history.policy());
     let requested_unix_ms = unix_ms()?;
     store.create_terminal_execution(
         NewExecution {
@@ -367,7 +366,8 @@ fn start_wsl_with_recorder<'store>(
         WslCwdResolution::FallbackHome { linux_home, .. } => linux_home.as_str(),
     };
     let execution_domain = serde_json::to_string(&plan.profile.execution_domain)?;
-    let persisted_shell_arguments = sanitize_persisted_arguments(&plan.profile.shell_arguments);
+    let persisted_shell_arguments =
+        persisted_arguments(&plan.profile.shell_arguments, history.policy());
     let requested_unix_ms = unix_ms()?;
     store.create_terminal_execution(
         NewExecution {
@@ -603,6 +603,10 @@ mod tests {
         assert_eq!(
             terminal.close_reason,
             Some(TerminalCloseReason::ProcessExited)
+        );
+        assert_eq!(
+            terminal.shell_arguments,
+            vec!["<winds:history-disabled>".to_owned()]
         );
     }
 
