@@ -25,7 +25,10 @@ struct TestRoot(PathBuf);
 impl TestRoot {
     fn new(name: &str) -> Self {
         let sequence = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
+        let temp_root = Path::new("/tmp")
+            .canonicalize()
+            .expect("supported Unix test hosts must provide canonical /tmp");
+        let path = temp_root.join(format!(
             "winds-t060-{name}-{}-{sequence}",
             std::process::id()
         ));
@@ -48,7 +51,7 @@ impl TestRoot {
 
 impl Drop for TestRoot {
     fn drop(&mut self) {
-        let canonical_temp = match std::env::temp_dir().canonicalize() {
+        let canonical_temp = match Path::new("/tmp").canonicalize() {
             Ok(path) => path,
             Err(_) => return,
         };
@@ -66,16 +69,29 @@ impl Drop for TestRoot {
     }
 }
 
+fn fixture_utf8_path(path: &Path, label: &str) -> String {
+    match path.to_str() {
+        Some(value) => value.to_owned(),
+        None => panic!(
+            "{label} must be UTF-8 under the canonical T060 /tmp fixture root: {}",
+            path.display()
+        ),
+    }
+}
+
 fn store_with_workspace(root: &TestRoot) -> Store {
     fs::create_dir(root.workspace()).unwrap();
     let workspace = fs::canonicalize(root.workspace()).unwrap();
+    let git_common_dir = workspace.join(".git");
+    let workspace_text = fixture_utf8_path(&workspace, "workspace path");
+    let git_common_text = fixture_utf8_path(&git_common_dir, "git common path");
     let store = Store::open(&root.state()).unwrap();
     store
         .create_workspace(
             NewWorkspace {
                 workspace_id: "workspace-1",
-                canonical_worktree_root: workspace.to_str().unwrap(),
-                git_common_dir: workspace.join(".git").to_str().unwrap(),
+                canonical_worktree_root: &workspace_text,
+                git_common_dir: &git_common_text,
             },
             1,
         )
@@ -92,18 +108,19 @@ fn native_sh_profile() -> ShellProfile {
 }
 
 fn profile_for_candidate(executable: &Path) -> ShellProfile {
+    let executable_text = fixture_utf8_path(executable, "shell candidate");
     let inventory = WorkspaceEnvironmentInventory {
         host_os: std::env::consts::OS.to_owned(),
         host_arch: std::env::consts::ARCH.to_owned(),
         canonical_worktree_root: "/unused/worktree".to_owned(),
         git_common_dir: "/unused/git-common".to_owned(),
-        shell_candidates: vec![executable.to_str().unwrap().to_owned()],
+        shell_candidates: vec![executable_text.clone()],
         detected_manifests: Vec::new(),
     };
     discover_native_shell_profiles(&inventory)
         .unwrap()
         .into_iter()
-        .find(|profile| profile.executable == executable.to_str().unwrap())
+        .find(|profile| profile.executable == executable_text)
         .unwrap_or_else(|| panic!("candidate was not discoverable: {}", executable.display()))
 }
 
@@ -153,6 +170,35 @@ fn write_executable(path: &Path, bytes: &[u8]) {
     let mut permissions = file.metadata().unwrap().permissions();
     permissions.set_mode(0o700);
     fs::set_permissions(path, permissions).unwrap();
+}
+
+struct ChildGuard {
+    child: Child,
+}
+
+impl ChildGuard {
+    fn new(child: Child) -> Self {
+        Self { child }
+    }
+
+    fn id(&self) -> u32 {
+        self.child.id()
+    }
+
+    fn try_wait(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
+        self.child.try_wait()
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        match self.child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) | Err(_) => {}
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 
 #[test]
@@ -505,11 +551,13 @@ fn restart_reconciles_partial_terminal_rows_without_fabricating_typed_session() 
 #[test]
 fn stale_pid_reuse_fixture_never_signals_unrelated_live_process() {
     let root = TestRoot::new("pid-reuse");
-    let mut unrelated = Command::new("/bin/sh")
-        .arg("-c")
-        .arg("exec sleep 30")
-        .spawn()
-        .unwrap();
+    let mut unrelated = ChildGuard::new(
+        Command::new("/bin/sh")
+            .arg("-c")
+            .arg("exec sleep 30")
+            .spawn()
+            .unwrap(),
+    );
     let unrelated_pid = unrelated.id();
 
     let state = root.state();
@@ -573,15 +621,6 @@ fn stale_pid_reuse_fixture_never_signals_unrelated_live_process() {
             .iter()
             .any(|name| name.to_ascii_lowercase().contains("pid"))
     );
-
-    kill_and_wait(&mut unrelated);
-}
-
-fn kill_and_wait(child: &mut Child) {
-    if child.try_wait().unwrap().is_none() {
-        child.kill().unwrap();
-    }
-    child.wait().unwrap();
 }
 
 #[test]
