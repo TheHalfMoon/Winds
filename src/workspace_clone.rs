@@ -151,9 +151,7 @@ fn git_cli_local_path(path: &Path) -> Result<PathBuf> {
 
 #[cfg(windows)]
 fn git_cli_local_path(path: &Path) -> Result<PathBuf> {
-    let value = path
-        .to_str()
-        .ok_or("local Git path is not valid UTF-8")?;
+    let value = path.to_str().ok_or("local Git path is not valid UTF-8")?;
     if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
         if rest.is_empty() {
             return Err("Windows verbatim UNC path has no server/share identity".into());
@@ -167,7 +165,9 @@ fn git_cli_local_path(path: &Path) -> Result<PathBuf> {
             && bytes[1] == b':'
             && matches!(bytes[2], b'\\' | b'/');
         if !ordinary_drive_path {
-            return Err("Windows verbatim local Git path cannot be represented safely for Git CLI".into());
+            return Err(
+                "Windows verbatim local Git path cannot be represented safely for Git CLI".into(),
+            );
         }
         return Ok(PathBuf::from(rest));
     }
@@ -279,9 +279,9 @@ fn sanitize_scp_like_remote(remote: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{clone_and_register_workspace, sanitize_remote_identity};
     #[cfg(windows)]
     use super::git_cli_local_path;
+    use super::{clone_and_register_workspace, sanitize_remote_identity};
     use crate::store::Store;
     use rusqlite::{Connection, params};
     use std::ffi::OsStr;
