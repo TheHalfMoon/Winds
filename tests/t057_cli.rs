@@ -262,9 +262,7 @@ struct TestTempDir {
 impl TestTempDir {
     fn new(prefix: &str) -> Option<Self> {
         let canonical_parent = std::env::temp_dir().canonicalize().ok()?;
-        if canonical_parent.to_str().is_none() {
-            return None;
-        }
+        canonical_parent.to_str()?;
 
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
