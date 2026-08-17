@@ -47,7 +47,10 @@ fn workspace_clone(flags: HashMap<String, String>) -> Result<()> {
     ensure_allowed_flags(&flags, &["remote", "destination", "home"])?;
     let remote = required(&flags, "remote")?;
     let destination = Path::new(required(&flags, "destination")?);
-    let home = standalone_winds_home(flags.get("home").map(String::as_str))?;
+    let home = standalone_winds_home_for_clone(
+        flags.get("home").map(String::as_str),
+        destination,
+    )?;
     let workspace = clone_and_register_workspace(remote, destination, &home, unix_ms()?)?;
     print_json(&workspace)
 }
@@ -169,7 +172,21 @@ fn execution(flags: HashMap<String, String>) -> Result<()> {
     let repo = Repo::open(Path::new(repo_arg))?;
     let home = winds_home(flags.get("home").map(String::as_str), &repo)?;
     let store = Store::open(&home)?;
+    require_execution_repo(&store, execution_id, &repo)?;
     print_json(&execution_snapshot(&store, execution_id)?)
+}
+
+fn require_execution_repo(store: &Store, execution_id: &str, repo: &Repo) -> Result<()> {
+    let execution = store.load_execution(execution_id)?;
+    let workspace = store.load_workspace(&execution.workspace_id)?;
+    let repo_root = utf8_path(repo.root(), "repository path")?;
+    if workspace.canonical_worktree_root != repo_root {
+        return Err(format!(
+            "execution {execution_id} belongs to a different Winds workspace than --repo"
+        )
+        .into());
+    }
+    Ok(())
 }
 
 fn execution_snapshot(store: &Store, execution_id: &str) -> Result<Value> {
@@ -281,7 +298,19 @@ fn parse_terminal_size(rows: Option<&str>, cols: Option<&str>) -> Result<Termina
     Ok(TerminalSize { rows, cols })
 }
 
-fn standalone_winds_home(explicit: Option<&str>) -> Result<PathBuf> {
+fn standalone_winds_home_for_clone(explicit: Option<&str>, destination: &Path) -> Result<PathBuf> {
+    if !destination.is_absolute() {
+        return Err("clone destination must be an absolute path".into());
+    }
+    if destination.exists() {
+        return Err(format!(
+            "clone destination already exists: {}",
+            destination.display()
+        )
+        .into());
+    }
+    let planned_destination = resolve_without_creation(destination)?;
+
     let path = if let Some(path) = explicit {
         PathBuf::from(path)
     } else if let Some(path) = env::var_os("WINDS_HOME") {
@@ -296,6 +325,9 @@ fn standalone_winds_home(explicit: Option<&str>) -> Result<PathBuf> {
         env::current_dir()?.join(path)
     };
     let resolved = resolve_without_creation(&absolute)?;
+    if planned_destination.starts_with(&resolved) || resolved.starts_with(&planned_destination) {
+        return Err("clone destination and Winds state root must not overlap".into());
+    }
     fs::create_dir_all(&resolved)?;
     let canonical = resolved.canonicalize()?;
     utf8_path(&canonical, "WINDS_HOME")?;
