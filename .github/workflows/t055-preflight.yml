@@ -44,6 +44,35 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("tools/.github/t055_patch.py")
+          text = path.read_text(encoding="utf-8")
+          start = text.index("    migration.write_text(\n")
+          end = text.index("\n\n    domain = root / \"src/domain.rs\"", start)
+          replacement = '''    migration.write_text(
+              """CREATE TABLE IF NOT EXISTS shell_command_git_observations (
+              execution_id TEXT PRIMARY KEY REFERENCES shell_commands(execution_id),
+              before_source TEXT NOT NULL,
+              before_head_known INTEGER NOT NULL CHECK (before_head_known IN (0, 1)),
+              before_head_oid TEXT,
+              before_dirty INTEGER CHECK (before_dirty IS NULL OR before_dirty IN (0, 1)),
+              after_source TEXT,
+              after_head_known INTEGER NOT NULL DEFAULT 0 CHECK (after_head_known IN (0, 1)),
+              after_head_oid TEXT,
+              after_dirty INTEGER CHECK (after_dirty IS NULL OR after_dirty IN (0, 1)),
+              CHECK (before_head_known = 1 OR before_head_oid IS NULL),
+              CHECK (after_head_known = 1 OR after_head_oid IS NULL),
+              CHECK (
+                  after_source IS NOT NULL
+                  OR (after_head_known = 0 AND after_head_oid IS NULL AND after_dirty IS NULL)
+              )
+          );
+          """,
+              encoding="utf-8",
+          )'''
+          path.write_text(text[:start] + replacement + text[end:], encoding="utf-8")
+          PY
           python tools/.github/t055_patch.py target
       - name: Verify intended patch surface
         shell: bash
