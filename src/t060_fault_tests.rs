@@ -1,4 +1,3 @@
-use super::{NewExecution, NewTerminalSession, NewWorkspace, Store};
 use crate::command::history::{SessionHistoryPolicy, SessionHistoryRecorder};
 use crate::command::{ExplicitCommandRequest, run_explicit_command};
 use crate::domain::{ExecutionKind, ExecutionStatus, FactSource, TerminalCloseReason};
@@ -6,6 +5,8 @@ use crate::execution::TerminalExecution;
 use crate::git::shell_profiles::{ShellProfile, discover_native_shell_profiles};
 use crate::git::terminal::TerminalSize;
 use crate::git::workspace_inventory::WorkspaceEnvironmentInventory;
+use crate::store::{NewExecution, NewTerminalSession, NewWorkspace, Store};
+use rusqlite::Connection;
 use std::ffi::OsStr;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read};
@@ -13,7 +14,6 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -84,6 +84,10 @@ fn store_with_workspace(root: &TestRoot) -> Store {
     store
 }
 
+fn fault_connection(root: &TestRoot) -> Connection {
+    Connection::open(root.state().join("winds.db")).unwrap()
+}
+
 fn native_sh_profile() -> ShellProfile {
     profile_for_candidate(Path::new("/bin/sh"))
 }
@@ -142,7 +146,10 @@ fn wait_for_marker(mut reader: Box<dyn Read + Send>, marker: &'static [u8]) -> t
                 ),
                 Ok(count) => {
                     observed.extend_from_slice(&buffer[..count]);
-                    assert!(observed.len() <= OUTPUT_BOUND, "PTY fixture output exceeded bound");
+                    assert!(
+                        observed.len() <= OUTPUT_BOUND,
+                        "PTY fixture output exceeded bound"
+                    );
                     if observed.windows(marker.len()).any(|window| window == marker) {
                         return;
                     }
@@ -193,13 +200,18 @@ fn input_and_resize_racing_with_exit_never_reopen_final_session() {
         }
         let _ = execution.send_input(b":\n");
         let _ = execution.resize(TerminalSize { rows: 25, cols: 81 });
-        assert!(Instant::now() < deadline, "terminal did not exit inside race fixture deadline");
+        assert!(
+            Instant::now() < deadline,
+            "terminal did not exit inside race fixture deadline"
+        );
         thread::sleep(Duration::from_millis(2));
     };
 
     assert_eq!(final_exit.exit_code, 0);
     assert!(execution.send_input(b"echo impossible\n").is_err());
-    assert!(execution.resize(TerminalSize { rows: 30, cols: 90 }).is_err());
+    assert!(execution
+        .resize(TerminalSize { rows: 30, cols: 90 })
+        .is_err());
     assert_eq!(execution.try_wait().unwrap(), Some(final_exit));
     drop(execution);
 
@@ -303,10 +315,10 @@ fn sqlite_failure_before_terminal_spawn_rolls_back_request_and_never_runs_shell(
     write_executable(&wrapper, script.as_bytes());
     let profile = profile_for_candidate(&wrapper);
 
-    store
-        .connection
+    let injector = fault_connection(&root);
+    injector
         .execute_batch(
-            "CREATE TEMP TRIGGER t060_fail_terminal_insert
+            "CREATE TRIGGER t060_fail_terminal_insert
              BEFORE INSERT ON executions
              WHEN NEW.kind = 'TERMINAL' AND NEW.execution_id = 't060-before-spawn'
              BEGIN
@@ -325,7 +337,10 @@ fn sqlite_failure_before_terminal_spawn_rolls_back_request_and_never_runs_shell(
     );
     assert!(result.is_err());
     drop(result);
-    assert!(!marker.exists(), "child wrapper ran despite pre-spawn SQLite failure");
+    assert!(
+        !marker.exists(),
+        "child wrapper ran despite pre-spawn SQLite failure"
+    );
     assert!(store.load_execution("t060-before-spawn").is_err());
 }
 
@@ -335,10 +350,10 @@ fn sqlite_running_failure_after_child_spawn_is_repaired_to_interrupted() {
     let mut store = store_with_workspace(&root);
     let workspace = fs::canonicalize(root.workspace()).unwrap();
     let profile = native_sh_profile();
-    store
-        .connection
+    let injector = fault_connection(&root);
+    injector
         .execute_batch(
-            "CREATE TEMP TRIGGER t060_fail_terminal_running
+            "CREATE TRIGGER t060_fail_terminal_running
              BEFORE UPDATE OF status ON executions
              WHEN NEW.execution_id = 't060-after-spawn' AND NEW.status = 'RUNNING'
              BEGIN
@@ -356,7 +371,11 @@ fn sqlite_running_failure_after_child_spawn_is_repaired_to_interrupted() {
         DEFAULT_SIZE,
     );
     let error = result.err().expect("RUNNING persistence failure must surface");
-    assert!(error.to_string().contains("child started but RUNNING persistence failed"));
+    assert!(
+        error
+            .to_string()
+            .contains("child started but RUNNING persistence failed")
+    );
 
     let record = store.load_execution("t060-after-spawn").unwrap();
     assert_eq!(record.status, ExecutionStatus::Interrupted);
@@ -378,10 +397,10 @@ fn sqlite_exit_finalization_failure_is_deferred_then_retried_without_false_succe
     let mut store = store_with_workspace(&root);
     let workspace = fs::canonicalize(root.workspace()).unwrap();
     let profile = native_sh_profile();
-    store
-        .connection
+    let injector = fault_connection(&root);
+    injector
         .execute_batch(
-            "CREATE TEMP TRIGGER t060_fail_terminal_exit
+            "CREATE TRIGGER t060_fail_terminal_exit
              BEFORE UPDATE OF status ON executions
              WHEN NEW.execution_id = 't060-finalize' AND NEW.status = 'EXITED'
              BEGIN
@@ -400,7 +419,10 @@ fn sqlite_exit_finalization_failure_is_deferred_then_retried_without_false_succe
     )
     .unwrap();
     execution.send_input(b"exit 0\n").unwrap();
-    assert!(execution.wait().is_err(), "durability failure must not report success");
+    assert!(
+        execution.wait().is_err(),
+        "durability failure must not report success"
+    );
     drop(execution);
 
     assert_eq!(store.pending_terminal_finalization_count(), 1);
@@ -408,8 +430,7 @@ fn sqlite_exit_finalization_failure_is_deferred_then_retried_without_false_succe
         store.load_execution("t060-finalize").unwrap().status,
         ExecutionStatus::Running
     );
-    store
-        .connection
+    injector
         .execute_batch("DROP TRIGGER t060_fail_terminal_exit;")
         .unwrap();
     assert_eq!(store.retry_deferred_terminal_finalizations().unwrap(), 1);
@@ -444,8 +465,7 @@ fn restart_reconciles_partial_terminal_rows_without_fabricating_typed_session() 
             )
             .unwrap();
     }
-    store
-        .connection
+    fault_connection(&root)
         .execute(
             "UPDATE executions
              SET status = 'RUNNING', status_source = 'WINDS_OBSERVED', started_unix_ms = 110
@@ -467,10 +487,16 @@ fn restart_reconciles_partial_terminal_rows_without_fabricating_typed_session() 
         assert_eq!(record.ended_unix_ms, None);
         assert_eq!(record.duration_ms, None);
         assert!(store.load_terminal_session(execution_id).is_err());
-        assert!(store.execution_events(execution_id).unwrap().iter().any(|event| {
-            event.kind == "TerminalOwnershipLostAfterRestart"
-                && event.source == FactSource::WindsObserved
-        }));
+        assert!(
+            store
+                .execution_events(execution_id)
+                .unwrap()
+                .iter()
+                .any(|event| {
+                    event.kind == "TerminalOwnershipLostAfterRestart"
+                        && event.source == FactSource::WindsObserved
+                })
+        );
     }
 }
 
@@ -523,11 +549,15 @@ fn stale_pid_reuse_fixture_never_signals_unrelated_live_process() {
         reopened.load_execution("t060-stale-pid").unwrap().status,
         ExecutionStatus::OwnershipLost
     );
-    assert_eq!(unrelated.try_wait().unwrap(), None, "restart reconciliation signaled an unrelated live PID");
+    assert_eq!(
+        unrelated.try_wait().unwrap(),
+        None,
+        "restart reconciliation signaled an unrelated live PID"
+    );
 
     let column_names = {
-        let mut statement = reopened
-            .connection
+        let connection = fault_connection(&root);
+        let mut statement = connection
             .prepare("PRAGMA table_info(terminal_sessions)")
             .unwrap();
         statement
@@ -536,7 +566,11 @@ fn stale_pid_reuse_fixture_never_signals_unrelated_live_process() {
             .collect::<rusqlite::Result<Vec<_>>>()
             .unwrap()
     };
-    assert!(!column_names.iter().any(|name| name.to_ascii_lowercase().contains("pid")));
+    assert!(
+        !column_names
+            .iter()
+            .any(|name| name.to_ascii_lowercase().contains("pid"))
+    );
 
     kill_and_wait(&mut unrelated);
 }
@@ -571,7 +605,12 @@ fn marker_like_child_output_never_becomes_shell_reported_or_extra_command_author
     )
     .unwrap();
     assert_eq!(result.exit_code, Some(0));
-    assert_eq!(store.shell_command_count_for_workspace("workspace-1").unwrap(), 1);
+    assert_eq!(
+        store
+            .shell_command_count_for_workspace("workspace-1")
+            .unwrap(),
+        1
+    );
     let command = store.load_shell_command("t060-marker-spoof").unwrap();
     assert_eq!(command.command_source, FactSource::CallerRequested);
     assert_eq!(command.exit_source, Some(FactSource::WindsObserved));
