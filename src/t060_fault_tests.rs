@@ -462,7 +462,15 @@ fn sqlite_exit_finalization_failure_is_deferred_then_retried_without_false_succe
                 "durability failure falsely reported terminal success with exit {:?}",
                 exit
             ),
-            Err(_) => break,
+            Err(error) => {
+                assert!(
+                    error
+                        .to_string()
+                        .contains("t060 forced EXITED persistence failure"),
+                    "unexpected try_wait error instead of the injected finalization failure: {error}"
+                );
+                break;
+            }
         }
         assert!(
             Instant::now() < deadline,
