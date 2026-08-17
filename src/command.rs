@@ -1,5 +1,8 @@
-use crate::domain::{ExecutionKind, ExecutionStatus, FactSource};
-use crate::git::shell_profiles::ShellExecutionDomain;
+use crate::domain::{ExecutionKind, ExecutionStatus, FactSource, WorkspaceRecord};
+use crate::git::{observe_worktree_state, shell_profiles::ShellExecutionDomain};
+use crate::store::git_observation::{
+    GitObservationAvailability, GitObservationBoundary, NewExecutionGitObservation,
+};
 use crate::store::{NewExecution, NewShellCommand, Result, Store};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -38,6 +41,7 @@ pub fn run_explicit_command(
         return Err("explicit command arguments may not contain NUL bytes".into());
     }
     let cwd = validate_workspace_cwd(store, request.workspace_id, request.cwd)?;
+    let workspace = store.load_workspace(request.workspace_id)?;
     let execution_domain = serde_json::to_string(&ShellExecutionDomain::NativeHost {
         os: std::env::consts::OS.to_owned(),
         arch: std::env::consts::ARCH.to_owned(),
@@ -61,6 +65,26 @@ pub fn run_explicit_command(
         },
         requested_unix_ms,
     )?;
+
+    if let Err(observation_error) = record_git_boundary_observation(
+        store,
+        request.execution_id,
+        &workspace,
+        GitObservationBoundary::Before,
+    ) {
+        let failed_unix_ms = trustworthy_wall_time_after(requested_unix_ms, None);
+        let repair = store.mark_shell_command_failed_to_start(request.execution_id, failed_unix_ms);
+        return match repair {
+            Ok(()) => Err(format!(
+                "explicit command was not started because BEFORE Git observation persistence failed: {observation_error}"
+            )
+            .into()),
+            Err(repair_error) => Err(format!(
+                "explicit command was not started because BEFORE Git observation persistence failed: {observation_error}; FAILED_TO_START persistence also failed: {repair_error}"
+            )
+            .into()),
+        };
+    }
 
     let mut child = match Command::new(&executable)
         .args(request.arguments)
@@ -145,6 +169,17 @@ pub fn run_explicit_command(
         )
         .into());
     }
+    record_git_boundary_observation(
+        store,
+        request.execution_id,
+        &workspace,
+        GitObservationBoundary::After,
+    )
+    .map_err(|error| {
+        format!(
+            "explicit command exited and its lifecycle finalization is persisted, but AFTER Git observation persistence failed: {error}"
+        )
+    })?;
     let execution = store.load_execution(request.execution_id)?;
     if execution.status != ExecutionStatus::Exited {
         return Err("explicit command finalization did not persist EXITED state".into());
@@ -153,6 +188,41 @@ pub fn run_explicit_command(
         exit_code,
         duration_ms: execution.duration_ms,
     })
+}
+
+fn record_git_boundary_observation(
+    store: &mut Store,
+    execution_id: &str,
+    workspace: &WorkspaceRecord,
+    boundary: GitObservationBoundary,
+) -> Result<()> {
+    let root = Path::new(&workspace.canonical_worktree_root);
+    let common_dir = Path::new(&workspace.git_common_dir);
+    let observed_unix_ms = unix_ms().ok();
+    match observe_worktree_state(root, common_dir) {
+        Ok(observation) => store.record_execution_git_observation(NewExecutionGitObservation {
+            execution_id,
+            boundary,
+            availability: GitObservationAvailability::Observed,
+            head_oid: observation.head_oid.as_deref(),
+            branch: observation.branch.as_deref(),
+            detached: Some(observation.detached),
+            dirty: Some(observation.dirty),
+            worktree_state_sha256: Some(&observation.worktree_state_sha256),
+            observed_unix_ms,
+        }),
+        Err(_) => store.record_execution_git_observation(NewExecutionGitObservation {
+            execution_id,
+            boundary,
+            availability: GitObservationAvailability::Unavailable,
+            head_oid: None,
+            branch: None,
+            detached: None,
+            dirty: None,
+            worktree_state_sha256: None,
+            observed_unix_ms,
+        }),
+    }
 }
 
 fn validate_executable(path: &Path) -> Result<String> {
@@ -230,9 +300,11 @@ fn unix_ms() -> Result<i64> {
 mod tests {
     use super::{ExplicitCommandRequest, non_regressing_wall_time, run_explicit_command};
     use crate::domain::{ExecutionKind, ExecutionStatus, FactSource};
+    use crate::store::git_observation::{GitObservationAvailability, GitObservationBoundary};
     use crate::store::{NewExecution, NewShellCommand, NewWorkspace, Store};
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::process::Command;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
@@ -243,7 +315,7 @@ mod tests {
         fn new(name: &str) -> Self {
             let sequence = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
             let path = std::env::temp_dir().join(format!(
-                "winds-t054-{name}-{}-{sequence}",
+                "winds-t055-{name}-{}-{sequence}",
                 std::process::id()
             ));
             fs::create_dir(&path).unwrap();
@@ -280,29 +352,152 @@ mod tests {
         store
     }
 
+    fn store_with_git_workspace(root: &TestRoot) -> (Store, PathBuf) {
+        let home = root.path().join("state");
+        let workspace_root = root.path().join("workspace-git");
+        fs::create_dir(&workspace_root).unwrap();
+        run_git(&workspace_root, &["init", "--initial-branch=main"]);
+        run_git(&workspace_root, &["config", "user.name", "Winds Test"]);
+        run_git(
+            &workspace_root,
+            &["config", "user.email", "winds@example.invalid"],
+        );
+        fs::write(workspace_root.join("tracked.txt"), b"initial\n").unwrap();
+        run_git(&workspace_root, &["add", "--", "tracked.txt"]);
+        run_git(
+            &workspace_root,
+            &["commit", "--no-gpg-sign", "-m", "initial"],
+        );
+
+        let canonical_workspace = fs::canonicalize(&workspace_root).unwrap();
+        let common_dir = PathBuf::from(run_git(
+            &canonical_workspace,
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        ))
+        .canonicalize()
+        .unwrap();
+        let store = Store::open(&home).unwrap();
+        store
+            .create_workspace(
+                NewWorkspace {
+                    workspace_id: "workspace-git",
+                    canonical_worktree_root: canonical_workspace.to_str().unwrap(),
+                    git_common_dir: common_dir.to_str().unwrap(),
+                },
+                1,
+            )
+            .unwrap();
+        (store, canonical_workspace)
+    }
+
+    fn run_git(cwd: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_COMMON_DIR")
+            .env("GIT_NO_REPLACE_OBJECTS", "1")
+            .arg("-c")
+            .arg("core.hooksPath=/dev/null")
+            .arg("-c")
+            .arg("core.fsmonitor=false")
+            .arg("-C")
+            .arg(cwd)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
+
     fn workspace_path(root: &TestRoot) -> PathBuf {
         fs::canonicalize(root.path().join("workspace")).unwrap()
     }
 
     #[cfg(unix)]
+    fn shell_script(script: &str) -> (PathBuf, Vec<String>) {
+        (
+            PathBuf::from("/bin/sh"),
+            vec!["-c".to_owned(), script.to_owned()],
+        )
+    }
+
+    #[cfg(windows)]
+    fn shell_script(script: &str) -> (PathBuf, Vec<String>) {
+        let executable = PathBuf::from(std::env::var_os("COMSPEC").expect("COMSPEC on Windows CI"));
+        (
+            executable,
+            vec!["/D".to_owned(), "/C".to_owned(), script.to_owned()],
+        )
+    }
+
     fn command_parts(exit_code: i32, marker: bool) -> (PathBuf, Vec<String>) {
+        #[cfg(unix)]
         let script = if marker {
             format!("printf '__WINDS_COMMAND_END_spoof__\\n'; exit {exit_code}")
         } else {
             format!("exit {exit_code}")
         };
-        (PathBuf::from("/bin/sh"), vec!["-c".to_owned(), script])
-    }
-
-    #[cfg(windows)]
-    fn command_parts(exit_code: i32, marker: bool) -> (PathBuf, Vec<String>) {
-        let executable = PathBuf::from(std::env::var_os("COMSPEC").expect("COMSPEC on Windows CI"));
-        let body = if marker {
+        #[cfg(windows)]
+        let script = if marker {
             format!("echo __WINDS_COMMAND_END_spoof__ & exit /B {exit_code}")
         } else {
             format!("exit /B {exit_code}")
         };
-        (executable, vec!["/D".to_owned(), "/C".to_owned(), body])
+        shell_script(&script)
+    }
+
+    #[cfg(unix)]
+    fn tracked_mutation_script() -> &'static str {
+        "printf 'changed\\n' > tracked.txt"
+    }
+
+    #[cfg(windows)]
+    fn tracked_mutation_script() -> &'static str {
+        "echo changed>tracked.txt"
+    }
+
+    #[cfg(unix)]
+    fn commit_script() -> &'static str {
+        "printf 'committed\\n' >> tracked.txt; git add -- tracked.txt; git commit --no-gpg-sign -m t055 >/dev/null 2>&1"
+    }
+
+    #[cfg(windows)]
+    fn commit_script() -> &'static str {
+        "echo committed>>tracked.txt && git add -- tracked.txt && git commit --no-gpg-sign -m t055 >NUL 2>&1"
+    }
+
+    #[cfg(unix)]
+    fn branch_switch_script() -> &'static str {
+        "git switch -c t055-observed >/dev/null 2>&1"
+    }
+
+    #[cfg(windows)]
+    fn branch_switch_script() -> &'static str {
+        "git switch -c t055-observed >NUL 2>&1"
+    }
+
+    #[cfg(unix)]
+    fn add_dirty_file_script() -> &'static str {
+        "printf 'second\\n' > dirty-b.txt"
+    }
+
+    #[cfg(windows)]
+    fn add_dirty_file_script() -> &'static str {
+        "echo second>dirty-b.txt"
+    }
+
+    #[cfg(unix)]
+    fn hide_git_metadata_script() -> &'static str {
+        "mv .git .git-hidden"
+    }
+
+    #[cfg(windows)]
+    fn hide_git_metadata_script() -> &'static str {
+        "rmdir /s /q .git"
     }
 
     #[test]
@@ -349,6 +544,11 @@ mod tests {
         assert_eq!(command.exit_code, Some(7));
         assert_eq!(command.exit_source, Some(FactSource::WindsObserved));
         assert!(command.observed_end_unix_ms.is_some());
+        let git_observations = store.load_execution_git_observations("command-1").unwrap();
+        assert_eq!(git_observations.len(), 2);
+        assert!(git_observations.iter().all(|observation| {
+            observation.availability == GitObservationAvailability::Unavailable
+        }));
     }
 
     #[test]
@@ -387,7 +587,7 @@ mod tests {
     }
 
     #[test]
-    fn spawn_failure_is_explicit_and_never_claims_a_start_or_duration() {
+    fn spawn_failure_is_explicit_and_records_only_the_before_boundary() {
         let root = TestRoot::new("failed-start");
         let mut store = store_with_workspace(&root);
         let cwd = workspace_path(&root);
@@ -413,6 +613,15 @@ mod tests {
         assert_eq!(command.exit_code, None);
         assert_eq!(command.exit_source, None);
         assert_eq!(command.observed_end_unix_ms, None);
+        let observations = store
+            .load_execution_git_observations("command-failed")
+            .unwrap();
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0].boundary, GitObservationBoundary::Before);
+        assert_eq!(
+            observations[0].availability,
+            GitObservationAvailability::Unavailable
+        );
     }
 
     #[test]
@@ -441,6 +650,189 @@ mod tests {
                 .unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn command_git_observations_are_stable_for_no_change_and_anchor_to_workspace_root() {
+        let root = TestRoot::new("git-no-change");
+        let (mut store, workspace) = store_with_git_workspace(&root);
+        let nested = workspace.join("nested");
+        fs::create_dir(&nested).unwrap();
+        let (executable, arguments) = command_parts(0, false);
+        run_explicit_command(
+            &mut store,
+            ExplicitCommandRequest {
+                execution_id: "git-no-change",
+                workspace_id: "workspace-git",
+                executable: &executable,
+                arguments: &arguments,
+                cwd: &nested,
+            },
+        )
+        .unwrap();
+
+        let observations = store
+            .load_execution_git_observations("git-no-change")
+            .unwrap();
+        assert_eq!(observations.len(), 2);
+        assert_eq!(observations[0].boundary, GitObservationBoundary::Before);
+        assert_eq!(observations[1].boundary, GitObservationBoundary::After);
+        assert!(observations.iter().all(|observation| {
+            observation.availability == GitObservationAvailability::Observed
+                && observation.source == FactSource::WindsObserved
+                && observation.dirty == Some(false)
+        }));
+        assert_eq!(observations[0].head_oid, observations[1].head_oid);
+        assert_eq!(observations[0].branch, observations[1].branch);
+        assert_eq!(
+            observations[0].worktree_state_sha256,
+            observations[1].worktree_state_sha256
+        );
+    }
+
+    #[test]
+    fn tracked_mutation_changes_worktree_digest_without_changing_head() {
+        let root = TestRoot::new("git-mutation");
+        let (mut store, workspace) = store_with_git_workspace(&root);
+        let (executable, arguments) = shell_script(tracked_mutation_script());
+        run_explicit_command(
+            &mut store,
+            ExplicitCommandRequest {
+                execution_id: "git-mutation",
+                workspace_id: "workspace-git",
+                executable: &executable,
+                arguments: &arguments,
+                cwd: &workspace,
+            },
+        )
+        .unwrap();
+        let observations = store
+            .load_execution_git_observations("git-mutation")
+            .unwrap();
+        assert_eq!(observations[0].dirty, Some(false));
+        assert_eq!(observations[1].dirty, Some(true));
+        assert_eq!(observations[0].head_oid, observations[1].head_oid);
+        assert_ne!(
+            observations[0].worktree_state_sha256,
+            observations[1].worktree_state_sha256
+        );
+    }
+
+    #[test]
+    fn commit_creation_changes_head_and_returns_to_clean_state() {
+        let root = TestRoot::new("git-commit");
+        let (mut store, workspace) = store_with_git_workspace(&root);
+        let (executable, arguments) = shell_script(commit_script());
+        run_explicit_command(
+            &mut store,
+            ExplicitCommandRequest {
+                execution_id: "git-commit",
+                workspace_id: "workspace-git",
+                executable: &executable,
+                arguments: &arguments,
+                cwd: &workspace,
+            },
+        )
+        .unwrap();
+        let observations = store.load_execution_git_observations("git-commit").unwrap();
+        assert_eq!(observations[0].dirty, Some(false));
+        assert_eq!(observations[1].dirty, Some(false));
+        assert_ne!(observations[0].head_oid, observations[1].head_oid);
+        assert_eq!(observations[0].branch, observations[1].branch);
+    }
+
+    #[test]
+    fn branch_switch_changes_branch_without_fabricating_head_change() {
+        let root = TestRoot::new("git-branch");
+        let (mut store, workspace) = store_with_git_workspace(&root);
+        let (executable, arguments) = shell_script(branch_switch_script());
+        run_explicit_command(
+            &mut store,
+            ExplicitCommandRequest {
+                execution_id: "git-branch",
+                workspace_id: "workspace-git",
+                executable: &executable,
+                arguments: &arguments,
+                cwd: &workspace,
+            },
+        )
+        .unwrap();
+        let observations = store.load_execution_git_observations("git-branch").unwrap();
+        assert_eq!(observations[0].head_oid, observations[1].head_oid);
+        assert_eq!(observations[0].branch.as_deref(), Some("main"));
+        assert_eq!(observations[1].branch.as_deref(), Some("t055-observed"));
+        assert_eq!(observations[0].detached, Some(false));
+        assert_eq!(observations[1].detached, Some(false));
+    }
+
+    #[test]
+    fn dirty_to_dirty_mutation_remains_distinguishable_by_digest() {
+        let root = TestRoot::new("git-dirty-digest");
+        let (mut store, workspace) = store_with_git_workspace(&root);
+        fs::write(workspace.join("dirty-a.txt"), b"first\n").unwrap();
+        let (executable, arguments) = shell_script(add_dirty_file_script());
+        run_explicit_command(
+            &mut store,
+            ExplicitCommandRequest {
+                execution_id: "git-dirty-digest",
+                workspace_id: "workspace-git",
+                executable: &executable,
+                arguments: &arguments,
+                cwd: &workspace,
+            },
+        )
+        .unwrap();
+        let observations = store
+            .load_execution_git_observations("git-dirty-digest")
+            .unwrap();
+        assert_eq!(observations[0].dirty, Some(true));
+        assert_eq!(observations[1].dirty, Some(true));
+        assert_ne!(
+            observations[0].worktree_state_sha256,
+            observations[1].worktree_state_sha256
+        );
+    }
+
+    #[test]
+    fn repository_becoming_unavailable_persists_unknown_after_state_without_losing_exit() {
+        let root = TestRoot::new("git-after-unavailable");
+        let (mut store, workspace) = store_with_git_workspace(&root);
+        let (executable, arguments) = shell_script(hide_git_metadata_script());
+        let result = run_explicit_command(
+            &mut store,
+            ExplicitCommandRequest {
+                execution_id: "git-after-unavailable",
+                workspace_id: "workspace-git",
+                executable: &executable,
+                arguments: &arguments,
+                cwd: &workspace,
+            },
+        )
+        .unwrap();
+        assert_eq!(result.exit_code, Some(0));
+        assert_eq!(
+            store
+                .load_execution("git-after-unavailable")
+                .unwrap()
+                .status,
+            ExecutionStatus::Exited
+        );
+        let observations = store
+            .load_execution_git_observations("git-after-unavailable")
+            .unwrap();
+        assert_eq!(
+            observations[0].availability,
+            GitObservationAvailability::Observed
+        );
+        assert_eq!(
+            observations[1].availability,
+            GitObservationAvailability::Unavailable
+        );
+        assert_eq!(observations[1].head_oid, None);
+        assert_eq!(observations[1].branch, None);
+        assert_eq!(observations[1].detached, None);
+        assert_eq!(observations[1].dirty, None);
+        assert_eq!(observations[1].worktree_state_sha256, None);
     }
 
     #[test]
