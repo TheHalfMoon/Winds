@@ -1133,12 +1133,7 @@ impl Store {
                         ExecutionStatus::Requested.as_str(),
                         ExecutionStatus::Running.as_str(),
                     ],
-                    |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,
-                            row.get::<_, Option<String>>(1)?,
-                        ))
-                    },
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
                 )?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         };
