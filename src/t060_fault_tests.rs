@@ -205,9 +205,7 @@ fn input_and_resize_racing_with_exit_never_reopen_final_session() {
     let root = TestRoot::new("exit-race");
     let mut store = store_with_workspace(&root);
     let workspace = fs::canonicalize(root.workspace()).unwrap();
-    let wrapper = workspace.join("t060-exit-race-child");
-    write_executable(&wrapper, b"#!/bin/sh\nIFS= read -r _ || :\nexit 0\n");
-    let profile = profile_for_candidate(&wrapper);
+    let profile = native_sh_profile();
     let mut execution = TerminalExecution::start_native(
         &mut store,
         "t060-exit-race",
@@ -222,7 +220,7 @@ fn input_and_resize_racing_with_exit_never_reopen_final_session() {
     execution
         .resize(TerminalSize { rows: 25, cols: 81 })
         .unwrap();
-    execution.send_input(b"exit-now\n").unwrap();
+    execution.send_input(b"exit 0\n").unwrap();
     let _ = execution.resize(TerminalSize { rows: 26, cols: 82 });
 
     let deadline = Instant::now() + Duration::from_secs(5);
