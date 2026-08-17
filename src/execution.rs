@@ -14,6 +14,18 @@ use std::io::Read;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+#[derive(Debug, Clone, Copy)]
+pub struct LocalTerminalHistory<'a> {
+    policy: SessionHistoryPolicy,
+    state_root: &'a Path,
+}
+
+impl<'a> LocalTerminalHistory<'a> {
+    pub const fn new(policy: SessionHistoryPolicy, state_root: &'a Path) -> Self {
+        Self { policy, state_root }
+    }
+}
+
 pub struct TerminalExecution<'store> {
     execution_id: String,
     store: &'store mut Store,
@@ -45,19 +57,18 @@ impl<'store> TerminalExecution<'store> {
         )
     }
 
-    pub fn start_native_with_history_policy(
+    pub fn start_native_with_local_history(
         store: &'store mut Store,
         execution_id: &str,
         workspace_id: &str,
         profile: &ShellProfile,
         cwd: &Path,
         size: TerminalSize,
-        history_policy: SessionHistoryPolicy,
-        history_state_root: &Path,
+        history: LocalTerminalHistory<'_>,
     ) -> Result<Self> {
         store.retry_deferred_terminal_finalizations()?;
         let history =
-            SessionHistoryRecorder::new_local(execution_id, history_policy, history_state_root)?;
+            SessionHistoryRecorder::new_local(execution_id, history.policy, history.state_root)?;
         start_native_with_recorder(
             store,
             execution_id,
@@ -83,18 +94,17 @@ impl<'store> TerminalExecution<'store> {
     }
 
     #[cfg(windows)]
-    pub fn start_wsl_with_history_policy(
+    pub fn start_wsl_with_local_history(
         store: &'store mut Store,
         execution_id: &str,
         workspace_id: &str,
         plan: &WslTerminalLaunchPlan,
         size: TerminalSize,
-        history_policy: SessionHistoryPolicy,
-        history_state_root: &Path,
+        history: LocalTerminalHistory<'_>,
     ) -> Result<Self> {
         store.retry_deferred_terminal_finalizations()?;
         let history =
-            SessionHistoryRecorder::new_local(execution_id, history_policy, history_state_root)?;
+            SessionHistoryRecorder::new_local(execution_id, history.policy, history.state_root)?;
         start_wsl_with_recorder(store, execution_id, workspace_id, plan, size, history)
     }
 
@@ -468,7 +478,7 @@ fn unix_ms() -> Result<i64> {
 
 #[cfg(all(test, unix))]
 mod tests {
-    use super::TerminalExecution;
+    use super::{LocalTerminalHistory, TerminalExecution};
     use crate::command::history::SessionHistoryPolicy;
     use crate::domain::{ExecutionStatus, FactSource, TerminalCloseReason};
     use crate::git::shell_profiles::{ShellProfile, discover_native_shell_profiles};
@@ -603,15 +613,14 @@ mod tests {
         let mut store = store_with_workspace(&root);
         let profile = native_sh_profile();
         let policy = SessionHistoryPolicy::local_bounded(false, 5, 16_384).unwrap();
-        let mut execution = TerminalExecution::start_native_with_history_policy(
+        let mut execution = TerminalExecution::start_native_with_local_history(
             &mut store,
             "execution-bounded-history",
             "workspace-1",
             &profile,
             root.path(),
             TerminalSize { rows: 24, cols: 80 },
-            policy,
-            &state_home,
+            LocalTerminalHistory::new(policy, &state_home),
         )
         .unwrap();
 
