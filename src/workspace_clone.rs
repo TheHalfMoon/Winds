@@ -153,8 +153,14 @@ fn git_cli_local_path(path: &Path) -> Result<PathBuf> {
 fn git_cli_local_path(path: &Path) -> Result<PathBuf> {
     let value = path.to_str().ok_or("local Git path is not valid UTF-8")?;
     if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
-        if rest.is_empty() {
-            return Err("Windows verbatim UNC path has no server/share identity".into());
+        let mut components = rest.split('\\');
+        let server = components.next().unwrap_or_default();
+        let share = components.next().unwrap_or_default();
+        if server.is_empty() || share.is_empty() {
+            return Err(
+                "Windows verbatim UNC path must include non-empty server and share components"
+                    .into(),
+            );
         }
         return Ok(PathBuf::from(format!(r"\\{rest}")));
     }
@@ -557,6 +563,8 @@ mod tests {
             git_cli_local_path(Path::new(r"\\?\UNC\server\share\Winds Clone")).unwrap(),
             PathBuf::from(r"\\server\share\Winds Clone")
         );
+        assert!(git_cli_local_path(Path::new(r"\\?\UNC\server")).is_err());
+        assert!(git_cli_local_path(Path::new(r"\\?\UNC\")).is_err());
         assert!(git_cli_local_path(Path::new(r"\\?\Volume{abc}\repo")).is_err());
     }
 }
