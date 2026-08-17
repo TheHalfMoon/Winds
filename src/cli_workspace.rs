@@ -47,10 +47,7 @@ fn workspace_clone(flags: HashMap<String, String>) -> Result<()> {
     ensure_allowed_flags(&flags, &["remote", "destination", "home"])?;
     let remote = required(&flags, "remote")?;
     let destination = Path::new(required(&flags, "destination")?);
-    let home = standalone_winds_home_for_clone(
-        flags.get("home").map(String::as_str),
-        destination,
-    )?;
+    let home = standalone_winds_home_for_clone(flags.get("home").map(String::as_str), destination)?;
     let workspace = clone_and_register_workspace(remote, destination, &home, unix_ms()?)?;
     print_json(&workspace)
 }
