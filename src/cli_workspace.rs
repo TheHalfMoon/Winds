@@ -47,7 +47,11 @@ fn workspace_clone(flags: HashMap<String, String>) -> Result<()> {
     ensure_allowed_flags(&flags, &["remote", "destination", "home"])?;
     let remote = required(&flags, "remote")?;
     let destination = Path::new(required(&flags, "destination")?);
-    let home = standalone_winds_home_for_clone(flags.get("home").map(String::as_str), destination)?;
+    let home = standalone_winds_home_for_clone(
+        flags.get("home").map(String::as_str),
+        destination,
+        remote,
+    )?;
     let workspace = clone_and_register_workspace(remote, destination, &home, unix_ms()?)?;
     print_json(&workspace)
 }
@@ -295,7 +299,11 @@ fn parse_terminal_size(rows: Option<&str>, cols: Option<&str>) -> Result<Termina
     Ok(TerminalSize { rows, cols })
 }
 
-fn standalone_winds_home_for_clone(explicit: Option<&str>, destination: &Path) -> Result<PathBuf> {
+fn standalone_winds_home_for_clone(
+    explicit: Option<&str>,
+    destination: &Path,
+    remote: &str,
+) -> Result<PathBuf> {
     if !destination.is_absolute() {
         return Err("clone destination must be an absolute path".into());
     }
@@ -325,10 +333,39 @@ fn standalone_winds_home_for_clone(explicit: Option<&str>, destination: &Path) -
     if planned_destination.starts_with(&resolved) || resolved.starts_with(&planned_destination) {
         return Err("clone destination and Winds state root must not overlap".into());
     }
+    require_clone_state_external_to_local_remote(remote, &resolved)?;
+
     fs::create_dir_all(&resolved)?;
     let canonical = resolved.canonicalize()?;
     utf8_path(&canonical, "WINDS_HOME")?;
     Ok(canonical)
+}
+
+fn require_clone_state_external_to_local_remote(remote: &str, state_root: &Path) -> Result<()> {
+    if let Some((scheme, _)) = remote.split_once("://") {
+        if scheme.eq_ignore_ascii_case("file") {
+            return Err(
+                "T057 workspace-clone requires an absolute local path instead of file:// so Winds can prove the clone-source/state-root boundary"
+                    .into(),
+            );
+        }
+        return Ok(());
+    }
+
+    let remote_path = Path::new(remote);
+    if !remote_path.is_absolute() {
+        return Ok(());
+    }
+    let canonical_remote = remote_path
+        .canonicalize()
+        .map_err(|error| format!("local clone remote cannot be canonicalized: {error}"))?;
+    if state_root.starts_with(&canonical_remote) {
+        return Err("Winds state root must live outside the local clone source".into());
+    }
+    if let Ok(repo) = Repo::open(&canonical_remote) {
+        repo.require_external_state_path(state_root)?;
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
