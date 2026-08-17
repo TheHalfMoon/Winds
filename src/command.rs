@@ -314,11 +314,11 @@ fn unix_ms() -> Result<i64> {
 
 #[cfg(test)]
 mod tests {
+    use super::history::SessionHistoryPolicy;
     use super::{
         ExplicitCommandRequest, non_regressing_wall_time, run_explicit_command,
         run_explicit_command_with_history_policy,
     };
-    use super::history::SessionHistoryPolicy;
     use crate::domain::{ExecutionKind, ExecutionStatus, FactSource};
     use crate::store::git_observation::{GitObservationAvailability, GitObservationBoundary};
     use crate::store::{NewExecution, NewShellCommand, NewWorkspace, Store};
@@ -601,7 +601,12 @@ mod tests {
         assert_eq!(result.exit_code, Some(0));
         let command = store.load_shell_command("command-secret").unwrap();
         assert_eq!(command.arguments.len(), arguments.len());
-        assert!(command.arguments.iter().any(|argument| argument == "<winds:redacted>"));
+        assert!(
+            command
+                .arguments
+                .iter()
+                .any(|argument| argument == "<winds:redacted>")
+        );
         assert!(!command.arguments.join(" ").contains("super-secret"));
     }
 
@@ -626,7 +631,10 @@ mod tests {
         let command = store
             .load_shell_command("command-history-disabled")
             .unwrap();
-        assert_eq!(command.arguments, vec!["<winds:history-disabled>".to_owned()]);
+        assert_eq!(
+            command.arguments,
+            vec!["<winds:history-disabled>".to_owned()]
+        );
     }
 
     #[test]

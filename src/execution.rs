@@ -436,9 +436,7 @@ fn unix_ms() -> Result<i64> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::TerminalExecution;
-    use crate::command::history::{
-        SessionHistoryPolicy, load_persisted_session_history, read_persisted_transcript,
-    };
+    use crate::command::history::SessionHistoryPolicy;
     use crate::domain::{ExecutionStatus, FactSource, TerminalCloseReason};
     use crate::git::shell_profiles::{ShellProfile, discover_native_shell_profiles};
     use crate::git::terminal::TerminalSize;
@@ -584,7 +582,9 @@ mod tests {
         .unwrap();
 
         let output = collect_output(execution.take_output_reader().unwrap());
-        execution.send_input(b"printf 'abcdefgh'; exit 0\n").unwrap();
+        execution
+            .send_input(b"printf 'abcdefgh'; exit 0\n")
+            .unwrap();
         let exit = execution.wait().unwrap();
         assert_eq!(exit.exit_code, 0);
         let live_output = output.join().unwrap();
@@ -594,15 +594,14 @@ mod tests {
         assert_eq!(persisted.manifest.transcript_retained_bytes, 5);
         assert!(persisted.manifest.transcript_observed_bytes > 5);
         assert!(persisted.manifest.transcript_truncated);
+        let transcript = persisted.manifest.transcript.as_ref().unwrap();
+        assert_eq!(
+            fs::read(state_home.join(&transcript.relative_path))
+                .unwrap()
+                .len(),
+            5
+        );
         drop(execution);
-
-        let loaded = load_persisted_session_history(&state_home, "execution-bounded-history")
-            .unwrap()
-            .unwrap();
-        let transcript = read_persisted_transcript(&state_home, &loaded)
-            .unwrap()
-            .unwrap();
-        assert_eq!(transcript.len(), 5);
     }
 
     #[test]

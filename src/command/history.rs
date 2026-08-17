@@ -1,10 +1,8 @@
 use crate::domain::BlobEvidence;
 use crate::store::{Result, Store};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::fs;
 use std::io::Read;
-use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 pub(crate) const HARD_MAX_TRANSCRIPT_BYTES: usize = 8 * 1024 * 1024;
@@ -13,15 +11,15 @@ const REDACTED: &str = "<winds:redacted>";
 const HISTORY_DISABLED: &str = "<winds:history-disabled>";
 const SECRET_FILTERING_MODE: &str = "BEST_EFFORT_METADATA_REDACTION_NOT_SECRET_DETECTION";
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) struct SessionHistoryPolicy {
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub struct SessionHistoryPolicy {
     pub command_history_enabled: bool,
     pub transcript_enabled: bool,
     pub transcript_byte_quota: usize,
 }
 
 impl SessionHistoryPolicy {
-    pub(crate) const fn disabled() -> Self {
+    pub const fn disabled() -> Self {
         Self {
             command_history_enabled: false,
             transcript_enabled: false,
@@ -29,7 +27,7 @@ impl SessionHistoryPolicy {
         }
     }
 
-    pub(crate) const fn command_history_only() -> Self {
+    pub const fn command_history_only() -> Self {
         Self {
             command_history_enabled: true,
             transcript_enabled: false,
@@ -37,7 +35,7 @@ impl SessionHistoryPolicy {
         }
     }
 
-    pub(crate) fn local_bounded(
+    pub fn local_bounded(
         command_history_enabled: bool,
         transcript_byte_quota: usize,
     ) -> Result<Self> {
@@ -53,7 +51,9 @@ impl SessionHistoryPolicy {
     fn validate(self) -> Result<()> {
         if self.transcript_enabled {
             if self.transcript_byte_quota == 0 {
-                return Err("enabled terminal transcript history requires a non-zero byte quota".into());
+                return Err(
+                    "enabled terminal transcript history requires a non-zero byte quota".into(),
+                );
             }
             if self.transcript_byte_quota > HARD_MAX_TRANSCRIPT_BYTES {
                 return Err(format!(
@@ -78,8 +78,8 @@ impl Default for SessionHistoryPolicy {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) struct HistoryBlobRef {
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct HistoryBlobRef {
     pub relative_path: String,
     pub sha256: String,
     pub captured_bytes: usize,
@@ -97,8 +97,8 @@ impl From<BlobEvidence> for HistoryBlobRef {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) struct SessionHistoryManifest {
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SessionHistoryManifest {
     pub schema_version: u32,
     pub execution_id: String,
     pub local_only: bool,
@@ -111,7 +111,7 @@ pub(crate) struct SessionHistoryManifest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PersistedSessionHistory {
+pub struct PersistedSessionHistory {
     pub manifest: SessionHistoryManifest,
     pub manifest_blob: HistoryBlobRef,
 }
@@ -122,7 +122,7 @@ struct TranscriptState {
     retained: Vec<u8>,
     truncated: bool,
     reader_taken: bool,
-    persisted: Option<PersistedSessionHistory>,
+    persisted: bool,
 }
 
 pub(crate) struct SessionHistoryRecorder {
@@ -134,7 +134,9 @@ pub(crate) struct SessionHistoryRecorder {
 impl SessionHistoryRecorder {
     pub(crate) fn new(execution_id: &str, policy: SessionHistoryPolicy) -> Result<Self> {
         if execution_id.is_empty() || execution_id.chars().any(char::is_control) {
-            return Err("session history requires a non-empty control-character-free execution id".into());
+            return Err(
+                "session history requires a non-empty control-character-free execution id".into(),
+            );
         }
         policy.validate()?;
         Ok(Self {
@@ -162,7 +164,7 @@ impl SessionHistoryRecorder {
         if state.reader_taken {
             return Err("terminal history output reader has already been wrapped".into());
         }
-        if state.persisted.is_some() {
+        if state.persisted {
             return Err("terminal history was already persisted before output capture".into());
         }
         state.reader_taken = true;
@@ -185,21 +187,20 @@ impl SessionHistoryRecorder {
             );
         }
 
-        let (observed_bytes, retained, truncated, prior) = {
+        let (observed_bytes, retained, truncated) = {
             let state = self
                 .state
                 .lock()
                 .map_err(|_| "terminal history state lock is poisoned")?;
+            if state.persisted {
+                return Err("session history has already been persisted".into());
+            }
             (
                 state.observed_bytes,
                 state.retained.clone(),
                 state.truncated,
-                state.persisted.clone(),
             )
         };
-        if let Some(prior) = prior {
-            return Ok(Some(prior));
-        }
 
         let storage_key = history_storage_key(&self.execution_id);
         let transcript = if self.policy.transcript_enabled {
@@ -231,14 +232,11 @@ impl SessionHistoryRecorder {
             manifest,
             manifest_blob,
         };
-        let mut state = self
-            .state
+        self.state
             .lock()
-            .map_err(|_| "terminal history state lock is poisoned")?;
-        if state.persisted.is_none() {
-            state.persisted = Some(persisted.clone());
-        }
-        Ok(state.persisted.clone())
+            .map_err(|_| "terminal history state lock is poisoned")?
+            .persisted = true;
+        Ok(Some(persisted))
     }
 }
 
@@ -314,9 +312,7 @@ pub(crate) fn sanitize_persisted_arguments(arguments: &[String]) -> Vec<String> 
 }
 
 fn is_secret_option(lower: &str) -> bool {
-    let normalized = lower
-        .trim_start_matches('-')
-        .replace('_', "-");
+    let normalized = lower.trim_start_matches('-').replace('_', "-");
     matches!(
         normalized.as_str(),
         "api-key"
@@ -388,79 +384,10 @@ fn sanitize_url_like_argument(argument: &str) -> Option<String> {
         return Some(REDACTED.to_owned());
     }
     let path = &without_tail[authority_end..];
-    Some(format!("{}://{authority}{path}", scheme.to_ascii_lowercase()))
-}
-
-pub(crate) fn load_persisted_session_history(
-    home: &Path,
-    execution_id: &str,
-) -> Result<Option<PersistedSessionHistory>> {
-    let storage_key = history_storage_key(execution_id);
-    let dir = home.join("blobs").join(&storage_key);
-    if !dir.exists() {
-        return Ok(None);
-    }
-    if !dir.is_dir() {
-        return Err("session history storage path is not a directory".into());
-    }
-
-    let mut manifests = Vec::new();
-    for entry in fs::read_dir(&dir)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_file() {
-            continue;
-        }
-        let name = entry.file_name();
-        let Some(name) = name.to_str() else {
-            continue;
-        };
-        if name.starts_with("history-manifest.") {
-            manifests.push(entry.path());
-        }
-    }
-    if manifests.is_empty() {
-        return Ok(None);
-    }
-    if manifests.len() != 1 {
-        return Err("session history has multiple manifest versions; refusing ambiguous history".into());
-    }
-
-    let manifest_path = manifests.pop().expect("manifest length checked");
-    let bytes = fs::read(&manifest_path)?;
-    let manifest: SessionHistoryManifest = serde_json::from_slice(&bytes)?;
-    validate_manifest(&manifest)?;
-    if manifest.execution_id != execution_id {
-        return Err("session history manifest execution identity mismatch".into());
-    }
-    let manifest_blob = blob_ref_for_existing(home, &manifest_path, &bytes, false)?;
-    Ok(Some(PersistedSessionHistory {
-        manifest,
-        manifest_blob,
-    }))
-}
-
-pub(crate) fn read_persisted_transcript(
-    home: &Path,
-    history: &PersistedSessionHistory,
-) -> Result<Option<Vec<u8>>> {
-    let Some(blob) = &history.manifest.transcript else {
-        return Ok(None);
-    };
-    let relative = Path::new(&blob.relative_path);
-    require_safe_relative_path(relative)?;
-    let expected_prefix = PathBuf::from("blobs").join(history_storage_key(&history.manifest.execution_id));
-    if !relative.starts_with(&expected_prefix) {
-        return Err("terminal transcript path does not belong to its execution history".into());
-    }
-    let bytes = fs::read(home.join(relative))?;
-    if bytes.len() != blob.captured_bytes {
-        return Err("terminal transcript byte count does not match its manifest".into());
-    }
-    let digest = lower_sha256(&bytes);
-    if digest != blob.sha256 {
-        return Err("terminal transcript digest does not match its manifest".into());
-    }
-    Ok(Some(bytes))
+    Some(format!(
+        "{}://{authority}{path}",
+        scheme.to_ascii_lowercase()
+    ))
 }
 
 fn validate_manifest(manifest: &SessionHistoryManifest) -> Result<()> {
@@ -494,7 +421,9 @@ fn validate_manifest(manifest: &SessionHistoryManifest) -> Result<()> {
             if blob.captured_bytes != manifest.transcript_retained_bytes
                 || blob.truncated != manifest.transcript_truncated
             {
-                return Err("terminal transcript blob metadata does not match history manifest".into());
+                return Err(
+                    "terminal transcript blob metadata does not match history manifest".into(),
+                );
             }
         }
         (None, false) => {
@@ -511,53 +440,16 @@ fn validate_manifest(manifest: &SessionHistoryManifest) -> Result<()> {
 }
 
 fn history_storage_key(execution_id: &str) -> String {
-    format!("history-{}", lower_sha256(execution_id.as_bytes()))
-}
-
-fn lower_sha256(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    digest.iter().map(|byte| format!("{byte:02x}")).collect()
-}
-
-fn blob_ref_for_existing(
-    home: &Path,
-    path: &Path,
-    bytes: &[u8],
-    truncated: bool,
-) -> Result<HistoryBlobRef> {
-    let relative = path.strip_prefix(home)?;
-    require_safe_relative_path(relative)?;
-    Ok(HistoryBlobRef {
-        relative_path: relative
-            .to_str()
-            .ok_or("session history blob path is not valid UTF-8")?
-            .to_owned(),
-        sha256: lower_sha256(bytes),
-        captured_bytes: bytes.len(),
-        truncated,
-    })
-}
-
-fn require_safe_relative_path(path: &Path) -> Result<()> {
-    if path.is_absolute()
-        || path.components().any(|component| {
-            matches!(
-                component,
-                Component::ParentDir | Component::RootDir | Component::Prefix(_)
-            )
-        })
-    {
-        return Err("session history blob path escapes the Winds state root".into());
-    }
-    Ok(())
+    let digest = Sha256::digest(execution_id.as_bytes());
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("history-{hex}")
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
         HARD_MAX_TRANSCRIPT_BYTES, HISTORY_DISABLED, REDACTED, SessionHistoryPolicy,
-        SessionHistoryRecorder, load_persisted_session_history, persisted_arguments,
-        read_persisted_transcript, sanitize_persisted_arguments,
+        SessionHistoryRecorder, persisted_arguments, sanitize_persisted_arguments,
     };
     use crate::store::Store;
     use std::fs;
@@ -602,15 +494,13 @@ mod tests {
             vec![HISTORY_DISABLED.to_owned()]
         );
         assert!(recorder.persist(&store).unwrap().is_none());
-        assert!(!root.path().join("blobs").join("../../unsafe-id").exists());
+        assert_eq!(fs::read_dir(root.path().join("blobs")).unwrap().count(), 0);
     }
 
     #[test]
     fn policy_enforces_nonzero_bounded_transcript_quota() {
         assert!(SessionHistoryPolicy::local_bounded(true, 0).is_err());
-        assert!(
-            SessionHistoryPolicy::local_bounded(false, HARD_MAX_TRANSCRIPT_BYTES + 1).is_err()
-        );
+        assert!(SessionHistoryPolicy::local_bounded(false, HARD_MAX_TRANSCRIPT_BYTES + 1).is_err());
         assert!(SessionHistoryPolicy::local_bounded(false, 1).is_ok());
     }
 
@@ -640,7 +530,7 @@ mod tests {
     }
 
     #[test]
-    fn bounded_transcript_records_quota_and_truncation_and_round_trips() {
+    fn bounded_transcript_records_quota_and_truncation_truth() {
         let root = TestRoot::new("bounded");
         let store = Store::open(root.path()).unwrap();
         let policy = SessionHistoryPolicy::local_bounded(true, 5).unwrap();
@@ -659,37 +549,13 @@ mod tests {
         assert_eq!(persisted.manifest.transcript_retained_bytes, 5);
         assert!(persisted.manifest.transcript_truncated);
         assert!(persisted.manifest.local_only);
+        let transcript = persisted.manifest.transcript.as_ref().unwrap();
         assert_eq!(
-            read_persisted_transcript(root.path(), &persisted)
-                .unwrap()
-                .unwrap(),
+            fs::read(root.path().join(&transcript.relative_path)).unwrap(),
             b"abcde"
         );
-
-        let loaded = load_persisted_session_history(root.path(), "execution/with-path-chars")
-            .unwrap()
-            .unwrap();
-        assert_eq!(loaded.manifest, persisted.manifest);
-        assert_eq!(
-            read_persisted_transcript(root.path(), &loaded)
-                .unwrap()
-                .unwrap(),
-            b"abcde"
-        );
-        assert!(loaded.manifest_blob.relative_path.starts_with("blobs/history-"));
-        assert!(!loaded.manifest_blob.relative_path.contains(".."));
-    }
-
-    #[test]
-    fn command_history_only_manifest_contains_no_transcript_blob() {
-        let root = TestRoot::new("command-only");
-        let store = Store::open(root.path()).unwrap();
-        let policy = SessionHistoryPolicy::command_history_only();
-        let recorder = SessionHistoryRecorder::new("command-only", policy).unwrap();
-        let persisted = recorder.persist(&store).unwrap().unwrap();
-        assert!(persisted.manifest.policy.command_history_enabled);
-        assert!(!persisted.manifest.policy.transcript_enabled);
-        assert_eq!(persisted.manifest.transcript, None);
-        assert_eq!(persisted.manifest.transcript_observed_bytes, 0);
+        assert!(persisted.manifest_blob.relative_path.starts_with("blobs/history-"));
+        assert!(!persisted.manifest_blob.relative_path.contains(".."));
+        assert!(recorder.persist(&store).is_err());
     }
 }
