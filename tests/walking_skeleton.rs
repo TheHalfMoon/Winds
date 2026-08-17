@@ -58,7 +58,7 @@ fn native_windows_refuses_authoritative_required_checks_without_mutation() {
 #[test]
 fn verifies_blocks_and_promotes_without_touching_primary_checkout() {
     let root = unique_temp_dir("winds-walking-skeleton");
-    let repo = root.join("repo with spaces");
+    let repo = root.join(" repo ");
     let winds_home = root.join("winds-home");
     fs::create_dir_all(&repo).unwrap();
 
