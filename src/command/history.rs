@@ -479,7 +479,7 @@ mod tests {
         assert_eq!(sanitized[0], "--api-key");
         assert_eq!(sanitized[1], REDACTED);
         assert_eq!(sanitized[2], REDACTED);
-        assert_eq!(sanitized[3], "https://example.com/repo");
+        assert_eq!(sanitized[3], REDACTED);
         assert_eq!(sanitized[4], REDACTED);
         assert_eq!(sanitized[5], "ordinary");
         let joined = sanitized.join(" ");
