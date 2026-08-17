@@ -282,7 +282,10 @@ fn parse_worktree_status(bytes: &[u8]) -> Result<WorktreeStateObservation> {
     let mut dirty = false;
     let mut worktree_hasher = Sha256::new();
 
-    for field in bytes.split(|byte| *byte == 0).filter(|field| !field.is_empty()) {
+    for field in bytes
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty())
+    {
         if let Some(value) = field.strip_prefix(b"# branch.oid ") {
             if head_oid.is_some() {
                 return Err("Git status returned duplicate branch.oid headers".into());
@@ -416,10 +419,8 @@ mod git_observation_tests {
 
     #[test]
     fn clean_attached_status_parses_branch_and_empty_state_digest() {
-        let observation = parse_worktree_status(
-            b"# branch.oid 0123456789abcdef\0# branch.head main\0",
-        )
-        .unwrap();
+        let observation =
+            parse_worktree_status(b"# branch.oid 0123456789abcdef\0# branch.head main\0").unwrap();
         assert_eq!(observation.head_oid.as_deref(), Some("0123456789abcdef"));
         assert_eq!(observation.branch.as_deref(), Some("main"));
         assert!(!observation.detached);
@@ -436,21 +437,24 @@ mod git_observation_tests {
 
     #[test]
     fn status_digest_excludes_branch_headers_but_includes_exact_worktree_records() {
-        let main = parse_worktree_status(
-            b"# branch.oid abc\0# branch.head main\0? untracked.txt\0",
-        )
-        .unwrap();
-        let other_branch = parse_worktree_status(
-            b"# branch.oid abc\0# branch.head other\0? untracked.txt\0",
-        )
-        .unwrap();
-        let different_state = parse_worktree_status(
-            b"# branch.oid abc\0# branch.head main\0? different.txt\0",
-        )
-        .unwrap();
+        let main =
+            parse_worktree_status(b"# branch.oid abc\0# branch.head main\0? untracked.txt\0")
+                .unwrap();
+        let other_branch =
+            parse_worktree_status(b"# branch.oid abc\0# branch.head other\0? untracked.txt\0")
+                .unwrap();
+        let different_state =
+            parse_worktree_status(b"# branch.oid abc\0# branch.head main\0? different.txt\0")
+                .unwrap();
         assert!(main.dirty);
-        assert_eq!(main.worktree_state_sha256, other_branch.worktree_state_sha256);
-        assert_ne!(main.worktree_state_sha256, different_state.worktree_state_sha256);
+        assert_eq!(
+            main.worktree_state_sha256,
+            other_branch.worktree_state_sha256
+        );
+        assert_ne!(
+            main.worktree_state_sha256,
+            different_state.worktree_state_sha256
+        );
     }
 
     #[test]
@@ -473,8 +477,7 @@ mod git_observation_tests {
         assert!(parse_worktree_status(b"# branch.head main\0").is_err());
         assert!(parse_worktree_status(b"# branch.oid abc\0").is_err());
         assert!(
-            parse_worktree_status(b"# branch.oid (initial)\0# branch.head (detached)\0")
-                .is_err()
+            parse_worktree_status(b"# branch.oid (initial)\0# branch.head (detached)\0").is_err()
         );
     }
 }
