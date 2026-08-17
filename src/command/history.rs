@@ -13,6 +13,7 @@ use std::time::{Duration, SystemTime};
 pub(crate) const HARD_MAX_TRANSCRIPT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_EXECUTION_ID_BYTES: usize = 512;
 const HISTORY_SCHEMA_VERSION: u32 = 1;
+const HISTORY_WRITE_LOCK_DB: &str = ".winds-history-write-lock.sqlite3";
 const REDACTED: &str = "<winds:redacted>";
 const HISTORY_DISABLED: &str = "<winds:history-disabled>";
 const SECRET_FILTERING_MODE: &str = "BEST_EFFORT_METADATA_REDACTION_NOT_SECRET_DETECTION";
@@ -66,17 +67,7 @@ impl SessionHistoryPolicy {
             transcript_byte_quota,
             total_history_byte_quota,
         };
-        let minimum_storage_key = history_storage_key("x");
-        let (_, minimum_manifest_bytes, _) = build_history_manifest(
-            "x",
-            policy,
-            &minimum_storage_key,
-            u64::MAX,
-            &[],
-            false,
-            true,
-        )?;
-        if u64::try_from(minimum_manifest_bytes.len())? > total_history_byte_quota {
+        if u64::try_from(minimum_manifest_bytes("x", policy)?)? > total_history_byte_quota {
             return Err(
                 "total terminal history byte quota is too small for mandatory history metadata"
                     .into(),
@@ -169,24 +160,13 @@ impl SessionHistoryRecorder {
                     .into(),
             );
         }
-        if policy.transcript_enabled {
-            let storage_key = history_storage_key(execution_id);
-            let (_, maximum_empty_manifest_bytes, _) = build_history_manifest(
-                execution_id,
-                policy,
-                &storage_key,
-                u64::MAX,
-                &[],
-                false,
-                true,
-            )?;
-            if u64::try_from(maximum_empty_manifest_bytes.len())? > policy.total_history_byte_quota
-            {
-                return Err(
-                    "terminal history quota cannot hold mandatory metadata for this execution"
-                        .into(),
-                );
-            }
+        if policy.transcript_enabled
+            && u64::try_from(minimum_manifest_bytes(execution_id, policy)?)?
+                > policy.total_history_byte_quota
+        {
+            return Err(
+                "terminal history quota cannot hold mandatory metadata for this execution".into(),
+            );
         }
         let state_root = match state_root {
             Some(root) => Some(validate_state_root(root)?),
@@ -498,7 +478,7 @@ fn contains_sensitive_url_like_token(argument: &str) -> bool {
         let token = token.trim_matches(|ch: char| {
             matches!(
                 ch,
-                '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | ',' | ';'
+                '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | ',' | ';'
             )
         });
         let Some((scheme, rest)) = token.split_once("://") else {
@@ -576,11 +556,36 @@ fn with_history_write_lock<T>(
     execution_id: &str,
     operation: impl FnOnce(&Path) -> Result<T>,
 ) -> Result<T> {
+    validate_terminal_history_identity(state_root, execution_id)?;
+    let history_root = state_root.join("history");
+    ensure_private_directory(&history_root)?;
+
+    let lock_database = state_root.join(HISTORY_WRITE_LOCK_DB);
+    ensure_private_lock_database(&lock_database)?;
+    let lock_connection = Connection::open_with_flags(
+        &lock_database,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )?;
+    lock_connection.busy_timeout(Duration::from_secs(5))?;
+    lock_connection.execute_batch("BEGIN IMMEDIATE")?;
+    let result = operation(&history_root);
+    let release = lock_connection.execute_batch("ROLLBACK");
+    match (result, release) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error.into()),
+    }
+}
+
+fn validate_terminal_history_identity(state_root: &Path, execution_id: &str) -> Result<()> {
     let database = state_root.join("winds.db");
-    let connection = Connection::open_with_flags(&database, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+    let connection = Connection::open_with_flags(
+        &database,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )?;
     connection.busy_timeout(Duration::from_secs(5))?;
     connection.execute_batch("BEGIN IMMEDIATE")?;
-    let result = (|| -> Result<T> {
+    let result = (|| -> Result<()> {
         let terminal_count: i64 = connection.query_row(
             "SELECT COUNT(*)
              FROM executions e
@@ -598,16 +603,41 @@ fn with_history_write_lock<T>(
                     .into(),
             );
         }
-        let history_root = state_root.join("history");
-        ensure_private_directory(&history_root)?;
-        operation(&history_root)
+        Ok(())
     })();
-    let rollback = connection.execute_batch("ROLLBACK");
-    match (result, rollback) {
-        (Ok(value), Ok(())) => Ok(value),
+    let release = connection.execute_batch("ROLLBACK");
+    match (result, release) {
+        (Ok(()), Ok(())) => Ok(()),
         (Err(error), _) => Err(error),
-        (Ok(_), Err(error)) => Err(error.into()),
+        (Ok(()), Err(error)) => Err(error.into()),
     }
+}
+
+fn ensure_private_lock_database(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err("terminal history write lock must be a real file".into());
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            options.mode(0o600);
+            match options.open(path) {
+                Ok(file) => file.sync_all()?,
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error.into()),
+            }
+            let metadata = fs::symlink_metadata(path)?;
+            if metadata.file_type().is_symlink() || !metadata.is_file() {
+                return Err("terminal history write lock must be a real file".into());
+            }
+        }
+        Err(error) => return Err(error.into()),
+    }
+    Ok(())
 }
 
 fn ensure_private_directory(path: &Path) -> Result<()> {
@@ -776,6 +806,20 @@ fn history_logical_bytes(history_root: &Path) -> Result<u64> {
         })
 }
 
+fn minimum_manifest_bytes(execution_id: &str, policy: SessionHistoryPolicy) -> Result<usize> {
+    let storage_key = history_storage_key(execution_id);
+    let (_, manifest_bytes, _) = build_history_manifest(
+        execution_id,
+        policy,
+        &storage_key,
+        u64::MAX,
+        &[],
+        false,
+        true,
+    )?;
+    Ok(manifest_bytes.len())
+}
+
 fn build_history_manifest(
     execution_id: &str,
     policy: SessionHistoryPolicy,
@@ -853,10 +897,11 @@ mod tests {
         HARD_MAX_TRANSCRIPT_BYTES, HISTORY_DISABLED, REDACTED, SessionHistoryPolicy,
         SessionHistoryRecorder, history_logical_bytes, history_storage_key, lower_sha256,
         persisted_arguments, prune_for_write, remove_owned_history_session,
-        sanitize_persisted_arguments,
+        sanitize_persisted_arguments, with_history_write_lock,
     };
     use crate::domain::{ExecutionKind, FactSource};
     use crate::store::{NewExecution, NewTerminalSession, NewWorkspace, Store};
+    use rusqlite::{Connection, OpenFlags};
     use std::fs;
     use std::io::{Cursor, Read};
     use std::path::{Path, PathBuf};
@@ -952,6 +997,18 @@ mod tests {
     }
 
     #[test]
+    fn enabled_command_history_persists_sanitized_arguments() {
+        let policy = SessionHistoryPolicy::command_history_only();
+        assert_eq!(
+            persisted_arguments(
+                &["--api-key".to_owned(), "sk-super-secret".to_owned()],
+                policy
+            ),
+            vec!["--api-key".to_owned(), REDACTED.to_owned()]
+        );
+    }
+
+    #[test]
     fn policy_enforces_per_session_and_total_quotas() {
         assert!(SessionHistoryPolicy::local_bounded(true, 0, 10).is_err());
         assert!(
@@ -972,6 +1029,7 @@ mod tests {
             "https://user:pass@example.com/repo?token=abc#frag".to_owned(),
             "Authorization: Bearer abc".to_owned(),
             "curl https://user:pass@example.com/repo".to_owned(),
+            "curl <https://user:pass@example.com/repo>".to_owned(),
             "curl https://example.com/repo?opaque=value#frag".to_owned(),
             "curl https://example.com/repo".to_owned(),
             "ordinary".to_owned(),
@@ -984,8 +1042,9 @@ mod tests {
         assert_eq!(sanitized[4], REDACTED);
         assert_eq!(sanitized[5], REDACTED);
         assert_eq!(sanitized[6], REDACTED);
-        assert_eq!(sanitized[7], "curl https://example.com/repo");
-        assert_eq!(sanitized[8], "ordinary");
+        assert_eq!(sanitized[7], REDACTED);
+        assert_eq!(sanitized[8], "curl https://example.com/repo");
+        assert_eq!(sanitized[9], "ordinary");
         let joined = sanitized.join(" ");
         assert!(!joined.contains("super-secret"));
         assert!(!joined.contains("hunter2"));
@@ -993,6 +1052,22 @@ mod tests {
         assert!(!joined.contains("token=abc"));
         assert!(!joined.contains("Bearer abc"));
         assert!(!joined.contains("opaque=value"));
+    }
+
+    #[test]
+    fn history_filesystem_lock_does_not_hold_winds_database_writer_lock() {
+        let root = TestRoot::new("history-lock-separation");
+        let state_root = state_with_terminal_executions(&root, &["history-lock-separation"]);
+        with_history_write_lock(&state_root, "history-lock-separation", |_| {
+            let connection = Connection::open_with_flags(
+                state_root.join("winds.db"),
+                OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+            )
+            .unwrap();
+            connection.execute_batch("BEGIN IMMEDIATE; ROLLBACK").unwrap();
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
