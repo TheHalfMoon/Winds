@@ -41,6 +41,7 @@ impl Eligibility {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ExecutionKind {
     Terminal,
+    ShellCommand,
 }
 
 #[allow(
@@ -51,12 +52,14 @@ impl ExecutionKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Terminal => "TERMINAL",
+            Self::ShellCommand => "SHELL_COMMAND",
         }
     }
 
     pub(crate) fn from_db(value: &str) -> Option<Self> {
         match value {
             "TERMINAL" => Some(Self::Terminal),
+            "SHELL_COMMAND" => Some(Self::ShellCommand),
             _ => None,
         }
     }
@@ -236,6 +239,23 @@ pub struct TerminalSessionRecord {
     pub initial_cols: Option<u16>,
     pub initial_rows: Option<u16>,
     pub close_reason: Option<TerminalCloseReason>,
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 003 T054 command-record backend API; CLI/timeline caller lands in T057"
+)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellCommandRecord {
+    pub execution_id: String,
+    pub executable: String,
+    pub arguments: Vec<String>,
+    pub command_source: FactSource,
+    pub requested_cwd: String,
+    pub cwd_source: FactSource,
+    pub exit_code: Option<i32>,
+    pub exit_source: Option<FactSource>,
+    pub observed_end_unix_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
