@@ -53,3 +53,12 @@ This checklist records implementation/evidence truth for Spec 003. A checked ite
 - [ ] **T067** Complete Ponytail v4.9.0 simplicity review on the exact final implementation head. Challenge every dependency/module/protocol; remove custom multiplexer/renderer/plugin/provider/environment-manager machinery not required by Spec 003.
 - [ ] **T068** Obtain and reconcile at least one independent reviewer pass on the exact final implementation head. External summaries or reviews bound only to older heads do not satisfy this task.
 - [ ] **T069** Reconcile deterministic CI, platform/WSL evidence, soak results, correctness/safety, Ponytail, and independent-review findings into final canonical task truth before making the Spec 003 completion claim.
+
+## Explicit Follow-On Specifications
+
+These are product goals, **not hidden unchecked work inside Spec 003**:
+
+- **Spec 004 - SQL Studio**: secret-safe connection profiles, schema/catalog intelligence, query editor/history, explicit transaction/write safety, dialect-aware parsing, timing/rows/results/export, EXPLAIN/plan evidence, and workspace-linked query executions.
+- **Spec 005 - LLM Observatory**: provider/model traces, input/output/cache/reasoning tokens, total/streaming latency, retries/errors/rate limits, exact or unknown cost with pricing provenance, budgets/aggregates, tool/subagent spans, payload privacy, and OpenTelemetry-aligned export.
+- **Later UI slice**: graphical workspace organization, panes/tabs, embedded terminal renderer, SQL data grid/plan visualization, and LLM timeline dashboards built on the proven backend records.
+- **Later persistence slice**: detached live terminal sessions across Winds restarts only if real user need justifies an external PTY owner/daemon and a versioned reconnection protocol.
