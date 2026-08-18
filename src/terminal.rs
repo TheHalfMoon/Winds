@@ -267,22 +267,14 @@ impl TerminalSession {
     }
 
     pub fn terminate(&mut self) -> Result<TerminalExit> {
-        if let Some(exit) = self.try_wait()? {
-            return Ok(exit);
+        match self.cleanup_for_drop(Duration::from_millis(500))? {
+            TerminalDropCleanupOutcome::ExitedBeforeCleanup(exit)
+            | TerminalDropCleanupOutcome::Terminated(exit) => Ok(exit),
+            TerminalDropCleanupOutcome::Unproven => Err(
+                "terminal terminate could not prove owned child exit inside bounded cleanup window"
+                    .into(),
+            ),
         }
-
-        let kill_result = self
-            .child
-            .as_mut()
-            .ok_or("terminal session lost its owned child handle")?
-            .kill();
-        if let Err(kill_error) = kill_result {
-            if let Some(exit) = self.try_wait()? {
-                return Ok(exit);
-            }
-            return Err(format!("failed to terminate owned terminal child: {kill_error}").into());
-        }
-        self.wait()
     }
 
     pub fn close(&mut self) -> Result<TerminalExit> {
