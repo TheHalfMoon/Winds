@@ -7,9 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 #[test]
 fn minimal_cli_proves_workspace_profiles_execution_and_terminal_paths() {
-    let Some(temp) = TestTempDir::new("winds-t057-cli") else {
-        return;
-    };
+    let temp = TestTempDir::new("winds-t057-cli")
+        .expect("T057 CLI fixture requires a canonical UTF-8 temporary directory");
     let root = temp.path();
     let repo = root.join("repo");
     let other_repo = root.join("other-repo");
@@ -71,6 +70,18 @@ fn minimal_cli_proves_workspace_profiles_execution_and_terminal_paths() {
         command_json["execution"]["shell_command"]["arguments"][0],
         "<winds:history-disabled>"
     );
+    let command_git_observations = command_json["execution"]["git_observations"]
+        .as_array()
+        .expect("winds run must expose typed Git observations");
+    assert_eq!(command_git_observations.len(), 2);
+    assert_eq!(command_git_observations[0]["boundary"], "BEFORE");
+    assert_eq!(command_git_observations[1]["boundary"], "AFTER");
+    assert!(command_git_observations.iter().all(|observation| {
+        observation["availability"] == "OBSERVED"
+            && observation["source"] == "WINDS_OBSERVED"
+            && observation["worktree_state_format"].as_str().is_some()
+            && observation["worktree_state_sha256"].as_str().is_some()
+    }));
     assert_eq!(command_json["result"]["exit_code"], 1);
 
     let inspected = winds(
@@ -87,6 +98,10 @@ fn minimal_cli_proves_workspace_profiles_execution_and_terminal_paths() {
     let inspected_json: Value = serde_json::from_slice(&inspected.stdout).unwrap();
     assert_eq!(inspected_json["execution_id"], command_id);
     assert_eq!(inspected_json["status"], "EXITED");
+    assert_eq!(
+        inspected_json["git_observations"],
+        command_json["execution"]["git_observations"]
+    );
     assert!(inspected_json["events"].as_array().unwrap().len() >= 2);
 
     let cross_workspace = winds(
@@ -131,14 +146,20 @@ fn minimal_cli_proves_workspace_profiles_execution_and_terminal_paths() {
         terminal_json["execution"]["terminal"]["close_reason"],
         "TERMINATED_BY_WINDS"
     );
+    assert_eq!(
+        terminal_json["execution"]["git_observations"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
     assert_eq!(terminal_json["proof"]["profile_id"], profile_id);
 }
 
 #[test]
 fn workspace_clone_rejects_unsafe_state_roots_before_creation() {
-    let Some(temp) = TestTempDir::new("winds-t057-clone") else {
-        return;
-    };
+    let temp = TestTempDir::new("winds-t057-clone")
+        .expect("T057 clone fixture requires a canonical UTF-8 temporary directory");
     let root = temp.path();
     let source = root.join("source");
     init_repo(&source, "source");
