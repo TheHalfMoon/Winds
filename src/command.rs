@@ -43,7 +43,6 @@ pub fn run_explicit_command_with_history_policy(
     request: ExplicitCommandRequest<'_>,
     history_policy: SessionHistoryPolicy,
 ) -> Result<ExplicitCommandResult> {
-    store.finalize_observed_shell_commands()?;
     if request.execution_id.is_empty() || request.workspace_id.is_empty() {
         return Err("explicit command requires non-empty execution/workspace identity".into());
     }
@@ -536,6 +535,64 @@ mod tests {
         assert_eq!(non_regressing_wall_time(Some(10), 10, Some(11)), None);
         assert_eq!(non_regressing_wall_time(Some(12), 10, Some(11)), Some(12));
         assert_eq!(non_regressing_wall_time(None, 10, Some(11)), None);
+    }
+
+    #[test]
+    fn starting_command_does_not_finalize_unrelated_observed_exit() {
+        let root = TestRoot::new("no-global-finalize");
+        let mut store = store_with_workspace(&root);
+        let cwd = workspace_path(&root);
+        let (pending_executable, pending_arguments) = command_parts(0, false);
+        store
+            .create_shell_command_execution(
+                NewExecution {
+                    execution_id: "command-pending-observed-exit",
+                    workspace_id: "workspace-1",
+                    kind: ExecutionKind::ShellCommand,
+                    request_source: FactSource::CallerRequested,
+                    execution_domain: "native-test",
+                },
+                NewShellCommand {
+                    execution_id: "command-pending-observed-exit",
+                    executable: pending_executable.to_str().unwrap(),
+                    arguments: &pending_arguments,
+                    command_source: FactSource::CallerRequested,
+                    requested_cwd: cwd.to_str().unwrap(),
+                    cwd_source: FactSource::CallerRequested,
+                },
+                10,
+            )
+            .unwrap();
+        store
+            .mark_shell_command_running("command-pending-observed-exit", Some(11))
+            .unwrap();
+        store
+            .record_shell_command_exit_observation(
+                "command-pending-observed-exit",
+                Some(0),
+                Some(12),
+            )
+            .unwrap();
+
+        let (executable, arguments) = command_parts(0, false);
+        run_explicit_command(
+            &mut store,
+            ExplicitCommandRequest {
+                execution_id: "command-independent",
+                workspace_id: "workspace-1",
+                executable: &executable,
+                arguments: &arguments,
+                cwd: &cwd,
+            },
+        )
+        .unwrap();
+
+        let pending = store
+            .load_execution("command-pending-observed-exit")
+            .unwrap();
+        assert_eq!(pending.status, ExecutionStatus::Running);
+        let independent = store.load_execution("command-independent").unwrap();
+        assert_eq!(independent.status, ExecutionStatus::Exited);
     }
 
     #[test]
