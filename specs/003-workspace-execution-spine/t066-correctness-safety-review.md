@@ -25,7 +25,7 @@ T066 requires explicit review of:
 7. secret/history persistence;
 8. separation from verification authority.
 
-## Blocking finding discovered
+## Blocking findings discovered and reconciled
 
 ### T066-F1 — restart reconciliation was not connected to the user-facing process lifecycle
 
@@ -35,21 +35,50 @@ The accepted backend already contained conservative restart reconciliation for t
 
 A process crash could therefore leave a persisted `REQUESTED` or `RUNNING` execution row that a later CLI process could expose as if it were still live. This violates the Spec 003 requirement that unprovable post-restart ownership reconcile to `OWNERSHIP_LOST` rather than remain falsely live.
 
-A naive repair that reconciles every non-final row at every CLI start is also incorrect: two live Winds CLI processes may overlap, and one process must not mark an execution still owned by another live Winds process as stale.
+### T066-F2 — first lease repair raced bulk reconciliation against new execution startup
 
-## Repair design
+**Classification:** blocking correctness / live-owner revocation race.
+
+The first T066 repair probed all non-final per-execution leases and then called the existing Store-wide reconciliation method only when no live owner was seen. That still left a snapshot-to-update race: after the probe released its temporary lease, another process could acquire its own execution lease and create a new non-final row before the bulk Store update. Because the Store method updates every matching non-final row, the new live row could be marked `OWNERSHIP_LOST`.
+
+The final repair removes Store-wide reconciliation from the CLI restart path. The CLI now reconciles only the execution IDs captured in its snapshot, one row at a time, while retaining that row's successfully acquired ownership lease for the entire targeted transition. New execution IDs created after the snapshot are therefore outside the update set, while a live owner of a captured ID keeps its lease busy and is skipped.
+
+### T066-F3 — deleting lease files after unlock could create dual owners
+
+**Classification:** blocking correctness / lease pathname split-brain.
+
+The first lease implementation rolled back and closed SQLite, then removed the lease file. On Unix another process could open and lock that pathname between close and unlink; unlink would detach the new owner's live inode from the pathname, allowing a third process to create a replacement file and obtain a second apparent owner.
+
+The final repair never deletes hashed lease database files during normal lease release. Liveness is represented only by the retained SQLite `BEGIN IMMEDIATE` transaction. The stable pathname remains the common rendezvous object for all future probes, preventing unlink/recreate split-brain.
+
+### T066-F4 — same-kind deferral left unrelated stale rows non-final
+
+**Classification:** specification compliance / restart-truth completeness.
+
+The first repair conservatively deferred all reconciliation for an execution kind if any same-kind live owner existed. Although display failed closed, this left unrelated unowned rows internally non-final and introduced a user-visible refusal branch rather than performing FR-019's required ownership-loss transition.
+
+The final repair reconciles each captured non-final execution independently. A live row is skipped because its own lease is busy; an unrelated stale row is reconciled immediately while its acquired probe lease prevents a same-ID owner from appearing during the targeted transaction. `winds execution` performs a second per-ID ownership check before display so an owner that disappears after the initial scan cannot leave a falsely-live result.
+
+## Final repair design
 
 The T066 repair keeps reconciliation at the **user-facing CLI process boundary**, not inside generic `Store::open`, so a second Store connection inside one live process cannot silently revoke owned execution state.
 
 For current Spec 003 CLI execution surfaces:
 
 - `run` and `terminal-proof` acquire a per-execution cross-process ownership lease before creating the execution record and hold it until their owned execution path has finalized or unwound;
-- lease names are deterministic SHA-256 identifiers rather than caller-controlled paths;
-- the lease uses a dedicated SQLite file and a retained `BEGIN IMMEDIATE` transaction, so no PID is persisted and no stale PID is ever signaled;
+- lease names are deterministic domain-separated SHA-256 identifiers rather than caller-controlled paths;
+- each lease is a dedicated stable SQLite file whose retained `BEGIN IMMEDIATE` transaction represents liveness; no PID is persisted and no stale PID is ever signaled;
+- lease files are retained after release rather than unlinked, preventing pathname/inode split-brain races;
 - independent execution IDs use independent lease files, so this is not a global single-execution mutex;
-- CLI restart reconciliation checks non-final execution IDs and reconciles a kind only when none of those IDs has a provable live Winds owner;
-- if `winds execution` encounters a non-final row whose own lease is not live while another same-kind execution keeps bulk reconciliation deferred, it fails closed rather than displaying that row as truthfully `RUNNING`;
-- when no live owner blocks reconciliation, existing Store semantics preserve durable observed shell-command exits as `EXITED` and convert otherwise-unowned non-final terminal/command rows to `OWNERSHIP_LOST`.
+- CLI restart reconciliation snapshots non-final execution IDs, then handles each ID independently;
+- a busy lease proves another Winds process currently owns that execution lifecycle, so that row is not modified;
+- an acquired probe lease is retained across the targeted SQLite transition, preventing a same-ID owner from appearing while the row is reconciled;
+- targeted reconciliation updates only that exact execution ID, so executions created after the snapshot cannot be swept into a bulk ownership-loss update;
+- durable `WINDS_OBSERVED` shell-command exit facts are finalized to `EXITED` rather than discarded as ownership loss;
+- otherwise-unowned `REQUESTED`/`RUNNING` terminal and explicit-command rows transition immediately to `OWNERSHIP_LOST` with unknown process end/duration;
+- `winds execution` rechecks a non-final requested ID after startup reconciliation and either proves a live lease or performs the targeted ownership-loss/finalization transition before displaying JSON.
+
+The targeted transition intentionally remains local to the T057 CLI restart boundary. It writes only the existing execution/session/event schema and reproduces the already-canonical restart state vocabulary; it does not change candidate/evidence authority or introduce a new public runtime protocol.
 
 This is a process-ownership proof only. It is not a daemon, detached-session protocol, PID recovery mechanism, sandbox, or remote runtime.
 
@@ -59,11 +88,11 @@ This is a process-ownership proof only. It is not a daemon, detached-session pro
 
 The retained `TerminalSession` child handle remains the authority for live terminal lifecycle operations. Unix interrupt validates the PTY foreground process group against the retained child session before `killpg`. Terminate/close act only through directly retained child handles. Bounded close that cannot prove reaping becomes ownership loss rather than success.
 
-T066-F1 repaired the missing transition between in-process ownership and later CLI-process restart truth. Cross-process leases prove only whether another Winds process still owns the execution lifecycle; they do not grant process signaling authority.
+T066 repairs the missing transition between in-process ownership and later CLI-process restart truth. Cross-process leases prove only whether another Winds process still owns the execution lifecycle; they do not grant process signaling authority. Per-ID targeted reconciliation prevents both revoking a distinct live owner and sweeping a newly created live row into a stale-state update.
 
 ### 2. Stale PID reuse
 
-No PID column was added and no PID lookup/signaling path was introduced. Existing T060 coverage proves PID-shaped stale metadata cannot cause an unrelated live process to be signaled. The T066 repair uses SQLite lock ownership keyed by a hashed execution identity, not OS PID identity.
+No PID column was added and no PID lookup/signaling path was introduced. Existing T060 coverage proves PID-shaped stale metadata cannot cause an unrelated live process to be signaled. The T066 repair uses SQLite transaction ownership keyed by a hashed execution identity, not OS PID identity.
 
 ### 3. Windows / Unix close and interrupt semantics
 
@@ -75,9 +104,9 @@ WSL launch remains bound to the selected distribution, exact system `wsl.exe`, e
 
 ### 5. SQLite partial transitions
 
-Terminal request/session creation remains atomic. Child-start/RUNNING persistence failure retains owned cleanup and conservative repair. Exit-finalization failures do not return false success and are deferred for retry. Restart reconciliation includes partial terminal rows through the existing LEFT JOIN behavior. Explicit shell-command durable exit observations are finalized before remaining non-final rows are classified ownership-lost.
+Terminal request/session creation remains atomic. Child-start/RUNNING persistence failure retains owned cleanup and conservative repair. Exit-finalization failures do not return false success and are deferred for retry. Existing backend restart behavior retains partial terminal coverage; the T066 user-facing path additionally performs exact-ID ownership-loss transitions without touching unrelated rows.
 
-The T066 binary-facing fixture additionally proves the user-facing restart path exercises these semantics rather than leaving them as test-only backend functions.
+Explicit shell-command durable exit observations are finalized before an unowned non-final row is classified ownership-lost. The targeted ownership-loss update and its execution event are committed in one immediate SQLite transaction. Terminal close reason is updated in that same transaction when the typed session row exists.
 
 ### 6. Shell telemetry source attribution
 
@@ -87,7 +116,7 @@ Explicit command intent/cwd stays `CALLER_REQUESTED`; process exit and Git bound
 
 Terminal transcript history remains disabled by default, explicitly opt-in, bounded by per-session and total quotas, and labeled best-effort metadata redaction rather than perfect secret detection. Command history can be disabled. Obvious secret options/assignments and credential-bearing URL metadata are conservatively redacted/sanitized. Full environment snapshots are not persisted. History deletion remains constrained to validated owned descendants.
 
-Execution ownership lease files contain no command, environment, credential, transcript, PID, repository path, or user-provided execution ID text; the filename contains only a domain-separated SHA-256 digest.
+Execution ownership lease files contain no command, environment, credential, transcript, PID, repository path, or user-provided execution ID text; the filename contains only a domain-separated SHA-256 digest. Empty lease databases may persist locally as coordination artifacts, but their transaction lock—not file existence—is the liveness fact.
 
 ### 8. Separation from verification authority
 
@@ -101,8 +130,8 @@ Spec 003 workspace execution, command history, terminal history, Git observation
 - stale explicit command `RUNNING` -> `OWNERSHIP_LOST`;
 - explicit command with a durable `WINDS_OBSERVED` exit fact -> `EXITED` rather than discarded truth;
 - a concurrently live `winds run` remains `RUNNING` when inspected from another Winds CLI process;
-- a stale same-kind row encountered while a different live owner prevents safe bulk reconciliation is refused rather than displayed falsely live;
-- after the live owner finishes, the stale row reconciles to `OWNERSHIP_LOST`.
+- an unrelated stale same-kind command reconciles to `OWNERSHIP_LOST` immediately while the live owner remains protected;
+- after the live execution finishes, it remains truthfully `EXITED`.
 
 ## Boundaries preserved
 
@@ -126,4 +155,4 @@ Herdr remains future donor reference only.
 
 ## Acceptance gate
 
-T066 may be closed only after the repaired exact head passes the repository-required deterministic CI and the final T066 correctness/safety review finds no remaining blocking issue. Any later finding must be reconciled on a new exact head before canonical task truth is updated.
+T066 may be closed only after the final repaired exact head passes the repository-required deterministic CI and fresh exact-head correctness/safety review finds no remaining blocking issue. Earlier green heads invalidated by later race findings are not acceptance evidence. Any later finding must be reconciled on a new exact head before canonical task truth is updated.
