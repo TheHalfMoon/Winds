@@ -1,9 +1,7 @@
 use super::{TerminalSession, TerminalSize};
 use crate::git::shell_profiles::{ShellProfile, discover_native_shell_profiles};
 use crate::git::workspace_inventory::WorkspaceEnvironmentInventory;
-use crate::git::wsl_launch::{
-    WslCwdResolution, launch_wsl_terminal, prepare_wsl_terminal_launch,
-};
+use crate::git::wsl_launch::{WslCwdResolution, launch_wsl_terminal, prepare_wsl_terminal_launch};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
