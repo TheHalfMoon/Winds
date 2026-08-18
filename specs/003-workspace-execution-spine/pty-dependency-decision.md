@@ -4,32 +4,34 @@
 
 **Canonical feature**: Spec 003 — Workspace Execution Spine
 
-**Decision**: **ACCEPT `portable-pty` 0.9.0 as the preferred direct dependency for the first PTY/ConPTY implementation slice, but do not land the crate until the first runtime slice actually uses it.**
+**Historical T043 decision**: **ACCEPT `portable-pty` 0.9.0 as the preferred direct dependency for the first PTY/ConPTY implementation slice, with landing deferred until the first runtime slice that actually used it.**
 
-This is a dependency/provenance decision, not a claim that terminal behavior is implemented or that native Windows/WSL support is proven.
+**Current status**: **ACCEPTED, LANDED, LOCK-AUDITED, AND PLATFORM-PROVEN FOR THE ACCEPTED SPEC 003 WORKSPACE-TERMINAL SURFACE.**
 
-## Accepted candidate
+This document preserves the original T043 dependency/provenance reasoning while reconciling it with the runtime evidence that landed afterward. T043 itself was a dependency decision; T050-T052 and T061-T062 supplied the implementation/platform proof.
 
-| Field | Decision evidence |
+## Accepted dependency
+
+| Field | Decision / current evidence |
 |---|---|
 | Crate | `portable-pty` |
-| Exact package version to request | `=0.9.0` |
+| Exact package version | `=0.9.0` |
 | Upstream repository | `wezterm/wezterm` |
 | Published-source VCS commit | `f8921727a11b9f8b073e8c24821d72fd41283500` |
 | Upstream path | `pty/` |
 | License | MIT |
 | Default features | none |
-| Reuse mode | direct dependency when terminal code first lands; no copied/adapted donor runtime code approved by T043 |
-| Current Winds state | approved candidate only; not yet present in `Cargo.toml` or `Cargo.lock` |
+| Reuse mode | direct dependency; no copied/adapted donor runtime code approved by T043 |
+| Current Winds state | landed by T050 with exact pin and committed lockfile; exact locked dependency/license audit recorded in `docs/provenance/portable-pty-0.9.0-lock-audit.md` |
 
-Primary package/source evidence:
+Primary package/source evidence used by the original decision:
 
 - https://docs.rs/crate/portable-pty/0.9.0
 - https://docs.rs/crate/portable-pty/0.9.0/source/Cargo.toml.orig
 - https://docs.rs/crate/portable-pty/0.9.0/source/.cargo_vcs_info.json
 - https://docs.rs/crate/portable-pty/0.9.0/source/LICENSE.md
 
-## Why this candidate fits Spec 003
+## Why this dependency fits Spec 003
 
 The 0.9.0 public API supplies the concrete primitives Spec 003 needs without requiring a daemon, multiplexer, terminal renderer, or async runtime:
 
@@ -41,144 +43,94 @@ The 0.9.0 public API supplies the concrete primitives Spec 003 needs without req
 - child `try_wait` / `wait` and process identity while the child handle is owned;
 - a kill handle while Winds still owns the corresponding process/session capability.
 
-The design is synchronous/blocking. That is acceptable for the first Winds slice because Winds can place blocking PTY reads behind bounded owned threads without introducing Tokio solely to service terminal I/O. T050/T051 remain responsible for proving actual lifecycle behavior and race handling.
+The design is synchronous/blocking. Winds uses bounded owned-thread/lifecycle machinery rather than introducing Tokio solely to service terminal I/O.
 
-T043 does **not** authorize reconstructing process ownership from `process_id()` after restart. Spec 003 remains authoritative: persisted PID alone is not identity, and lost ownership becomes `OWNERSHIP_LOST` with no blind signal/kill.
+Nothing in the dependency changes Spec 003 restart authority: a persisted PID is not process identity, and lost ownership becomes `OWNERSHIP_LOST` with no blind signal/kill.
 
-## Dependency footprint audit
+## Landing gates and their disposition
 
-`portable-pty` 0.9.0 has no default features. Its published normal direct dependencies are:
-
-- `anyhow 1.0`
-- `downcast-rs 1.0`
-- `filedescriptor 0.8.3`
-- `libc 0.2`
-- `log 0.4`
-- `nix 0.28` with `term` and `fs`
-- `serial2 0.2`
-- `shell-words 1.1`
-
-Optional-only dependencies are `serde` and `serde_derive`; Winds does not need the `serde_support` feature for the initial PTY slice.
-
-Windows additionally declares:
-
-- `bitflags 1.3`
-- `lazy_static 1.4`
-- `shared_library 0.1`
-- `winapi 0.3` with console/handle/file/named-pipe/synchronization features
-- `winreg 0.10`
-
-Published dev dependencies (`smol`, `futures`) are not required by downstream Winds runtime use.
-
-### Footprint concern: mandatory serial support
-
-`serial2 0.2` is a normal, non-optional dependency in `portable-pty` 0.9.0 even though Winds does not currently need serial TTY support. Its published lock graph includes platform support such as `cfg-if`, `libc`, and `winapi`. This is accepted as a bounded cost for using the mature WezTerm PTY implementation, but it is a known Ponytail pressure point.
-
-The exact **Winds-resolved transitive graph** cannot truthfully be fixed before the crate is inserted into Winds' own manifest and `Cargo.lock`; Cargo version unification and target selection affect that graph. Therefore the runtime landing PR MUST:
+T043 required the first runtime PR that used the crate to:
 
 1. request exactly `portable-pty = "=0.9.0"`;
-2. commit the resulting `Cargo.lock`;
+2. commit the Winds-resolved `Cargo.lock`;
 3. inspect the actual resolved direct/transitive additions;
 4. rerun the dependency/license audit for those exact locked versions;
-5. remove/reconsider `portable-pty` if the resolved footprint or license set materially violates the Spec 003 simplicity/security boundary.
+5. compile/clippy/test the exact graph under Winds' pinned Rust toolchain;
+6. reopen the dependency decision rather than silently work around a material footprint/license failure.
 
-This landing condition is part of the T043 decision; T043 does not pretend the future lockfile already exists.
+**Those landing gates were satisfied by T050.** PR #23 landed the exact pin and lockfile, passed the pinned Rust 1.97.1 quality/release gates, and recorded the exact locked transitive/license audit in `docs/provenance/portable-pty-0.9.0-lock-audit.md`. The decision therefore no longer has `RUNTIME_PROOF_PENDING` status.
 
-## Rust 1.97.1 compatibility audit
+## Dependency-footprint audit
 
-The published crate uses Rust edition 2018 and declares no `rust-version` / MSRV field. Therefore upstream metadata does not provide an exact MSRV claim.
+The original published-package audit identified normal dependencies including `anyhow`, `downcast-rs`, `filedescriptor`, `libc`, `log`, `nix`, `serial2`, and `shell-words`, plus Windows support dependencies. T050's exact lock audit supersedes any attempt to infer the final Winds graph from published metadata alone; the committed `Cargo.lock` and the lock-audit document are the canonical resolved-graph evidence.
 
-The crate predates Winds' pinned Rust 1.97.1 toolchain and was successfully published/documented on stable Rust-era tooling. Rust's stable-language compatibility model is designed so previously stable source continues to compile on later stable releases, absent exceptional compiler/soundness breakage. This makes 1.97.1 a reasonable compatibility target, but it is **not treated as execution proof**.
+### Mandatory serial-support pressure
 
-The first PR that actually lands `portable-pty` MUST compile/clippy/test the exact locked dependency graph under Winds' pinned Rust 1.97.1. Until then the decision is `COMPATIBILITY_EXPECTED / RUNTIME_PROOF_PENDING` rather than a false claim of compiler execution.
+`serial2` was identified at T043 as a non-optional footprint cost even though Winds does not need serial TTY support. That Ponytail pressure was accepted as the bounded cost of using the mature WezTerm PTY implementation. T067 later re-challenged the final direct-dependency surface and found no justified dependency removal or replacement.
 
-Rust stability reference:
+## Rust 1.97.1 compatibility
 
-- https://doc.rust-lang.org/edition-guide/editions/index.html
+At T043, upstream metadata provided no exact MSRV proof, so compatibility was only expected. That uncertainty is now resolved for the Winds use case: T050 and subsequent quality/platform gates compiled, linted, and tested the locked graph under Winds' pinned Rust 1.97.1 toolchain.
 
-## Platform behavior audit
+This is Winds execution evidence for the accepted graph; it is not a claim about every possible `portable-pty` consumer or feature combination.
+
+## Platform evidence after landing
 
 ### Linux / macOS
 
-The crate exposes the Unix PTY implementation needed for allocation, resize, owned reader/writer access, spawning, and child lifecycle. T050 must still prove Winds-specific resource ownership, interrupt/close behavior, bounded streams, and no leaked directly owned child in controlled lifecycle tests.
+T050 proved the accepted Unix PTY lifecycle: allocation, canonical cwd, one output consumer, input/output, resize/current-size, owned-child observation/termination/reaping, and ownership-scoped foreground-process-group interrupt behavior.
 
-### Windows
+### Native Windows
 
-`native_pty_system()` selects the crate's ConPTY implementation on Windows and the published package carries Windows console/handle/named-pipe dependencies. This is sufficient for a dependency decision, **not** a Winds support claim.
+T051 proved the accepted `portable-pty` ConPTY path on native Windows for create/input/output/resize/exit/terminate/close/reap. The platform evidence did **not** prove a safe ownership-scoped ConPTY interrupt primitive, so native-Windows `interrupt()` remains explicitly fail-closed rather than falling back to process-global console signaling. T061 later broadened official-Windows touched-surface evidence.
 
-A material risk was found: `portable-pty-psmux` exists specifically because its maintainers need newer ConPTY creation flags (`PSEUDOCONSOLE_RESIZE_QUIRK`, `WIN32_INPUT_MODE`, and `PASSTHROUGH_MODE`) that upstream `portable-pty` 0.9.0 does not expose. Winds will not pre-emptively take that fork. T051 must test Winds' actual Windows behavior first; only demonstrated failures may justify a narrowly reviewed alternative or upstream patch.
-
-Reference:
-
-- https://docs.rs/crate/portable-pty-psmux/0.9.6/source/README.md
+The historical `portable-pty-psmux` risk remains useful reference material, but Winds did not pre-emptively adopt that fork because accepted native-Windows behavior was proven without it.
 
 ### WSL
 
-WSL selection/path mapping is outside the PTY crate's responsibility. Spec 003 uses Microsoft's supported `wsl.exe` surface for WSL discovery/launch. T052/T062 remain responsible for real WSL integration evidence.
+WSL identity, path mapping, and distribution selection are intentionally outside the PTY crate. T052 implemented the explicit WSL launch/mapping boundary, and T062 supplied real Windows Server 2025 + Ubuntu WSL2 integration evidence. That evidence does not convert `portable-pty` into the authority for WSL identity or Git equivalence.
 
-## Alternatives considered
+## Alternatives considered by T043
 
-### `xpty` 0.3.6 — REJECT for first slice
+### `xpty` 0.3.6 — REJECTED for first slice
 
-Pros:
+It offered a newer fork surface and optional serial support, but at decision time Winds preferred the mature WezTerm-derived implementation and did not have a demonstrated reason to switch. No later Spec 003 evidence has required reopening that choice.
 
-- explicitly declares `rust-version = "1.70"`;
-- moves `serial2` behind an optional `serial` feature;
-- modernizes dependency versions and error typing;
-- provides Linux/macOS/Windows CI in its own project.
+### `rust-pty` 0.5.0 — REJECTED for first slice
 
-Why not now:
+Its Tokio-oriented model would have expanded Winds' runtime model before a measured need existed.
 
-- it is a young fork of `portable-pty` 0.9.0 rather than the source used by WezTerm;
-- its own README describes async support and better ConPTY control as planned improvements;
-- Winds currently needs mature bounded PTY mechanics more than a newer fork surface.
+### `portable-pty-psmux` 0.9.6 — RETAINED AS REFERENCE ONLY
 
-Reference:
+Its extra ConPTY flags remain useful risk evidence, but the accepted Winds native-Windows slice did not demonstrate a need to adopt the fork.
 
-- https://docs.rs/crate/xpty/0.3.6/source/README.md
-- https://docs.rs/crate/xpty/0.3.6/source/Cargo.toml.orig
+### Unix-only PTY crates — REJECTED
 
-### `rust-pty` 0.5.0 — REJECT for first slice
+Separate unrelated Unix/Windows libraries would increase platform divergence without a proven benefit for the accepted cross-platform slice.
 
-It offers a cross-platform Unix/ConPTY abstraction with first-class async I/O, but its model is Tokio-based. Adding an async runtime solely for PTY I/O would expand Winds' runtime model before a measured need exists.
+## License / notice status
 
-Reference:
+`portable-pty` 0.9.0 is MIT licensed and is now a landed dependency. Winds therefore:
 
-- https://docs.rs/rust-pty/0.5.0/rust_pty/
+- preserves the dependency's upstream license/notice requirements in release dependency notices;
+- records the exact locked package set in the release/license audit;
+- does not imply that Winds' `MIT OR Apache-2.0` project license relicenses the dependency;
+- has not approved copied/adapted WezTerm runtime code through this decision.
 
-### `portable-pty-psmux` 0.9.6 — REJECT pending demonstrated need
+T050 also reconciled the two exact `winapi-*-pc-windows-gnu 0.4.0` package tuples required by the locked graph through the fail-closed release license collector and provenance records.
 
-This fork is valuable risk evidence for modern Windows ConPTY behavior, but adopting a fork before Winds demonstrates that the extra flags are required would violate Ponytail/YAGNI. Keep it as a fallback reference for T051.
+## Current final verdict
 
-Reference:
+**`portable-pty = "=0.9.0"` is ACCEPTED AND LANDED for the Spec 003 workspace-terminal implementation.**
 
-- https://docs.rs/crate/portable-pty-psmux/0.9.6/source/README.md
+The accepted boundary remains narrow:
 
-### Unix-only PTY crates — REJECT
-
-`ptyprocess`, `pty-process`, and `pty` can cover Unix PTY behavior but do not satisfy Spec 003's single dependency direction for native Windows ConPTY. Using separate unrelated Unix/Windows libraries would increase integration and behavior divergence without a proven benefit.
-
-## License / notice decision
-
-`portable-pty` 0.9.0 is MIT licensed. If/when the dependency lands:
-
-- preserve its upstream license/notice requirements in release dependency notices;
-- record the exact locked package set in the release license audit;
-- do not imply that Winds' dual `MIT OR Apache-2.0` license relicenses the dependency;
-- no copied/adapted WezTerm code is approved by this decision.
-
-## Final T043 verdict
-
-**ACCEPT `portable-pty = "=0.9.0"` as the first implementation dependency candidate.**
-
-The accepted boundary is intentionally narrow:
-
-- dependency, not copied code;
-- no features initially;
-- no daemon/multiplexer/renderer adoption;
+- direct dependency, not copied donor code;
+- exact version pin and committed lockfile;
+- no daemon, multiplexer, renderer, public runtime protocol, or plugin/provider framework;
 - no PID-based restart ownership;
-- no Windows support claim until T051 evidence;
-- no WSL support claim until T052/T062 evidence;
-- actual Rust 1.97.1 compile and exact Winds lockfile/license graph are mandatory at dependency landing.
+- native-Windows workspace/terminal support only to the behavior actually proven by T051/T061;
+- WSL support only to the behavior actually proven by T052/T062;
+- no implication that native-Windows authoritative `winds verify` required-check execution is supported.
 
-If those landing gates fail, T043's candidate decision must be reopened rather than patched around silently.
+Any future dependency switch or broader runtime claim requires its own evidence rather than treating the historical T043 candidate wording as current implementation truth.
