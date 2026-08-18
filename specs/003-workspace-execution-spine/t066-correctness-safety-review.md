@@ -75,6 +75,24 @@ A pre-read ownership check is insufficient on its own: a live owner can finish o
 
 This removes the owner-disappears-between-proof-and-read window without claiming that a process can never exit immediately after any point-in-time observation.
 
+### T066-F7 — active-owner proof still required a post-proof snapshot refresh
+
+**Classification:** correctness / stale non-final JSON after owner finalization.
+
+A later exact-head review found a narrower display race: `winds execution` could build a non-final snapshot, observe the exact lease as busy, and then return the earlier snapshot even if the owner completed finalization between those two operations. The lease proof was valid at its instant, but the returned JSON could unnecessarily lag durable final truth.
+
+The final display branch therefore performs a fresh `execution_snapshot` after `LeaseProbe::Active` rather than returning the pre-probe snapshot. If the owner finalized in that window, the durable final state is returned. If the refreshed state is still non-final, it remains a point-in-time observation made immediately after a live-owner proof; Winds still does not claim that a process cannot exit after any observation.
+
+### T066-F8 — nested ownership-directory validation/open introduced a new path-swap surface
+
+**Classification:** blocking correctness / lease rendezvous path integrity.
+
+An earlier repair created and validated a dedicated `WINDS_HOME/execution-ownership/` directory and then opened each SQLite lease by a child pathname. Exact-head review correctly observed that validation and open were separate pathname operations: replacing that intermediate ownership directory between them could redirect different Winds processes to different lease rendezvous objects.
+
+The final repair removes that independently mutable intermediate directory from the protocol. Each lease now uses a deterministic `execution-ownership-<domain-separated-sha256>.sqlite3` filename **directly under the already-canonical `WINDS_HOME` state root**, alongside the existing Winds state database boundary. `SQLITE_OPEN_NOFOLLOW` still applies to the lease file itself, and lease files remain retained rather than unlinked.
+
+This closes the **new child-directory TOCTOU introduced by T066** without inventing an unstable platform-specific directory-handle abstraction. It does not claim protection against a hostile actor that can concurrently replace the entire canonical Winds state root itself; such a filesystem-sandbox threat would also apply to `winds.db` and the pre-existing state model and is outside Spec 003/T066. T066 therefore does not broaden the repository's filesystem-adversary claim.
+
 ## Final repair design
 
 The T066 repair keeps reconciliation at the **user-facing CLI process boundary**, not inside generic `Store::open`, so a second Store connection inside one live process cannot silently revoke owned execution state.
@@ -83,7 +101,8 @@ For current Spec 003 CLI execution surfaces:
 
 - `run` and `terminal-proof` acquire a per-execution cross-process ownership lease before creating the execution record and hold it until their owned execution path has finalized or unwound;
 - lease names are deterministic domain-separated SHA-256 identifiers rather than caller-controlled paths;
-- each lease is a dedicated stable SQLite file whose retained `BEGIN IMMEDIATE` transaction represents liveness; no PID is persisted and no stale PID is ever signaled;
+- each lease is a dedicated stable SQLite file directly under canonical `WINDS_HOME`; its retained `BEGIN IMMEDIATE` transaction represents liveness, no PID is persisted, and no stale PID is ever signaled;
+- no independently validated/opened ownership child directory remains, removing the T066-introduced child-directory path-swap surface;
 - lease files are retained after release rather than unlinked, preventing pathname/inode split-brain races;
 - independent execution IDs use independent lease files, so this is not a global single-execution mutex;
 - CLI restart reconciliation snapshots non-final execution IDs, then handles each ID independently;
@@ -92,11 +111,11 @@ For current Spec 003 CLI execution surfaces:
 - targeted reconciliation updates only that exact execution ID, so executions created after the snapshot cannot be swept into a bulk ownership-loss update;
 - durable `WINDS_OBSERVED` shell-command exit facts are finalized to `EXITED` rather than discarded as ownership loss;
 - otherwise-unowned `REQUESTED`/`RUNNING` terminal and explicit-command rows transition immediately to `OWNERSHIP_LOST` with unknown process end/duration;
-- `winds execution` reads a snapshot first, proves a live owner after any non-final read, and otherwise performs targeted reconciliation under the acquired lease before re-reading final truth.
+- `winds execution` reads a snapshot first, proves a live owner after any non-final read, refreshes the snapshot after a busy-owner proof, and otherwise performs targeted reconciliation under the acquired lease before re-reading final truth.
 
 The targeted transition intentionally remains local to the T057 CLI restart boundary. It writes only the existing execution/session/event schema and reproduces the already-canonical restart state vocabulary; it does not change candidate/evidence authority or introduce a new public runtime protocol.
 
-This is a process-ownership proof only. It is not a daemon, detached-session protocol, PID recovery mechanism, sandbox, or remote runtime.
+This is a process-ownership proof only. It is not a daemon, detached-session protocol, PID recovery mechanism, sandbox, hostile state-root replacement defense, or remote runtime.
 
 ## Review results by required axis
 
@@ -104,7 +123,7 @@ This is a process-ownership proof only. It is not a daemon, detached-session pro
 
 The retained `TerminalSession` child handle remains the authority for live terminal lifecycle operations. Unix interrupt validates the PTY foreground process group against the retained child session before `killpg`. Terminate/close act only through directly retained child handles. Bounded close that cannot prove reaping becomes ownership loss rather than success.
 
-T066 repairs the missing transition between in-process ownership and later CLI-process restart truth. Cross-process leases prove only whether another Winds process still owns the execution lifecycle; they do not grant process signaling authority. Per-ID targeted reconciliation prevents both revoking a distinct live owner and sweeping a newly created live row into a stale-state update. Display-time proof is taken after reading any non-final snapshot.
+T066 repairs the missing transition between in-process ownership and later CLI-process restart truth. Cross-process leases prove only whether another Winds process still owns the execution lifecycle; they do not grant process signaling authority. Per-ID targeted reconciliation prevents both revoking a distinct live owner and sweeping a newly created live row into a stale-state update. Display-time proof is taken after reading any non-final snapshot, and the snapshot is refreshed after a busy-owner proof.
 
 ### 2. Stale PID reuse
 
@@ -147,6 +166,7 @@ Spec 003 workspace execution, command history, terminal history, Git observation
 - explicit command with a durable `WINDS_OBSERVED` exit fact -> `EXITED` rather than discarded truth;
 - a concurrently live `winds run` remains `RUNNING` when inspected from another Winds CLI process;
 - an unrelated stale same-kind command reconciles to `OWNERSHIP_LOST` immediately while the live owner remains protected;
+- the live fixture uses an explicit release-file condition rather than fixed-duration liveness or stdin propagation, and a RAII guard releases/reaps the child on both normal completion and assertion unwinding;
 - after the live execution finishes, it remains truthfully `EXITED`.
 
 ## Boundaries preserved
@@ -165,6 +185,7 @@ This T066 work does **not** add or authorize:
 - terminal renderer or GUI terminal emulator;
 - SQL Studio or LLM Observatory;
 - native-Windows authoritative required-check execution;
+- hostile concurrent replacement of the canonical Winds state root;
 - broad OS/network/filesystem sandboxing.
 
 Herdr remains future donor reference only.
