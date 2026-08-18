@@ -8,7 +8,8 @@ use std::io::{self, Read};
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -301,18 +302,15 @@ pub(super) fn run_bounded_read_only_git(mut command: Command, label: &str) -> Re
         .stderr
         .take()
         .ok_or_else(|| format!("{label} could not capture Git stderr"))?;
-    let stdout_reader = thread::spawn(move || read_bounded(stdout));
-    let stderr_reader = thread::spawn(move || read_bounded(stderr));
-    let started = Instant::now();
+    let stdout_reader = spawn_bounded_reader(stdout);
+    let stderr_reader = spawn_bounded_reader(stderr);
+    let deadline = Instant::now() + OBSERVATION_GIT_TIMEOUT;
 
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if started.elapsed() >= OBSERVATION_GIT_TIMEOUT => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = join_bounded_reader(stdout_reader, label, "stdout");
-                let _ = join_bounded_reader(stderr_reader, label, "stderr");
+            Ok(None) if Instant::now() >= deadline => {
+                cleanup_child_async(child);
                 return Err(format!(
                     "{label} exceeded the {} second safety timeout",
                     OBSERVATION_GIT_TIMEOUT.as_secs()
@@ -321,17 +319,14 @@ pub(super) fn run_bounded_read_only_git(mut command: Command, label: &str) -> Re
             }
             Ok(None) => thread::sleep(Duration::from_millis(10)),
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = join_bounded_reader(stdout_reader, label, "stdout");
-                let _ = join_bounded_reader(stderr_reader, label, "stderr");
+                cleanup_child_async(child);
                 return Err(format!("{label} failed while waiting for Git: {error}").into());
             }
         }
     };
 
-    let stdout = join_bounded_reader(stdout_reader, label, "stdout")?;
-    let stderr = join_bounded_reader(stderr_reader, label, "stderr")?;
+    let stdout = receive_bounded_reader(stdout_reader, label, "stdout", deadline)?;
+    let stderr = receive_bounded_reader(stderr_reader, label, "stderr", deadline)?;
     if stdout.truncated || stderr.truncated {
         return Err(format!(
             "{label} output exceeded the {} byte per-stream safety bound",
@@ -354,34 +349,69 @@ struct BoundedCapture {
     truncated: bool,
 }
 
+fn spawn_bounded_reader<R>(reader: R) -> Receiver<io::Result<BoundedCapture>>
+where
+    R: Read + Send + 'static,
+{
+    let (sender, receiver) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let _ = sender.send(read_bounded(reader));
+    });
+    receiver
+}
+
+fn receive_bounded_reader(
+    receiver: Receiver<io::Result<BoundedCapture>>,
+    label: &str,
+    stream: &str,
+    deadline: Instant,
+) -> Result<BoundedCapture> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    match receiver.recv_timeout(remaining) {
+        Ok(result) => result
+            .map_err(|error| format!("{label} failed reading Git {stream}: {error}").into()),
+        Err(RecvTimeoutError::Timeout) => Err(format!(
+            "{label} {stream} reader exceeded the overall {} second safety timeout",
+            OBSERVATION_GIT_TIMEOUT.as_secs()
+        )
+        .into()),
+        Err(RecvTimeoutError::Disconnected) => {
+            Err(format!("{label} {stream} reader terminated without a result").into())
+        }
+    }
+}
+
+fn cleanup_child_async(mut child: Child) {
+    thread::spawn(move || {
+        let _ = child.kill();
+        let _ = child.wait();
+    });
+}
+
 fn read_bounded<R: Read>(mut reader: R) -> io::Result<BoundedCapture> {
     let mut bytes = Vec::new();
-    let mut truncated = false;
     let mut buffer = [0_u8; 8192];
     loop {
         let count = reader.read(&mut buffer)?;
         if count == 0 {
             break;
         }
-        let remaining = OBSERVATION_GIT_OUTPUT_LIMIT.saturating_sub(bytes.len());
+        let probe_limit = OBSERVATION_GIT_OUTPUT_LIMIT + 1;
+        let remaining = probe_limit.saturating_sub(bytes.len());
         let retained = remaining.min(count);
         bytes.extend_from_slice(&buffer[..retained]);
-        if retained < count {
-            truncated = true;
+        if bytes.len() > OBSERVATION_GIT_OUTPUT_LIMIT {
+            bytes.truncate(OBSERVATION_GIT_OUTPUT_LIMIT);
+            return Ok(BoundedCapture {
+                bytes,
+                truncated: true,
+            });
         }
     }
-    Ok(BoundedCapture { bytes, truncated })
-}
-
-fn join_bounded_reader(
-    handle: thread::JoinHandle<io::Result<BoundedCapture>>,
-    label: &str,
-    stream: &str,
-) -> Result<BoundedCapture> {
-    handle
-        .join()
-        .map_err(|_| format!("{label} {stream} reader thread panicked"))?
-        .map_err(|error| format!("{label} failed reading Git {stream}: {error}").into())
+    Ok(BoundedCapture {
+        bytes,
+        truncated: false,
+    })
 }
 
 fn parse_worktree_status(bytes: &[u8]) -> Result<WorktreeStateObservation> {
@@ -578,7 +608,8 @@ fn strip_git_line_ending(value: &str) -> &str {
 
 #[cfg(test)]
 mod git_observation_tests {
-    use super::{GIT_WORKTREE_STATE_FORMAT, parse_worktree_status};
+    use super::{GIT_WORKTREE_STATE_FORMAT, OBSERVATION_GIT_OUTPUT_LIMIT, parse_worktree_status, read_bounded};
+    use std::io::Cursor;
 
     #[test]
     fn clean_attached_status_parses_branch_and_empty_state_digest() {
@@ -658,5 +689,13 @@ mod git_observation_tests {
             bytes.extend_from_slice(invalid);
             assert!(parse_worktree_status(&bytes).is_err());
         }
+    }
+
+    #[test]
+    fn bounded_reader_stops_at_the_safety_cap() {
+        let input = vec![b'x'; OBSERVATION_GIT_OUTPUT_LIMIT + 17];
+        let captured = read_bounded(Cursor::new(input)).unwrap();
+        assert_eq!(captured.bytes.len(), OBSERVATION_GIT_OUTPUT_LIMIT);
+        assert!(captured.truncated);
     }
 }
