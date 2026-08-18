@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/release-candidate.yml
       - .github/workflows/windows-terminal.yml
+      - scripts/ci/**
       - scripts/release/**
       - third-party/licenses/**
       - rust-toolchain.toml
@@ -98,10 +99,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-24.04
-          - macos-15
-          - windows-2025
+        include:
+          - os: ubuntu-24.04
+            python: python3
+          - os: macos-15
+            python: python3
+          - os: windows-2025
+            python: python
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -130,8 +134,21 @@ jobs:
         with:
           toolchain: 1.97.1
 
-      - name: Run T063 100-cycle terminal lifecycle soak
-        run: cargo test --locked --bin winds git::t063_soak_tests::controlled_terminal_lifecycle_soak_100_cycles -- --ignored --test-threads=1 --nocapture
+      - name: Run exact T063 100-cycle terminal lifecycle soak
+        run: >-
+          ${{ matrix.python }} scripts/ci/run_exact_cargo_test.py
+          git::t063_soak_tests::controlled_terminal_lifecycle_soak_100_cycles
+          -- cargo test --locked --bin winds
+          git::t063_soak_tests::controlled_terminal_lifecycle_soak_100_cycles
+          -- --ignored --exact --test-threads=1 --nocapture
+
+      - name: Run exact T063 active-close and child-resize guard
+        run: >-
+          ${{ matrix.python }} scripts/ci/run_exact_cargo_test.py
+          active_close_and_windows_child_resize_guard
+          -- cargo test --locked --test t063_close_resize_guard
+          active_close_and_windows_child_resize_guard
+          -- --exact --test-threads=1 --nocapture
 
   build:
     name: build (${{ matrix.target }})
