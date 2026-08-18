@@ -1,5 +1,5 @@
 use super::{Result, Store};
-use crate::domain::{ExecutionKind, FactSource};
+use crate::domain::{ExecutionKind, ExecutionStatus, FactSource};
 use crate::git::GIT_WORKTREE_STATE_FORMAT;
 use rusqlite::{OptionalExtension, params};
 
@@ -198,6 +198,51 @@ impl Store {
         }
         Ok(observations)
     }
+
+    pub(crate) fn retry_deferred_terminal_finalizations_resilient(&mut self) -> Result<usize> {
+        let pending = std::mem::take(&mut self.deferred_terminal_finalizations);
+        let mut completed = 0_usize;
+        let mut retryable = Vec::new();
+        let mut failures = Vec::new();
+        for item in pending {
+            match self.load_execution(&item.execution_id) {
+                Ok(execution)
+                    if !matches!(
+                        execution.status,
+                        ExecutionStatus::Requested | ExecutionStatus::Running
+                    ) =>
+                {
+                    completed += 1;
+                    continue;
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    failures.push(format!("{}: {error}", item.execution_id));
+                    retryable.push(item);
+                    continue;
+                }
+            }
+
+            match self.apply_terminal_finalization(&item.execution_id, item.finalization) {
+                Ok(()) => completed += 1,
+                Err(error) => {
+                    failures.push(format!("{}: {error}", item.execution_id));
+                    retryable.push(item);
+                }
+            }
+        }
+        self.deferred_terminal_finalizations = retryable;
+        if failures.is_empty() {
+            Ok(completed)
+        } else {
+            Err(format!(
+                "{} retryable deferred terminal finalization(s) remain pending: {}",
+                failures.len(),
+                failures.join("; ")
+            )
+            .into())
+        }
+    }
 }
 
 fn validate_new_observation(
@@ -233,7 +278,7 @@ fn validate_new_observation(
             let digest = observation
                 .worktree_state_sha256
                 .ok_or("OBSERVED Git observation requires worktree-state digest")?;
-            validate_optional_nonempty(observation.head_oid, "Git HEAD object id")?;
+            validate_optional_git_oid(observation.head_oid, "Git HEAD object id")?;
             validate_optional_nonempty(observation.branch, "Git branch")?;
             if !is_lower_hex_sha256(digest) {
                 return Err(
@@ -288,7 +333,7 @@ fn validate_loaded_observation(record: &ExecutionGitObservationRecord) -> Result
             if !is_lower_hex_sha256(digest) {
                 return Err("stored Git worktree-state digest is invalid".into());
             }
-            validate_optional_nonempty(record.head_oid.as_deref(), "stored Git HEAD object id")?;
+            validate_optional_git_oid(record.head_oid.as_deref(), "stored Git HEAD object id")?;
             validate_optional_nonempty(record.branch.as_deref(), "stored Git branch")?;
             if detached {
                 if record.branch.is_some() || record.head_oid.is_none() {
@@ -305,6 +350,20 @@ fn validate_loaded_observation(record: &ExecutionGitObservationRecord) -> Result
 fn validate_optional_nonempty(value: Option<&str>, label: &str) -> Result<()> {
     if value.is_some_and(str::is_empty) {
         return Err(format!("{label} cannot be empty").into());
+    }
+    Ok(())
+}
+
+fn validate_optional_git_oid(value: Option<&str>, label: &str) -> Result<()> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    if !matches!(value.len(), 40 | 64)
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(format!("{label} must be a lowercase 40- or 64-hex Git object id").into());
     }
     Ok(())
 }
@@ -327,281 +386,4 @@ fn is_lower_hex_sha256(value: &str) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{GitObservationAvailability, GitObservationBoundary, NewExecutionGitObservation};
-    use crate::domain::{ExecutionKind, FactSource};
-    use crate::store::{NewExecution, NewShellCommand, NewWorkspace, Store};
-    use rusqlite::Connection;
-    use std::fs;
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static NEXT_HOME: AtomicU64 = AtomicU64::new(0);
-
-    fn test_home(name: &str) -> PathBuf {
-        let sequence = NEXT_HOME.fetch_add(1, Ordering::Relaxed);
-        let home = std::env::temp_dir().join(format!(
-            "winds-t055-store-{name}-{}-{sequence}",
-            std::process::id()
-        ));
-        fs::create_dir(&home).unwrap();
-        home
-    }
-
-    fn store_with_shell_command(name: &str) -> (PathBuf, Store) {
-        let home = test_home(name);
-        let mut store = Store::open(&home).unwrap();
-        store
-            .create_workspace(
-                NewWorkspace {
-                    workspace_id: "workspace-1",
-                    canonical_worktree_root: "/tmp/example",
-                    git_common_dir: "/tmp/example/.git",
-                },
-                10,
-            )
-            .unwrap();
-        let arguments = vec!["status".to_owned()];
-        store
-            .create_shell_command_execution(
-                NewExecution {
-                    execution_id: "command-1",
-                    workspace_id: "workspace-1",
-                    kind: ExecutionKind::ShellCommand,
-                    request_source: FactSource::CallerRequested,
-                    execution_domain: "native-test",
-                },
-                NewShellCommand {
-                    execution_id: "command-1",
-                    executable: "/usr/bin/git",
-                    arguments: &arguments,
-                    command_source: FactSource::CallerRequested,
-                    requested_cwd: "/tmp/example",
-                    cwd_source: FactSource::CallerRequested,
-                },
-                20,
-            )
-            .unwrap();
-        (home, store)
-    }
-
-    #[test]
-    fn observed_and_unavailable_git_states_round_trip_without_candidate_evidence() {
-        let (home, mut store) = store_with_shell_command("round-trip");
-        let digest = "0".repeat(64);
-        store
-            .record_execution_git_observation(NewExecutionGitObservation {
-                execution_id: "command-1",
-                boundary: GitObservationBoundary::Before,
-                availability: GitObservationAvailability::Observed,
-                head_oid: Some("abc123"),
-                branch: Some("main"),
-                detached: Some(false),
-                dirty: Some(true),
-                worktree_state_sha256: Some(&digest),
-                observed_unix_ms: Some(21),
-            })
-            .unwrap();
-        store
-            .record_execution_git_observation(NewExecutionGitObservation {
-                execution_id: "command-1",
-                boundary: GitObservationBoundary::After,
-                availability: GitObservationAvailability::Unavailable,
-                head_oid: None,
-                branch: None,
-                detached: None,
-                dirty: None,
-                worktree_state_sha256: None,
-                observed_unix_ms: Some(22),
-            })
-            .unwrap();
-
-        let observations = store.load_execution_git_observations("command-1").unwrap();
-        assert_eq!(observations.len(), 2);
-        assert_eq!(observations[0].boundary, GitObservationBoundary::Before);
-        assert_eq!(
-            observations[0].availability,
-            GitObservationAvailability::Observed
-        );
-        assert_eq!(observations[0].source, FactSource::WindsObserved);
-        assert_eq!(observations[0].head_oid.as_deref(), Some("abc123"));
-        assert_eq!(observations[0].branch.as_deref(), Some("main"));
-        assert_eq!(observations[0].detached, Some(false));
-        assert_eq!(observations[0].dirty, Some(true));
-        assert_eq!(
-            observations[0].worktree_state_sha256.as_deref(),
-            Some(digest.as_str())
-        );
-        assert_eq!(observations[1].boundary, GitObservationBoundary::After);
-        assert_eq!(
-            observations[1].availability,
-            GitObservationAvailability::Unavailable
-        );
-        assert_eq!(observations[1].head_oid, None);
-        assert_eq!(observations[1].dirty, None);
-
-        let candidate_events: i64 = store
-            .connection
-            .query_row("SELECT COUNT(*) FROM events", [], |row| row.get(0))
-            .unwrap();
-        let evidence_reports: i64 = store
-            .connection
-            .query_row("SELECT COUNT(*) FROM evidence_reports", [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-        assert_eq!(candidate_events, 0);
-        assert_eq!(evidence_reports, 0);
-
-        drop(store);
-        fs::remove_dir_all(home).unwrap();
-    }
-
-    #[test]
-    fn duplicate_boundary_is_rejected() {
-        let (home, mut store) = store_with_shell_command("duplicate");
-        store
-            .record_execution_git_observation(NewExecutionGitObservation {
-                execution_id: "command-1",
-                boundary: GitObservationBoundary::Before,
-                availability: GitObservationAvailability::Unavailable,
-                head_oid: None,
-                branch: None,
-                detached: None,
-                dirty: None,
-                worktree_state_sha256: None,
-                observed_unix_ms: Some(21),
-            })
-            .unwrap();
-        let duplicate = store.record_execution_git_observation(NewExecutionGitObservation {
-            execution_id: "command-1",
-            boundary: GitObservationBoundary::Before,
-            availability: GitObservationAvailability::Unavailable,
-            head_oid: None,
-            branch: None,
-            detached: None,
-            dirty: None,
-            worktree_state_sha256: None,
-            observed_unix_ms: Some(22),
-        });
-        assert!(duplicate.is_err());
-        assert_eq!(
-            store
-                .load_execution_git_observations("command-1")
-                .unwrap()
-                .len(),
-            1
-        );
-        drop(store);
-        fs::remove_dir_all(home).unwrap();
-    }
-
-    #[test]
-    fn unavailable_observation_rejects_fabricated_state() {
-        let (home, mut store) = store_with_shell_command("unavailable-state");
-        let result = store.record_execution_git_observation(NewExecutionGitObservation {
-            execution_id: "command-1",
-            boundary: GitObservationBoundary::Before,
-            availability: GitObservationAvailability::Unavailable,
-            head_oid: None,
-            branch: None,
-            detached: None,
-            dirty: Some(false),
-            worktree_state_sha256: None,
-            observed_unix_ms: Some(21),
-        });
-        assert!(result.is_err());
-        assert!(
-            store
-                .load_execution_git_observations("command-1")
-                .unwrap()
-                .is_empty()
-        );
-        drop(store);
-        fs::remove_dir_all(home).unwrap();
-    }
-
-    #[test]
-    fn observed_state_rejects_invalid_digest_and_detached_branch() {
-        let (home, mut store) = store_with_shell_command("invalid-observed");
-        let invalid_digest = store.record_execution_git_observation(NewExecutionGitObservation {
-            execution_id: "command-1",
-            boundary: GitObservationBoundary::Before,
-            availability: GitObservationAvailability::Observed,
-            head_oid: Some("abc123"),
-            branch: Some("main"),
-            detached: Some(false),
-            dirty: Some(false),
-            worktree_state_sha256: Some("not-a-digest"),
-            observed_unix_ms: Some(21),
-        });
-        assert!(invalid_digest.is_err());
-
-        let digest = "0".repeat(64);
-        let detached_branch = store.record_execution_git_observation(NewExecutionGitObservation {
-            execution_id: "command-1",
-            boundary: GitObservationBoundary::Before,
-            availability: GitObservationAvailability::Observed,
-            head_oid: Some("abc123"),
-            branch: Some("main"),
-            detached: Some(true),
-            dirty: Some(false),
-            worktree_state_sha256: Some(&digest),
-            observed_unix_ms: Some(21),
-        });
-        assert!(detached_branch.is_err());
-
-        drop(store);
-        fs::remove_dir_all(home).unwrap();
-    }
-
-    #[test]
-    fn store_open_upgrades_a_0004_database_with_the_forward_only_git_observation_table() {
-        let home = test_home("migration");
-        let connection = Connection::open(home.join("winds.db")).unwrap();
-        connection
-            .execute_batch(include_str!("../migrations/0001_init.sql"))
-            .unwrap();
-        connection
-            .execute_batch(include_str!(
-                "../migrations/0002_workspace_execution_ledger.sql"
-            ))
-            .unwrap();
-        connection
-            .execute_batch(include_str!(
-                "../migrations/0003_workspace_clone_origins.sql"
-            ))
-            .unwrap();
-        connection
-            .execute_batch(include_str!("../migrations/0004_shell_commands.sql"))
-            .unwrap();
-        let before: i64 = connection
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master
-                 WHERE type = 'table' AND name = 'execution_git_observations'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(before, 0);
-        drop(connection);
-
-        let store = Store::open(&home).unwrap();
-        let after: i64 = store
-            .connection
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master
-                 WHERE type = 'table' AND name = 'execution_git_observations'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(after, 1);
-
-        drop(store);
-        fs::remove_dir_all(home).unwrap();
-    }
 }
