@@ -1,4 +1,7 @@
 use crate::domain::{ExecutionKind, ExecutionStatus, FactSource};
+use crate::store::git_observation::{
+    GitObservationAvailability, GitObservationBoundary, NewExecutionGitObservation,
+};
 use crate::store::{NewExecution, NewShellCommand, NewTerminalSession, NewWorkspace, Store};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -145,7 +148,11 @@ fn restart_reconciliation_never_records_events_before_observed_start_time() {
         .unwrap();
     store.mark_terminal_running("terminal-1", 140).unwrap();
 
-    assert!(store.mark_shell_command_ownership_lost("command-1", Some(120)).is_err());
+    assert!(
+        store
+            .mark_shell_command_ownership_lost("command-1", Some(120))
+            .is_err()
+    );
 
     assert_eq!(
         store
@@ -175,6 +182,47 @@ fn restart_reconciliation_never_records_events_before_observed_start_time() {
         .find(|event| event.kind == "TerminalOwnershipLostAfterRestart")
         .unwrap();
     assert_eq!(terminal_event.created_unix_ms, 140);
+}
+
+#[test]
+fn git_after_boundary_time_cannot_regress_behind_before_boundary() {
+    let home = TestHome::new("git-boundary-clock");
+    let mut store = store_with_workspace(&home);
+    create_shell_command(&mut store, "command-1", 100);
+    let head_oid = "0123456789abcdef0123456789abcdef01234567";
+    let digest = "0000000000000000000000000000000000000000000000000000000000000000";
+
+    store
+        .record_execution_git_observation(NewExecutionGitObservation {
+            execution_id: "command-1",
+            boundary: GitObservationBoundary::Before,
+            availability: GitObservationAvailability::Observed,
+            head_oid: Some(head_oid),
+            branch: Some("main"),
+            detached: Some(false),
+            dirty: Some(false),
+            worktree_state_sha256: Some(digest),
+            observed_unix_ms: Some(200),
+        })
+        .unwrap();
+    store
+        .record_execution_git_observation(NewExecutionGitObservation {
+            execution_id: "command-1",
+            boundary: GitObservationBoundary::After,
+            availability: GitObservationAvailability::Observed,
+            head_oid: Some(head_oid),
+            branch: Some("main"),
+            detached: Some(false),
+            dirty: Some(false),
+            worktree_state_sha256: Some(digest),
+            observed_unix_ms: Some(150),
+        })
+        .unwrap();
+
+    let observations = store.load_execution_git_observations("command-1").unwrap();
+    assert_eq!(observations.len(), 2);
+    assert_eq!(observations[0].observed_unix_ms, Some(200));
+    assert_eq!(observations[1].observed_unix_ms, Some(200));
 }
 
 #[test]
