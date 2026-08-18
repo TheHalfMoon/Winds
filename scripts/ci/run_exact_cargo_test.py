@@ -7,16 +7,38 @@ import sys
 
 
 def fail(message: str) -> None:
-    print(f"T063 exact-test guard failed: {message}", file=sys.stderr)
+    print(f"exact-test guard failed: {message}", file=sys.stderr)
     raise SystemExit(1)
 
 
 def main() -> None:
-    if len(sys.argv) < 4 or sys.argv[2] != "--":
-        fail("usage: run_exact_cargo_test.py <expected-test-name> -- <cargo command...>")
+    try:
+        separator = sys.argv.index("--", 1)
+    except ValueError:
+        fail(
+            "usage: run_exact_cargo_test.py <expected-test-name> "
+            "[--marker-prefix <prefix>] -- <cargo command...>"
+        )
 
-    expected = sys.argv[1]
-    command = sys.argv[3:]
+    options = sys.argv[1:separator]
+    if len(options) == 1:
+        expected = options[0]
+        marker_prefix = "T063"
+    elif len(options) == 3 and options[1] == "--marker-prefix":
+        expected = options[0]
+        marker_prefix = options[2]
+    else:
+        fail(
+            "usage: run_exact_cargo_test.py <expected-test-name> "
+            "[--marker-prefix <prefix>] -- <cargo command...>"
+        )
+
+    if not expected:
+        fail("expected test name must not be empty")
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]*", marker_prefix):
+        fail("marker prefix must match [A-Z][A-Z0-9_]*")
+
+    command = sys.argv[separator + 1 :]
     if not command or command[0] != "cargo":
         fail("guard only accepts an explicit cargo command")
     if "--exact" not in command:
@@ -59,7 +81,7 @@ def main() -> None:
     if len(summaries) != 1:
         fail(f"expected exactly one one-test success summary, found {len(summaries)}")
 
-    print(f"T063_EXACT_TEST_PROVEN={expected}")
+    print(f"{marker_prefix}_EXACT_TEST_PROVEN={expected}")
 
 
 if __name__ == "__main__":
