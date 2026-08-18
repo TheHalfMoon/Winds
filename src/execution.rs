@@ -43,7 +43,7 @@ impl<'store> TerminalExecution<'store> {
         cwd: &Path,
         size: TerminalSize,
     ) -> Result<Self> {
-        store.retry_deferred_terminal_finalizations()?;
+        store.retry_deferred_terminal_finalizations_resilient()?;
         let history = SessionHistoryRecorder::new_disabled(execution_id)?;
         start_native_with_recorder(
             store,
@@ -65,7 +65,7 @@ impl<'store> TerminalExecution<'store> {
         size: TerminalSize,
         history: LocalTerminalHistory<'_>,
     ) -> Result<Self> {
-        store.retry_deferred_terminal_finalizations()?;
+        store.retry_deferred_terminal_finalizations_resilient()?;
         let history =
             SessionHistoryRecorder::new_local(execution_id, history.policy, history.state_root)?;
         start_native_with_recorder(
@@ -87,7 +87,7 @@ impl<'store> TerminalExecution<'store> {
         plan: &WslTerminalLaunchPlan,
         size: TerminalSize,
     ) -> Result<Self> {
-        store.retry_deferred_terminal_finalizations()?;
+        store.retry_deferred_terminal_finalizations_resilient()?;
         let history = SessionHistoryRecorder::new_disabled(execution_id)?;
         start_wsl_with_recorder(store, execution_id, workspace_id, plan, size, history)
     }
@@ -101,7 +101,7 @@ impl<'store> TerminalExecution<'store> {
         size: TerminalSize,
         history: LocalTerminalHistory<'_>,
     ) -> Result<Self> {
-        store.retry_deferred_terminal_finalizations()?;
+        store.retry_deferred_terminal_finalizations_resilient()?;
         let history =
             SessionHistoryRecorder::new_local(execution_id, history.policy, history.state_root)?;
         start_wsl_with_recorder(store, execution_id, workspace_id, plan, size, history)
@@ -172,7 +172,7 @@ impl<'store> TerminalExecution<'store> {
         let exit = self.session.try_wait()?;
         if exit.is_some() {
             self.pending_final = Some(TerminalFinalization::Exited {
-                ended_unix_ms: unix_ms()?,
+                ended_unix_ms: self.finalization_unix_ms()?,
             });
             self.persist_pending_final()?;
         }
@@ -190,13 +190,25 @@ impl<'store> TerminalExecution<'store> {
 
         let exit = self.session.wait()?;
         self.pending_final = Some(TerminalFinalization::Exited {
-            ended_unix_ms: unix_ms()?,
+            ended_unix_ms: self.finalization_unix_ms()?,
         });
         self.persist_pending_final()?;
         Ok(exit)
     }
 
     pub fn terminate(&mut self) -> Result<TerminalExit> {
+        self.controlled_cleanup(TerminalCloseReason::TerminatedByWinds, "terminate")
+    }
+
+    pub fn close(&mut self) -> Result<TerminalExit> {
+        self.controlled_cleanup(TerminalCloseReason::ClosedByWinds, "close")
+    }
+
+    fn controlled_cleanup(
+        &mut self,
+        controlled_reason: TerminalCloseReason,
+        operation: &str,
+    ) -> Result<TerminalExit> {
         if self.pending_final.is_some() {
             self.persist_pending_final()?;
             return self.session.wait();
@@ -204,46 +216,45 @@ impl<'store> TerminalExecution<'store> {
         if self.final_recorded {
             return self.session.wait();
         }
-        if let Some(exit) = self.session.try_wait()? {
-            self.pending_final = Some(TerminalFinalization::Exited {
-                ended_unix_ms: unix_ms()?,
-            });
-            self.persist_pending_final()?;
-            return Ok(exit);
-        }
 
-        let exit = self.session.terminate()?;
-        self.pending_final = Some(TerminalFinalization::Interrupted {
-            ended_unix_ms: unix_ms()?,
-            reason: TerminalCloseReason::TerminatedByWinds,
-        });
+        let observed_unix_ms = self.finalization_unix_ms()?;
+        let outcome = self.session.cleanup_for_drop(Duration::from_millis(500))?;
+        let (exit, finalization) = match outcome {
+            TerminalDropCleanupOutcome::ExitedBeforeCleanup(exit) => (
+                exit,
+                TerminalFinalization::Exited {
+                    ended_unix_ms: observed_unix_ms,
+                },
+            ),
+            TerminalDropCleanupOutcome::Terminated(exit) => (
+                exit,
+                TerminalFinalization::Interrupted {
+                    ended_unix_ms: observed_unix_ms,
+                    reason: controlled_reason,
+                },
+            ),
+            TerminalDropCleanupOutcome::Unproven => {
+                self.pending_final = Some(TerminalFinalization::OwnershipLost {
+                    observed_unix_ms,
+                });
+                self.persist_pending_final()?;
+                return Err(format!(
+                    "terminal {operation} could not prove owned child exit inside bounded cleanup window"
+                )
+                .into());
+            }
+        };
+        self.pending_final = Some(finalization);
         self.persist_pending_final()?;
         Ok(exit)
     }
 
-    pub fn close(&mut self) -> Result<TerminalExit> {
-        if self.pending_final.is_some() {
-            self.persist_pending_final()?;
-            return self.session.wait();
-        }
-        if self.final_recorded {
-            return self.session.wait();
-        }
-        if let Some(exit) = self.session.try_wait()? {
-            self.pending_final = Some(TerminalFinalization::Exited {
-                ended_unix_ms: unix_ms()?,
-            });
-            self.persist_pending_final()?;
-            return Ok(exit);
-        }
-
-        let exit = self.session.close()?;
-        self.pending_final = Some(TerminalFinalization::Interrupted {
-            ended_unix_ms: unix_ms()?,
-            reason: TerminalCloseReason::ClosedByWinds,
-        });
-        self.persist_pending_final()?;
-        Ok(exit)
+    fn finalization_unix_ms(&self) -> Result<i64> {
+        let execution = self.store.load_execution(&self.execution_id)?;
+        let lower_bound = execution
+            .started_unix_ms
+            .unwrap_or(execution.requested_unix_ms);
+        Ok(unix_ms()?.max(lower_bound))
     }
 
     fn persist_pending_final(&mut self) -> Result<()> {
@@ -284,7 +295,7 @@ impl Drop for TerminalExecution<'_> {
             return;
         }
 
-        let observed_unix_ms = match unix_ms() {
+        let observed_unix_ms = match self.finalization_unix_ms() {
             Ok(value) => value,
             Err(_) => return,
         };
@@ -307,6 +318,7 @@ impl Drop for TerminalExecution<'_> {
 }
 
 pub fn reconcile_terminal_executions_after_restart(store: &mut Store) -> Result<usize> {
+    store.retry_deferred_terminal_finalizations_resilient()?;
     store.reconcile_unowned_terminal_sessions_after_restart(unix_ms()?)
 }
 
@@ -417,7 +429,7 @@ fn finish_started_session<'store>(
         let cleanup = session.terminate();
         let cleanup_proven = cleanup.is_ok();
         let repair = if cleanup_proven {
-            let ended_unix_ms = unix_ms().unwrap_or(started_unix_ms);
+            let ended_unix_ms = unix_ms().unwrap_or(started_unix_ms).max(started_unix_ms);
             store.mark_terminal_start_persistence_failed(
                 execution_id,
                 started_unix_ms,
@@ -456,7 +468,8 @@ fn fail_launch<'store>(
     execution_id: &str,
     launch_error: Box<dyn std::error::Error + Send + Sync>,
 ) -> Result<TerminalExecution<'store>> {
-    let failed_unix_ms = unix_ms()?;
+    let execution = store.load_execution(execution_id)?;
+    let failed_unix_ms = unix_ms()?.max(execution.requested_unix_ms);
     match store.mark_terminal_failed_to_start(execution_id, failed_unix_ms) {
         Ok(()) => Err(format!("terminal launch failed: {launch_error}").into()),
         Err(persist_error) => Err(format!(
