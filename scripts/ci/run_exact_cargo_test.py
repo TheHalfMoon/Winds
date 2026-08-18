@@ -19,6 +19,8 @@ def main() -> None:
     command = sys.argv[3:]
     if not command or command[0] != "cargo":
         fail("guard only accepts an explicit cargo command")
+    if "--exact" not in command:
+        fail("guard requires cargo test harness --exact filtering")
 
     env = os.environ.copy()
     env["CARGO_TERM_COLOR"] = "never"
@@ -41,9 +43,13 @@ def main() -> None:
     if completed.returncode != 0:
         raise SystemExit(completed.returncode)
 
-    expected_result = f"test {expected} ... ok"
-    if expected_result not in output:
-        fail(f"expected successful test line not found: {expected_result!r}")
+    started = re.findall(
+        rf"^test {re.escape(expected)} \.\.\.",
+        output,
+        flags=re.MULTILINE,
+    )
+    if len(started) != 1:
+        fail(f"expected exactly one test start for {expected!r}, found {len(started)}")
 
     summaries = re.findall(
         r"^test result: ok\. 1 passed; 0 failed; \d+ ignored; \d+ measured; \d+ filtered out; finished in .+$",
