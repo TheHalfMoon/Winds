@@ -33,6 +33,8 @@ Reports that only demonstrate behavior explicitly outside these security claimsâ
 
 PTY/ConPTY ownership is lifecycle ownership for resources Winds can prove it owns. It is not proof that Winds confines every descendant process, filesystem effect, network connection, or credential reachable by the launched process.
 
+Local-history confidentiality also depends on the configured state-root boundary. On Unix, Winds-created history directories/files request owner-only modes. On Windows, the current Spec 003 implementation inherits ACLs from `WINDS_HOME` and does not create or validate an owner-only ACL. A permissive Windows `WINDS_HOME` is therefore not a cross-local-account confidentiality boundary; users who require that isolation must restrict the state root with operating-system ACLs or disable history for sensitive sessions.
+
 See [`specs/003-workspace-execution-spine/terminal-trust-boundary.md`](specs/003-workspace-execution-spine/terminal-trust-boundary.md) for the detailed workspace-terminal trust boundary.
 
 ## Platform boundary
