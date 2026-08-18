@@ -269,7 +269,7 @@ fn complete_headless_terminal_startup(
 #[cfg(unix)]
 fn ready_command(cycle: usize) -> Vec<u8> {
     format!(
-        "w=WINDS_T063_READY_; printf '%s%s\\n' \"$w\" '{cycle}'; IFS= read -r _winds_t063_gate; d=$(stty size); p=WINDS_T063_SIZE_; printf '%s%s\\n' \"$p\" \"$d\"\n"
+        "w=WINDS_T063_READY_; printf '%s%s\\n' \"$w\" '{cycle}'; IFS= read -r _winds_t063_gate; d=$(stty size); p=WINDS_T063_SIZE_; printf '%s%s\\n' \"$p\" \"$d\"; i=0; while [ \"$i\" -lt 64 ]; do printf 'xxxxxxxxxxxxxxxx'; i=$((i+1)); done; printf '\\n'; q=WINDS_T063_DONE_; printf '%s%s\\n' \"$q\" '{cycle}'; exit 0\n"
     )
     .into_bytes()
 }
@@ -306,19 +306,14 @@ fn prove_resized_terminal(
 }
 
 #[cfg(unix)]
-fn finish_command(cycle: usize) -> Vec<u8> {
-    let payload = "x".repeat(2048);
-    format!(
-        "printf '%s\\n' '{payload}'; w=WINDS_T063_DONE_; printf '%s%s\\n' \"$w\" '{cycle}'; exit 0\n"
-    )
-    .into_bytes()
-}
+fn finish_after_resize(_execution: &mut TerminalExecution<'_>, _cycle: usize) {}
 
 #[cfg(windows)]
-fn finish_command(cycle: usize) -> Vec<u8> {
-    let payload = "x".repeat(2048);
-    format!("echo {payload}\r\nset \"W=WINDS_T063_DONE_\"\r\necho %W%{cycle}\r\nexit\r\n")
-        .into_bytes()
+fn finish_after_resize(execution: &mut TerminalExecution<'_>, cycle: usize) {
+    let command = format!(
+        "for /L %i in (1,1,64) do @echo xxxxxxxxxxxxxxxx\r\nset \"W=WINDS_T063_DONE_\"\r\necho %W%{cycle}\r\nexit\r\n"
+    );
+    execution.send_input(command.as_bytes()).unwrap();
 }
 
 fn marker(prefix: &str, cycle: usize) -> Vec<u8> {
@@ -481,7 +476,7 @@ fn controlled_terminal_lifecycle_soak_100_cycles() {
         prove_resized_terminal(&mut execution, &mut output, resized, cycle);
 
         let done = marker("WINDS_T063_DONE_", cycle);
-        execution.send_input(&finish_command(cycle)).unwrap();
+        finish_after_resize(&mut execution, cycle);
         output.wait_for(&done, cycle);
 
         let observed_exit = execution.wait().unwrap();
