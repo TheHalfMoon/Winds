@@ -17,6 +17,9 @@ mod t059_negative_tests;
 #[cfg(all(test, unix))]
 #[path = "t060_fault_tests.rs"]
 mod t060_fault_tests;
+#[cfg(all(test, any(unix, windows)))]
+#[path = "t063_soak_tests.rs"]
+mod t063_soak_tests;
 #[cfg(any(unix, windows))]
 #[allow(
     dead_code,
