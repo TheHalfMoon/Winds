@@ -472,6 +472,29 @@ fn execution_snapshot(store: &Store, execution_id: &str) -> Result<Value> {
             })
         })
         .collect::<Vec<_>>();
+    let git_observations = if execution.kind == ExecutionKind::ShellCommand {
+        store
+            .load_execution_git_observations(execution_id)?
+            .into_iter()
+            .map(|observation| {
+                json!({
+                    "execution_id": observation.execution_id,
+                    "boundary": observation.boundary.as_str(),
+                    "availability": observation.availability.as_str(),
+                    "source": observation.source,
+                    "head_oid": observation.head_oid,
+                    "branch": observation.branch,
+                    "detached": observation.detached,
+                    "dirty": observation.dirty,
+                    "worktree_state_format": observation.worktree_state_format,
+                    "worktree_state_sha256": observation.worktree_state_sha256,
+                    "observed_unix_ms": observation.observed_unix_ms,
+                })
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
 
     let (terminal, shell_command) = match execution.kind {
         ExecutionKind::Terminal => {
@@ -523,6 +546,7 @@ fn execution_snapshot(store: &Store, execution_id: &str) -> Result<Value> {
         "duration_ms": execution.duration_ms,
         "terminal": terminal,
         "shell_command": shell_command,
+        "git_observations": git_observations,
         "events": events,
     }))
 }
