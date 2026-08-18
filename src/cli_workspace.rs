@@ -22,11 +22,8 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-
-const EXECUTION_OWNERSHIP_DIR: &str = "execution-ownership";
 
 pub(crate) fn dispatch(command: &str, flags: HashMap<String, String>) -> Result<()> {
     match command {
@@ -235,7 +232,7 @@ fn execution_snapshot_with_ownership_truth(
         }
 
         match probe_execution_lease(home, execution_id)? {
-            LeaseProbe::Active => return Ok(snapshot),
+            LeaseProbe::Active => return execution_snapshot(store, execution_id),
             LeaseProbe::Acquired(lease) => {
                 let result = reconcile_unowned_execution_row(
                     home,
@@ -407,8 +404,7 @@ fn probe_execution_lease(home: &Path, execution_id: &str) -> Result<LeaseProbe> 
     if execution_id.is_empty() || execution_id.chars().any(char::is_control) {
         return Err("execution ownership lease requires a non-empty control-free identity".into());
     }
-    let directory = ensure_execution_ownership_directory(home)?;
-    let path = directory.join(execution_lease_filename(execution_id));
+    let path = home.join(execution_lease_filename(execution_id));
     let connection = Connection::open_with_flags(
         &path,
         OpenFlags::SQLITE_OPEN_READ_WRITE
@@ -428,30 +424,6 @@ fn probe_execution_lease(home: &Path, execution_id: &str) -> Result<LeaseProbe> 
     }
 }
 
-fn ensure_execution_ownership_directory(home: &Path) -> Result<PathBuf> {
-    let directory = home.join(EXECUTION_OWNERSHIP_DIR);
-    match fs::symlink_metadata(&directory) {
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                return Err("execution ownership path must be a real directory".into());
-            }
-        }
-        Err(error) if error.kind() == ErrorKind::NotFound => {
-            match fs::create_dir(&directory) {
-                Ok(()) => {}
-                Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
-                Err(error) => return Err(error.into()),
-            }
-            let metadata = fs::symlink_metadata(&directory)?;
-            if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                return Err("execution ownership path must be a real directory".into());
-            }
-        }
-        Err(error) => return Err(error.into()),
-    }
-    Ok(directory)
-}
-
 fn execution_lease_filename(execution_id: &str) -> String {
     let mut digest = Sha256::new();
     digest.update(b"WindsExecutionOwnershipLeaseV1\0");
@@ -461,7 +433,7 @@ fn execution_lease_filename(execution_id: &str) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect();
-    format!("execution-{hex}.sqlite3")
+    format!("execution-ownership-{hex}.sqlite3")
 }
 
 fn sqlite_busy_or_locked(error: &rusqlite::Error) -> bool {
@@ -734,7 +706,7 @@ mod tests {
         let first = execution_lease_filename("workspace/execution:1");
         let second = execution_lease_filename("workspace/execution:1");
         assert_eq!(first, second);
-        assert!(first.starts_with("execution-"));
+        assert!(first.starts_with("execution-ownership-"));
         assert!(first.ends_with(".sqlite3"));
         assert!(!first.contains('/'));
         assert!(!first.contains(':'));
