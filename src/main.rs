@@ -13,6 +13,8 @@ mod domain;
 mod execution;
 mod git;
 mod store;
+#[cfg(test)]
+mod t068_store_regression_tests;
 
 use crate::check::run_check;
 use crate::domain::{CheckEvidence, CheckStatus, Eligibility, EvidenceReport, PromotionReport};
@@ -476,5 +478,14 @@ fn unix_ms() -> Result<i64> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  winds verify --repo PATH --base REF --candidate REF --check COMMAND [--timeout-secs N] [--home PATH]\n  winds promote --repo PATH --run RUN_ID [--home PATH]\n  winds recover --repo PATH [--home PATH]\n  winds workspace-open --repo PATH [--home PATH]\n  winds workspace-clone --remote REMOTE --destination ABS_PATH [--home PATH]\n  winds profiles --repo PATH [--home PATH]\n  winds run --repo PATH --execution-id ID --executable ABS_PATH [--args-json JSON_ARRAY] [--history command|disabled] [--home PATH]\n  winds terminal-proof --repo PATH --execution-id ID --profile-id PROFILE_ID [--rows N] [--cols N] [--home PATH]\n  winds execution --repo PATH --execution-id ID [--home PATH]"
+    "usage:\
+  winds verify --repo PATH --base REF --candidate REF --check COMMAND [--timeout-secs N] [--home PATH]\
+  winds promote --repo PATH --run RUN_ID [--home PATH]\
+  winds recover --repo PATH [--home PATH]\
+  winds workspace-open --repo PATH [--home PATH]\
+  winds workspace-clone --remote REMOTE --destination ABS_PATH [--home PATH]\
+  winds profiles --repo PATH [--home PATH]\
+  winds run --repo PATH --execution-id ID --executable ABS_PATH [--args-json JSON_ARRAY] [--history command|disabled] [--home PATH]\
+  winds terminal-proof --repo PATH --execution-id ID --profile-id PROFILE_ID [--rows N] [--cols N] [--home PATH]\
+  winds execution --repo PATH --execution-id ID [--home PATH]"
 }
