@@ -148,9 +148,7 @@ fn complete_headless_terminal_startup(
 
 fn output_contains_exact_marker(output: &[u8], marker: &str) -> bool {
     let marker = marker.as_bytes();
-    output
-        .windows(marker.len())
-        .any(|window| window == marker)
+    output.windows(marker.len()).any(|window| window == marker)
 }
 
 fn default_size() -> TerminalSize {
