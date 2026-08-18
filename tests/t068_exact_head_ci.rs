@@ -10,9 +10,9 @@ fn assert_exact_head_contract(path: &str, contents: &str) {
         .find(|line| line.trim_start().starts_with("CANDIDATE_SHA:"))
         .unwrap_or_else(|| panic!("{path} must define CANDIDATE_SHA"));
     let pull_head = "github.event.pull_request.head.sha";
-    let pull_head_index = candidate_line
-        .find(pull_head)
-        .unwrap_or_else(|| panic!("{path} must derive candidate identity from the pull-request head SHA"));
+    let pull_head_index = candidate_line.find(pull_head).unwrap_or_else(|| {
+        panic!("{path} must derive candidate identity from the pull-request head SHA")
+    });
     let github_sha_index = candidate_line
         .find("github.sha")
         .unwrap_or_else(|| panic!("{path} must retain a non-PR SHA fallback"));
