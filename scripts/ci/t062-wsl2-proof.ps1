@@ -31,7 +31,7 @@ function Invoke-NativeResult {
             }
         }
         catch {
-            Write-Warning "failed to kill timed-out native command $File: $_"
+            Write-Warning "failed to kill timed-out native command ${File}: $_"
         }
         if (-not $process.WaitForExit(2000)) {
             $process.Dispose()
