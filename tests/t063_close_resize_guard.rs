@@ -1,7 +1,10 @@
 #![allow(dead_code)]
 
-#[path = "../src/command.rs"]
-mod command;
+#[path = "../src/command/history.rs"]
+pub(crate) mod command_history;
+mod command {
+    pub(crate) use crate::command_history as history;
+}
 #[path = "../src/domain.rs"]
 mod domain;
 #[path = "../src/execution.rs"]
@@ -259,7 +262,7 @@ fn active_close_and_windows_child_resize_guard() {
     );
 
     #[cfg(windows)]
-    let mut output = {
+    let output = {
         let mut output = OutputPump::start(execution.take_output_reader().unwrap());
         output.wait_for(CURSOR_POSITION_QUERY);
         execution.send_input(CURSOR_POSITION_RESPONSE).unwrap();
