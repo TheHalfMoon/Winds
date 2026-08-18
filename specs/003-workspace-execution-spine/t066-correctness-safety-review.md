@@ -57,7 +57,7 @@ The final repair never deletes hashed lease database files during normal lease r
 
 The first repair conservatively deferred all reconciliation for an execution kind if any same-kind live owner existed. Although display failed closed, this left unrelated unowned rows internally non-final and introduced a user-visible refusal branch rather than performing FR-019's required ownership-loss transition.
 
-The final repair reconciles each captured non-final execution independently. A live row is skipped because its own lease is busy; an unrelated stale row is reconciled immediately while its acquired probe lease prevents a same-ID owner from appearing during the targeted transaction. `winds execution` performs a second per-ID ownership check before display so an owner that disappears after the initial scan cannot leave a falsely-live result.
+The final repair reconciles each captured non-final execution independently. A live row is skipped because its own lease is busy; an unrelated stale row is reconciled immediately while its acquired probe lease prevents a same-ID owner from appearing during the targeted transaction.
 
 ### T066-F5 — probe-lease lifetime was made explicit across targeted reconciliation
 
@@ -65,7 +65,15 @@ The final repair reconciles each captured non-final execution independently. A l
 
 A fresh exact-head review challenged whether a probe lease bound as `_lease` was visibly retained across the targeted SQLite transition. Rust drop scopes already keep a named local alive through its match arm, but this is a security-sensitive ownership invariant and must not depend on an implicit reading of lifetime/drop behavior.
 
-The final code binds the acquired probe as `lease`, executes the complete targeted reconciliation first, then calls `drop(lease)` explicitly. Both startup reconciliation and display-time recheck therefore make the required ordering mechanically obvious: acquire lease -> reconcile/finalize exact execution ID -> release lease.
+The final code binds the acquired probe as `lease`, executes the complete targeted reconciliation first, then calls `drop(lease)` explicitly. Startup reconciliation therefore makes the required ordering mechanically obvious: acquire lease -> reconcile/finalize exact execution ID -> release lease.
+
+### T066-F6 — display ownership proof must follow the snapshot read
+
+**Classification:** correctness / point-in-time falsely-live display window.
+
+A pre-read ownership check is insufficient on its own: a live owner can finish or crash after the check but before `winds execution` reads the non-final row. The final display path therefore reads the snapshot first and, only if that snapshot remains `REQUESTED` or `RUNNING`, probes the exact execution lease afterward. A busy lease proves the just-read non-final snapshot had a live Winds owner at the point immediately after the read. If the lease can instead be acquired, Winds retains it, reconciles/finalizes that exact execution ID, releases the lease, and loops to read a new final snapshot.
+
+This removes the owner-disappears-between-proof-and-read window without claiming that a process can never exit immediately after any point-in-time observation.
 
 ## Final repair design
 
@@ -84,7 +92,7 @@ For current Spec 003 CLI execution surfaces:
 - targeted reconciliation updates only that exact execution ID, so executions created after the snapshot cannot be swept into a bulk ownership-loss update;
 - durable `WINDS_OBSERVED` shell-command exit facts are finalized to `EXITED` rather than discarded as ownership loss;
 - otherwise-unowned `REQUESTED`/`RUNNING` terminal and explicit-command rows transition immediately to `OWNERSHIP_LOST` with unknown process end/duration;
-- `winds execution` rechecks a non-final requested ID after startup reconciliation and either proves a live lease or performs the targeted ownership-loss/finalization transition before displaying JSON.
+- `winds execution` reads a snapshot first, proves a live owner after any non-final read, and otherwise performs targeted reconciliation under the acquired lease before re-reading final truth.
 
 The targeted transition intentionally remains local to the T057 CLI restart boundary. It writes only the existing execution/session/event schema and reproduces the already-canonical restart state vocabulary; it does not change candidate/evidence authority or introduce a new public runtime protocol.
 
@@ -96,7 +104,7 @@ This is a process-ownership proof only. It is not a daemon, detached-session pro
 
 The retained `TerminalSession` child handle remains the authority for live terminal lifecycle operations. Unix interrupt validates the PTY foreground process group against the retained child session before `killpg`. Terminate/close act only through directly retained child handles. Bounded close that cannot prove reaping becomes ownership loss rather than success.
 
-T066 repairs the missing transition between in-process ownership and later CLI-process restart truth. Cross-process leases prove only whether another Winds process still owns the execution lifecycle; they do not grant process signaling authority. Per-ID targeted reconciliation prevents both revoking a distinct live owner and sweeping a newly created live row into a stale-state update.
+T066 repairs the missing transition between in-process ownership and later CLI-process restart truth. Cross-process leases prove only whether another Winds process still owns the execution lifecycle; they do not grant process signaling authority. Per-ID targeted reconciliation prevents both revoking a distinct live owner and sweeping a newly created live row into a stale-state update. Display-time proof is taken after reading any non-final snapshot.
 
 ### 2. Stale PID reuse
 
