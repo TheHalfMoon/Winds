@@ -205,8 +205,11 @@ fn reconcile_unowned_cli_executions(
     for execution_id in execution_ids {
         match probe_execution_lease(home, &execution_id)? {
             LeaseProbe::Active => {}
-            LeaseProbe::Acquired(_lease) => {
-                reconcile_unowned_execution_row(home, store, &execution_id, kind, unix_ms()?)?;
+            LeaseProbe::Acquired(lease) => {
+                let result =
+                    reconcile_unowned_execution_row(home, store, &execution_id, kind, unix_ms()?);
+                drop(lease);
+                result?;
             }
         }
     }
@@ -227,8 +230,16 @@ fn reconcile_execution_for_display(
     }
     match probe_execution_lease(home, execution_id)? {
         LeaseProbe::Active => Ok(()),
-        LeaseProbe::Acquired(_lease) => {
-            reconcile_unowned_execution_row(home, store, execution_id, execution.kind, unix_ms()?)
+        LeaseProbe::Acquired(lease) => {
+            let result = reconcile_unowned_execution_row(
+                home,
+                store,
+                execution_id,
+                execution.kind,
+                unix_ms()?,
+            );
+            drop(lease);
+            result
         }
     }
 }
