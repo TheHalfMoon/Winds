@@ -269,6 +269,29 @@ mod tests {
         )
     }
 
+    #[cfg(windows)]
+    fn ordinary_windows_path_from_verbatim(canonical: &str) -> PathBuf {
+        if let Some(rest) = canonical.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{rest}"));
+        }
+        let ordinary = canonical
+            .strip_prefix(r"\\?\")
+            .expect("Windows canonical path should use a supported verbatim drive or UNC prefix");
+        PathBuf::from(ordinary)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn ordinary_windows_path_fixture_preserves_drive_and_unc_absolute_forms() {
+        let drive = ordinary_windows_path_from_verbatim(r"\\?\C:\workspace\repo");
+        assert_eq!(drive, PathBuf::from(r"C:\workspace\repo"));
+        assert!(drive.is_absolute());
+
+        let unc = ordinary_windows_path_from_verbatim(r"\\?\UNC\server\share\repo");
+        assert_eq!(unc, PathBuf::from(r"\\server\share\repo"));
+        assert!(unc.is_absolute());
+    }
+
     #[test]
     fn inventory_reports_safe_metadata_without_reading_or_executing_manifests() {
         let root = test_root("safe-inventory");
@@ -349,13 +372,7 @@ mod tests {
         let (mut workspace, worktree) = fixture_workspace(&root);
 
         #[cfg(windows)]
-        let noncanonical = {
-            let canonical = worktree.to_str().unwrap();
-            let ordinary = canonical
-                .strip_prefix(r"\\?\")
-                .expect("Windows temp canonical path should use the verbatim drive prefix");
-            PathBuf::from(ordinary)
-        };
+        let noncanonical = ordinary_windows_path_from_verbatim(worktree.to_str().unwrap());
         #[cfg(not(windows))]
         let noncanonical = worktree.join("..");
 
