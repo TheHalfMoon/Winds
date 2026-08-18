@@ -325,10 +325,9 @@ fn sanitize_scp_like_remote(remote: &str) -> Option<String> {
 mod tests {
     #[cfg(windows)]
     use super::git_cli_local_path;
-    use super::{
-        clone_and_register_workspace, git_remote_argument, reserve_clone_destination,
-        sanitize_remote_identity,
-    };
+    use super::{clone_and_register_workspace, sanitize_remote_identity};
+    #[cfg(unix)]
+    use super::{git_remote_argument, reserve_clone_destination};
     use crate::store::Store;
     use rusqlite::{Connection, params};
     use std::ffi::OsStr;
