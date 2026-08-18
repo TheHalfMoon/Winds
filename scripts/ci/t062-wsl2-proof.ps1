@@ -317,7 +317,7 @@ $fallbackHome = $null
 $fallbackWindows = $null
 $fallbackBackendLaunch = $null
 $backupNonce = [Guid]::NewGuid().ToString("N")
-$wslConfBackup = "/tmp/winds-t062-wsl-conf-$($hostHead.Substring(0, 12))-$backupNonce.bak"
+$wslConfBackup = "/etc/.winds-t062-wsl-conf-$($hostHead.Substring(0, 12))-$backupNonce.bak"
 $wslConfOriginalState = Invoke-Captured -File "wsl.exe" -Arguments @(
     "--distribution", $distro,
     "--user", "root",
