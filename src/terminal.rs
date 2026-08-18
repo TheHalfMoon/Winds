@@ -106,6 +106,7 @@ impl TerminalSession {
         size: TerminalSize,
     ) -> Result<Self> {
         let start_cwd = canonical_start_cwd(cwd)?;
+        let spawn_cwd = terminal_spawn_cwd(&start_cwd)?;
         let pty_size = size.to_pty_size()?;
         let session_id = next_session_id()?;
 
@@ -116,7 +117,7 @@ impl TerminalSession {
 
         let mut command = CommandBuilder::new(executable.as_os_str());
         command.args(arguments);
-        command.cwd(start_cwd.as_os_str());
+        command.cwd(spawn_cwd.as_os_str());
         let child = pair.slave.spawn_command(command)?;
         drop(pair.slave);
 
@@ -374,6 +375,39 @@ fn canonical_start_cwd(cwd: &Path) -> Result<PathBuf> {
         return Err("terminal start cwd must be a directory".into());
     }
     Ok(canonical)
+}
+
+#[cfg(not(windows))]
+fn terminal_spawn_cwd(canonical_cwd: &Path) -> Result<PathBuf> {
+    Ok(canonical_cwd.to_path_buf())
+}
+
+#[cfg(windows)]
+fn terminal_spawn_cwd(canonical_cwd: &Path) -> Result<PathBuf> {
+    let value = canonical_cwd
+        .to_str()
+        .ok_or("native Windows terminal cwd is not valid UTF-8")?;
+    if value.starts_with(r"\\?\UNC\") || value.starts_with(r"\\") {
+        return Err(
+            "native Windows terminal cwd cannot use a UNC path in Spec 003 T051; refusing to let the shell silently fall back to another directory"
+                .into(),
+        );
+    }
+    if let Some(rest) = value.strip_prefix(r"\\?\") {
+        let bytes = rest.as_bytes();
+        let ordinary_drive_path = bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'\\' | b'/');
+        if !ordinary_drive_path {
+            return Err(
+                "native Windows terminal cwd cannot be represented safely for the PTY child"
+                    .into(),
+            );
+        }
+        return Ok(PathBuf::from(rest));
+    }
+    Ok(canonical_cwd.to_path_buf())
 }
 
 fn next_session_id() -> Result<TerminalSessionId> {
