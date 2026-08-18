@@ -1,6 +1,9 @@
 use super::{TerminalSession, TerminalSize};
 use crate::git::shell_profiles::{ShellProfile, discover_native_shell_profiles};
 use crate::git::workspace_inventory::WorkspaceEnvironmentInventory;
+use crate::git::wsl_launch::{
+    WslCwdResolution, launch_wsl_terminal, prepare_wsl_terminal_launch,
+};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -234,4 +237,59 @@ fn conpty_terminate_reaps_the_exact_owned_child() {
     assert_ne!(exit.exit_code, 0);
     assert_eq!(session.try_wait().unwrap(), Some(exit.clone()));
     assert_eq!(session.close().unwrap(), exit);
+}
+
+#[test]
+fn t062_real_wsl_backend_launch_is_opt_in_and_uses_production_path() {
+    let distro = match std::env::var("WINDS_T062_WSL_DISTRO") {
+        Ok(value) if !value.is_empty() => value,
+        _ => return,
+    };
+    let expected = std::env::var("WINDS_T062_EXPECT_CWD")
+        .expect("WINDS_T062_EXPECT_CWD must be set when the real T062 backend proof is enabled");
+    let repo = std::env::current_dir()
+        .expect("T062 backend proof must have a current directory")
+        .canonicalize()
+        .expect("T062 backend proof repository must canonicalize");
+
+    let plan = prepare_wsl_terminal_launch(&repo, &distro)
+        .expect("production WSL launch preparation must succeed on the provisioned distribution");
+    match (expected.as_str(), &plan.cwd_resolution) {
+        (
+            "MAPPED",
+            WslCwdResolution::MappedWorkspace {
+                windows_workspace_root,
+                linux_workspace_root,
+                ..
+            },
+        ) => {
+            assert_eq!(
+                Path::new(windows_workspace_root)
+                    .canonicalize()
+                    .expect("prepared Windows workspace must canonicalize"),
+                repo
+            );
+            assert!(linux_workspace_root.starts_with('/'));
+        }
+        ("FALLBACK", WslCwdResolution::FallbackHome { linux_home, .. }) => {
+            assert!(linux_home.starts_with('/'));
+        }
+        (expected, actual) => panic!(
+            "production WSL launch preparation returned unexpected cwd resolution: expected={expected}, actual={actual:?}"
+        ),
+    }
+
+    let prepared_profile = plan.profile.clone();
+    let prepared_cwd = plan.cwd_resolution.clone();
+    let mut launched = launch_wsl_terminal(&plan, default_size())
+        .expect("production WSL terminal launch must succeed on the real selected distribution");
+    assert_eq!(launched.profile, prepared_profile);
+    assert_eq!(launched.cwd_resolution, prepared_cwd);
+    assert_eq!(launched.session.profile_id(), launched.profile.profile_id);
+    assert_eq!(launched.session.start_cwd(), repo);
+    assert_eq!(launched.session.current_size().unwrap(), default_size());
+    launched
+        .session
+        .close()
+        .expect("production WSL terminal session must close its exact owned child");
 }
