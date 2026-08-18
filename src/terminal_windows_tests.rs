@@ -151,6 +151,13 @@ fn output_contains_exact_marker(output: &[u8], marker: &str) -> bool {
     output.windows(marker.len()).any(|window| window == marker)
 }
 
+fn output_contains_exact_line_ignore_ascii_case(output: &[u8], expected: &str) -> bool {
+    output.split(|byte| *byte == b'\n').any(|line| {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        line.eq_ignore_ascii_case(expected.as_bytes())
+    })
+}
+
 fn default_size() -> TerminalSize {
     TerminalSize { rows: 24, cols: 80 }
 }
@@ -169,14 +176,16 @@ fn conpty_streams_input_output_from_exact_start_cwd_and_observes_exit() {
     assert!(session.take_output_reader().is_err());
     complete_headless_terminal_startup(&mut session, &output);
     session
-        .send_input(b"cd\r\necho WINDS_READY\r\nexit\r\n")
+        .send_input(
+            b"cd\r\nset \"WINDS_TEST_PREFIX=WINDS_\"\r\necho %WINDS_TEST_PREFIX%READY\r\nexit\r\n",
+        )
         .unwrap();
     let observed = wait_for_output(&output, b"WINDS_READY");
     let cwd = canonical_root.to_string_lossy();
     assert!(
-        observed
-            .windows(cwd.len())
-            .any(|window| window.eq_ignore_ascii_case(cwd.as_bytes()))
+        output_contains_exact_line_ignore_ascii_case(&observed, &cwd),
+        "ConPTY cd output did not contain the exact canonical start-cwd line; observed {:?}",
+        String::from_utf8_lossy(&observed)
     );
 
     let exit = session.wait().unwrap();
@@ -208,7 +217,11 @@ fn conpty_interrupt_fails_closed_without_corrupting_the_session() {
     let output = start_output_reader(session.take_output_reader().unwrap());
 
     complete_headless_terminal_startup(&mut session, &output);
-    session.send_input(b"echo WINDS_READY\r\n").unwrap();
+    session
+        .send_input(
+            b"set \"WINDS_TEST_PREFIX=WINDS_\"\r\necho %WINDS_TEST_PREFIX%READY\r\n",
+        )
+        .unwrap();
     wait_for_output(&output, b"WINDS_READY");
 
     let error = session.interrupt().unwrap_err();
@@ -218,7 +231,9 @@ fn conpty_interrupt_fails_closed_without_corrupting_the_session() {
             .contains("interrupt is unsupported on native Windows")
     );
 
-    session.send_input(b"echo WINDS_AFTER\r\nexit\r\n").unwrap();
+    session
+        .send_input(b"echo %WINDS_TEST_PREFIX%AFTER\r\nexit\r\n")
+        .unwrap();
     wait_for_output(&output, b"WINDS_AFTER");
     let exit = session.wait().unwrap();
     assert_eq!(exit.exit_code, 0);
@@ -233,7 +248,9 @@ fn conpty_terminate_reaps_the_exact_owned_child() {
 
     complete_headless_terminal_startup(&mut session, &output);
     session
-        .send_input(b"echo WINDS_READY\r\nset /p WINDS_BLOCK=\r\n")
+        .send_input(
+            b"set \"WINDS_TEST_PREFIX=WINDS_\"\r\necho %WINDS_TEST_PREFIX%READY\r\nset /p WINDS_BLOCK=\r\n",
+        )
         .unwrap();
     wait_for_output(&output, b"WINDS_READY");
     let exit = session.terminate().unwrap();
