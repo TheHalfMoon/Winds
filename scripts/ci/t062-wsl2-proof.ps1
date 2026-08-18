@@ -107,6 +107,7 @@ $mismatchExitCode = $null
 $mismatchBehavior = $null
 $observedMismatchCwd = $null
 $fallbackHome = $null
+$fallbackWindows = $null
 try {
     Invoke-Captured "wsl.exe" @(
         "--distribution", $distro,
@@ -146,6 +147,19 @@ try {
     $fallbackHome = Invoke-Captured "wsl.exe" @("--distribution", $distro, "--user", "root", "--cd", "~", "--exec", "/bin/pwd", "-P")
     if (-not $fallbackHome.StartsWith("/", [System.StringComparison]::Ordinal)) {
         throw "fallback WSL home is not an absolute Linux path: $fallbackHome"
+    }
+    if ($fallbackHome -ceq $linuxRepo) {
+        throw "fallback WSL home unexpectedly equals the mapped Linux workspace: $fallbackHome"
+    }
+    $fallbackWindows = Invoke-Captured "wsl.exe" @(
+        "--distribution", $distro,
+        "--user", "root",
+        "--exec", "/usr/bin/wslpath", "-w", $fallbackHome
+    )
+    $fallbackWindowsComparable = $fallbackWindows.TrimEnd('\')
+    $repoComparable = $repo.TrimEnd('\')
+    if ([string]::Equals($fallbackWindowsComparable, $repoComparable, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "fallback WSL home unexpectedly maps back to the canonical Windows workspace: $fallbackWindows"
     }
     Invoke-Captured "wsl.exe" @("--distribution", $distro, "--user", "root", "--cd", $fallbackHome, "--exec", "/bin/sh", "-c", "exit 0") | Out-Null
 }
@@ -188,6 +202,8 @@ $summary = [ordered]@{
         observed_cwd = $observedMismatchCwd
         mapped_workspace_equivalence_broken = $true
         fallback_home = $fallbackHome
+        fallback_windows = $fallbackWindows
+        fallback_equivalent_to_mapped_workspace = $false
         fallback_launch = "PASS"
     }
 }
