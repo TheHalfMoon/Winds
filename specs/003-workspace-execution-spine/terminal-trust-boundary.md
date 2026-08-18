@@ -71,6 +71,8 @@ Winds applies the accepted Spec 003 local history and metadata controls, includi
 
 These controls reduce unnecessary persistence; they are not a guarantee that a command cannot access or disclose a secret. A launched process may access any secret available to that process, and no secret detector can prove that arbitrary command text or output is secret-free.
 
+On Unix, Winds-created local-history directories and files request owner-only filesystem modes (`0700` for directories and `0600` for files). On Windows, the current Spec 003 slice does **not** create or validate an owner-only ACL; history paths inherit the ACL of the configured `WINDS_HOME`. Winds therefore does not claim cross-local-account confidentiality when `WINDS_HOME` is accessible to other principals. Users who require that boundary must place `WINDS_HOME` under an appropriately restricted Windows ACL using operating-system administration controls, or disable history for sensitive sessions.
+
 Users should disable history when the supported local-history policy is inappropriate for a sensitive session and should rely on external OS/container/credential controls when stronger isolation is required.
 
 ## PTY ownership is lifecycle ownership, not security isolation
@@ -94,7 +96,7 @@ Execution-domain selection does not add sandboxing. A WSL process has the permis
 | Workspace identity | Canonical repository/worktree identity and accepted Git observations | That workspace code is safe or verified |
 | PTY/ConPTY lifecycle | Accepted directly observed lifecycle facts for the session Winds owns | OS/network/secret isolation or complete descendant ownership |
 | Explicit command execution | Requested command plus accepted lifecycle/exit/Git observations | That the command's claims or produced code are correct |
-| Local history | Bounded retained history and its metadata under the selected policy | That retained content is secret-free or verification evidence |
+| Local history | Bounded retained history and its metadata under the selected policy | That retained content is secret-free, cross-account private on a permissive state root, or verification evidence |
 | `winds verify` | Evidence produced under the accepted verification path for the exact candidate/base | Authorization to weaken candidate, evidence, or promotion rules |
 
 ## Scope boundary
