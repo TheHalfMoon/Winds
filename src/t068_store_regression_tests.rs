@@ -113,10 +113,13 @@ fn shell_command_exit_requires_a_durable_observed_fact() {
 }
 
 #[test]
-fn restart_reconciliation_never_records_events_before_request_time() {
+fn restart_reconciliation_never_records_events_before_observed_start_time() {
     let home = TestHome::new("restart-clock");
     let mut store = store_with_workspace(&home);
     create_shell_command(&mut store, "command-1", 100);
+    store
+        .mark_shell_command_running("command-1", Some(130))
+        .unwrap();
 
     let shell_arguments = Vec::new();
     store
@@ -140,6 +143,9 @@ fn restart_reconciliation_never_records_events_before_request_time() {
             110,
         )
         .unwrap();
+    store.mark_terminal_running("terminal-1", 140).unwrap();
+
+    assert!(store.mark_shell_command_ownership_lost("command-1", Some(120)).is_err());
 
     assert_eq!(
         store
@@ -160,7 +166,7 @@ fn restart_reconciliation_never_records_events_before_request_time() {
         .into_iter()
         .find(|event| event.kind == "ShellCommandOwnershipLostAfterRestart")
         .unwrap();
-    assert_eq!(shell_event.created_unix_ms, 100);
+    assert_eq!(shell_event.created_unix_ms, 130);
 
     let terminal_event = store
         .execution_events("terminal-1")
@@ -168,7 +174,7 @@ fn restart_reconciliation_never_records_events_before_request_time() {
         .into_iter()
         .find(|event| event.kind == "TerminalOwnershipLostAfterRestart")
         .unwrap();
-    assert_eq!(terminal_event.created_unix_ms, 110);
+    assert_eq!(terminal_event.created_unix_ms, 140);
 }
 
 #[test]
