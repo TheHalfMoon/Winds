@@ -102,27 +102,6 @@ function Assert-WindowsPathEqual {
     }
 }
 
-function Wait-ForAutomountDisabled {
-    param([Parameter(Mandatory = $true)][string]$Distribution)
-
-    $deadline = [DateTime]::UtcNow.AddSeconds(20)
-    $lastDiagnostic = ""
-    do {
-        $probe = Invoke-NativeResult "wsl.exe" @(
-            "--distribution", $Distribution,
-            "--user", "root",
-            "--exec", "/bin/sh", "-c", "test ! -e /mnt/d"
-        )
-        if ($probe.ExitCode -eq 0) {
-            return
-        }
-        $lastDiagnostic = "stdout=$($probe.Stdout); stderr=$($probe.Stderr)"
-        Start-Sleep -Milliseconds 250
-    } while ([DateTime]::UtcNow -lt $deadline)
-
-    throw "WSL did not restart with automount disabled within the bounded probe window: $lastDiagnostic"
-}
-
 function Limit-Diagnostic {
     param([AllowEmptyString()][string]$Value)
 
@@ -130,6 +109,68 @@ function Limit-Diagnostic {
         return $Value
     }
     return $Value.Substring(0, 4096) + "...[truncated]"
+}
+
+function Wait-ForMappedWorkspaceMismatch {
+    param(
+        [Parameter(Mandatory = $true)][string]$Distribution,
+        [Parameter(Mandatory = $true)][string]$LinuxWorkspaceRoot
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    $marker = "/tmp/winds-t062-observed-cwd"
+    $lastDiagnostic = ""
+    do {
+        $arguments = @(
+            "--distribution", $Distribution,
+            "--user", "root",
+            "--cd", $LinuxWorkspaceRoot,
+            "--exec", "/bin/sh", "-c", "pwd -P > $marker"
+        )
+        $result = Invoke-NativeResult "wsl.exe" $arguments
+        $diagnostic = Limit-Diagnostic ((@(
+            $result.Stderr,
+            $result.Stdout
+        ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join "`n")
+
+        if ($result.ExitCode -ne 0) {
+            return [pscustomobject]@{
+                Behavior = "CD_REJECTED"
+                ExitCode = $result.ExitCode
+                Diagnostic = $diagnostic
+                ObservedCwd = $null
+            }
+        }
+
+        $markerResult = Invoke-NativeResult "wsl.exe" @(
+            "--distribution", $Distribution,
+            "--user", "root",
+            "--exec", "/bin/cat", $marker
+        )
+        if ($markerResult.ExitCode -eq 0) {
+            $observedCwd = $markerResult.Stdout.Trim()
+            if ($observedCwd -cne $LinuxWorkspaceRoot) {
+                return [pscustomobject]@{
+                    Behavior = "VISIBLE_CWD_MISMATCH"
+                    ExitCode = $result.ExitCode
+                    Diagnostic = $diagnostic
+                    ObservedCwd = $observedCwd
+                }
+            }
+            $lastDiagnostic = "mapped workspace still active: cwd=$observedCwd; diagnostic=$diagnostic"
+        }
+        else {
+            $markerDiagnostic = Limit-Diagnostic ((@(
+                $markerResult.Stderr,
+                $markerResult.Stdout
+            ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join "`n")
+            $lastDiagnostic = "mapped probe succeeded but cwd marker could not be read: $markerDiagnostic"
+        }
+
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $deadline)
+
+    throw "WSL did not expose mapped-workspace mismatch within the bounded probe window: $lastDiagnostic"
 }
 
 $distro = $env:WINDS_T062_WSL_DISTRO
@@ -205,44 +246,19 @@ try {
         "printf '[automount]\nenabled=false\n[interop]\nappendWindowsPath=false\n[user]\ndefault=root\n' > /etc/wsl.conf"
     ) | Out-Null
     Invoke-Captured "wsl.exe" @("--terminate", $distro) | Out-Null
-    Wait-ForAutomountDisabled $distro
 
-    Invoke-ProductionWslBackendProof "FALLBACK"
-    $fallbackBackendLaunch = "PASS"
-
-    $mismatchMarker = "/tmp/winds-t062-observed-cwd"
-    $mismatchArguments = @(
-        "--distribution", $distro,
-        "--user", "root",
-        "--cd", $linuxRepo,
-        "--exec", "/bin/sh", "-c", "pwd -P > $mismatchMarker"
-    )
-    $mismatchResult = Invoke-NativeResult "wsl.exe" $mismatchArguments
-    $mismatchExitCode = $mismatchResult.ExitCode
-    $mismatchDiagnostic = Limit-Diagnostic ((@(
-        $mismatchResult.Stderr,
-        $mismatchResult.Stdout
-    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join "`n")
-
-    if ($mismatchExitCode -ne 0) {
-        $mismatchBehavior = "CD_REJECTED"
-        $mappedWorkspaceEquivalenceBroken = $true
-    }
-    else {
-        $observedMismatchCwd = Invoke-Captured "wsl.exe" @(
-            "--distribution", $distro,
-            "--user", "root",
-            "--exec", "/bin/cat", $mismatchMarker
-        )
-        if ($observedMismatchCwd -ceq $linuxRepo) {
-            throw "WSL silently preserved mapped-workspace equivalence after automount was disabled"
-        }
-        $mismatchBehavior = "VISIBLE_CWD_MISMATCH"
-        $mappedWorkspaceEquivalenceBroken = $true
-    }
+    $mismatchObservation = Wait-ForMappedWorkspaceMismatch $distro $linuxRepo
+    $mismatchExitCode = $mismatchObservation.ExitCode
+    $mismatchBehavior = $mismatchObservation.Behavior
+    $mismatchDiagnostic = $mismatchObservation.Diagnostic
+    $observedMismatchCwd = $mismatchObservation.ObservedCwd
+    $mappedWorkspaceEquivalenceBroken = $mismatchBehavior -in @("CD_REJECTED", "VISIBLE_CWD_MISMATCH")
     if (-not $mappedWorkspaceEquivalenceBroken) {
         throw "T062 mismatch proof did not establish broken mapped-workspace equivalence"
     }
+
+    Invoke-ProductionWslBackendProof "FALLBACK"
+    $fallbackBackendLaunch = "PASS"
 
     $fallbackHome = Invoke-Captured "wsl.exe" @("--distribution", $distro, "--user", "root", "--cd", "~", "--exec", "/bin/pwd", "-P")
     if (-not $fallbackHome.StartsWith("/", [System.StringComparison]::Ordinal)) {
