@@ -299,12 +299,7 @@ fn reconcile_unowned_execution_row(
         tx.commit()?;
         return Ok(());
     }
-    if now_ms < row.1 {
-        return Err(format!(
-            "restart reconciliation time precedes execution request time: {execution_id}"
-        )
-        .into());
-    }
+    let event_unix_ms = now_ms.max(row.1);
     let updated = tx.execute(
         "UPDATE executions
          SET status = ?2, status_source = ?3,
@@ -343,7 +338,7 @@ fn reconcile_unowned_execution_row(
             execution_id,
             event_kind,
             FactSource::WindsObserved.as_str(),
-            now_ms,
+            event_unix_ms,
         ],
     )?;
     tx.commit()?;
