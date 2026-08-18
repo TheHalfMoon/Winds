@@ -375,7 +375,7 @@ jobs:
 
           manifest = checksum.read_text(encoding="utf-8")
           if manifest != expected_manifest:
-            raise SystemExit("SHA-256 manifest write/read verification failed")
+              raise SystemExit("SHA-256 manifest write/read verification failed")
           manifest_digest, manifest_name = manifest.rstrip("\n").split("  ", 1)
           if manifest_name != archive.name:
               raise SystemExit("SHA-256 manifest archive name mismatch")
