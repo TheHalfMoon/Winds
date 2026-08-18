@@ -6,10 +6,10 @@ use serde::Serialize;
 use std::ffi::CString;
 use std::ffi::OsString;
 use std::fs;
-#[cfg(unix)]
-use std::os::unix::fs::DirBuilderExt;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
+use std::os::unix::fs::DirBuilderExt;
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -39,13 +39,9 @@ pub fn clone_and_register_workspace(
     canonical_state_root: &Path,
     now_ms: i64,
 ) -> Result<ClonedWorkspace> {
-    clone_and_register_workspace_impl(
-        remote,
-        destination,
-        canonical_state_root,
-        now_ms,
-        |_, _| Ok(()),
-    )
+    clone_and_register_workspace_impl(remote, destination, canonical_state_root, now_ms, |_, _| {
+        Ok(())
+    })
 }
 
 fn clone_and_register_workspace_impl<F>(
@@ -165,11 +161,7 @@ fn plan_clone_destination(destination: &Path, canonical_state_root: &Path) -> Re
     let planned = canonical_parent.join(file_name);
     match fs::symlink_metadata(&planned) {
         Ok(_) => {
-            return Err(format!(
-                "clone destination already exists: {}",
-                planned.display()
-            )
-            .into());
+            return Err(format!("clone destination already exists: {}", planned.display()).into());
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => {
@@ -279,7 +271,8 @@ fn atomic_publish_no_replace(source: &Path, destination: &Path) -> Result<()> {
 fn atomic_publish_no_replace(source: &Path, destination: &Path) -> Result<()> {
     let source = unix_path_cstring(source, "staged clone source")?;
     let destination = unix_path_cstring(destination, "clone destination")?;
-    let result = unsafe { libc::renamex_np(source.as_ptr(), destination.as_ptr(), libc::RENAME_EXCL) };
+    let result =
+        unsafe { libc::renamex_np(source.as_ptr(), destination.as_ptr(), libc::RENAME_EXCL) };
     if result == 0 {
         Ok(())
     } else {
@@ -484,11 +477,11 @@ fn sanitize_scp_like_remote(remote: &str) -> Option<String> {
 mod tests {
     #[cfg(windows)]
     use super::git_cli_local_path;
+    #[cfg(unix)]
+    use super::git_remote_argument;
     use super::{
         clone_and_register_workspace, clone_and_register_workspace_impl, sanitize_remote_identity,
     };
-    #[cfg(unix)]
-    use super::git_remote_argument;
     use crate::store::Store;
     use rusqlite::{Connection, params};
     use std::ffi::OsStr;
