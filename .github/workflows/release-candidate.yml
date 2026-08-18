@@ -296,20 +296,22 @@ jobs:
         run: |
           set -euo pipefail
           SOURCE_SHA="ad4625ecd7f9a933613890cca74129857d0b4166"
-          TEMP_PARENT="$(cd .. && pwd)/winds-t064-windows-${GITHUB_RUN_ID}-${RANDOM}"
-          TEMP_WORKTREE="$TEMP_PARENT/candidate"
-          BASELINE_FIXTURE="$TEMP_PARENT/walking_skeleton.rs"
-          CARGO_TARGET_DIR="$(cygpath -w "$TEMP_PARENT/target")"
-          mkdir "$TEMP_PARENT"
+          TEMP_PARENT_POSIX="$(cd .. && pwd)/winds-t064-windows-${GITHUB_RUN_ID}-${RANDOM}"
+          TEMP_WORKTREE_POSIX="$TEMP_PARENT_POSIX/candidate"
+          BASELINE_FIXTURE_POSIX="$TEMP_PARENT_POSIX/walking_skeleton.rs"
+          TEMP_WORKTREE_TESTS_WIN="$(cygpath -w "$TEMP_WORKTREE_POSIX/tests")"
+          BASELINE_FIXTURE_WIN="$(cygpath -w "$BASELINE_FIXTURE_POSIX")"
+          CARGO_TARGET_DIR="$(cygpath -w "$TEMP_PARENT_POSIX/target")"
+          mkdir "$TEMP_PARENT_POSIX"
           cleanup_historical_worktree() {
             original_status="${1:-0}"
             cleanup_status=0
-            if git worktree list --porcelain | grep -Fqx "worktree $TEMP_WORKTREE"; then
-              git worktree remove "$TEMP_WORKTREE" >/dev/null 2>&1 || cleanup_status=1
+            if [ -d "$TEMP_WORKTREE_POSIX" ] && git -C "$TEMP_WORKTREE_POSIX" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+              git worktree remove "$TEMP_WORKTREE_POSIX" >/dev/null 2>&1 || cleanup_status=1
             fi
-            rm -rf -- "$TEMP_PARENT/target" || cleanup_status=1
-            rm -f -- "$BASELINE_FIXTURE" || cleanup_status=1
-            rmdir "$TEMP_PARENT" >/dev/null 2>&1 || cleanup_status=1
+            rm -rf -- "$TEMP_PARENT_POSIX/target" || cleanup_status=1
+            rm -f -- "$BASELINE_FIXTURE_POSIX" || cleanup_status=1
+            rmdir "$TEMP_PARENT_POSIX" >/dev/null 2>&1 || cleanup_status=1
             if [ "$original_status" -ne 0 ]; then
               if [ "$cleanup_status" -ne 0 ]; then
                 echo "historical Windows verification failed with status $original_status; cleanup also failed and evidence was retained where possible" >&2
@@ -319,9 +321,9 @@ jobs:
             return "$cleanup_status"
           }
           trap 'status=$?; trap - EXIT; cleanup_historical_worktree "$status"; exit $?' EXIT
-          git worktree add --detach "$TEMP_WORKTREE" "$CANDIDATE_SHA"
-          git show "${SOURCE_SHA}:tests/walking_skeleton.rs" > "$BASELINE_FIXTURE"
-          python - "$TEMP_WORKTREE/tests" "$BASELINE_FIXTURE" <<'PY'
+          git worktree add --detach "$TEMP_WORKTREE_POSIX" "$CANDIDATE_SHA"
+          git show "${SOURCE_SHA}:tests/walking_skeleton.rs" > "$BASELINE_FIXTURE_POSIX"
+          python - "$TEMP_WORKTREE_TESTS_WIN" "$BASELINE_FIXTURE_WIN" <<'PY'
           import os
           import stat
           import sys
@@ -350,7 +352,7 @@ jobs:
               os.close(target_fd)
           PY
           (
-            cd "$TEMP_WORKTREE"
+            cd "$TEMP_WORKTREE_POSIX"
             export CARGO_TARGET_DIR
             python scripts/ci/run_exact_cargo_test.py \
               native_windows_refuses_authoritative_required_checks_without_mutation \
@@ -358,9 +360,9 @@ jobs:
               native_windows_refuses_authoritative_required_checks_without_mutation \
               -- --exact --test-threads=1 --nocapture
           )
-          git -C "$TEMP_WORKTREE" restore --source="$CANDIDATE_SHA" --worktree -- tests/walking_skeleton.rs
-          git -C "$TEMP_WORKTREE" diff --exit-code
-          test -z "$(git -C "$TEMP_WORKTREE" status --porcelain=v1 --untracked-files=all)"
+          git -C "$TEMP_WORKTREE_POSIX" restore --source="$CANDIDATE_SHA" --worktree -- tests/walking_skeleton.rs
+          git -C "$TEMP_WORKTREE_POSIX" diff --exit-code
+          test -z "$(git -C "$TEMP_WORKTREE_POSIX" status --porcelain=v1 --untracked-files=all)"
           cleanup_historical_worktree 0
           trap - EXIT
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
