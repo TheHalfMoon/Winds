@@ -42,6 +42,7 @@ A source appearing here is **not admitted**. Before copying/adapting code or add
 | Greptile | https://www.greptile.com | FOUNDER_SUPPLIED | Independent code-review / codebase-context reference | External reviewer/reference; not runtime dependency |
 | Fern | https://buildwithfern.com/?utm_campaign=buildWith&utm_medium=docs&utm_source=docs.cohere.com | FOUNDER_SUPPLIED | API/documentation tooling reference | UNADMITTED |
 | JetBrains | https://www.jetbrains.com | FOUNDER_SUPPLIED | IDE/developer-tooling reference | UNADMITTED |
+| GitHub CLI 2.96.0 release | https://github.com/cli/cli/releases/tag/v2.96.0 | FOUNDER_SUPPLIED | Toolchain/operational reference from a Winds handoff | UNADMITTED; not a runtime dependency admission |
 | Agentica | https://github.com/wrtnlabs/agentica | FOUNDER_SUPPLIED | Agent framework / orchestration reference | UNADMITTED |
 | LLM Space | https://github.com/deer-flow/llm-space | FOUNDER_SUPPLIED | Agent workspace/orchestration reference | UNADMITTED |
 | DeerFlow | https://github.com/bytedance/deer-flow | FOUNDER_SUPPLIED | Orchestration, subagents, sandbox/memory/skills reference | UNADMITTED; no wholesale architecture transplant |
