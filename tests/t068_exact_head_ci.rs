@@ -21,12 +21,18 @@ fn assert_exact_head_contract(path: &str, contents: &str) {
         "{path} must prefer the pull-request head SHA over fallback candidate identity"
     );
     assert!(
+        contents.contains("ref: ${{ env.CANDIDATE_SHA }}"),
+        "{path} must checkout the exact candidate SHA rather than a mutable branch/ref"
+    );
+    assert!(
         contents.contains("Verify checkout identity"),
         "{path} must fail closed if checkout identity differs from the candidate SHA"
     );
     assert!(
-        contents.contains("git rev-parse HEAD"),
-        "{path} must verify the checked-out Git commit"
+        contents.contains("test \"$(git rev-parse HEAD)\" = \"$CANDIDATE_SHA\"")
+            || (contents.contains("$actual = (git rev-parse HEAD).Trim()")
+                && contents.contains("$actual -cne $env:CANDIDATE_SHA")),
+        "{path} must compare the actual checked-out Git commit to the exact candidate SHA"
     );
 }
 
