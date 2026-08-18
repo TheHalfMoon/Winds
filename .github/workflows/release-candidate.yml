@@ -71,6 +71,175 @@ jobs:
       - name: Test
         run: cargo test --locked
 
+  verification-regression:
+    name: t064-verification-regression (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04
+          - macos-15
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - name: Checkout exact candidate head with Spec 003 baseline history
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
+
+      - name: Verify exact candidate and pre-Spec-003 suite inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          BASELINE_SHA="8e92c5612a9ddc32996ed5e08475e3c9baa5e161"
+          git cat-file -e "${BASELINE_SHA}^{commit}"
+          actual="$(git ls-tree -r --name-only "$BASELINE_SHA" -- tests | LC_ALL=C sort)"
+          expected="$(cat <<'EOF'
+          tests/fault_injection.rs
+          tests/pre_release_soak.rs
+          tests/prohibited_git_operations.rs
+          tests/walking_skeleton.rs
+          EOF
+          )"
+          if [ "$actual" != "$expected" ]; then
+            printf 'unexpected pre-Spec-003 test inventory\nexpected:\n%s\nactual:\n%s\n' "$expected" "$actual" >&2
+            exit 1
+          fi
+          for path in \
+            tests/fault_injection.rs \
+            tests/pre_release_soak.rs \
+            tests/prohibited_git_operations.rs
+          do
+            baseline_blob="$(git rev-parse "${BASELINE_SHA}:${path}")"
+            current_blob="$(git rev-parse "HEAD:${path}")"
+            if [ "$baseline_blob" != "$current_blob" ]; then
+              echo "pre-existing verification target drifted: $path" >&2
+              exit 1
+            fi
+          done
+          git cat-file -e "${BASELINE_SHA}:tests/walking_skeleton.rs"
+          echo "T064_BASELINE_SUITE_PROVEN=$BASELINE_SHA"
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.97.1
+
+      - name: Prove exact baseline walking-skeleton verify/promote/recover authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASELINE_SHA="8e92c5612a9ddc32996ed5e08475e3c9baa5e161"
+          git show "${BASELINE_SHA}:tests/walking_skeleton.rs" > tests/walking_skeleton.rs
+          python3 scripts/ci/run_exact_cargo_test.py \
+            verifies_blocks_and_promotes_without_touching_primary_checkout \
+            -- cargo test --locked --test walking_skeleton \
+            verifies_blocks_and_promotes_without_touching_primary_checkout \
+            -- --exact --test-threads=1 --nocapture
+          git restore --source=HEAD --worktree -- tests/walking_skeleton.rs
+          git diff --exit-code -- tests/walking_skeleton.rs
+          echo "T064_PINNED_WALKING_SKELETON_PROVEN=$BASELINE_SHA"
+
+      - name: Prove partial-worktree recovery is non-destructive
+        run: >-
+          python3 scripts/ci/run_exact_cargo_test.py
+          partial_worktree_creation_remains_manual_recovery_required
+          -- cargo test --locked --test fault_injection
+          partial_worktree_creation_remains_manual_recovery_required
+          -- --exact --test-threads=1 --nocapture
+
+      - name: Prove failed READY persistence remains recoverable
+        run: >-
+          python3 scripts/ci/run_exact_cargo_test.py
+          failed_workspace_ready_db_write_retains_provisioning_state
+          -- cargo test --locked --test fault_injection
+          failed_workspace_ready_db_write_retains_provisioning_state
+          -- --exact --test-threads=1 --nocapture
+
+      - name: Prove interrupted promotion transition is retryable without ref drift
+        run: >-
+          python3 scripts/ci/run_exact_cargo_test.py
+          interrupted_promotion_db_transition_is_retryable_without_ref_drift
+          -- cargo test --locked --test fault_injection
+          interrupted_promotion_db_transition_is_retryable_without_ref_drift
+          -- --exact --test-threads=1 --nocapture
+
+      - name: Prove prohibited downstream Git operations remain absent
+        run: >-
+          python3 scripts/ci/run_exact_cargo_test.py
+          winds_never_invokes_prohibited_downstream_git_operations
+          -- cargo test --locked --test prohibited_git_operations
+          winds_never_invokes_prohibited_downstream_git_operations
+          -- --exact --test-threads=1 --nocapture
+
+      - name: Prove binary Git trace parser keeps exact argv boundaries
+        run: >-
+          python3 scripts/ci/run_exact_cargo_test.py
+          binary_trace_parser_preserves_embedded_delimiters_and_empty_args
+          -- cargo test --locked --test prohibited_git_operations
+          binary_trace_parser_preserves_embedded_delimiters_and_empty_args
+          -- --exact --test-threads=1 --nocapture
+
+      - name: Prove SC-001 100-cycle verify/promote/recover reconciliation
+        run: >-
+          python3 scripts/ci/run_exact_cargo_test.py
+          sc_001_runs_100_clean_create_verify_promote_reconcile_cycles
+          -- cargo test --locked --test pre_release_soak
+          sc_001_runs_100_clean_create_verify_promote_reconcile_cycles
+          -- --ignored --exact --test-threads=1 --nocapture
+
+  verification-regression-windows:
+    name: t064-native-windows-authority-refusal
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact candidate head with T061 history
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
+
+      - name: Verify exact candidate and pinned T061 authority source
+        shell: pwsh
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -cne $env:CANDIDATE_SHA) {
+            throw "checkout identity mismatch: actual=$actual expected=$env:CANDIDATE_SHA"
+          }
+          $sourceSha = "ad4625ecd7f9a933613890cca74129857d0b4166"
+          git cat-file -e "${sourceSha}^{commit}"
+          if ($LASTEXITCODE -ne 0) {
+            throw "pinned T061 source commit is unavailable: $sourceSha"
+          }
+          git cat-file -e "${sourceSha}:tests/walking_skeleton.rs"
+          if ($LASTEXITCODE -ne 0) {
+            throw "pinned T061 walking-skeleton source is unavailable"
+          }
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.97.1
+
+      - name: Prove pinned T061 native-Windows fail-closed authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_SHA="ad4625ecd7f9a933613890cca74129857d0b4166"
+          git show "${SOURCE_SHA}:tests/walking_skeleton.rs" > tests/walking_skeleton.rs
+          python scripts/ci/run_exact_cargo_test.py \
+            native_windows_refuses_authoritative_required_checks_without_mutation \
+            -- cargo test --locked --test walking_skeleton \
+            native_windows_refuses_authoritative_required_checks_without_mutation \
+            -- --exact --test-threads=1 --nocapture
+          git restore --source=HEAD --worktree -- tests/walking_skeleton.rs
+          git diff --exit-code -- tests/walking_skeleton.rs
+          echo "T064_PINNED_WINDOWS_AUTHORITY_PROVEN=$SOURCE_SHA"
+
   soak:
     name: sc-001-soak
     runs-on: ubuntu-24.04
@@ -154,6 +323,8 @@ jobs:
     name: build (${{ matrix.target }})
     needs:
       - quality
+      - verification-regression
+      - verification-regression-windows
       - soak
       - terminal-soak
     strategy:
