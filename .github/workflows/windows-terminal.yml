@@ -50,7 +50,7 @@ jobs:
         run: cargo test --locked --test t057_cli minimal_cli_proves_workspace_profiles_execution_and_terminal_paths -- --test-threads=1
 
   native-windows-terminal:
-    runs-on: windows-latest
+    runs-on: windows-2025
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
