@@ -97,9 +97,9 @@ See [`specs/003-workspace-execution-spine/terminal-trust-boundary.md`](specs/003
 
 The verification and workspace-terminal surfaces intentionally have different platform claims.
 
-### `verify` / `promote` / `recover`
+### Verification path
 
-Authoritative required-check execution is supported on Linux and macOS, and on WSL2 when Winds, Git, the repository, and required checks all run inside the Linux domain. **Native Windows authoritative required-check execution is not supported** and fails closed before verification/promotion mutation.
+The released 0.1 verification support claim remains Linux and macOS, plus WSL2 when Winds, Git, the repository, and required checks all run inside the Linux domain. On native Windows, authoritative required-check execution used by `winds verify` and `winds promote` is **not supported** and fails closed before verification/promotion mutation. Spec 003's native-Windows workspace-terminal evidence does not by itself certify `winds verify`, `winds promote`, or `winds recover` as supported native-Windows verification product surfaces.
 
 ### Workspace / terminal execution
 
