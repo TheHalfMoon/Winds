@@ -1,13 +1,15 @@
 use crate::command::history::SessionHistoryPolicy;
 use crate::domain::{ExecutionStatus, FactSource, TerminalCloseReason};
-use crate::execution::{LocalTerminalHistory, TerminalExecution, reconcile_terminal_executions_after_restart};
+use crate::execution::{
+    LocalTerminalHistory, TerminalExecution, reconcile_terminal_executions_after_restart,
+};
 use crate::git::shell_profiles::{ShellProfile, discover_native_shell_profiles};
 use crate::git::terminal::TerminalSize;
 use crate::git::workspace_inventory::WorkspaceEnvironmentInventory;
 use crate::store::{NewWorkspace, Store};
 use rusqlite::Connection;
 use std::fs;
-use std::io::{Read, ErrorKind};
+use std::io::{ErrorKind, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
@@ -33,10 +35,7 @@ impl TestRoot {
         let temp_root = std::env::temp_dir()
             .canonicalize()
             .expect("supported T063 CI hosts must provide a canonical temporary directory");
-        let path = temp_root.join(format!(
-            "winds-t063-soak-{}-{sequence}",
-            std::process::id()
-        ));
+        let path = temp_root.join(format!("winds-t063-soak-{}-{sequence}", std::process::id()));
         fs::create_dir(&path).unwrap();
         Self(path.canonicalize().unwrap())
     }
@@ -173,18 +172,26 @@ impl OutputPump {
         self.observed.extend_from_slice(chunk);
         assert!(
             self.observed.len() <= OUTPUT_LIMIT,
-            "T063 cycle {cycle} terminal output exceeded the test observation bound"
+            "T063 cycle {cycle} terminal output exceeded the observation bound"
         );
     }
 }
 
 fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
-    !needle.is_empty() && haystack.windows(needle.len()).any(|window| window == needle)
+    !needle.is_empty()
+        && haystack
+            .windows(needle.len())
+            .any(|window| window == needle)
 }
 
 fn utf8_path(path: &Path, label: &str) -> String {
     path.to_str()
-        .unwrap_or_else(|| panic!("T063 {label} must be UTF-8 on supported CI: {}", path.display()))
+        .unwrap_or_else(|| {
+            panic!(
+                "T063 {label} must be UTF-8 on supported CI: {}",
+                path.display()
+            )
+        })
         .to_owned()
 }
 
@@ -240,7 +247,11 @@ fn native_profile() -> ShellProfile {
 }
 
 #[cfg(windows)]
-fn complete_headless_terminal_startup(execution: &mut TerminalExecution<'_>, output: &mut OutputPump, cycle: usize) {
+fn complete_headless_terminal_startup(
+    execution: &mut TerminalExecution<'_>,
+    output: &mut OutputPump,
+    cycle: usize,
+) {
     output.wait_for(CURSOR_POSITION_QUERY, cycle);
     execution
         .send_input(TEST_CURSOR_POSITION_RESPONSE)
@@ -266,6 +277,37 @@ fn ready_command(cycle: usize) -> Vec<u8> {
 }
 
 #[cfg(unix)]
+fn size_probe_command() -> &'static [u8] {
+    b"d=$(stty size); p=WINDS_T063_SIZE_; printf '%s%s\\n' \"$p\" \"$d\"\n"
+}
+
+#[cfg(unix)]
+fn size_marker(size: TerminalSize) -> Vec<u8> {
+    format!("WINDS_T063_SIZE_{} {}", size.rows, size.cols).into_bytes()
+}
+
+#[cfg(unix)]
+fn prove_resized_terminal(
+    execution: &mut TerminalExecution<'_>,
+    output: &mut OutputPump,
+    size: TerminalSize,
+    cycle: usize,
+) {
+    execution.send_input(size_probe_command()).unwrap();
+    output.wait_for(&size_marker(size), cycle);
+}
+
+#[cfg(windows)]
+fn prove_resized_terminal(
+    execution: &mut TerminalExecution<'_>,
+    _output: &mut OutputPump,
+    size: TerminalSize,
+    _cycle: usize,
+) {
+    assert_eq!(execution.current_size().unwrap(), size);
+}
+
+#[cfg(unix)]
 fn finish_command(cycle: usize) -> Vec<u8> {
     let payload = "x".repeat(2048);
     format!(
@@ -277,10 +319,8 @@ fn finish_command(cycle: usize) -> Vec<u8> {
 #[cfg(windows)]
 fn finish_command(cycle: usize) -> Vec<u8> {
     let payload = "x".repeat(2048);
-    format!(
-        "echo {payload}\r\nset \"W=WINDS_T063_DONE_\"\r\necho %W%{cycle}\r\nexit\r\n"
-    )
-    .into_bytes()
+    format!("echo {payload}\r\nset \"W=WINDS_T063_DONE_\"\r\necho %W%{cycle}\r\nexit\r\n")
+        .into_bytes()
 }
 
 fn marker(prefix: &str, cycle: usize) -> Vec<u8> {
@@ -288,8 +328,8 @@ fn marker(prefix: &str, cycle: usize) -> Vec<u8> {
 }
 
 fn seed_verification_sentinel(state_root: &Path) {
-    let connection = Connection::open(state_root.join("winds.db")).unwrap();
-    connection
+    Connection::open(state_root.join("winds.db"))
+        .unwrap()
         .execute_batch(
             "INSERT INTO candidate_runs (
                  run_id, repo_path, base_oid, candidate_ref, candidate_oid,
@@ -347,7 +387,11 @@ fn verification_snapshot(state_root: &Path) -> Vec<String> {
          )",
     ]
     .into_iter()
-    .map(|query| connection.query_row(query, [], |row| row.get::<_, String>(0)).unwrap())
+    .map(|query| {
+        connection
+            .query_row(query, [], |row| row.get::<_, String>(0))
+            .unwrap()
+    })
     .collect()
 }
 
@@ -375,7 +419,10 @@ fn history_bytes(path: &Path) -> u64 {
     let entries = match fs::read_dir(path) {
         Ok(entries) => entries,
         Err(error) if error.kind() == ErrorKind::NotFound => return 0,
-        Err(error) => panic!("failed to inspect T063 history directory {}: {error}", path.display()),
+        Err(error) => panic!(
+            "failed to inspect T063 history directory {}: {error}",
+            path.display()
+        ),
     };
     entries
         .map(|entry| entry.unwrap())
@@ -386,7 +433,10 @@ fn history_bytes(path: &Path) -> u64 {
             } else if file_type.is_file() {
                 entry.metadata().unwrap().len()
             } else {
-                panic!("unexpected non-file history entry during T063 soak: {}", entry.path().display())
+                panic!(
+                    "unexpected non-file history entry during T063 soak: {}",
+                    entry.path().display()
+                )
             }
         })
         .sum()
@@ -400,12 +450,8 @@ fn controlled_terminal_lifecycle_soak_100_cycles() {
     let state_root = root.state();
     let workspace = root.workspace().canonicalize().unwrap();
     let profile = native_profile();
-    let policy = SessionHistoryPolicy::local_bounded(
-        false,
-        TRANSCRIPT_QUOTA,
-        TOTAL_HISTORY_QUOTA,
-    )
-    .unwrap();
+    let policy =
+        SessionHistoryPolicy::local_bounded(false, TRANSCRIPT_QUOTA, TOTAL_HISTORY_QUOTA).unwrap();
 
     seed_verification_sentinel(&state_root);
     let verification_before = verification_snapshot(&state_root);
@@ -434,7 +480,7 @@ fn controlled_terminal_lifecycle_soak_100_cycles() {
             cols: 81 + u16::try_from(cycle % 16).unwrap(),
         };
         execution.resize(resized).unwrap();
-        assert_eq!(execution.current_size().unwrap(), resized);
+        prove_resized_terminal(&mut execution, &mut output, resized, cycle);
 
         let done = marker("WINDS_T063_DONE_", cycle);
         execution.send_input(&finish_command(cycle)).unwrap();
@@ -445,9 +491,8 @@ fn controlled_terminal_lifecycle_soak_100_cycles() {
             observed_exit.exit_code, 0,
             "T063 cycle {cycle} shell exited unsuccessfully"
         );
-        let closed_exit = execution.close().unwrap();
-        assert_eq!(closed_exit, observed_exit);
-        assert_eq!(execution.try_wait().unwrap(), Some(observed_exit.clone()));
+        assert_eq!(execution.close().unwrap(), observed_exit);
+        assert_eq!(execution.try_wait().unwrap(), Some(observed_exit));
 
         output.drain_to_eof(cycle);
         let history = execution
@@ -455,8 +500,7 @@ fn controlled_terminal_lifecycle_soak_100_cycles() {
             .unwrap()
             .expect("T063 local transcript history must persist");
         assert!(
-            history.manifest.transcript_observed_bytes
-                > u64::try_from(TRANSCRIPT_QUOTA).unwrap(),
+            history.manifest.transcript_observed_bytes > u64::try_from(TRANSCRIPT_QUOTA).unwrap(),
             "T063 cycle {cycle} did not exercise transcript truncation"
         );
         assert!(
@@ -466,10 +510,12 @@ fn controlled_terminal_lifecycle_soak_100_cycles() {
         assert!(history.manifest.transcript_truncated);
         drop(execution);
 
+        // Successful owned wait plus stable close/try_wait is the ownership-scoped
+        // child-reap proof. Do not infer process truth from arbitrary PID scans.
         assert_eq!(
             reconcile_terminal_executions_after_restart(&mut store).unwrap(),
             0,
-            "T063 cycle {cycle} left a non-final terminal row requiring restart reconciliation"
+            "T063 cycle {cycle} left a terminal row requiring restart repair"
         );
         assert_eq!(
             active_terminal_count(&state_root),
