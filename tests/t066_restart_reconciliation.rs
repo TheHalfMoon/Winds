@@ -463,11 +463,15 @@ fn init_repo(path: &Path) {
 }
 
 fn winds<const N: usize>(home: &Path, args: [&str; N]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_winds"))
+    let child = Command::new(env!("CARGO_BIN_EXE_winds"))
         .args(args)
         .env("WINDS_HOME", home)
-        .output()
-        .unwrap()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_with_output_bounded(child, Duration::from_secs(10), "T066 CLI subprocess")
 }
 
 fn git<const N: usize>(repo: &Path, args: [&str; N]) {
@@ -495,6 +499,36 @@ fn test_path(path: &Path) -> &str {
     )
 }
 
+fn wait_with_output_bounded(mut child: Child, timeout: Duration, context: &str) -> Output {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().unwrap(),
+            Ok(None) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let output = child.wait_with_output().unwrap();
+                panic!(
+                    "{context} did not exit within {timeout:?}\nstdout:\n{}\nstderr:\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let output = child.wait_with_output().unwrap();
+                panic!(
+                    "{context} status check failed: {error}\nstdout:\n{}\nstderr:\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        }
+    }
+}
+
 struct LiveWinds {
     child: Option<Child>,
     release_file: PathBuf,
@@ -515,37 +549,15 @@ impl LiveWinds {
 
     fn finish(mut self) -> Output {
         self.signal_release();
-        let mut child = self
+        let child = self
             .child
             .take()
             .expect("T066 live Winds child must exist until finish");
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            match child.try_wait() {
-                Ok(Some(_)) => return child.wait_with_output().unwrap(),
-                Ok(None) if Instant::now() < deadline => {
-                    thread::sleep(Duration::from_millis(10));
-                }
-                Ok(None) => {
-                    let _ = child.kill();
-                    let output = child.wait_with_output().unwrap();
-                    panic!(
-                        "T066 live Winds child did not exit after release signal\nstdout:\n{}\nstderr:\n{}",
-                        String::from_utf8_lossy(&output.stdout),
-                        String::from_utf8_lossy(&output.stderr)
-                    );
-                }
-                Err(error) => {
-                    let _ = child.kill();
-                    let output = child.wait_with_output().unwrap();
-                    panic!(
-                        "T066 live Winds child status check failed after release signal: {error}\nstdout:\n{}\nstderr:\n{}",
-                        String::from_utf8_lossy(&output.stdout),
-                        String::from_utf8_lossy(&output.stderr)
-                    );
-                }
-            }
-        }
+        wait_with_output_bounded(
+            child,
+            Duration::from_secs(10),
+            "T066 live Winds child after release signal",
+        )
     }
 }
 
