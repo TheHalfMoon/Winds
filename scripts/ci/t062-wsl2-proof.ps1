@@ -16,24 +16,6 @@ function Invoke-Captured {
     return $text
 }
 
-function Invoke-ExpectedFailure {
-    param(
-        [Parameter(Mandatory = $true)][string]$File,
-        [Parameter(Mandatory = $true)][string[]]$Arguments
-    )
-
-    $output = & $File @Arguments 2>&1
-    $exitCode = $LASTEXITCODE
-    $text = (@($output) -join "`n").Trim()
-    if ($exitCode -eq 0) {
-        throw "command unexpectedly succeeded: $File $($Arguments -join ' ')`n$text"
-    }
-    return [ordered]@{
-        exit_code = $exitCode
-        diagnostic = $text
-    }
-}
-
 function Resolve-CanonicalWindowsPath {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -121,25 +103,44 @@ Assert-WindowsPathEqual "WSL Git worktree root" $rootWindows $repo
 Assert-WindowsPathEqual "WSL Git common directory" $commonWindows $hostCommon
 Assert-Equal "WSL Git HEAD" $linuxHead $hostHead
 
-$mismatch = $null
+$mismatchExitCode = $null
+$mismatchBehavior = $null
+$observedMismatchCwd = $null
 $fallbackHome = $null
 try {
     Invoke-Captured "wsl.exe" @(
         "--distribution", $distro,
         "--user", "root",
         "--exec", "/bin/sh", "-c",
-        "printf '[automount]\nenabled=false\n[user]\ndefault=root\n' > /etc/wsl.conf"
+        "printf '[automount]\nenabled=false\n[interop]\nappendWindowsPath=false\n[user]\ndefault=root\n' > /etc/wsl.conf"
     ) | Out-Null
     Invoke-Captured "wsl.exe" @("--terminate", $distro) | Out-Null
     Start-Sleep -Seconds 2
     Invoke-Captured "wsl.exe" @("--distribution", $distro, "--user", "root", "--exec", "/bin/true") | Out-Null
 
-    $mismatch = Invoke-ExpectedFailure "wsl.exe" @(
-        "--distribution", $distro,
-        "--user", "root",
-        "--cd", $linuxRepo,
-        "--exec", "/bin/pwd", "-P"
-    )
+    $mismatchMarker = "/tmp/winds-t062-observed-cwd"
+    $mismatchOutput = & wsl.exe \
+        --distribution $distro \
+        --user root \
+        --cd $linuxRepo \
+        --exec /bin/sh -c "pwd -P > $mismatchMarker" 2>&1
+    $mismatchExitCode = $LASTEXITCODE
+
+    if ($mismatchExitCode -ne 0) {
+        $mismatchBehavior = "CD_REJECTED"
+    }
+    else {
+        $observedMismatchCwd = Invoke-Captured "wsl.exe" @(
+            "--distribution", $distro,
+            "--user", "root",
+            "--exec", "/bin/cat", $mismatchMarker
+        )
+        if ($observedMismatchCwd -ceq $linuxRepo) {
+            throw "WSL silently preserved mapped-workspace equivalence after automount was disabled"
+        }
+        $mismatchBehavior = "VISIBLE_CWD_MISMATCH"
+    }
+
     $fallbackHome = Invoke-Captured "wsl.exe" @("--distribution", $distro, "--user", "root", "--cd", "~", "--exec", "/bin/pwd", "-P")
     if (-not $fallbackHome.StartsWith("/", [System.StringComparison]::Ordinal)) {
         throw "fallback WSL home is not an absolute Linux path: $fallbackHome"
@@ -152,7 +153,7 @@ finally {
             "--distribution", $distro,
             "--user", "root",
             "--exec", "/bin/sh", "-c",
-            "printf '[automount]\nenabled=true\n[user]\ndefault=root\n' > /etc/wsl.conf"
+            "printf '[automount]\nenabled=true\n[interop]\nappendWindowsPath=true\n[user]\ndefault=root\n' > /etc/wsl.conf"
         ) | Out-Null
         Invoke-Captured "wsl.exe" @("--terminate", $distro) | Out-Null
     }
@@ -180,8 +181,10 @@ $summary = [ordered]@{
     }
     mismatch = [ordered]@{
         automount_disabled = $true
-        mapped_cwd_rejected = $true
-        mapped_cwd_exit_code = $mismatch.exit_code
+        behavior = $mismatchBehavior
+        mapped_cwd_exit_code = $mismatchExitCode
+        observed_cwd = $observedMismatchCwd
+        mapped_workspace_equivalence_broken = $true
         fallback_home = $fallbackHome
         fallback_launch = "PASS"
     }
