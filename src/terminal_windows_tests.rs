@@ -218,9 +218,7 @@ fn conpty_interrupt_fails_closed_without_corrupting_the_session() {
 
     complete_headless_terminal_startup(&mut session, &output);
     session
-        .send_input(
-            b"set \"WINDS_TEST_PREFIX=WINDS_\"\r\necho %WINDS_TEST_PREFIX%READY\r\n",
-        )
+        .send_input(b"set \"WINDS_TEST_PREFIX=WINDS_\"\r\necho %WINDS_TEST_PREFIX%READY\r\n")
         .unwrap();
     wait_for_output(&output, b"WINDS_READY");
 
