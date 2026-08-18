@@ -452,7 +452,7 @@ mod tests {
     }
 
     fn workspace_path(root: &TestRoot) -> PathBuf {
-        fs::canonicalize(root.path().join("workspace")).unwrap()
+        root.path().join("workspace")
     }
 
     #[cfg(unix)]
