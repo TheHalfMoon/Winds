@@ -23,6 +23,15 @@ fn cli_process_start_reconciles_stale_execution_truth_before_display() {
     let canonical_repo = repo.canonicalize().unwrap();
 
     seed_stale_execution_rows(&winds_home, &workspace_id, &canonical_repo);
+    let future_requested_unix_ms = 4_102_444_800_000_i64;
+    seed_stale_shell_command_at(
+        &winds_home,
+        &workspace_id,
+        &canonical_repo,
+        "t066-future-clock-stale",
+        future_requested_unix_ms,
+        future_requested_unix_ms + 1,
+    );
 
     let reopened = winds(&winds_home, ["workspace-open", "--repo", test_path(&repo)]);
     assert_success(&reopened);
@@ -49,6 +58,23 @@ fn cli_process_start_reconciles_stale_execution_truth_before_display() {
         Some(120),
         Some(10),
     );
+    assert_execution_state(
+        &connection,
+        "t066-future-clock-stale",
+        "OWNERSHIP_LOST",
+        None,
+        None,
+    );
+    let future_event_unix_ms: i64 = connection
+        .query_row(
+            "SELECT created_unix_ms FROM execution_events
+             WHERE execution_id = ?1 AND kind = 'ShellCommandOwnershipLostAfterRestart'
+             ORDER BY event_id DESC LIMIT 1",
+            ["t066-future-clock-stale"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(future_event_unix_ms, future_requested_unix_ms);
 
     let terminal_reason: String = connection
         .query_row(
@@ -70,6 +96,11 @@ fn cli_process_start_reconciles_stale_execution_truth_before_display() {
         "ShellCommandOwnershipLostAfterRestart",
     );
     assert_event(&connection, "t066-observed-command", "ShellCommandExited");
+    assert_event(
+        &connection,
+        "t066-future-clock-stale",
+        "ShellCommandOwnershipLostAfterRestart",
+    );
     drop(connection);
 
     let terminal = winds(
@@ -305,6 +336,17 @@ fn seed_stale_execution_rows(home: &Path, workspace_id: &str, repo: &Path) {
 }
 
 fn seed_one_stale_shell_command(home: &Path, workspace_id: &str, repo: &Path, execution_id: &str) {
+    seed_stale_shell_command_at(home, workspace_id, repo, execution_id, 100, 110);
+}
+
+fn seed_stale_shell_command_at(
+    home: &Path,
+    workspace_id: &str,
+    repo: &Path,
+    execution_id: &str,
+    requested_unix_ms: i64,
+    started_unix_ms: i64,
+) {
     let mut connection = Connection::open(home.join("winds.db")).unwrap();
     connection
         .execute_batch("PRAGMA foreign_keys = ON;")
@@ -316,8 +358,14 @@ fn seed_one_stale_shell_command(home: &Path, workspace_id: &str, repo: &Path, ex
             status, status_source, requested_unix_ms,
             started_unix_ms, ended_unix_ms, duration_ms
          ) VALUES (?1, ?2, 'SHELL_COMMAND', 'CALLER_REQUESTED', ?3,
-                   'RUNNING', 'WINDS_OBSERVED', 100, 110, NULL, NULL)",
-        params![execution_id, workspace_id, execution_domain_json()],
+                   'RUNNING', 'WINDS_OBSERVED', ?4, ?5, NULL, NULL)",
+        params![
+            execution_id,
+            workspace_id,
+            execution_domain_json(),
+            requested_unix_ms,
+            started_unix_ms
+        ],
     )
     .unwrap();
     tx.execute(
