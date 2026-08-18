@@ -227,13 +227,9 @@ fn reconcile_execution_for_display(
     }
     match probe_execution_lease(home, execution_id)? {
         LeaseProbe::Active => Ok(()),
-        LeaseProbe::Acquired(_lease) => reconcile_unowned_execution_row(
-            home,
-            store,
-            execution_id,
-            execution.kind,
-            unix_ms()?,
-        ),
+        LeaseProbe::Acquired(_lease) => {
+            reconcile_unowned_execution_row(home, store, execution_id, execution.kind, unix_ms()?)
+        }
     }
 }
 
@@ -270,14 +266,19 @@ fn reconcile_unowned_execution_row(
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
         )
         .optional()?
-        .ok_or_else(|| format!("unknown Winds execution during restart reconciliation: {execution_id}"))?;
+        .ok_or_else(|| {
+            format!("unknown Winds execution during restart reconciliation: {execution_id}")
+        })?;
     let status = ExecutionStatus::from_db(&row.0).ok_or_else(|| {
         format!(
             "unknown execution status during restart reconciliation for {execution_id}: {}",
             row.0
         )
     })?;
-    if !matches!(status, ExecutionStatus::Requested | ExecutionStatus::Running) {
+    if !matches!(
+        status,
+        ExecutionStatus::Requested | ExecutionStatus::Running
+    ) {
         tx.commit()?;
         return Ok(());
     }
