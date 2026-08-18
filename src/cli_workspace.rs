@@ -1,6 +1,6 @@
 use crate::command::history::SessionHistoryPolicy;
 use crate::command::{ExplicitCommandRequest, run_explicit_command_with_history_policy};
-use crate::domain::ExecutionKind;
+use crate::domain::{ExecutionKind, ExecutionStatus};
 use crate::execution::TerminalExecution;
 use crate::git::Repo;
 use crate::git::shell_profiles::{ShellProfile, discover_native_shell_profiles};
@@ -15,12 +15,18 @@ use crate::{
     Result, ensure_allowed_flags, required, resolve_without_creation, unix_ms, utf8_path,
     winds_home,
 };
+use rusqlite::{Connection, ErrorCode, OpenFlags, params};
 use serde::Serialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+const EXECUTION_OWNERSHIP_DIR: &str = "execution-ownership";
 
 pub(crate) fn dispatch(command: &str, flags: HashMap<String, String>) -> Result<()> {
     match command {
@@ -100,6 +106,7 @@ fn run_command(flags: HashMap<String, String>) -> Result<()> {
     let workspace = open_existing_workspace(Path::new(repo_arg), &home, unix_ms()?)?;
     let cwd = Path::new(&workspace.canonical_worktree_root);
     let mut store = open_reconciled_cli_store(&home)?;
+    let _lease = acquire_execution_lease(&home, execution_id)?;
     let result = run_explicit_command_with_history_policy(
         &mut store,
         ExplicitCommandRequest {
@@ -143,6 +150,7 @@ fn terminal_proof(flags: HashMap<String, String>) -> Result<()> {
     let profile = select_profile(&native_shell_profiles, profile_id)?;
     let cwd = Path::new(&workspace.canonical_worktree_root);
     let mut store = open_reconciled_cli_store(&home)?;
+    let _lease = acquire_execution_lease(&home, execution_id)?;
 
     let exit = {
         let mut execution = TerminalExecution::start_native(
@@ -177,15 +185,192 @@ fn execution(flags: HashMap<String, String>) -> Result<()> {
     let home = winds_home(flags.get("home").map(String::as_str), &repo)?;
     let store = open_reconciled_cli_store(&home)?;
     require_execution_repo(&store, execution_id, &repo)?;
+    require_execution_display_truth(&home, &store, execution_id)?;
     print_json(&execution_snapshot(&store, execution_id)?)
 }
 
 fn open_reconciled_cli_store(home: &Path) -> Result<Store> {
     let mut store = Store::open(home)?;
-    let now_ms = unix_ms()?;
-    store.reconcile_unowned_terminal_sessions_after_restart(now_ms)?;
-    store.reconcile_unowned_shell_commands_after_restart(now_ms)?;
+    reconcile_kind_when_no_live_owner(home, &mut store, ExecutionKind::Terminal)?;
+    reconcile_kind_when_no_live_owner(home, &mut store, ExecutionKind::ShellCommand)?;
     Ok(store)
+}
+
+fn reconcile_kind_when_no_live_owner(
+    home: &Path,
+    store: &mut Store,
+    kind: ExecutionKind,
+) -> Result<()> {
+    let execution_ids = nonfinal_execution_ids(home, kind)?;
+    if execution_ids.is_empty() {
+        return Ok(());
+    }
+    for execution_id in &execution_ids {
+        if execution_has_live_owner(home, execution_id)? {
+            return Ok(());
+        }
+    }
+    let now_ms = unix_ms()?;
+    match kind {
+        ExecutionKind::Terminal => {
+            store.reconcile_unowned_terminal_sessions_after_restart(now_ms)?;
+        }
+        ExecutionKind::ShellCommand => {
+            store.reconcile_unowned_shell_commands_after_restart(now_ms)?;
+        }
+    }
+    Ok(())
+}
+
+fn nonfinal_execution_ids(home: &Path, kind: ExecutionKind) -> Result<Vec<String>> {
+    let database = home.join("winds.db");
+    let connection = Connection::open_with_flags(
+        database,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )?;
+    let mut statement = connection.prepare(
+        "SELECT execution_id
+         FROM executions
+         WHERE kind = ?1 AND status IN (?2, ?3)
+         ORDER BY requested_unix_ms, execution_id",
+    )?;
+    let execution_ids = statement
+        .query_map(
+            params![
+                kind.as_str(),
+                ExecutionStatus::Requested.as_str(),
+                ExecutionStatus::Running.as_str(),
+            ],
+            |row| row.get::<_, String>(0),
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(execution_ids)
+}
+
+fn require_execution_display_truth(home: &Path, store: &Store, execution_id: &str) -> Result<()> {
+    let execution = store.load_execution(execution_id)?;
+    if !matches!(
+        execution.status,
+        ExecutionStatus::Requested | ExecutionStatus::Running
+    ) {
+        return Ok(());
+    }
+    if execution_has_live_owner(home, execution_id)? {
+        return Ok(());
+    }
+    Err(format!(
+        "execution {execution_id} remains non-final but no live Winds owner can be proven; restart reconciliation is deferred while another execution of the same kind is active, so Winds refuses to display a falsely-live status"
+    )
+    .into())
+}
+
+fn acquire_execution_lease(home: &Path, execution_id: &str) -> Result<ExecutionLease> {
+    match probe_execution_lease(home, execution_id)? {
+        LeaseProbe::Acquired(lease) => Ok(lease),
+        LeaseProbe::Active => Err(format!(
+            "execution ownership lease is already held by another live Winds process: {execution_id}"
+        )
+        .into()),
+    }
+}
+
+fn execution_has_live_owner(home: &Path, execution_id: &str) -> Result<bool> {
+    match probe_execution_lease(home, execution_id)? {
+        LeaseProbe::Active => Ok(true),
+        LeaseProbe::Acquired(lease) => {
+            drop(lease);
+            Ok(false)
+        }
+    }
+}
+
+enum LeaseProbe {
+    Acquired(ExecutionLease),
+    Active,
+}
+
+struct ExecutionLease {
+    connection: Option<Connection>,
+    path: PathBuf,
+}
+
+impl Drop for ExecutionLease {
+    fn drop(&mut self) {
+        if let Some(connection) = self.connection.take() {
+            let _ = connection.execute_batch("ROLLBACK");
+            drop(connection);
+        }
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn probe_execution_lease(home: &Path, execution_id: &str) -> Result<LeaseProbe> {
+    if execution_id.is_empty() || execution_id.chars().any(char::is_control) {
+        return Err("execution ownership lease requires a non-empty control-free identity".into());
+    }
+    let directory = ensure_execution_ownership_directory(home)?;
+    let path = directory.join(execution_lease_filename(execution_id));
+    let connection = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_CREATE
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )?;
+    connection.busy_timeout(Duration::from_millis(0))?;
+    match connection.execute_batch("BEGIN IMMEDIATE") {
+        Ok(()) => Ok(LeaseProbe::Acquired(ExecutionLease {
+            connection: Some(connection),
+            path,
+        })),
+        Err(error) if sqlite_busy_or_locked(&error) => Ok(LeaseProbe::Active),
+        Err(error) => Err(format!(
+            "execution ownership lease could not be checked for {execution_id}: {error}"
+        )
+        .into()),
+    }
+}
+
+fn ensure_execution_ownership_directory(home: &Path) -> Result<PathBuf> {
+    let directory = home.join(EXECUTION_OWNERSHIP_DIR);
+    match fs::symlink_metadata(&directory) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err("execution ownership path must be a real directory".into());
+            }
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            match fs::create_dir(&directory) {
+                Ok(()) => {}
+                Err(error) if error.kind() == ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error.into()),
+            }
+            let metadata = fs::symlink_metadata(&directory)?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err("execution ownership path must be a real directory".into());
+            }
+        }
+        Err(error) => return Err(error.into()),
+    }
+    Ok(directory)
+}
+
+fn execution_lease_filename(execution_id: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"WindsExecutionOwnershipLeaseV1\0");
+    digest.update(execution_id.as_bytes());
+    let hex: String = digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("execution-{hex}.sqlite3")
+}
+
+fn sqlite_busy_or_locked(error: &rusqlite::Error) -> bool {
+    matches!(
+        error.sqlite_error_code(),
+        Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
+    )
 }
 
 fn require_execution_repo(store: &Store, execution_id: &str, repo: &Repo) -> Result<()> {
@@ -409,7 +594,9 @@ fn print_json(value: &impl Serialize) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_arguments, parse_history_policy, parse_terminal_size};
+    use super::{
+        execution_lease_filename, parse_arguments, parse_history_policy, parse_terminal_size,
+    };
     use crate::command::history::SessionHistoryPolicy;
 
     #[test]
@@ -442,5 +629,16 @@ mod tests {
         assert_eq!(size.cols, 80);
         assert!(parse_terminal_size(Some("0"), None).is_err());
         assert!(parse_terminal_size(None, Some("0")).is_err());
+    }
+
+    #[test]
+    fn ownership_lease_filename_is_deterministic_and_path_safe() {
+        let first = execution_lease_filename("workspace/execution:1");
+        let second = execution_lease_filename("workspace/execution:1");
+        assert_eq!(first, second);
+        assert!(first.starts_with("execution-"));
+        assert!(first.ends_with(".sqlite3"));
+        assert!(!first.contains('/'));
+        assert!(!first.contains(':'));
     }
 }
