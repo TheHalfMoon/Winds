@@ -146,11 +146,11 @@ fn complete_headless_terminal_startup(
         .expect("headless ConPTY fixture must answer cursor-position query");
 }
 
-fn t062_output_value<'a>(output: &'a str, marker: &str) -> Option<&'a str> {
+fn output_contains_exact_marker(output: &[u8], marker: &str) -> bool {
+    let marker = marker.as_bytes();
     output
-        .lines()
-        .find_map(|line| line.trim().strip_prefix(marker))
-        .map(str::trim)
+        .windows(marker.len())
+        .any(|window| window == marker)
 }
 
 fn default_size() -> TerminalSize {
@@ -316,16 +316,16 @@ fn t062_real_wsl_backend_launch_is_opt_in_and_uses_production_path() {
         .expect("production WSL shell must accept the real cwd proof command");
     let observed = wait_for_output(&output, b"WINDS_T062_DONE");
     let observed_text = String::from_utf8_lossy(&observed);
-    assert_eq!(
-        t062_output_value(&observed_text, "WINDS_T062_CWD="),
-        Some(expected_linux_cwd.as_str()),
-        "production WSL shell did not observe the prepared Linux cwd"
+    let cwd_marker = format!("WINDS_T062_CWD={expected_linux_cwd}");
+    assert!(
+        output_contains_exact_marker(&observed, &cwd_marker),
+        "production WSL shell did not observe the prepared Linux cwd; observed {observed_text:?}"
     );
     if let Some(expected_head) = expected_git_head {
-        assert_eq!(
-            t062_output_value(&observed_text, "WINDS_T062_HEAD="),
-            Some(expected_head.as_str()),
-            "production WSL shell did not observe the prepared Git identity"
+        let head_marker = format!("WINDS_T062_HEAD={expected_head}");
+        assert!(
+            output_contains_exact_marker(&observed, &head_marker),
+            "production WSL shell did not observe the prepared Git identity; observed {observed_text:?}"
         );
     }
     let exit = launched
