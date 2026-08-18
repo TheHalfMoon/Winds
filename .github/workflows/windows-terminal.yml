@@ -79,7 +79,7 @@ jobs:
 
   real-wsl2-integration:
     name: real-wsl2-integration (windows-2025 / Ubuntu)
-    runs-on: windows-latest
+    runs-on: windows-2025
     timeout-minutes: 40
     steps:
       - name: Checkout exact candidate head
@@ -155,13 +155,46 @@ jobs:
         env:
           WINDS_T062_WSL_DISTRO: Ubuntu
         run: |
-          ./scripts/ci/t062-wsl2-proof.ps1 | Tee-Object -FilePath "$env:RUNNER_TEMP/t062-wsl2-evidence.json"
-          if (-not (Test-Path -LiteralPath "$env:RUNNER_TEMP/t062-wsl2-evidence.json" -PathType Leaf)) {
+          $evidencePath = "$env:RUNNER_TEMP/t062-wsl2-evidence.json"
+          ./scripts/ci/t062-wsl2-proof.ps1 | Tee-Object -FilePath $evidencePath
+          if (-not (Test-Path -LiteralPath $evidencePath -PathType Leaf)) {
             throw "T062 evidence JSON was not produced"
+          }
+          $evidence = Get-Content -LiteralPath $evidencePath -Raw | ConvertFrom-Json
+          $expected = "${{ github.event.pull_request.head.sha || github.sha }}"
+          if ([int]$evidence.schema_version -ne 1) { throw "unexpected T062 evidence schema_version" }
+          if ($evidence.evidence -cne "T062_REAL_WINDOWS_WSL2_INTEGRATION") { throw "unexpected T062 evidence marker" }
+          if ($evidence.repository_head -cne $expected) { throw "T062 evidence is not bound to exact candidate head" }
+          if ($evidence.distribution.name -cne "Ubuntu" -or [int]$evidence.distribution.version -ne 2) {
+            throw "T062 evidence does not attest the selected Ubuntu WSL2 distribution"
+          }
+          if ($evidence.production_backend.mapped_prepare_and_launch -cne "PASS") {
+            throw "T062 evidence does not prove production mapped prepare+launch"
+          }
+          if ($evidence.production_backend.fallback_prepare_and_launch -cne "PASS") {
+            throw "T062 evidence does not prove production fallback prepare+launch"
+          }
+          if ($evidence.mapped_workspace.git_head_oid -cne $expected) {
+            throw "T062 evidence does not attest exact Git HEAD inside WSL"
+          }
+          if ($evidence.mapped_workspace.effective_cwd -cne $evidence.mapped_workspace.linux_root) {
+            throw "T062 evidence does not attest the mapped effective cwd"
+          }
+          if ($evidence.mismatch.behavior -notin @("CD_REJECTED", "VISIBLE_CWD_MISMATCH")) {
+            throw "T062 evidence does not record a visible mapped-workspace mismatch"
+          }
+          if (-not [bool]$evidence.mismatch.mapped_workspace_equivalence_broken) {
+            throw "T062 evidence did not establish broken mapped-workspace equivalence"
+          }
+          if ([bool]$evidence.mismatch.fallback_equivalent_to_mapped_workspace) {
+            throw "T062 fallback still claims equivalence to the mapped workspace"
+          }
+          if ($evidence.mismatch.fallback_launch -cne "PASS") {
+            throw "T062 evidence does not prove fallback launch"
           }
 
       - name: Upload T062 evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: t062-real-windows-wsl2-evidence
           path: ${{ runner.temp }}/t062-wsl2-evidence.json
