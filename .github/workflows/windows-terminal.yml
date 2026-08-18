@@ -116,8 +116,6 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "failed to install Ubuntu through supported WSL web-download surface" }
           wsl.exe --distribution Ubuntu --user root --exec /bin/true
           if ($LASTEXITCODE -ne 0) { throw "failed to initialize Ubuntu as root" }
-          wsl.exe --set-version Ubuntu 2
-          if ($LASTEXITCODE -ne 0) { throw "failed to require Ubuntu WSL2" }
           wsl.exe --distribution Ubuntu --user root --exec /bin/sh -lc "command -v git >/dev/null 2>&1 || (apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git)"
           if ($LASTEXITCODE -ne 0) { throw "failed to ensure Git inside Ubuntu" }
           wsl.exe --distribution Ubuntu --user root --exec /usr/bin/git config --global --add safe.directory '*'
