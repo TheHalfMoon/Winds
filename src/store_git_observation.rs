@@ -106,6 +106,26 @@ impl Store {
             );
         }
 
+        let observed_unix_ms = match observation.boundary {
+            GitObservationBoundary::Before => observation.observed_unix_ms,
+            GitObservationBoundary::After => {
+                let before_time = tx
+                    .query_row(
+                        "SELECT observed_unix_ms
+                         FROM execution_git_observations
+                         WHERE execution_id = ?1 AND boundary = ?2",
+                        params![observation.execution_id, GitObservationBoundary::Before.as_str()],
+                        |row| row.get::<_, Option<i64>>(0),
+                    )
+                    .optional()?
+                    .ok_or("AFTER Git observation requires a persisted BEFORE observation")?;
+                match (observation.observed_unix_ms, before_time) {
+                    (Some(candidate), Some(before)) => Some(candidate.max(before)),
+                    (candidate, _) => candidate,
+                }
+            }
+        };
+
         tx.execute(
             "INSERT INTO execution_git_observations(
                 execution_id, boundary, availability, fact_source,
@@ -123,7 +143,7 @@ impl Store {
                 observation.dirty.map(bool_to_i64),
                 worktree_state_format,
                 observation.worktree_state_sha256,
-                observation.observed_unix_ms,
+                observed_unix_ms,
             ],
         )?;
         tx.commit()?;
