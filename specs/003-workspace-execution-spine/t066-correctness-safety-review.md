@@ -59,6 +59,14 @@ The first repair conservatively deferred all reconciliation for an execution kin
 
 The final repair reconciles each captured non-final execution independently. A live row is skipped because its own lease is busy; an unrelated stale row is reconciled immediately while its acquired probe lease prevents a same-ID owner from appearing during the targeted transaction. `winds execution` performs a second per-ID ownership check before display so an owner that disappears after the initial scan cannot leave a falsely-live result.
 
+### T066-F5 — probe-lease lifetime was made explicit across targeted reconciliation
+
+**Classification:** ownership-proof clarity / reviewer-blocking ambiguity.
+
+A fresh exact-head review challenged whether a probe lease bound as `_lease` was visibly retained across the targeted SQLite transition. Rust drop scopes already keep a named local alive through its match arm, but this is a security-sensitive ownership invariant and must not depend on an implicit reading of lifetime/drop behavior.
+
+The final code binds the acquired probe as `lease`, executes the complete targeted reconciliation first, then calls `drop(lease)` explicitly. Both startup reconciliation and display-time recheck therefore make the required ordering mechanically obvious: acquire lease -> reconcile/finalize exact execution ID -> release lease.
+
 ## Final repair design
 
 The T066 repair keeps reconciliation at the **user-facing CLI process boundary**, not inside generic `Store::open`, so a second Store connection inside one live process cannot silently revoke owned execution state.
@@ -72,7 +80,7 @@ For current Spec 003 CLI execution surfaces:
 - independent execution IDs use independent lease files, so this is not a global single-execution mutex;
 - CLI restart reconciliation snapshots non-final execution IDs, then handles each ID independently;
 - a busy lease proves another Winds process currently owns that execution lifecycle, so that row is not modified;
-- an acquired probe lease is retained across the targeted SQLite transition, preventing a same-ID owner from appearing while the row is reconciled;
+- an acquired probe lease is explicitly retained until after the targeted exact-ID SQLite transition completes, preventing a same-ID owner from appearing while the row is reconciled;
 - targeted reconciliation updates only that exact execution ID, so executions created after the snapshot cannot be swept into a bulk ownership-loss update;
 - durable `WINDS_OBSERVED` shell-command exit facts are finalized to `EXITED` rather than discarded as ownership loss;
 - otherwise-unowned `REQUESTED`/`RUNNING` terminal and explicit-command rows transition immediately to `OWNERSHIP_LOST` with unknown process end/duration;
