@@ -541,3 +541,69 @@ fn controlled_terminal_lifecycle_soak_100_cycles() {
     assert_eq!(verification_snapshot(&state_root), verification_before);
     assert!(history_bytes(&state_root.join("history")) <= TOTAL_HISTORY_QUOTA);
 }
+
+#[test]
+#[ignore = "T063 supplemental active-close and Windows child-resize guard; run explicitly in release-candidate"]
+fn active_close_and_windows_child_resize_guard() {
+    const GUARD_CYCLE: usize = CYCLES;
+    let root = TestRoot::new();
+    let mut store = store_with_workspace(&root);
+    let workspace = root.workspace().canonicalize().unwrap();
+    let profile = native_profile();
+    let mut execution = TerminalExecution::start_native(
+        &mut store,
+        "t063-active-close-guard",
+        "workspace-1",
+        &profile,
+        &workspace,
+        DEFAULT_SIZE,
+    )
+    .unwrap();
+    let mut output = OutputPump::start(execution.take_output_reader().unwrap());
+    complete_headless_terminal_startup(&mut execution, &mut output, GUARD_CYCLE);
+
+    assert_eq!(
+        execution.try_wait().unwrap(),
+        None,
+        "T063 close guard requires a live owned child before close()"
+    );
+
+    #[cfg(windows)]
+    {
+        let resized = TerminalSize {
+            rows: 33,
+            cols: 101,
+        };
+        execution.resize(resized).unwrap();
+        let command = "powershell -NoProfile -NonInteractive -Command \"$s=$Host.UI.RawUI.WindowSize; Write-Output ('WINDS_T063_CHILD_SIZE_' + $s.Height + ' ' + $s.Width)\"\r\n";
+        execution.send_input(command.as_bytes()).unwrap();
+        let expected = format!("WINDS_T063_CHILD_SIZE_{} {}", resized.rows, resized.cols);
+        output.wait_for(expected.as_bytes(), GUARD_CYCLE);
+        assert_eq!(
+            execution.try_wait().unwrap(),
+            None,
+            "T063 Windows child-size proof must leave the owned shell live before close()"
+        );
+    }
+
+    let closed_exit = execution
+        .close()
+        .expect("T063 active close must complete bounded owned-child cleanup");
+    assert_eq!(execution.try_wait().unwrap(), Some(closed_exit));
+    output.drain_to_eof(GUARD_CYCLE);
+    drop(execution);
+
+    let record = store.load_execution("t063-active-close-guard").unwrap();
+    assert_eq!(record.status, ExecutionStatus::Interrupted);
+    assert_eq!(record.status_source, FactSource::WindsObserved);
+    assert!(record.started_unix_ms.is_some());
+    assert!(record.ended_unix_ms.is_some());
+    assert!(record.duration_ms.is_some());
+    assert_eq!(
+        store
+            .load_terminal_session("t063-active-close-guard")
+            .unwrap()
+            .close_reason,
+        Some(TerminalCloseReason::ClosedByWinds)
+    );
+}
