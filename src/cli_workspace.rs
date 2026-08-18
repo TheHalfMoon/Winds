@@ -40,6 +40,7 @@ fn workspace_open(flags: HashMap<String, String>) -> Result<()> {
     let repo = Repo::open(Path::new(repo_arg))?;
     let home = winds_home(flags.get("home").map(String::as_str), &repo)?;
     let workspace = open_existing_workspace(Path::new(repo_arg), &home, unix_ms()?)?;
+    let _store = open_reconciled_cli_store(&home)?;
     print_json(&workspace)
 }
 
@@ -53,6 +54,7 @@ fn workspace_clone(flags: HashMap<String, String>) -> Result<()> {
         remote,
     )?;
     let workspace = clone_and_register_workspace(remote, destination, &home, unix_ms()?)?;
+    let _store = open_reconciled_cli_store(&home)?;
     print_json(&workspace)
 }
 
@@ -62,6 +64,7 @@ fn profiles(flags: HashMap<String, String>) -> Result<()> {
     let repo = Repo::open(Path::new(repo_arg))?;
     let home = winds_home(flags.get("home").map(String::as_str), &repo)?;
     let workspace = open_existing_workspace(Path::new(repo_arg), &home, unix_ms()?)?;
+    let _store = open_reconciled_cli_store(&home)?;
     let inventory = inventory_workspace_environment(&workspace)?;
     let native_shell_profiles = discover_native_shell_profiles(&inventory)?;
     let wsl = wsl_inventory();
@@ -96,7 +99,7 @@ fn run_command(flags: HashMap<String, String>) -> Result<()> {
     let home = winds_home(flags.get("home").map(String::as_str), &repo)?;
     let workspace = open_existing_workspace(Path::new(repo_arg), &home, unix_ms()?)?;
     let cwd = Path::new(&workspace.canonical_worktree_root);
-    let mut store = Store::open(&home)?;
+    let mut store = open_reconciled_cli_store(&home)?;
     let result = run_explicit_command_with_history_policy(
         &mut store,
         ExplicitCommandRequest {
@@ -139,7 +142,7 @@ fn terminal_proof(flags: HashMap<String, String>) -> Result<()> {
     let native_shell_profiles = discover_native_shell_profiles(&inventory)?;
     let profile = select_profile(&native_shell_profiles, profile_id)?;
     let cwd = Path::new(&workspace.canonical_worktree_root);
-    let mut store = Store::open(&home)?;
+    let mut store = open_reconciled_cli_store(&home)?;
 
     let exit = {
         let mut execution = TerminalExecution::start_native(
@@ -172,9 +175,17 @@ fn execution(flags: HashMap<String, String>) -> Result<()> {
     let execution_id = required(&flags, "execution-id")?;
     let repo = Repo::open(Path::new(repo_arg))?;
     let home = winds_home(flags.get("home").map(String::as_str), &repo)?;
-    let store = Store::open(&home)?;
+    let store = open_reconciled_cli_store(&home)?;
     require_execution_repo(&store, execution_id, &repo)?;
     print_json(&execution_snapshot(&store, execution_id)?)
+}
+
+fn open_reconciled_cli_store(home: &Path) -> Result<Store> {
+    let mut store = Store::open(home)?;
+    let now_ms = unix_ms()?;
+    store.reconcile_unowned_terminal_sessions_after_restart(now_ms)?;
+    store.reconcile_unowned_shell_commands_after_restart(now_ms)?;
+    Ok(store)
 }
 
 fn require_execution_repo(store: &Store, execution_id: &str, repo: &Repo) -> Result<()> {
