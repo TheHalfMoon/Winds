@@ -303,36 +303,44 @@ impl TerminalSession {
             return Ok(TerminalDropCleanupOutcome::Unproven);
         }
         self.drop_cleanup_attempted = true;
-        self.writer.take();
-        if let Some(exit) = self.try_wait()? {
-            return Ok(TerminalDropCleanupOutcome::ExitedBeforeCleanup(exit));
-        }
 
-        let kill_result = self
-            .child
-            .as_mut()
-            .ok_or("terminal session lost its owned child handle")?
-            .kill();
-        if let Err(kill_error) = kill_result {
+        let result = (|| {
+            self.writer.take();
             if let Some(exit) = self.try_wait()? {
                 return Ok(TerminalDropCleanupOutcome::ExitedBeforeCleanup(exit));
             }
-            return Err(format!(
-                "failed to request bounded cleanup of owned terminal child: {kill_error}"
-            )
-            .into());
-        }
 
-        let started = Instant::now();
-        loop {
-            if let Some(exit) = self.try_wait()? {
-                return Ok(TerminalDropCleanupOutcome::Terminated(exit));
+            let kill_result = self
+                .child
+                .as_mut()
+                .ok_or("terminal session lost its owned child handle")?
+                .kill();
+            if let Err(kill_error) = kill_result {
+                if let Some(exit) = self.try_wait()? {
+                    return Ok(TerminalDropCleanupOutcome::ExitedBeforeCleanup(exit));
+                }
+                return Err(format!(
+                    "failed to request bounded cleanup of owned terminal child: {kill_error}"
+                )
+                .into());
             }
-            if started.elapsed() >= timeout {
-                return Ok(TerminalDropCleanupOutcome::Unproven);
+
+            let started = Instant::now();
+            loop {
+                if let Some(exit) = self.try_wait()? {
+                    return Ok(TerminalDropCleanupOutcome::Terminated(exit));
+                }
+                if started.elapsed() >= timeout {
+                    return Ok(TerminalDropCleanupOutcome::Unproven);
+                }
+                std::thread::sleep(Duration::from_millis(10));
             }
-            std::thread::sleep(Duration::from_millis(10));
+        })();
+
+        if matches!(result, Err(_) | Ok(TerminalDropCleanupOutcome::Unproven)) {
+            self.drop_cleanup_attempted = false;
         }
+        result
     }
 
     fn require_active(&mut self) -> Result<()> {
