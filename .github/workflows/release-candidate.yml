@@ -120,9 +120,7 @@ jobs:
               exit 1
             fi
           done
-          git grep -q -F \
-            'fn verifies_blocks_and_promotes_without_touching_primary_checkout()' \
-            "$BASELINE_SHA" -- tests/walking_skeleton.rs
+          git cat-file -e "${BASELINE_SHA}:tests/walking_skeleton.rs"
           echo "T064_BASELINE_SUITE_PROVEN=$BASELINE_SHA"
 
       - name: Install pinned Rust toolchain
@@ -130,13 +128,20 @@ jobs:
         with:
           toolchain: 1.97.1
 
-      - name: Prove walking-skeleton verify/promote/recover authority
-        run: >-
-          python3 scripts/ci/run_exact_cargo_test.py
-          verifies_blocks_and_promotes_without_touching_primary_checkout
-          -- cargo test --locked --test walking_skeleton
-          verifies_blocks_and_promotes_without_touching_primary_checkout
-          -- --exact --test-threads=1 --nocapture
+      - name: Prove exact baseline walking-skeleton verify/promote/recover authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASELINE_SHA="8e92c5612a9ddc32996ed5e08475e3c9baa5e161"
+          git show "${BASELINE_SHA}:tests/walking_skeleton.rs" > tests/walking_skeleton.rs
+          python3 scripts/ci/run_exact_cargo_test.py \
+            verifies_blocks_and_promotes_without_touching_primary_checkout \
+            -- cargo test --locked --test walking_skeleton \
+            verifies_blocks_and_promotes_without_touching_primary_checkout \
+            -- --exact --test-threads=1 --nocapture
+          git restore --source=HEAD --worktree -- tests/walking_skeleton.rs
+          git diff --exit-code -- tests/walking_skeleton.rs
+          echo "T064_PINNED_WALKING_SKELETON_PROVEN=$BASELINE_SHA"
 
       - name: Prove partial-worktree recovery is non-destructive
         run: >-
@@ -185,6 +190,55 @@ jobs:
           -- cargo test --locked --test pre_release_soak
           sc_001_runs_100_clean_create_verify_promote_reconcile_cycles
           -- --ignored --exact --test-threads=1 --nocapture
+
+  verification-regression-windows:
+    name: t064-native-windows-authority-refusal
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact candidate head with T061 history
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
+
+      - name: Verify exact candidate and pinned T061 authority source
+        shell: pwsh
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -cne $env:CANDIDATE_SHA) {
+            throw "checkout identity mismatch: actual=$actual expected=$env:CANDIDATE_SHA"
+          }
+          $sourceSha = "ad4625ecd7f9a933613890cca74129857d0b4166"
+          git cat-file -e "${sourceSha}^{commit}"
+          if ($LASTEXITCODE -ne 0) {
+            throw "pinned T061 source commit is unavailable: $sourceSha"
+          }
+          git cat-file -e "${sourceSha}:tests/walking_skeleton.rs"
+          if ($LASTEXITCODE -ne 0) {
+            throw "pinned T061 walking-skeleton source is unavailable"
+          }
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.97.1
+
+      - name: Prove pinned T061 native-Windows fail-closed authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_SHA="ad4625ecd7f9a933613890cca74129857d0b4166"
+          git show "${SOURCE_SHA}:tests/walking_skeleton.rs" > tests/walking_skeleton.rs
+          python scripts/ci/run_exact_cargo_test.py \
+            native_windows_refuses_authoritative_required_checks_without_mutation \
+            -- cargo test --locked --test walking_skeleton \
+            native_windows_refuses_authoritative_required_checks_without_mutation \
+            -- --exact --test-threads=1 --nocapture
+          git restore --source=HEAD --worktree -- tests/walking_skeleton.rs
+          git diff --exit-code -- tests/walking_skeleton.rs
+          echo "T064_PINNED_WINDOWS_AUTHORITY_PROVEN=$SOURCE_SHA"
 
   soak:
     name: sc-001-soak
@@ -270,6 +324,7 @@ jobs:
     needs:
       - quality
       - verification-regression
+      - verification-regression-windows
       - soak
       - terminal-soak
     strategy:
