@@ -222,7 +222,9 @@ fn execution_snapshot_with_ownership_truth(
     execution_id: &str,
 ) -> Result<Value> {
     loop {
-        let snapshot = execution_snapshot(store, execution_id)?;
+        // Build the complete point-in-time view before proving ownership. The value is
+        // intentionally discarded because an active-owner proof requires a fresh read.
+        execution_snapshot(store, execution_id)?;
         let execution = store.load_execution(execution_id)?;
         if !matches!(
             execution.status,
