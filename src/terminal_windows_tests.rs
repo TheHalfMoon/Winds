@@ -1,6 +1,7 @@
 use super::{TerminalSession, TerminalSize};
 use crate::git::shell_profiles::{ShellProfile, discover_native_shell_profiles};
 use crate::git::workspace_inventory::WorkspaceEnvironmentInventory;
+use crate::git::wsl_launch::{WslCwdResolution, launch_wsl_terminal, prepare_wsl_terminal_launch};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -145,6 +146,11 @@ fn complete_headless_terminal_startup(
         .expect("headless ConPTY fixture must answer cursor-position query");
 }
 
+fn output_contains_exact_marker(output: &[u8], marker: &str) -> bool {
+    let marker = marker.as_bytes();
+    output.windows(marker.len()).any(|window| window == marker)
+}
+
 fn default_size() -> TerminalSize {
     TerminalSize { rows: 24, cols: 80 }
 }
@@ -234,4 +240,95 @@ fn conpty_terminate_reaps_the_exact_owned_child() {
     assert_ne!(exit.exit_code, 0);
     assert_eq!(session.try_wait().unwrap(), Some(exit.clone()));
     assert_eq!(session.close().unwrap(), exit);
+}
+
+#[test]
+fn t062_real_wsl_backend_launch_is_opt_in_and_uses_production_path() {
+    let distro = match std::env::var("WINDS_T062_WSL_DISTRO") {
+        Ok(value) if !value.is_empty() => value,
+        _ => return,
+    };
+    let expected = std::env::var("WINDS_T062_EXPECT_CWD")
+        .expect("WINDS_T062_EXPECT_CWD must be set when the real T062 backend proof is enabled");
+    let repo = std::env::current_dir()
+        .expect("T062 backend proof must have a current directory")
+        .canonicalize()
+        .expect("T062 backend proof repository must canonicalize");
+
+    let plan = prepare_wsl_terminal_launch(&repo, &distro)
+        .expect("production WSL launch preparation must succeed on the provisioned distribution");
+    let (expected_linux_cwd, expected_git_head) = match (expected.as_str(), &plan.cwd_resolution) {
+        (
+            "MAPPED",
+            WslCwdResolution::MappedWorkspace {
+                windows_workspace_root,
+                linux_workspace_root,
+                git_head_oid,
+                ..
+            },
+        ) => {
+            assert_eq!(
+                Path::new(windows_workspace_root)
+                    .canonicalize()
+                    .expect("prepared Windows workspace must canonicalize"),
+                repo
+            );
+            assert!(linux_workspace_root.starts_with('/'));
+            (linux_workspace_root.clone(), Some(git_head_oid.clone()))
+        }
+        ("FALLBACK", WslCwdResolution::FallbackHome { linux_home, .. }) => {
+            assert!(linux_home.starts_with('/'));
+            (linux_home.clone(), None)
+        }
+        (expected, actual) => panic!(
+            "production WSL launch preparation returned unexpected cwd resolution: expected={expected}, actual={actual:?}"
+        ),
+    };
+
+    let prepared_profile = plan.profile.clone();
+    let prepared_cwd = plan.cwd_resolution.clone();
+    let mut launched = launch_wsl_terminal(&plan, default_size())
+        .expect("production WSL terminal launch must succeed on the real selected distribution");
+    assert_eq!(launched.profile, prepared_profile);
+    assert_eq!(launched.cwd_resolution, prepared_cwd);
+    assert_eq!(launched.session.profile_id(), launched.profile.profile_id);
+    assert_eq!(launched.session.start_cwd(), repo);
+    assert_eq!(launched.session.current_size().unwrap(), default_size());
+
+    let output = start_output_reader(
+        launched
+            .session
+            .take_output_reader()
+            .expect("production WSL session must expose its owned output reader"),
+    );
+    assert!(launched.session.take_output_reader().is_err());
+    complete_headless_terminal_startup(&mut launched.session, &output);
+    let command = if expected_git_head.is_some() {
+        "printf 'WINDS_T062_%s%s\\n' 'CWD=' \"$(pwd -P)\"; printf 'WINDS_T062_%s%s\\n' 'HEAD=' \"$(git rev-parse --verify HEAD^{commit})\"; printf 'WINDS_T062_%s\\n' 'DONE'; exit\r\n"
+    } else {
+        "printf 'WINDS_T062_%s%s\\n' 'CWD=' \"$(pwd -P)\"; printf 'WINDS_T062_%s\\n' 'DONE'; exit\r\n"
+    };
+    launched
+        .session
+        .send_input(command.as_bytes())
+        .expect("production WSL shell must accept the real cwd proof command");
+    let observed = wait_for_output(&output, b"WINDS_T062_DONE");
+    let observed_text = String::from_utf8_lossy(&observed);
+    let cwd_marker = format!("WINDS_T062_CWD={expected_linux_cwd}");
+    assert!(
+        output_contains_exact_marker(&observed, &cwd_marker),
+        "production WSL shell did not observe the prepared Linux cwd; observed {observed_text:?}"
+    );
+    if let Some(expected_head) = expected_git_head {
+        let head_marker = format!("WINDS_T062_HEAD={expected_head}");
+        assert!(
+            output_contains_exact_marker(&observed, &head_marker),
+            "production WSL shell did not observe the prepared Git identity; observed {observed_text:?}"
+        );
+    }
+    let exit = launched
+        .session
+        .wait()
+        .expect("production WSL terminal session must observe its exact owned child exit");
+    assert_eq!(exit.exit_code, 0);
 }
