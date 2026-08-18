@@ -145,10 +145,10 @@ jobs:
       - name: Run exact T063 active-close and child-resize guard
         run: >-
           ${{ matrix.python }} scripts/ci/run_exact_cargo_test.py
-          active_close_and_windows_child_resize_guard
-          -- cargo test --locked --test t063_close_resize_guard
-          active_close_and_windows_child_resize_guard
-          -- --exact --test-threads=1 --nocapture
+          git::t063_soak_tests::active_close_and_windows_child_resize_guard
+          -- cargo test --locked --bin winds
+          git::t063_soak_tests::active_close_and_windows_child_resize_guard
+          -- --ignored --exact --test-threads=1 --nocapture
 
   build:
     name: build (${{ matrix.target }})
