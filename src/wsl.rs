@@ -13,7 +13,9 @@ use std::os::windows::ffi::OsStringExt;
 #[cfg(windows)]
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+#[cfg(windows)]
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 #[cfg(windows)]
 use std::thread;
 #[cfg(windows)]
@@ -147,17 +149,14 @@ fn run_wsl<const N: usize>(executable: &Path, args: [&str; N]) -> Result<Vec<u8>
         .take()
         .ok_or("WSL discovery unavailable: failed to capture wsl.exe stderr")?;
 
-    let stdout_reader = thread::spawn(move || read_capped(stdout));
-    let stderr_reader = thread::spawn(move || read_capped(stderr));
-    let started = Instant::now();
+    let stdout_reader = spawn_reader(stdout);
+    let stderr_reader = spawn_reader(stderr);
+    let deadline = Instant::now() + WSL_DISCOVERY_TIMEOUT;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if started.elapsed() >= WSL_DISCOVERY_TIMEOUT => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = join_reader(stdout_reader, "stdout");
-                let _ = join_reader(stderr_reader, "stderr");
+            Ok(None) if Instant::now() >= deadline => {
+                cleanup_child_async(child);
                 return Err(format!(
                     "WSL discovery command exceeded the {} second safety timeout",
                     WSL_DISCOVERY_TIMEOUT.as_secs()
@@ -166,48 +165,73 @@ fn run_wsl<const N: usize>(executable: &Path, args: [&str; N]) -> Result<Vec<u8>
             }
             Ok(None) => thread::sleep(Duration::from_millis(10)),
             Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = join_reader(stdout_reader, "stdout");
-                let _ = join_reader(stderr_reader, "stderr");
+                cleanup_child_async(child);
                 return Err(format!("WSL discovery failed waiting for wsl.exe: {error}").into());
             }
         }
     };
-    let stdout = join_reader(stdout_reader, "stdout")?;
-    let stderr = join_reader(stderr_reader, "stderr")?;
+    let stdout = receive_reader(stdout_reader, "stdout", deadline)?;
+    let stderr = receive_reader(stderr_reader, "stderr", deadline)?;
 
+    if stdout.truncated || stderr.truncated {
+        return Err("WSL discovery output exceeded the 1 MiB per-stream safety bound".into());
+    }
     if !status.success() {
         let stderr_text = decode_wsl_text(&stderr.bytes)
             .unwrap_or_else(|_| String::from_utf8_lossy(&stderr.bytes).into_owned());
-        let suffix = if stderr.truncated { " [truncated]" } else { "" };
         return Err(format!(
-            "WSL discovery command failed with status {status}: {}{suffix}",
+            "WSL discovery command failed with status {status}: {}",
             stderr_text.trim()
         )
         .into());
-    }
-    if stdout.truncated || stderr.truncated {
-        return Err("WSL discovery output exceeded the 1 MiB per-stream safety bound".into());
     }
     Ok(stdout.bytes)
 }
 
 #[cfg(windows)]
-fn join_reader(
-    handle: thread::JoinHandle<io::Result<BoundedBytes>>,
+fn spawn_reader<R>(reader: R) -> Receiver<io::Result<BoundedBytes>>
+where
+    R: Read + Send + 'static,
+{
+    let (sender, receiver) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let _ = sender.send(read_capped(reader));
+    });
+    receiver
+}
+
+#[cfg(windows)]
+fn receive_reader(
+    receiver: Receiver<io::Result<BoundedBytes>>,
     name: &str,
+    deadline: Instant,
 ) -> Result<BoundedBytes> {
-    handle
-        .join()
-        .map_err(|_| format!("WSL discovery {name} reader thread panicked"))?
-        .map_err(|error| format!("WSL discovery failed reading {name}: {error}").into())
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    match receiver.recv_timeout(remaining) {
+        Ok(result) => result
+            .map_err(|error| format!("WSL discovery failed reading {name}: {error}").into()),
+        Err(RecvTimeoutError::Timeout) => Err(format!(
+            "WSL discovery {name} reader exceeded the overall {} second safety timeout",
+            WSL_DISCOVERY_TIMEOUT.as_secs()
+        )
+        .into()),
+        Err(RecvTimeoutError::Disconnected) => {
+            Err(format!("WSL discovery {name} reader terminated without a result").into())
+        }
+    }
+}
+
+#[cfg(windows)]
+fn cleanup_child_async(mut child: Child) {
+    thread::spawn(move || {
+        let _ = child.kill();
+        let _ = child.wait();
+    });
 }
 
 #[cfg(any(windows, test))]
 fn read_capped<R: Read>(mut reader: R) -> io::Result<BoundedBytes> {
     let mut captured = Vec::new();
-    let mut truncated = false;
     let mut buffer = [0_u8; 8192];
 
     loop {
@@ -215,17 +239,22 @@ fn read_capped<R: Read>(mut reader: R) -> io::Result<BoundedBytes> {
         if count == 0 {
             break;
         }
-        let remaining = WSL_OUTPUT_CAP_BYTES.saturating_sub(captured.len());
+        let probe_limit = WSL_OUTPUT_CAP_BYTES + 1;
+        let remaining = probe_limit.saturating_sub(captured.len());
         let keep = remaining.min(count);
         captured.extend_from_slice(&buffer[..keep]);
-        if keep < count {
-            truncated = true;
+        if captured.len() > WSL_OUTPUT_CAP_BYTES {
+            captured.truncate(WSL_OUTPUT_CAP_BYTES);
+            return Ok(BoundedBytes {
+                bytes: captured,
+                truncated: true,
+            });
         }
     }
 
     Ok(BoundedBytes {
         bytes: captured,
-        truncated,
+        truncated: false,
     })
 }
 
