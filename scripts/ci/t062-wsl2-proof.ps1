@@ -16,6 +16,25 @@ function Invoke-Captured {
     return $text
 }
 
+function Invoke-ProductionWslBackendProof {
+    param([Parameter(Mandatory = $true)][ValidateSet("MAPPED", "FALLBACK")][string]$ExpectedCwd)
+
+    $env:WINDS_T062_EXPECT_CWD = $ExpectedCwd
+    try {
+        Invoke-Captured "cargo.exe" @(
+            "test",
+            "--locked",
+            "--bin", "winds",
+            "t062_real_wsl_backend_launch_is_opt_in_and_uses_production_path",
+            "--",
+            "--test-threads=1"
+        ) | Out-Null
+    }
+    finally {
+        $env:WINDS_T062_EXPECT_CWD = $null
+    }
+}
+
 function Resolve-CanonicalWindowsPath {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -57,9 +76,9 @@ if ([string]::IsNullOrWhiteSpace($distro)) {
 $repo = Resolve-CanonicalWindowsPath (Invoke-Captured "git.exe" @("rev-parse", "--show-toplevel"))
 $hostHead = Invoke-Captured "git.exe" @("-C", $repo, "rev-parse", "--verify", "HEAD^{commit}")
 $hostCommon = Resolve-CanonicalWindowsPath (Invoke-Captured "git.exe" @("-C", $repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
-$windsHome = Join-Path $env:RUNNER_TEMP "winds-t062-home"
+$windsHome = Join-Path $env:RUNNER_TEMP ("winds-t062-home-" + $hostHead.Substring(0, 12))
 if (Test-Path -LiteralPath $windsHome) {
-    Remove-Item -LiteralPath $windsHome -Recurse -Force
+    throw "refusing to reuse pre-existing exact-head T062 Winds home: $windsHome"
 }
 
 Invoke-Captured "cargo.exe" @("build", "--locked", "--bin", "winds") | Out-Null
@@ -83,6 +102,9 @@ if ($selected.Count -ne 1) {
 if ([int]$selected[0].version -ne 2) {
     throw "selected distribution is not WSL2: $($selected[0] | ConvertTo-Json -Compress)"
 }
+
+Invoke-ProductionWslBackendProof "MAPPED"
+$mappedBackendLaunch = "PASS"
 
 $linuxRepo = Invoke-Captured "wsl.exe" @("--distribution", $distro, "--user", "root", "--exec", "/usr/bin/wslpath", $repo)
 if (-not $linuxRepo.StartsWith("/", [System.StringComparison]::Ordinal)) {
@@ -108,6 +130,7 @@ $mismatchBehavior = $null
 $observedMismatchCwd = $null
 $fallbackHome = $null
 $fallbackWindows = $null
+$fallbackBackendLaunch = $null
 try {
     Invoke-Captured "wsl.exe" @(
         "--distribution", $distro,
@@ -118,6 +141,9 @@ try {
     Invoke-Captured "wsl.exe" @("--terminate", $distro) | Out-Null
     Start-Sleep -Seconds 2
     Invoke-Captured "wsl.exe" @("--distribution", $distro, "--user", "root", "--exec", "/bin/true") | Out-Null
+
+    Invoke-ProductionWslBackendProof "FALLBACK"
+    $fallbackBackendLaunch = "PASS"
 
     $mismatchMarker = "/tmp/winds-t062-observed-cwd"
     $mismatchArguments = @(
@@ -186,6 +212,10 @@ $summary = [ordered]@{
         name = $selected[0].name
         state_at_discovery = $selected[0].state
         version = [int]$selected[0].version
+    }
+    production_backend = [ordered]@{
+        mapped_prepare_and_launch = $mappedBackendLaunch
+        fallback_prepare_and_launch = $fallbackBackendLaunch
     }
     mapped_workspace = [ordered]@{
         windows_root = $repo
