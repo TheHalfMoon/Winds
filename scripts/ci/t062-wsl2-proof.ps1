@@ -322,11 +322,21 @@ $wslConfOriginalState = Invoke-Captured -File "wsl.exe" -Arguments @(
     "--distribution", $distro,
     "--user", "root",
     "--exec", "/bin/sh", "-c",
-    "if [ -e '$wslConfBackup' ]; then exit 73; fi; if [ -f /etc/wsl.conf ]; then umask 077; cp -- /etc/wsl.conf '$wslConfBackup'; printf PRESENT; else printf ABSENT; fi"
+    "if [ -e '$wslConfBackup' ]; then exit 73; fi; if [ -f /etc/wsl.conf ]; then umask 077; cp -p -- /etc/wsl.conf '$wslConfBackup'; printf PRESENT; else printf ABSENT; fi"
 )
 if ($wslConfOriginalState -notin @("PRESENT", "ABSENT")) {
     throw "unexpected /etc/wsl.conf snapshot state: $wslConfOriginalState"
 }
+$wslConfOriginalMode = $null
+if ($wslConfOriginalState -ceq "PRESENT") {
+    $wslConfOriginalMode = Invoke-Captured -File "wsl.exe" -Arguments @(
+        "--distribution", $distro,
+        "--user", "root",
+        "--exec", "/usr/bin/stat", "-c", "%a", "/etc/wsl.conf"
+    )
+}
+$proofFailure = $null
+$cleanupFailure = $null
 try {
     Invoke-Captured -File "wsl.exe" -Arguments @(
         "--distribution", $distro,
@@ -368,6 +378,9 @@ try {
     }
     Invoke-Captured -File "wsl.exe" -Arguments @("--distribution", $distro, "--user", "root", "--cd", $fallbackHome, "--exec", "/bin/sh", "-c", "exit 0") | Out-Null
 }
+catch {
+    $proofFailure = $_
+}
 finally {
     try {
         $restoreCommand = if ($wslConfOriginalState -ceq "PRESENT") {
@@ -381,11 +394,28 @@ finally {
             "--user", "root",
             "--exec", "/bin/sh", "-c", $restoreCommand
         ) | Out-Null
+        if ($wslConfOriginalState -ceq "PRESENT") {
+            $restoredMode = Invoke-Captured -File "wsl.exe" -Arguments @(
+                "--distribution", $distro,
+                "--user", "root",
+                "--exec", "/usr/bin/stat", "-c", "%a", "/etc/wsl.conf"
+            )
+            Assert-Equal -Label "/etc/wsl.conf restored mode" -Actual $restoredMode -Expected $wslConfOriginalMode
+        }
         Invoke-Captured -File "wsl.exe" -Arguments @("--terminate", $distro) | Out-Null
     }
     catch {
-        throw "T062 cleanup failed to restore the original WSL configuration: $_"
+        $cleanupFailure = $_
     }
+}
+if ($null -ne $proofFailure) {
+    if ($null -ne $cleanupFailure) {
+        throw "T062 proof failed: $($proofFailure.Exception.Message); cleanup also failed to restore the original WSL configuration: $($cleanupFailure.Exception.Message)"
+    }
+    throw $proofFailure
+}
+if ($null -ne $cleanupFailure) {
+    throw "T062 cleanup failed to restore the original WSL configuration: $($cleanupFailure.Exception.Message)"
 }
 
 $summary = [ordered]@{
