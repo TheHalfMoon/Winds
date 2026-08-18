@@ -152,7 +152,7 @@ fn concurrent_live_owner_is_preserved_and_ambiguous_stale_display_fails_closed()
 
     let (executable, arguments) = long_running_command();
     let arguments_json = serde_json::to_string(&arguments).unwrap();
-    let mut live = Command::new(env!("CARGO_BIN_EXE_winds"))
+    let live = Command::new(env!("CARGO_BIN_EXE_winds"))
         .args([
             "run",
             "--repo",
@@ -370,7 +370,7 @@ fn wait_for_status(home: &Path, execution_id: &str, expected: &str) {
 fn long_running_command() -> (PathBuf, Vec<String>) {
     (
         PathBuf::from("/bin/sh"),
-        vec!["-c".to_owned(), "sleep 2".to_owned()],
+        vec!["-c".to_owned(), "sleep 5".to_owned()],
     )
 }
 
@@ -381,7 +381,7 @@ fn long_running_command() -> (PathBuf, Vec<String>) {
         vec![
             "/D".to_owned(),
             "/C".to_owned(),
-            "ping -n 3 127.0.0.1 >NUL".to_owned(),
+            "ping -n 6 127.0.0.1 >NUL".to_owned(),
         ],
     )
 }
