@@ -1,4 +1,4 @@
-use super::{TerminalSession, TerminalSize};
+use super::{TerminalSession, TerminalSize, terminal_spawn_cwd};
 use crate::git::shell_profiles::{ShellProfile, discover_native_shell_profiles};
 use crate::git::workspace_inventory::WorkspaceEnvironmentInventory;
 use crate::git::wsl_launch::{WslCwdResolution, launch_wsl_terminal, prepare_wsl_terminal_launch};
@@ -151,11 +151,11 @@ fn output_contains_exact_marker(output: &[u8], marker: &str) -> bool {
     output.windows(marker.len()).any(|window| window == marker)
 }
 
-fn output_contains_exact_line_ignore_ascii_case(output: &[u8], expected: &str) -> bool {
-    output.split(|byte| *byte == b'\n').any(|line| {
-        let line = line.strip_suffix(b"\r").unwrap_or(line);
-        line.eq_ignore_ascii_case(expected.as_bytes())
-    })
+fn output_contains_exact_marker_ignore_ascii_case(output: &[u8], marker: &str) -> bool {
+    let marker = marker.as_bytes();
+    output
+        .windows(marker.len())
+        .any(|window| window.eq_ignore_ascii_case(marker))
 }
 
 fn default_size() -> TerminalSize {
@@ -166,6 +166,11 @@ fn default_size() -> TerminalSize {
 fn conpty_streams_input_output_from_exact_start_cwd_and_observes_exit() {
     let root = TestRoot::new("stream");
     let canonical_root = root.path().canonicalize().unwrap();
+    let spawn_cwd = terminal_spawn_cwd(&canonical_root).unwrap();
+    let expected_cwd_marker = format!(
+        "WINDS_CWD_BEGIN:{}:WINDS_CWD_END",
+        spawn_cwd.to_string_lossy()
+    );
     let profile = native_cmd_profile();
     let mut session = TerminalSession::start(&profile, root.path(), default_size()).unwrap();
     let session_id = session.session_id();
@@ -177,14 +182,13 @@ fn conpty_streams_input_output_from_exact_start_cwd_and_observes_exit() {
     complete_headless_terminal_startup(&mut session, &output);
     session
         .send_input(
-            b"cd\r\nset \"WINDS_TEST_PREFIX=WINDS_\"\r\necho %WINDS_TEST_PREFIX%READY\r\nexit\r\n",
+            b"set \"WINDS_CWD_PREFIX=WINDS_CWD_BEGIN:\"\r\nset \"WINDS_CWD_SUFFIX=:WINDS_CWD_END\"\r\necho %WINDS_CWD_PREFIX%%CD%%WINDS_CWD_SUFFIX%\r\nset \"WINDS_TEST_PREFIX=WINDS_\"\r\necho %WINDS_TEST_PREFIX%READY\r\nexit\r\n",
         )
         .unwrap();
     let observed = wait_for_output(&output, b"WINDS_READY");
-    let cwd = canonical_root.to_string_lossy();
     assert!(
-        output_contains_exact_line_ignore_ascii_case(&observed, &cwd),
-        "ConPTY cd output did not contain the exact canonical start-cwd line; observed {:?}",
+        output_contains_exact_marker_ignore_ascii_case(&observed, &expected_cwd_marker),
+        "ConPTY shell did not emit the exact effective start-cwd marker; expected {expected_cwd_marker:?}, observed {:?}",
         String::from_utf8_lossy(&observed)
     );
 
