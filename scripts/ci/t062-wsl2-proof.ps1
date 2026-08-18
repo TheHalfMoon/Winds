@@ -119,11 +119,13 @@ try {
     Invoke-Captured "wsl.exe" @("--distribution", $distro, "--user", "root", "--exec", "/bin/true") | Out-Null
 
     $mismatchMarker = "/tmp/winds-t062-observed-cwd"
-    $mismatchOutput = & wsl.exe \
-        --distribution $distro \
-        --user root \
-        --cd $linuxRepo \
-        --exec /bin/sh -c "pwd -P > $mismatchMarker" 2>&1
+    $mismatchArguments = @(
+        "--distribution", $distro,
+        "--user", "root",
+        "--cd", $linuxRepo,
+        "--exec", "/bin/sh", "-c", "pwd -P > $mismatchMarker"
+    )
+    $mismatchOutput = & wsl.exe @mismatchArguments 2>&1
     $mismatchExitCode = $LASTEXITCODE
 
     if ($mismatchExitCode -ne 0) {
