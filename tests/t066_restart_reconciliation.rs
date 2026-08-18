@@ -3,15 +3,14 @@ use serde_json::{Value, json};
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, ChildStdin, Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[test]
 fn cli_process_start_reconciles_stale_execution_truth_before_display() {
-    let Some(temp) = TestTempDir::new("winds-t066-restart") else {
-        return;
-    };
+    let temp = TestTempDir::new("winds-t066-restart")
+        .expect("T066 restart fixture must run from a canonical UTF-8 temporary directory");
     let root = temp.path();
     let repo = root.join("repo");
     let winds_home = root.join("winds-home");
@@ -132,9 +131,8 @@ fn cli_process_start_reconciles_stale_execution_truth_before_display() {
 
 #[test]
 fn concurrent_live_owner_is_preserved_while_unrelated_stale_row_reconciles() {
-    let Some(temp) = TestTempDir::new("winds-t066-concurrent") else {
-        return;
-    };
+    let temp = TestTempDir::new("winds-t066-concurrent")
+        .expect("T066 concurrency fixture must run from a canonical UTF-8 temporary directory");
     let root = temp.path();
     let repo = root.join("repo");
     let winds_home = root.join("winds-home");
@@ -146,9 +144,9 @@ fn concurrent_live_owner_is_preserved_while_unrelated_stale_row_reconciles() {
     let workspace_id = opened_json["workspace_id"].as_str().unwrap().to_owned();
     let canonical_repo = repo.canonicalize().unwrap();
 
-    let (executable, arguments) = long_running_command();
+    let (executable, arguments) = blocking_command();
     let arguments_json = serde_json::to_string(&arguments).unwrap();
-    let live = Command::new(env!("CARGO_BIN_EXE_winds"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_winds"))
         .args([
             "run",
             "--repo",
@@ -163,10 +161,16 @@ fn concurrent_live_owner_is_preserved_while_unrelated_stale_row_reconciles() {
             "disabled",
         ])
         .env("WINDS_HOME", &winds_home)
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    let stdin = child
+        .stdin
+        .take()
+        .expect("T066 live Winds fixture must retain a stdin release handle");
+    let live = LiveWinds::new(child, stdin);
 
     wait_for_status(&winds_home, "t066-live-command", "RUNNING");
 
@@ -207,7 +211,7 @@ fn concurrent_live_owner_is_preserved_while_unrelated_stale_row_reconciles() {
     let inspected_live_json: Value = serde_json::from_slice(&inspected_live.stdout).unwrap();
     assert_eq!(inspected_live_json["status"], "RUNNING");
 
-    let live_output = live.wait_with_output().unwrap();
+    let live_output = live.finish();
     assert_success(&live_output);
 
     let final_live = winds(
@@ -347,21 +351,22 @@ fn wait_for_status(home: &Path, execution_id: &str, expected: &str) {
 }
 
 #[cfg(unix)]
-fn long_running_command() -> (PathBuf, Vec<String>) {
+fn blocking_command() -> (PathBuf, Vec<String>) {
     (
         PathBuf::from("/bin/sh"),
-        vec!["-c".to_owned(), "sleep 5".to_owned()],
+        vec!["-c".to_owned(), "IFS= read -r _".to_owned()],
     )
 }
 
 #[cfg(windows)]
-fn long_running_command() -> (PathBuf, Vec<String>) {
+fn blocking_command() -> (PathBuf, Vec<String>) {
     (
         PathBuf::from(std::env::var_os("COMSPEC").expect("COMSPEC on Windows CI")),
         vec![
             "/D".to_owned(),
+            "/Q".to_owned(),
             "/C".to_owned(),
-            "ping -n 6 127.0.0.1 >NUL".to_owned(),
+            "set /p winds_t066_block=".to_owned(),
         ],
     )
 }
@@ -446,6 +451,52 @@ fn test_path(path: &Path) -> &str {
     path.to_str().expect(
         "T066 CLI integration fixture root is validated as UTF-8; derived ASCII child paths must remain UTF-8",
     )
+}
+
+struct LiveWinds {
+    child: Option<Child>,
+    stdin: Option<ChildStdin>,
+}
+
+impl LiveWinds {
+    fn new(child: Child, stdin: ChildStdin) -> Self {
+        Self {
+            child: Some(child),
+            stdin: Some(stdin),
+        }
+    }
+
+    fn finish(mut self) -> Output {
+        self.stdin.take();
+        self.child
+            .take()
+            .expect("T066 live Winds child must exist until finish")
+            .wait_with_output()
+            .unwrap()
+    }
+}
+
+impl Drop for LiveWinds {
+    fn drop(&mut self) {
+        self.stdin.take();
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Ok(None) | Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return;
+                }
+            }
+        }
+    }
 }
 
 struct TestTempDir {
