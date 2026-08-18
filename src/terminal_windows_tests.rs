@@ -304,6 +304,7 @@ fn t062_real_wsl_backend_launch_is_opt_in_and_uses_production_path() {
             .expect("production WSL session must expose its owned output reader"),
     );
     assert!(launched.session.take_output_reader().is_err());
+    complete_headless_terminal_startup(&mut launched.session, &output);
     let command = if expected_git_head.is_some() {
         "printf 'WINDS_T062_%s%s\\n' 'CWD=' \"$(pwd -P)\"; printf 'WINDS_T062_%s%s\\n' 'HEAD=' \"$(git rev-parse --verify HEAD^{commit})\"; printf 'WINDS_T062_%s\\n' 'DONE'; exit\r\n"
     } else {
