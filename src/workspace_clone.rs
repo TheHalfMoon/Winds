@@ -32,9 +32,10 @@ pub fn clone_and_register_workspace(
     let parent = reserved_destination
         .parent()
         .ok_or("clone destination has no parent directory")?;
-    let git_remote = git_remote_argument(remote)?;
+    let git_remote = git_remote_argument(remote, &remote_identity)?;
     let git_destination = git_cli_local_path(&reserved_destination)?;
 
+    require_reserved_clone_destination(&reserved_destination)?;
     let status = git_command(parent)
         .arg("-c")
         .arg("core.askPass=")
@@ -56,13 +57,25 @@ pub fn clone_and_register_workspace(
         let status = status
             .code()
             .map_or_else(|| "signal".to_owned(), |code| code.to_string());
-        return Err(format!(
-            "system Git clone failed with status {status}; destination was not registered"
-        )
-        .into());
+        return match cleanup_failed_clone_destination(&reserved_destination) {
+            Ok(()) => Err(format!(
+                "system Git clone failed with status {status}; reserved destination was removed and not registered"
+            )
+            .into()),
+            Err(cleanup_error) => Err(format!(
+                "system Git clone failed with status {status}; destination was not registered and could not be safely removed: {cleanup_error}"
+            )
+            .into()),
+        };
     }
 
+    require_reserved_clone_destination(&reserved_destination)?;
     let workspace = inspect_existing_workspace(&reserved_destination, canonical_state_root)?;
+    if Path::new(&workspace.canonical_worktree_root) != reserved_destination {
+        return Err(
+            "cloned workspace canonical root does not match the reserved clone destination".into(),
+        );
+    }
     let mut store = Store::open(canonical_state_root)?;
     store.register_cloned_workspace(
         NewWorkspace {
@@ -136,10 +149,35 @@ fn reserve_clone_destination(destination: &Path, canonical_state_root: &Path) ->
     Ok(planned)
 }
 
-fn git_remote_argument(remote: &str) -> Result<OsString> {
-    let local_path = Path::new(remote);
-    if local_path.is_absolute() {
-        return Ok(git_cli_local_path(local_path)?.into_os_string());
+fn require_reserved_clone_destination(destination: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(destination)
+        .map_err(|error| format!("reserved clone destination cannot be inspected: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("reserved clone destination is no longer a real directory".into());
+    }
+    let canonical = destination
+        .canonicalize()
+        .map_err(|error| format!("reserved clone destination cannot be canonicalized: {error}"))?;
+    if canonical != destination {
+        return Err("reserved clone destination changed identity after reservation".into());
+    }
+    Ok(())
+}
+
+fn cleanup_failed_clone_destination(destination: &Path) -> Result<()> {
+    require_reserved_clone_destination(destination)?;
+    fs::remove_dir_all(destination).map_err(|error| {
+        format!(
+            "failed to remove reserved clone destination {}: {error}",
+            destination.display()
+        )
+        .into()
+    })
+}
+
+fn git_remote_argument(remote: &str, remote_identity: &str) -> Result<OsString> {
+    if Path::new(remote).is_absolute() {
+        return Ok(git_cli_local_path(Path::new(remote_identity))?.into_os_string());
     }
     Ok(OsString::from(remote))
 }
@@ -287,11 +325,16 @@ fn sanitize_scp_like_remote(remote: &str) -> Option<String> {
 mod tests {
     #[cfg(windows)]
     use super::git_cli_local_path;
-    use super::{clone_and_register_workspace, sanitize_remote_identity};
+    use super::{
+        clone_and_register_workspace, git_remote_argument, reserve_clone_destination,
+        sanitize_remote_identity,
+    };
     use crate::store::Store;
     use rusqlite::{Connection, params};
     use std::ffi::OsStr;
     use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -433,7 +476,7 @@ mod tests {
     }
 
     #[test]
-    fn clone_failure_happens_before_workspace_registration() {
+    fn clone_failure_happens_before_workspace_registration_and_allows_retry() {
         let root = test_root("failure");
         let state_root = create_state_root(&root);
         let not_a_repo = root.join("not-a-repo");
@@ -448,8 +491,17 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("system Git clone failed"));
-        assert!(destination.is_dir());
+        assert!(!destination.exists());
         assert!(!state_root.join("winds.db").exists());
+
+        let marker = root.join("retry-bootstrap-ran");
+        let retry_root = root.join("retry-source");
+        fs::create_dir(&retry_root).unwrap();
+        let (remote, _) = initialize_remote(&retry_root, &marker);
+        clone_and_register_workspace(remote.to_str().unwrap(), &destination, &state_root, 201)
+            .unwrap();
+        assert!(destination.is_dir());
+        assert!(!marker.exists());
 
         cleanup_owned_root(&root);
     }
@@ -550,6 +602,49 @@ mod tests {
         assert!(sanitize_remote_identity("ext::sh -c 'echo unsafe'").is_err());
         assert!(sanitize_remote_identity("custom://example.test/org/repo.git").is_err());
         assert!(sanitize_remote_identity("../relative/repo.git").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn absolute_local_symlink_remote_uses_one_canonical_identity_for_git_and_persistence() {
+        let root = test_root("remote-symlink");
+        let first_root = root.join("first");
+        let second_root = root.join("second");
+        fs::create_dir(&first_root).unwrap();
+        fs::create_dir(&second_root).unwrap();
+        let (first_remote, _) = initialize_remote(&first_root, &root.join("first-marker"));
+        let (second_remote, _) = initialize_remote(&second_root, &root.join("second-marker"));
+        let link = root.join("remote-link");
+        symlink(&first_remote, &link).unwrap();
+
+        let identity = sanitize_remote_identity(link.to_str().unwrap()).unwrap();
+        assert_eq!(identity, first_remote.canonicalize().unwrap().to_str().unwrap());
+
+        fs::remove_file(&link).unwrap();
+        symlink(&second_remote, &link).unwrap();
+        let git_argument = git_remote_argument(link.to_str().unwrap(), &identity).unwrap();
+        assert_eq!(PathBuf::from(git_argument), PathBuf::from(&identity));
+        assert_ne!(identity, second_remote.canonicalize().unwrap().to_str().unwrap());
+
+        cleanup_owned_root(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reserved_destination_revalidation_rejects_symlink_replacement() {
+        let root = test_root("destination-replacement");
+        let state_root = create_state_root(&root);
+        let destination = root.join("clone");
+        let replacement = root.join("replacement");
+        fs::create_dir(&replacement).unwrap();
+        let reserved = reserve_clone_destination(&destination, &state_root).unwrap();
+        fs::remove_dir(&reserved).unwrap();
+        symlink(&replacement, &reserved).unwrap();
+
+        assert!(super::require_reserved_clone_destination(&reserved).is_err());
+
+        fs::remove_file(&reserved).unwrap();
+        cleanup_owned_root(&root);
     }
 
     #[cfg(windows)]
