@@ -74,7 +74,9 @@ fn shell_command_exit_requires_a_durable_observed_fact() {
     let home = TestHome::new("exit-fact");
     let mut store = store_with_workspace(&home);
     create_shell_command(&mut store, "command-1", 100);
-    store.mark_shell_command_running("command-1", Some(110)).unwrap();
+    store
+        .mark_shell_command_running("command-1", Some(110))
+        .unwrap();
 
     let error = store
         .record_shell_command_exit_observation("command-1", None, None)
@@ -88,8 +90,15 @@ fn shell_command_exit_requires_a_durable_observed_fact() {
         store.load_execution("command-1").unwrap().status,
         ExecutionStatus::Running
     );
-    assert_eq!(store.load_shell_command("command-1").unwrap().exit_source, None);
-    assert!(store.finalize_shell_command_from_observation("command-1").is_err());
+    assert_eq!(
+        store.load_shell_command("command-1").unwrap().exit_source,
+        None
+    );
+    assert!(
+        store
+            .finalize_shell_command_from_observation("command-1")
+            .is_err()
+    );
 
     store
         .record_shell_command_exit_observation("command-1", Some(0), None)
