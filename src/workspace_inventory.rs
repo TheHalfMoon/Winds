@@ -331,14 +331,41 @@ mod tests {
     }
 
     #[test]
-    fn inventory_fails_when_workspace_identity_paths_are_stale_or_noncanonical() {
-        let root = test_root("stale-paths");
+    fn inventory_fails_when_workspace_identity_path_is_stale() {
+        let root = test_root("stale-path");
         let (workspace, worktree) = fixture_workspace(&root);
         let moved = root.join("repo-moved");
         fs::rename(&worktree, &moved).unwrap();
 
         let error = inventory_workspace_environment(&workspace).unwrap_err();
         assert!(error.to_string().contains("cannot be canonicalized"));
+
+        cleanup_owned_root(&root);
+    }
+
+    #[test]
+    fn inventory_fails_when_workspace_identity_path_exists_but_is_noncanonical() {
+        let root = test_root("noncanonical-path");
+        let (mut workspace, worktree) = fixture_workspace(&root);
+
+        #[cfg(windows)]
+        let noncanonical = {
+            let canonical = worktree.to_str().unwrap();
+            let ordinary = canonical
+                .strip_prefix(r"\\?\")
+                .expect("Windows temp canonical path should use the verbatim drive prefix");
+            PathBuf::from(ordinary)
+        };
+        #[cfg(not(windows))]
+        let noncanonical = worktree.join(".");
+
+        assert!(noncanonical.is_absolute());
+        assert!(noncanonical.exists());
+        assert_ne!(noncanonical, worktree);
+        workspace.canonical_worktree_root = noncanonical.to_str().unwrap().to_owned();
+
+        let error = inventory_workspace_environment(&workspace).unwrap_err();
+        assert!(error.to_string().contains("no longer canonical"));
 
         cleanup_owned_root(&root);
     }
