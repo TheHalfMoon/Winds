@@ -23,7 +23,6 @@ A source appearing here is **not admitted**. Before copying/adapting code or add
 - **FOUNDER_SUPPLIED** — URL was explicitly supplied by the founder in Winds or adjacent agent/developer-tooling research.
 - **RESEARCH_DISCOVERED** — URL was found while researching a founder-requested Winds capability/source family.
 - **DERIVED_CANONICAL** — canonical repository/source was resolved from a founder-supplied website/account.
-- **CURRENT_ACCEPTED** — already admitted elsewhere in Winds canonical provenance.
 - **UNADMITTED** — reference only; no runtime/code/dependency authority.
 
 ## Founder-supplied Winds / adjacent developer-tooling sources
