@@ -1,6 +1,6 @@
 use crate::command::history::SessionHistoryPolicy;
 use crate::command::{ExplicitCommandRequest, run_explicit_command_with_history_policy};
-use crate::domain::{ExecutionKind, ExecutionStatus};
+use crate::domain::{ExecutionKind, ExecutionStatus, FactSource};
 use crate::execution::TerminalExecution;
 use crate::git::Repo;
 use crate::git::shell_profiles::{ShellProfile, discover_native_shell_profiles};
@@ -15,7 +15,7 @@ use crate::{
     Result, ensure_allowed_flags, required, resolve_without_creation, unix_ms, utf8_path,
     winds_home,
 };
-use rusqlite::{Connection, ErrorCode, OpenFlags, params};
+use rusqlite::{Connection, ErrorCode, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -183,42 +183,152 @@ fn execution(flags: HashMap<String, String>) -> Result<()> {
     let execution_id = required(&flags, "execution-id")?;
     let repo = Repo::open(Path::new(repo_arg))?;
     let home = winds_home(flags.get("home").map(String::as_str), &repo)?;
-    let store = open_reconciled_cli_store(&home)?;
+    let mut store = open_reconciled_cli_store(&home)?;
+    reconcile_execution_for_display(&home, &mut store, execution_id)?;
     require_execution_repo(&store, execution_id, &repo)?;
-    require_execution_display_truth(&home, &store, execution_id)?;
     print_json(&execution_snapshot(&store, execution_id)?)
 }
 
 fn open_reconciled_cli_store(home: &Path) -> Result<Store> {
     let mut store = Store::open(home)?;
-    reconcile_kind_when_no_live_owner(home, &mut store, ExecutionKind::Terminal)?;
-    reconcile_kind_when_no_live_owner(home, &mut store, ExecutionKind::ShellCommand)?;
+    reconcile_unowned_cli_executions(home, &mut store, ExecutionKind::Terminal)?;
+    reconcile_unowned_cli_executions(home, &mut store, ExecutionKind::ShellCommand)?;
     Ok(store)
 }
 
-fn reconcile_kind_when_no_live_owner(
+fn reconcile_unowned_cli_executions(
     home: &Path,
     store: &mut Store,
     kind: ExecutionKind,
 ) -> Result<()> {
     let execution_ids = nonfinal_execution_ids(home, kind)?;
-    if execution_ids.is_empty() {
+    for execution_id in execution_ids {
+        match probe_execution_lease(home, &execution_id)? {
+            LeaseProbe::Active => {}
+            LeaseProbe::Acquired(_lease) => {
+                reconcile_unowned_execution_row(home, store, &execution_id, kind, unix_ms()?)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn reconcile_execution_for_display(
+    home: &Path,
+    store: &mut Store,
+    execution_id: &str,
+) -> Result<()> {
+    let execution = store.load_execution(execution_id)?;
+    if !matches!(
+        execution.status,
+        ExecutionStatus::Requested | ExecutionStatus::Running
+    ) {
         return Ok(());
     }
-    for execution_id in &execution_ids {
-        if execution_has_live_owner(home, execution_id)? {
-            return Ok(());
+    match probe_execution_lease(home, execution_id)? {
+        LeaseProbe::Active => Ok(()),
+        LeaseProbe::Acquired(_lease) => reconcile_unowned_execution_row(
+            home,
+            store,
+            execution_id,
+            execution.kind,
+            unix_ms()?,
+        ),
+    }
+}
+
+fn reconcile_unowned_execution_row(
+    home: &Path,
+    store: &mut Store,
+    execution_id: &str,
+    kind: ExecutionKind,
+    now_ms: i64,
+) -> Result<()> {
+    if kind == ExecutionKind::ShellCommand {
+        let execution = store.load_execution(execution_id)?;
+        if execution.status == ExecutionStatus::Running {
+            let command = store.load_shell_command(execution_id)?;
+            if command.exit_source == Some(FactSource::WindsObserved) {
+                store.finalize_shell_command_from_observation(execution_id)?;
+                return Ok(());
+            }
         }
     }
-    let now_ms = unix_ms()?;
-    match kind {
-        ExecutionKind::Terminal => {
-            store.reconcile_unowned_terminal_sessions_after_restart(now_ms)?;
-        }
-        ExecutionKind::ShellCommand => {
-            store.reconcile_unowned_shell_commands_after_restart(now_ms)?;
-        }
+
+    let database = home.join("winds.db");
+    let mut connection = Connection::open_with_flags(
+        database,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )?;
+    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let row = tx
+        .query_row(
+            "SELECT status, requested_unix_ms
+             FROM executions
+             WHERE execution_id = ?1 AND kind = ?2",
+            params![execution_id, kind.as_str()],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?
+        .ok_or_else(|| format!("unknown Winds execution during restart reconciliation: {execution_id}"))?;
+    let status = ExecutionStatus::from_db(&row.0).ok_or_else(|| {
+        format!(
+            "unknown execution status during restart reconciliation for {execution_id}: {}",
+            row.0
+        )
+    })?;
+    if !matches!(status, ExecutionStatus::Requested | ExecutionStatus::Running) {
+        tx.commit()?;
+        return Ok(());
     }
+    if now_ms < row.1 {
+        return Err(format!(
+            "restart reconciliation time precedes execution request time: {execution_id}"
+        )
+        .into());
+    }
+    let updated = tx.execute(
+        "UPDATE executions
+         SET status = ?2, status_source = ?3,
+             ended_unix_ms = NULL, duration_ms = NULL
+         WHERE execution_id = ?1 AND status IN (?4, ?5)",
+        params![
+            execution_id,
+            ExecutionStatus::OwnershipLost.as_str(),
+            FactSource::WindsObserved.as_str(),
+            ExecutionStatus::Requested.as_str(),
+            ExecutionStatus::Running.as_str(),
+        ],
+    )?;
+    if updated != 1 {
+        return Err(format!(
+            "targeted restart reconciliation lost its non-final execution row: {execution_id}"
+        )
+        .into());
+    }
+    if kind == ExecutionKind::Terminal {
+        tx.execute(
+            "UPDATE terminal_sessions
+             SET close_reason = 'OWNERSHIP_LOST_PROCESS_STATE_UNKNOWN'
+             WHERE execution_id = ?1",
+            params![execution_id],
+        )?;
+    }
+    let event_kind = match kind {
+        ExecutionKind::Terminal => "TerminalOwnershipLostAfterRestart",
+        ExecutionKind::ShellCommand => "ShellCommandOwnershipLostAfterRestart",
+    };
+    tx.execute(
+        "INSERT INTO execution_events(execution_id, kind, fact_source, created_unix_ms)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![
+            execution_id,
+            event_kind,
+            FactSource::WindsObserved.as_str(),
+            now_ms,
+        ],
+    )?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -247,23 +357,6 @@ fn nonfinal_execution_ids(home: &Path, kind: ExecutionKind) -> Result<Vec<String
     Ok(execution_ids)
 }
 
-fn require_execution_display_truth(home: &Path, store: &Store, execution_id: &str) -> Result<()> {
-    let execution = store.load_execution(execution_id)?;
-    if !matches!(
-        execution.status,
-        ExecutionStatus::Requested | ExecutionStatus::Running
-    ) {
-        return Ok(());
-    }
-    if execution_has_live_owner(home, execution_id)? {
-        return Ok(());
-    }
-    Err(format!(
-        "execution {execution_id} remains non-final but no live Winds owner can be proven; restart reconciliation is deferred while another execution of the same kind is active, so Winds refuses to display a falsely-live status"
-    )
-    .into())
-}
-
 fn acquire_execution_lease(home: &Path, execution_id: &str) -> Result<ExecutionLease> {
     match probe_execution_lease(home, execution_id)? {
         LeaseProbe::Acquired(lease) => Ok(lease),
@@ -274,16 +367,6 @@ fn acquire_execution_lease(home: &Path, execution_id: &str) -> Result<ExecutionL
     }
 }
 
-fn execution_has_live_owner(home: &Path, execution_id: &str) -> Result<bool> {
-    match probe_execution_lease(home, execution_id)? {
-        LeaseProbe::Active => Ok(true),
-        LeaseProbe::Acquired(lease) => {
-            drop(lease);
-            Ok(false)
-        }
-    }
-}
-
 enum LeaseProbe {
     Acquired(ExecutionLease),
     Active,
@@ -291,16 +374,13 @@ enum LeaseProbe {
 
 struct ExecutionLease {
     connection: Option<Connection>,
-    path: PathBuf,
 }
 
 impl Drop for ExecutionLease {
     fn drop(&mut self) {
         if let Some(connection) = self.connection.take() {
             let _ = connection.execute_batch("ROLLBACK");
-            drop(connection);
         }
-        let _ = fs::remove_file(&self.path);
     }
 }
 
@@ -320,7 +400,6 @@ fn probe_execution_lease(home: &Path, execution_id: &str) -> Result<LeaseProbe> 
     match connection.execute_batch("BEGIN IMMEDIATE") {
         Ok(()) => Ok(LeaseProbe::Acquired(ExecutionLease {
             connection: Some(connection),
-            path,
         })),
         Err(error) if sqlite_busy_or_locked(&error) => Ok(LeaseProbe::Active),
         Err(error) => Err(format!(
