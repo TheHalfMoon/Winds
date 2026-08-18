@@ -618,13 +618,19 @@ mod tests {
         symlink(&first_remote, &link).unwrap();
 
         let identity = sanitize_remote_identity(link.to_str().unwrap()).unwrap();
-        assert_eq!(identity, first_remote.canonicalize().unwrap().to_str().unwrap());
+        assert_eq!(
+            identity,
+            first_remote.canonicalize().unwrap().to_str().unwrap()
+        );
 
         fs::remove_file(&link).unwrap();
         symlink(&second_remote, &link).unwrap();
         let git_argument = git_remote_argument(link.to_str().unwrap(), &identity).unwrap();
         assert_eq!(PathBuf::from(git_argument), PathBuf::from(&identity));
-        assert_ne!(identity, second_remote.canonicalize().unwrap().to_str().unwrap());
+        assert_ne!(
+            identity,
+            second_remote.canonicalize().unwrap().to_str().unwrap()
+        );
 
         cleanup_owned_root(&root);
     }
