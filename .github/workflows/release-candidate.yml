@@ -135,23 +135,75 @@ jobs:
           BASELINE_SHA="8e92c5612a9ddc32996ed5e08475e3c9baa5e161"
           TEMP_PARENT="$(cd .. && pwd)/winds-t064-baseline-${GITHUB_RUN_ID}-${RANDOM}"
           TEMP_WORKTREE="$TEMP_PARENT/candidate"
+          BASELINE_FIXTURE="$TEMP_PARENT/walking_skeleton.rs"
+          CARGO_TARGET_DIR="$TEMP_PARENT/target"
           mkdir "$TEMP_PARENT"
           cleanup_historical_worktree() {
-            git worktree remove --force "$TEMP_WORKTREE" >/dev/null 2>&1 || true
-            rmdir "$TEMP_PARENT" >/dev/null 2>&1 || true
+            original_status="${1:-0}"
+            cleanup_status=0
+            if git worktree list --porcelain | grep -Fqx "worktree $TEMP_WORKTREE"; then
+              git worktree remove "$TEMP_WORKTREE" >/dev/null 2>&1 || cleanup_status=1
+            fi
+            rm -rf -- "$CARGO_TARGET_DIR" || cleanup_status=1
+            rm -f -- "$BASELINE_FIXTURE" || cleanup_status=1
+            rmdir "$TEMP_PARENT" >/dev/null 2>&1 || cleanup_status=1
+            if [ "$original_status" -ne 0 ]; then
+              if [ "$cleanup_status" -ne 0 ]; then
+                echo "historical verification failed with status $original_status; cleanup also failed and evidence was retained where possible" >&2
+              fi
+              return "$original_status"
+            fi
+            return "$cleanup_status"
           }
-          trap cleanup_historical_worktree EXIT
+          trap 'status=$?; trap - EXIT; cleanup_historical_worktree "$status"; exit $?' EXIT
           git worktree add --detach "$TEMP_WORKTREE" "$CANDIDATE_SHA"
-          git show "${BASELINE_SHA}:tests/walking_skeleton.rs" > "$TEMP_WORKTREE/tests/walking_skeleton.rs"
+          git show "${BASELINE_SHA}:tests/walking_skeleton.rs" > "$BASELINE_FIXTURE"
+          python3 - "$TEMP_WORKTREE/tests" "$BASELINE_FIXTURE" <<'PY'
+          import os
+          import stat
+          import sys
+          from pathlib import Path
+
+          parent = Path(sys.argv[1])
+          fixture = Path(sys.argv[2])
+          target = parent / "walking_skeleton.rs"
+          parent_stat = os.lstat(parent)
+          target_stat = os.lstat(target)
+          if not stat.S_ISDIR(parent_stat.st_mode) or stat.S_ISLNK(parent_stat.st_mode):
+              raise SystemExit("historical test parent is not a real directory")
+          if not stat.S_ISREG(target_stat.st_mode) or stat.S_ISLNK(target_stat.st_mode):
+              raise SystemExit("historical test target is not a real regular file")
+          data = fixture.read_bytes()
+          directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+          directory_fd = os.open(parent, directory_flags)
+          try:
+              target_flags = os.O_WRONLY | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+              target_fd = os.open(target.name, target_flags, dir_fd=directory_fd)
+              try:
+                  if not stat.S_ISREG(os.fstat(target_fd).st_mode):
+                      raise SystemExit("historical test target changed type during safe open")
+                  with os.fdopen(target_fd, "wb", closefd=False) as handle:
+                      handle.write(data)
+                      handle.flush()
+                      os.fsync(handle.fileno())
+              finally:
+                  os.close(target_fd)
+          finally:
+              os.close(directory_fd)
+          PY
           (
             cd "$TEMP_WORKTREE"
+            export CARGO_TARGET_DIR
             python3 scripts/ci/run_exact_cargo_test.py \
               verifies_blocks_and_promotes_without_touching_primary_checkout \
               -- cargo test --locked --test walking_skeleton \
               verifies_blocks_and_promotes_without_touching_primary_checkout \
               -- --exact --test-threads=1 --nocapture
           )
-          cleanup_historical_worktree
+          git -C "$TEMP_WORKTREE" restore --source="$CANDIDATE_SHA" --worktree -- tests/walking_skeleton.rs
+          git -C "$TEMP_WORKTREE" diff --exit-code
+          test -z "$(git -C "$TEMP_WORKTREE" status --porcelain=v1 --untracked-files=all)"
+          cleanup_historical_worktree 0
           trap - EXIT
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
           git diff --exit-code
@@ -246,23 +298,70 @@ jobs:
           SOURCE_SHA="ad4625ecd7f9a933613890cca74129857d0b4166"
           TEMP_PARENT="$(cd .. && pwd)/winds-t064-windows-${GITHUB_RUN_ID}-${RANDOM}"
           TEMP_WORKTREE="$TEMP_PARENT/candidate"
+          BASELINE_FIXTURE="$TEMP_PARENT/walking_skeleton.rs"
+          CARGO_TARGET_DIR="$(cygpath -w "$TEMP_PARENT/target")"
           mkdir "$TEMP_PARENT"
           cleanup_historical_worktree() {
-            git worktree remove --force "$TEMP_WORKTREE" >/dev/null 2>&1 || true
-            rmdir "$TEMP_PARENT" >/dev/null 2>&1 || true
+            original_status="${1:-0}"
+            cleanup_status=0
+            if git worktree list --porcelain | grep -Fqx "worktree $TEMP_WORKTREE"; then
+              git worktree remove "$TEMP_WORKTREE" >/dev/null 2>&1 || cleanup_status=1
+            fi
+            rm -rf -- "$TEMP_PARENT/target" || cleanup_status=1
+            rm -f -- "$BASELINE_FIXTURE" || cleanup_status=1
+            rmdir "$TEMP_PARENT" >/dev/null 2>&1 || cleanup_status=1
+            if [ "$original_status" -ne 0 ]; then
+              if [ "$cleanup_status" -ne 0 ]; then
+                echo "historical Windows verification failed with status $original_status; cleanup also failed and evidence was retained where possible" >&2
+              fi
+              return "$original_status"
+            fi
+            return "$cleanup_status"
           }
-          trap cleanup_historical_worktree EXIT
+          trap 'status=$?; trap - EXIT; cleanup_historical_worktree "$status"; exit $?' EXIT
           git worktree add --detach "$TEMP_WORKTREE" "$CANDIDATE_SHA"
-          git show "${SOURCE_SHA}:tests/walking_skeleton.rs" > "$TEMP_WORKTREE/tests/walking_skeleton.rs"
+          git show "${SOURCE_SHA}:tests/walking_skeleton.rs" > "$BASELINE_FIXTURE"
+          python - "$TEMP_WORKTREE/tests" "$BASELINE_FIXTURE" <<'PY'
+          import os
+          import stat
+          import sys
+          from pathlib import Path
+
+          parent = Path(sys.argv[1])
+          fixture = Path(sys.argv[2])
+          target = parent / "walking_skeleton.rs"
+          parent_stat = os.lstat(parent)
+          target_stat = os.lstat(target)
+          if not stat.S_ISDIR(parent_stat.st_mode) or stat.S_ISLNK(parent_stat.st_mode):
+              raise SystemExit("historical Windows test parent is not a real directory")
+          if not stat.S_ISREG(target_stat.st_mode) or stat.S_ISLNK(target_stat.st_mode):
+              raise SystemExit("historical Windows test target is not a real regular file")
+          data = fixture.read_bytes()
+          flags = os.O_WRONLY | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+          target_fd = os.open(target, flags)
+          try:
+              if not stat.S_ISREG(os.fstat(target_fd).st_mode):
+                  raise SystemExit("historical Windows test target changed type during safe open")
+              with os.fdopen(target_fd, "wb", closefd=False) as handle:
+                  handle.write(data)
+                  handle.flush()
+                  os.fsync(handle.fileno())
+          finally:
+              os.close(target_fd)
+          PY
           (
             cd "$TEMP_WORKTREE"
+            export CARGO_TARGET_DIR
             python scripts/ci/run_exact_cargo_test.py \
               native_windows_refuses_authoritative_required_checks_without_mutation \
               -- cargo test --locked --test walking_skeleton \
               native_windows_refuses_authoritative_required_checks_without_mutation \
               -- --exact --test-threads=1 --nocapture
           )
-          cleanup_historical_worktree
+          git -C "$TEMP_WORKTREE" restore --source="$CANDIDATE_SHA" --worktree -- tests/walking_skeleton.rs
+          git -C "$TEMP_WORKTREE" diff --exit-code
+          test -z "$(git -C "$TEMP_WORKTREE" status --porcelain=v1 --untracked-files=all)"
+          cleanup_historical_worktree 0
           trap - EXIT
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
           git diff --exit-code
