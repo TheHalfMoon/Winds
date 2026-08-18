@@ -3,8 +3,9 @@ use serde_json::{Value, json};
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[test]
 fn cli_process_start_reconciles_stale_execution_truth_before_display() {
@@ -133,16 +134,121 @@ fn cli_process_start_reconciles_stale_execution_truth_before_display() {
     );
 }
 
+#[test]
+fn concurrent_live_owner_is_preserved_and_ambiguous_stale_display_fails_closed() {
+    let Some(temp) = TestTempDir::new("winds-t066-concurrent") else {
+        return;
+    };
+    let root = temp.path();
+    let repo = root.join("repo");
+    let winds_home = root.join("winds-home");
+    init_repo(&repo);
+
+    let opened = winds(&winds_home, ["workspace-open", "--repo", test_path(&repo)]);
+    assert_success(&opened);
+    let opened_json: Value = serde_json::from_slice(&opened.stdout).unwrap();
+    let workspace_id = opened_json["workspace_id"].as_str().unwrap().to_owned();
+    let canonical_repo = repo.canonicalize().unwrap();
+
+    let (executable, arguments) = long_running_command();
+    let arguments_json = serde_json::to_string(&arguments).unwrap();
+    let mut live = Command::new(env!("CARGO_BIN_EXE_winds"))
+        .args([
+            "run",
+            "--repo",
+            test_path(&repo),
+            "--execution-id",
+            "t066-live-command",
+            "--executable",
+            test_path(&executable),
+            "--args-json",
+            &arguments_json,
+            "--history",
+            "disabled",
+        ])
+        .env("WINDS_HOME", &winds_home)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    wait_for_status(&winds_home, "t066-live-command", "RUNNING");
+
+    let inspected_live = winds(
+        &winds_home,
+        [
+            "execution",
+            "--repo",
+            test_path(&repo),
+            "--execution-id",
+            "t066-live-command",
+        ],
+    );
+    assert_success(&inspected_live);
+    let inspected_live_json: Value = serde_json::from_slice(&inspected_live.stdout).unwrap();
+    assert_eq!(inspected_live_json["status"], "RUNNING");
+
+    seed_one_stale_shell_command(
+        &winds_home,
+        &workspace_id,
+        &canonical_repo,
+        "t066-concurrent-stale",
+    );
+    let stale_during_live = winds(
+        &winds_home,
+        [
+            "execution",
+            "--repo",
+            test_path(&repo),
+            "--execution-id",
+            "t066-concurrent-stale",
+        ],
+    );
+    assert!(!stale_during_live.status.success());
+    assert!(
+        String::from_utf8_lossy(&stale_during_live.stderr)
+            .contains("refuses to display a falsely-live status")
+    );
+
+    let live_output = live.wait_with_output().unwrap();
+    assert_success(&live_output);
+
+    let final_live = winds(
+        &winds_home,
+        [
+            "execution",
+            "--repo",
+            test_path(&repo),
+            "--execution-id",
+            "t066-live-command",
+        ],
+    );
+    assert_success(&final_live);
+    let final_live_json: Value = serde_json::from_slice(&final_live.stdout).unwrap();
+    assert_eq!(final_live_json["status"], "EXITED");
+
+    let stale_after_live = winds(
+        &winds_home,
+        [
+            "execution",
+            "--repo",
+            test_path(&repo),
+            "--execution-id",
+            "t066-concurrent-stale",
+        ],
+    );
+    assert_success(&stale_after_live);
+    let stale_after_live_json: Value = serde_json::from_slice(&stale_after_live.stdout).unwrap();
+    assert_eq!(stale_after_live_json["status"], "OWNERSHIP_LOST");
+    assert!(stale_after_live_json["ended_unix_ms"].is_null());
+    assert!(stale_after_live_json["duration_ms"].is_null());
+}
+
 fn seed_stale_execution_rows(home: &Path, workspace_id: &str, repo: &Path) {
     let mut connection = Connection::open(home.join("winds.db")).unwrap();
     connection.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
     let tx = connection.transaction().unwrap();
-    let execution_domain = json!({
-        "kind": "NATIVE_HOST",
-        "os": std::env::consts::OS,
-        "arch": std::env::consts::ARCH,
-    })
-    .to_string();
+    let execution_domain = execution_domain_json();
     let cwd = test_path(repo);
 
     tx.execute(
@@ -195,6 +301,89 @@ fn seed_stale_execution_rows(home: &Path, workspace_id: &str, repo: &Path) {
     )
     .unwrap();
     tx.commit().unwrap();
+}
+
+fn seed_one_stale_shell_command(
+    home: &Path,
+    workspace_id: &str,
+    repo: &Path,
+    execution_id: &str,
+) {
+    let mut connection = Connection::open(home.join("winds.db")).unwrap();
+    connection.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    let tx = connection.transaction().unwrap();
+    tx.execute(
+        "INSERT INTO executions(
+            execution_id, workspace_id, kind, request_source, execution_domain,
+            status, status_source, requested_unix_ms,
+            started_unix_ms, ended_unix_ms, duration_ms
+         ) VALUES (?1, ?2, 'SHELL_COMMAND', 'CALLER_REQUESTED', ?3,
+                   'RUNNING', 'WINDS_OBSERVED', 100, 110, NULL, NULL)",
+        params![execution_id, workspace_id, execution_domain_json()],
+    )
+    .unwrap();
+    tx.execute(
+        "INSERT INTO shell_commands(
+            execution_id, executable, arguments_json, command_source,
+            requested_cwd, cwd_source, exit_code, exit_source, observed_end_unix_ms
+         ) VALUES (?1, 'stale-command', '[]', 'CALLER_REQUESTED', ?2,
+                   'CALLER_REQUESTED', NULL, NULL, NULL)",
+        params![execution_id, test_path(repo)],
+    )
+    .unwrap();
+    tx.commit().unwrap();
+}
+
+fn execution_domain_json() -> String {
+    json!({
+        "kind": "NATIVE_HOST",
+        "os": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+    })
+    .to_string()
+}
+
+fn wait_for_status(home: &Path, execution_id: &str, expected: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let connection = Connection::open(home.join("winds.db")).unwrap();
+        let status = connection
+            .query_row(
+                "SELECT status FROM executions WHERE execution_id = ?1",
+                [execution_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .unwrap();
+        if status.as_deref() == Some(expected) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for execution {execution_id} to reach {expected}; last status: {status:?}"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
+fn long_running_command() -> (PathBuf, Vec<String>) {
+    (
+        PathBuf::from("/bin/sh"),
+        vec!["-c".to_owned(), "sleep 2".to_owned()],
+    )
+}
+
+#[cfg(windows)]
+fn long_running_command() -> (PathBuf, Vec<String>) {
+    (
+        PathBuf::from(std::env::var_os("COMSPEC").expect("COMSPEC on Windows CI")),
+        vec![
+            "/D".to_owned(),
+            "/C".to_owned(),
+            "ping -n 3 127.0.0.1 >NUL".to_owned(),
+        ],
+    )
 }
 
 fn assert_execution_state(
