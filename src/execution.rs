@@ -32,6 +32,7 @@ pub struct TerminalExecution<'store> {
     history: SessionHistoryRecorder,
     pending_final: Option<TerminalFinalization>,
     final_recorded: bool,
+    finalization_lower_bound_unix_ms: i64,
 }
 
 impl<'store> TerminalExecution<'store> {
@@ -172,7 +173,7 @@ impl<'store> TerminalExecution<'store> {
         let exit = self.session.try_wait()?;
         if exit.is_some() {
             self.pending_final = Some(TerminalFinalization::Exited {
-                ended_unix_ms: self.finalization_unix_ms()?,
+                ended_unix_ms: self.finalization_unix_ms(),
             });
             self.persist_pending_final()?;
         }
@@ -190,7 +191,7 @@ impl<'store> TerminalExecution<'store> {
 
         let exit = self.session.wait()?;
         self.pending_final = Some(TerminalFinalization::Exited {
-            ended_unix_ms: self.finalization_unix_ms()?,
+            ended_unix_ms: self.finalization_unix_ms(),
         });
         self.persist_pending_final()?;
         Ok(exit)
@@ -217,23 +218,23 @@ impl<'store> TerminalExecution<'store> {
             return self.session.wait();
         }
 
-        let observed_unix_ms = self.finalization_unix_ms()?;
-        let outcome = self.session.cleanup_for_drop(Duration::from_millis(500))?;
+        let outcome = self.session.cleanup_for_drop(Duration::from_millis(500));
+        let observed_unix_ms = self.finalization_unix_ms();
         let (exit, finalization) = match outcome {
-            TerminalDropCleanupOutcome::ExitedBeforeCleanup(exit) => (
+            Ok(TerminalDropCleanupOutcome::ExitedBeforeCleanup(exit)) => (
                 exit,
                 TerminalFinalization::Exited {
                     ended_unix_ms: observed_unix_ms,
                 },
             ),
-            TerminalDropCleanupOutcome::Terminated(exit) => (
+            Ok(TerminalDropCleanupOutcome::Terminated(exit)) => (
                 exit,
                 TerminalFinalization::Interrupted {
                     ended_unix_ms: observed_unix_ms,
                     reason: controlled_reason,
                 },
             ),
-            TerminalDropCleanupOutcome::Unproven => {
+            Ok(TerminalDropCleanupOutcome::Unproven) => {
                 self.pending_final = Some(TerminalFinalization::OwnershipLost { observed_unix_ms });
                 self.persist_pending_final()?;
                 return Err(format!(
@@ -241,18 +242,33 @@ impl<'store> TerminalExecution<'store> {
                 )
                 .into());
             }
+            Err(cleanup_error) => {
+                self.pending_final = Some(TerminalFinalization::OwnershipLost { observed_unix_ms });
+                match self.persist_pending_final() {
+                    Ok(()) => {
+                        return Err(format!(
+                            "terminal {operation} cleanup failed and ownership was recorded as lost: {cleanup_error}"
+                        )
+                        .into());
+                    }
+                    Err(persist_error) => {
+                        return Err(format!(
+                            "terminal {operation} cleanup failed: {cleanup_error}; ownership-loss persistence also failed: {persist_error}"
+                        )
+                        .into());
+                    }
+                }
+            }
         };
         self.pending_final = Some(finalization);
         self.persist_pending_final()?;
         Ok(exit)
     }
 
-    fn finalization_unix_ms(&self) -> Result<i64> {
-        let execution = self.store.load_execution(&self.execution_id)?;
-        let lower_bound = execution
-            .started_unix_ms
-            .unwrap_or(execution.requested_unix_ms);
-        Ok(unix_ms()?.max(lower_bound))
+    fn finalization_unix_ms(&self) -> i64 {
+        unix_ms()
+            .unwrap_or(self.finalization_lower_bound_unix_ms)
+            .max(self.finalization_lower_bound_unix_ms)
     }
 
     fn persist_pending_final(&mut self) -> Result<()> {
@@ -293,11 +309,9 @@ impl Drop for TerminalExecution<'_> {
             return;
         }
 
-        let observed_unix_ms = match self.finalization_unix_ms() {
-            Ok(value) => value,
-            Err(_) => return,
-        };
-        let finalization = match self.session.cleanup_for_drop(Duration::from_millis(500)) {
+        let cleanup = self.session.cleanup_for_drop(Duration::from_millis(500));
+        let observed_unix_ms = self.finalization_unix_ms();
+        let finalization = match cleanup {
             Ok(TerminalDropCleanupOutcome::ExitedBeforeCleanup(_)) => {
                 TerminalFinalization::Exited {
                     ended_unix_ms: observed_unix_ms,
@@ -458,6 +472,7 @@ fn finish_started_session<'store>(
         history,
         pending_final: None,
         final_recorded: false,
+        finalization_lower_bound_unix_ms: started_unix_ms,
     })
 }
 
