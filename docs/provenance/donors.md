@@ -2,6 +2,8 @@
 
 This ledger records external projects that materially shape Winds. Before code is copied/adapted, exact paths, source commit, license, modifications, and update strategy must be added.
 
+For the broader founder-supplied and research-discovered candidate/reference inventory, see `docs/provenance/source-registry.md`. Presence in that registry does **not** admit a donor, dependency, protocol, or implementation scope.
+
 | Project | Pin | License | Winds use | Reuse mode |
 |---|---|---|---|---|
 | `github/spec-kit` | v0.16.4 / `d1f50fcbe684a4222059c4ba7f2d7eabcca87402` | MIT | Spec-driven workflow structure: Constitution -> Spec -> Plan -> Tasks -> Implement | Process/template reference; Winds-authored artifacts |
