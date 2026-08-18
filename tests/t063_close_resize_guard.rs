@@ -35,7 +35,10 @@ use std::time::{Duration, Instant};
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 const INITIAL_SIZE: TerminalSize = TerminalSize { rows: 24, cols: 80 };
 #[cfg(windows)]
-const RESIZED: TerminalSize = TerminalSize { rows: 33, cols: 101 };
+const RESIZED: TerminalSize = TerminalSize {
+    rows: 33,
+    cols: 101,
+};
 #[cfg(windows)]
 const CURSOR_POSITION_QUERY: &[u8] = b"\x1b[6n";
 #[cfg(windows)]
