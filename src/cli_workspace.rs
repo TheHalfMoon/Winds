@@ -184,9 +184,12 @@ fn execution(flags: HashMap<String, String>) -> Result<()> {
     let repo = Repo::open(Path::new(repo_arg))?;
     let home = winds_home(flags.get("home").map(String::as_str), &repo)?;
     let mut store = open_reconciled_cli_store(&home)?;
-    reconcile_execution_for_display(&home, &mut store, execution_id)?;
     require_execution_repo(&store, execution_id, &repo)?;
-    print_json(&execution_snapshot(&store, execution_id)?)
+    print_json(&execution_snapshot_with_ownership_truth(
+        &home,
+        &mut store,
+        execution_id,
+    )?)
 }
 
 fn open_reconciled_cli_store(home: &Path) -> Result<Store> {
@@ -216,30 +219,34 @@ fn reconcile_unowned_cli_executions(
     Ok(())
 }
 
-fn reconcile_execution_for_display(
+fn execution_snapshot_with_ownership_truth(
     home: &Path,
     store: &mut Store,
     execution_id: &str,
-) -> Result<()> {
-    let execution = store.load_execution(execution_id)?;
-    if !matches!(
-        execution.status,
-        ExecutionStatus::Requested | ExecutionStatus::Running
-    ) {
-        return Ok(());
-    }
-    match probe_execution_lease(home, execution_id)? {
-        LeaseProbe::Active => Ok(()),
-        LeaseProbe::Acquired(lease) => {
-            let result = reconcile_unowned_execution_row(
-                home,
-                store,
-                execution_id,
-                execution.kind,
-                unix_ms()?,
-            );
-            drop(lease);
-            result
+) -> Result<Value> {
+    loop {
+        let snapshot = execution_snapshot(store, execution_id)?;
+        let execution = store.load_execution(execution_id)?;
+        if !matches!(
+            execution.status,
+            ExecutionStatus::Requested | ExecutionStatus::Running
+        ) {
+            return Ok(snapshot);
+        }
+
+        match probe_execution_lease(home, execution_id)? {
+            LeaseProbe::Active => return Ok(snapshot),
+            LeaseProbe::Acquired(lease) => {
+                let result = reconcile_unowned_execution_row(
+                    home,
+                    store,
+                    execution_id,
+                    execution.kind,
+                    unix_ms()?,
+                );
+                drop(lease);
+                result?;
+            }
         }
     }
 }
