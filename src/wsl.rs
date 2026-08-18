@@ -208,8 +208,9 @@ fn receive_reader(
 ) -> Result<BoundedBytes> {
     let remaining = deadline.saturating_duration_since(Instant::now());
     match receiver.recv_timeout(remaining) {
-        Ok(result) => result
-            .map_err(|error| format!("WSL discovery failed reading {name}: {error}").into()),
+        Ok(result) => {
+            result.map_err(|error| format!("WSL discovery failed reading {name}: {error}").into())
+        }
         Err(RecvTimeoutError::Timeout) => Err(format!(
             "WSL discovery {name} reader exceeded the overall {} second safety timeout",
             WSL_DISCOVERY_TIMEOUT.as_secs()
