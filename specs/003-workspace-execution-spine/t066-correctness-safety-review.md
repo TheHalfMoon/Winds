@@ -93,6 +93,24 @@ The final repair removes that independently mutable intermediate directory from 
 
 This closes the **new child-directory TOCTOU introduced by T066** without inventing an unstable platform-specific directory-handle abstraction. It does not claim protection against a hostile actor that can concurrently replace the entire canonical Winds state root itself; such a filesystem-sandbox threat would also apply to `winds.db` and the pre-existing state model and is outside Spec 003/T066. T066 therefore does not broaden the repository's filesystem-adversary claim.
 
+### T066-F9 — starting one command could finalize another live owner's durable exit
+
+**Classification:** blocking correctness / cross-owner lifecycle mutation.
+
+A later exact-head review found that `run_explicit_command_with_history_policy()` began by calling `Store::finalize_observed_shell_commands()`. That Store helper intentionally finalizes **all** `RUNNING` shell commands with a durable `WINDS_OBSERVED` exit fact, but it has no knowledge of the per-execution T066 ownership lease. A different live owner can be in the narrow state where it has durably recorded its child exit but has not yet completed its own final execution-state transition. Starting an unrelated command could therefore finalize that owner's row and cause the original owner to observe an unexpected lifecycle state.
+
+The final repair removes that global sweep from command startup. An explicit command finalizes only its own observed exit after waiting for its own retained child. Restart recovery of durable observed exits remains in the lease-aware T066 reconciliation path, where Winds first acquires the exact execution lease before finalizing that exact row. A command-layer regression test seeds an unrelated `RUNNING` command with a durable observed exit, starts another command, and proves the unrelated row remains `RUNNING` while the new command reaches `EXITED`.
+
+### T066-F10 — regressed wall clock could block unrelated restart reconciliation
+
+**Classification:** correctness / conservative clock handling.
+
+A reviewer correctly noted that the first targeted reconciliation returned an error whenever `now_ms < requested_unix_ms`. Ownership-loss itself does not claim a trustworthy process end time: `ended_unix_ms` and `duration_ms` are deliberately stored as unknown. Refusing the ownership transition solely because wall clock regressed could therefore let one stale future-dated row block otherwise valid CLI startup.
+
+The final repair no longer requires current wall time to be at or after the request time before transitioning an unowned non-final row to `OWNERSHIP_LOST`. The execution still keeps unknown end/duration, while the required event timestamp is conservatively made non-regressing as `max(now_ms, requested_unix_ms)`. A binary-facing fixture seeds a stale command whose request/start timestamps are deliberately in the future, proves CLI restart still succeeds, proves the row becomes `OWNERSHIP_LOST`, and proves the event timestamp is clamped to the request timestamp.
+
+The broader reviewer suggestion to silently skip **all** per-row reconciliation errors was not adopted. Unknown/corrupt state or persistence failures remain fail-closed: silently leaving a known non-final row falsely live would conflict with FR-019 and FR-029. T066 therefore repairs the recoverable clock case without weakening corruption handling.
+
 ## Final repair design
 
 The T066 repair keeps reconciliation at the **user-facing CLI process boundary**, not inside generic `Store::open`, so a second Store connection inside one live process cannot silently revoke owned execution state.
@@ -109,8 +127,9 @@ For current Spec 003 CLI execution surfaces:
 - a busy lease proves another Winds process currently owns that execution lifecycle, so that row is not modified;
 - an acquired probe lease is explicitly retained until after the targeted exact-ID SQLite transition completes, preventing a same-ID owner from appearing while the row is reconciled;
 - targeted reconciliation updates only that exact execution ID, so executions created after the snapshot cannot be swept into a bulk ownership-loss update;
-- durable `WINDS_OBSERVED` shell-command exit facts are finalized to `EXITED` rather than discarded as ownership loss;
-- otherwise-unowned `REQUESTED`/`RUNNING` terminal and explicit-command rows transition immediately to `OWNERSHIP_LOST` with unknown process end/duration;
+- explicit command startup no longer performs a global durable-exit finalization sweep; a running command finalizes only its own observed exit, while restart recovery finalizes an unowned observed exit under its exact T066 lease;
+- durable `WINDS_OBSERVED` shell-command exit facts encountered by lease-aware restart reconciliation are finalized to `EXITED` rather than discarded as ownership loss;
+- otherwise-unowned `REQUESTED`/`RUNNING` terminal and explicit-command rows transition immediately to `OWNERSHIP_LOST` with unknown process end/duration, even if wall clock regressed; event time is clamped so it does not precede the request;
 - `winds execution` reads a snapshot first, proves a live owner after any non-final read, refreshes the snapshot after a busy-owner proof, and otherwise performs targeted reconciliation under the acquired lease before re-reading final truth.
 
 The targeted transition intentionally remains local to the T057 CLI restart boundary. It writes only the existing execution/session/event schema and reproduces the already-canonical restart state vocabulary; it does not change candidate/evidence authority or introduce a new public runtime protocol.
@@ -123,7 +142,7 @@ This is a process-ownership proof only. It is not a daemon, detached-session pro
 
 The retained `TerminalSession` child handle remains the authority for live terminal lifecycle operations. Unix interrupt validates the PTY foreground process group against the retained child session before `killpg`. Terminate/close act only through directly retained child handles. Bounded close that cannot prove reaping becomes ownership loss rather than success.
 
-T066 repairs the missing transition between in-process ownership and later CLI-process restart truth. Cross-process leases prove only whether another Winds process still owns the execution lifecycle; they do not grant process signaling authority. Per-ID targeted reconciliation prevents both revoking a distinct live owner and sweeping a newly created live row into a stale-state update. Display-time proof is taken after reading any non-final snapshot, and the snapshot is refreshed after a busy-owner proof.
+T066 repairs the missing transition between in-process ownership and later CLI-process restart truth. Cross-process leases prove only whether another Winds process still owns the execution lifecycle; they do not grant process signaling authority. Per-ID targeted reconciliation prevents both revoking a distinct live owner and sweeping a newly created live row into a stale-state update. Explicit command startup no longer finalizes unrelated durable exits. Display-time proof is taken after reading any non-final snapshot, and the snapshot is refreshed after a busy-owner proof.
 
 ### 2. Stale PID reuse
 
@@ -141,7 +160,7 @@ WSL launch remains bound to the selected distribution, exact system `wsl.exe`, e
 
 Terminal request/session creation remains atomic. Child-start/RUNNING persistence failure retains owned cleanup and conservative repair. Exit-finalization failures do not return false success and are deferred for retry. Existing backend restart behavior retains partial terminal coverage; the T066 user-facing path additionally performs exact-ID ownership-loss transitions without touching unrelated rows.
 
-Explicit shell-command durable exit observations are finalized before an unowned non-final row is classified ownership-lost. The targeted ownership-loss update and its execution event are committed in one immediate SQLite transaction. Terminal close reason is updated in that same transaction when the typed session row exists.
+Explicit shell-command durable exit observations are finalized before an unowned non-final row is classified ownership-lost, but only after exact-ID ownership is acquired in the T066 restart path. Ordinary command startup does not sweep another command's durable exit. The targeted ownership-loss update and its execution event are committed in one immediate SQLite transaction. Terminal close reason is updated in that same transaction when the typed session row exists. Clock regression does not invent an end time or block ownership-loss; only the event timestamp is clamped to a non-regressing value.
 
 ### 6. Shell telemetry source attribution
 
@@ -164,10 +183,14 @@ Spec 003 workspace execution, command history, terminal history, Git observation
 - stale terminal `RUNNING` -> `OWNERSHIP_LOST`, unknown process end/duration, typed ownership-lost close reason;
 - stale explicit command `RUNNING` -> `OWNERSHIP_LOST`;
 - explicit command with a durable `WINDS_OBSERVED` exit fact -> `EXITED` rather than discarded truth;
+- a stale future-dated explicit command still reconciles to `OWNERSHIP_LOST` instead of blocking CLI startup, with the ownership-loss event timestamp clamped to the request timestamp;
 - a concurrently live `winds run` remains `RUNNING` when inspected from another Winds CLI process;
 - an unrelated stale same-kind command reconciles to `OWNERSHIP_LOST` immediately while the live owner remains protected;
 - the live fixture uses an explicit release-file condition rather than fixed-duration liveness or stdin propagation, and a RAII guard releases/reaps the child on both normal completion and assertion unwinding;
+- all Winds CLI subprocesses in the T066 fixture have bounded completion with kill/reap and diagnostic output on timeout;
 - after the live execution finishes, it remains truthfully `EXITED`.
+
+`src/command.rs` additionally carries a focused regression proving that starting an explicit command does not finalize an unrelated command that merely has a durable observed exit pending its owner's final transition.
 
 ## Boundaries preserved
 
