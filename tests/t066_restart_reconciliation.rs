@@ -137,6 +137,10 @@ fn concurrent_live_owner_is_preserved_while_unrelated_stale_row_reconciles() {
     let repo = root.join("repo");
     let winds_home = root.join("winds-home");
     let release_file = root.join("release-live-command");
+    assert!(
+        !release_file.exists(),
+        "T066 release signal must not exist before the live execution starts"
+    );
     init_repo(&repo);
 
     let opened = winds(&winds_home, ["workspace-open", "--repo", test_path(&repo)]);
@@ -146,6 +150,10 @@ fn concurrent_live_owner_is_preserved_while_unrelated_stale_row_reconciles() {
     let canonical_repo = repo.canonicalize().unwrap();
 
     let (executable, arguments) = blocking_command(root);
+    assert!(
+        !release_file.exists(),
+        "T066 blocking-command setup must not emit the release signal"
+    );
     let arguments_json = serde_json::to_string(&arguments).unwrap();
     let child = Command::new(env!("CARGO_BIN_EXE_winds"))
         .args([
@@ -168,9 +176,13 @@ fn concurrent_live_owner_is_preserved_while_unrelated_stale_row_reconciles() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let live = LiveWinds::new(child, release_file);
+    let live = LiveWinds::new(child, release_file.clone());
 
     wait_for_status(&winds_home, "t066-live-command", "RUNNING");
+    assert!(
+        !release_file.exists(),
+        "T066 live execution reached RUNNING only before its release signal"
+    );
 
     seed_one_stale_shell_command(
         &winds_home,
@@ -194,6 +206,10 @@ fn concurrent_live_owner_is_preserved_while_unrelated_stale_row_reconciles() {
     assert_eq!(stale_during_live_json["status"], "OWNERSHIP_LOST");
     assert!(stale_during_live_json["ended_unix_ms"].is_null());
     assert!(stale_during_live_json["duration_ms"].is_null());
+    assert!(
+        !release_file.exists(),
+        "reconciling an unrelated stale row must not release the live execution"
+    );
 
     let inspected_live = winds(
         &winds_home,
@@ -364,18 +380,34 @@ fn blocking_command(root: &Path) -> (PathBuf, Vec<String>) {
 
 #[cfg(windows)]
 fn blocking_command(root: &Path) -> (PathBuf, Vec<String>) {
-    let script = root.join("wait-release.cmd");
+    let script = root.join("wait-release.ps1");
     fs::write(
         &script,
-        "@echo off\r\n:wait\r\nif exist \"%WINDS_T066_RELEASE_FILE%\" exit /b 0\r\nping -n 2 127.0.0.1 >NUL\r\ngoto wait\r\n",
+        "while (-not (Test-Path -LiteralPath $env:WINDS_T066_RELEASE_FILE)) { Start-Sleep -Milliseconds 50 }\r\n",
     )
     .unwrap();
+    let system_root = PathBuf::from(
+        std::env::var_os("SystemRoot").expect("SystemRoot must identify Windows system binaries"),
+    );
+    let powershell = system_root
+        .join("System32")
+        .join("WindowsPowerShell")
+        .join("v1.0")
+        .join("powershell.exe");
+    assert!(
+        powershell.is_absolute() && powershell.is_file(),
+        "T066 Windows fixture requires the system Windows PowerShell executable: {}",
+        powershell.display()
+    );
     (
-        PathBuf::from(std::env::var_os("COMSPEC").expect("COMSPEC on Windows CI")),
+        powershell,
         vec![
-            "/D".to_owned(),
-            "/Q".to_owned(),
-            "/C".to_owned(),
+            "-NoLogo".to_owned(),
+            "-NoProfile".to_owned(),
+            "-NonInteractive".to_owned(),
+            "-ExecutionPolicy".to_owned(),
+            "Bypass".to_owned(),
+            "-File".to_owned(),
             test_path(&script).to_owned(),
         ],
     )
