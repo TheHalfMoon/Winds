@@ -131,7 +131,7 @@ fn cli_process_start_reconciles_stale_execution_truth_before_display() {
 }
 
 #[test]
-fn concurrent_live_owner_is_preserved_and_ambiguous_stale_display_fails_closed() {
+fn concurrent_live_owner_is_preserved_while_unrelated_stale_row_reconciles() {
     let Some(temp) = TestTempDir::new("winds-t066-concurrent") else {
         return;
     };
@@ -170,6 +170,29 @@ fn concurrent_live_owner_is_preserved_and_ambiguous_stale_display_fails_closed()
 
     wait_for_status(&winds_home, "t066-live-command", "RUNNING");
 
+    seed_one_stale_shell_command(
+        &winds_home,
+        &workspace_id,
+        &canonical_repo,
+        "t066-concurrent-stale",
+    );
+
+    let stale_during_live = winds(
+        &winds_home,
+        [
+            "execution",
+            "--repo",
+            test_path(&repo),
+            "--execution-id",
+            "t066-concurrent-stale",
+        ],
+    );
+    assert_success(&stale_during_live);
+    let stale_during_live_json: Value = serde_json::from_slice(&stale_during_live.stdout).unwrap();
+    assert_eq!(stale_during_live_json["status"], "OWNERSHIP_LOST");
+    assert!(stale_during_live_json["ended_unix_ms"].is_null());
+    assert!(stale_during_live_json["duration_ms"].is_null());
+
     let inspected_live = winds(
         &winds_home,
         [
@@ -183,28 +206,6 @@ fn concurrent_live_owner_is_preserved_and_ambiguous_stale_display_fails_closed()
     assert_success(&inspected_live);
     let inspected_live_json: Value = serde_json::from_slice(&inspected_live.stdout).unwrap();
     assert_eq!(inspected_live_json["status"], "RUNNING");
-
-    seed_one_stale_shell_command(
-        &winds_home,
-        &workspace_id,
-        &canonical_repo,
-        "t066-concurrent-stale",
-    );
-    let stale_during_live = winds(
-        &winds_home,
-        [
-            "execution",
-            "--repo",
-            test_path(&repo),
-            "--execution-id",
-            "t066-concurrent-stale",
-        ],
-    );
-    assert!(!stale_during_live.status.success());
-    assert!(
-        String::from_utf8_lossy(&stale_during_live.stderr)
-            .contains("refuses to display a falsely-live status")
-    );
 
     let live_output = live.wait_with_output().unwrap();
     assert_success(&live_output);
@@ -222,22 +223,6 @@ fn concurrent_live_owner_is_preserved_and_ambiguous_stale_display_fails_closed()
     assert_success(&final_live);
     let final_live_json: Value = serde_json::from_slice(&final_live.stdout).unwrap();
     assert_eq!(final_live_json["status"], "EXITED");
-
-    let stale_after_live = winds(
-        &winds_home,
-        [
-            "execution",
-            "--repo",
-            test_path(&repo),
-            "--execution-id",
-            "t066-concurrent-stale",
-        ],
-    );
-    assert_success(&stale_after_live);
-    let stale_after_live_json: Value = serde_json::from_slice(&stale_after_live.stdout).unwrap();
-    assert_eq!(stale_after_live_json["status"], "OWNERSHIP_LOST");
-    assert!(stale_after_live_json["ended_unix_ms"].is_null());
-    assert!(stale_after_live_json["duration_ms"].is_null());
 }
 
 fn seed_stale_execution_rows(home: &Path, workspace_id: &str, repo: &Path) {
