@@ -368,8 +368,9 @@ fn receive_bounded_reader(
 ) -> Result<BoundedCapture> {
     let remaining = deadline.saturating_duration_since(Instant::now());
     match receiver.recv_timeout(remaining) {
-        Ok(result) => result
-            .map_err(|error| format!("{label} failed reading Git {stream}: {error}").into()),
+        Ok(result) => {
+            result.map_err(|error| format!("{label} failed reading Git {stream}: {error}").into())
+        }
         Err(RecvTimeoutError::Timeout) => Err(format!(
             "{label} {stream} reader exceeded the overall {} second safety timeout",
             OBSERVATION_GIT_TIMEOUT.as_secs()
@@ -608,7 +609,10 @@ fn strip_git_line_ending(value: &str) -> &str {
 
 #[cfg(test)]
 mod git_observation_tests {
-    use super::{GIT_WORKTREE_STATE_FORMAT, OBSERVATION_GIT_OUTPUT_LIMIT, parse_worktree_status, read_bounded};
+    use super::{
+        GIT_WORKTREE_STATE_FORMAT, OBSERVATION_GIT_OUTPUT_LIMIT, parse_worktree_status,
+        read_bounded,
+    };
     use std::io::Cursor;
 
     #[test]
