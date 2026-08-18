@@ -114,7 +114,10 @@ impl Store {
                         "SELECT observed_unix_ms
                          FROM execution_git_observations
                          WHERE execution_id = ?1 AND boundary = ?2",
-                        params![observation.execution_id, GitObservationBoundary::Before.as_str()],
+                        params![
+                            observation.execution_id,
+                            GitObservationBoundary::Before.as_str()
+                        ],
                         |row| row.get::<_, Option<i64>>(0),
                     )
                     .optional()?
