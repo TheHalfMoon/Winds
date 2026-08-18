@@ -501,6 +501,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::thread;
+    use std::time::{Duration, Instant};
 
     static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
@@ -678,6 +679,15 @@ mod tests {
         .unwrap();
 
         let output = drain_output(execution.take_output_reader().unwrap());
+        let ready = root.path().join("terminate-ready");
+        execution
+            .send_input(b"printf ready > terminate-ready; while :; do sleep 1; done\n")
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !ready.is_file() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(ready.is_file(), "terminate fixture shell never became live");
         execution.terminate().unwrap();
         drop(execution);
         output.join().unwrap();
