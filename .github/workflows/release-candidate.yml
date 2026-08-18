@@ -133,14 +133,28 @@ jobs:
         run: |
           set -euo pipefail
           BASELINE_SHA="8e92c5612a9ddc32996ed5e08475e3c9baa5e161"
-          git show "${BASELINE_SHA}:tests/walking_skeleton.rs" > tests/walking_skeleton.rs
-          python3 scripts/ci/run_exact_cargo_test.py \
-            verifies_blocks_and_promotes_without_touching_primary_checkout \
-            -- cargo test --locked --test walking_skeleton \
-            verifies_blocks_and_promotes_without_touching_primary_checkout \
-            -- --exact --test-threads=1 --nocapture
-          git restore --source=HEAD --worktree -- tests/walking_skeleton.rs
-          git diff --exit-code -- tests/walking_skeleton.rs
+          TEMP_PARENT="$(cd .. && pwd)/winds-t064-baseline-${GITHUB_RUN_ID}-${RANDOM}"
+          TEMP_WORKTREE="$TEMP_PARENT/candidate"
+          mkdir "$TEMP_PARENT"
+          cleanup_historical_worktree() {
+            git worktree remove --force "$TEMP_WORKTREE" >/dev/null 2>&1 || true
+            rmdir "$TEMP_PARENT" >/dev/null 2>&1 || true
+          }
+          trap cleanup_historical_worktree EXIT
+          git worktree add --detach "$TEMP_WORKTREE" "$CANDIDATE_SHA"
+          git show "${BASELINE_SHA}:tests/walking_skeleton.rs" > "$TEMP_WORKTREE/tests/walking_skeleton.rs"
+          (
+            cd "$TEMP_WORKTREE"
+            python3 scripts/ci/run_exact_cargo_test.py \
+              verifies_blocks_and_promotes_without_touching_primary_checkout \
+              -- cargo test --locked --test walking_skeleton \
+              verifies_blocks_and_promotes_without_touching_primary_checkout \
+              -- --exact --test-threads=1 --nocapture
+          )
+          cleanup_historical_worktree
+          trap - EXIT
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          git diff --exit-code
           echo "T064_PINNED_WALKING_SKELETON_PROVEN=$BASELINE_SHA"
 
       - name: Prove partial-worktree recovery is non-destructive
@@ -230,14 +244,28 @@ jobs:
         run: |
           set -euo pipefail
           SOURCE_SHA="ad4625ecd7f9a933613890cca74129857d0b4166"
-          git show "${SOURCE_SHA}:tests/walking_skeleton.rs" > tests/walking_skeleton.rs
-          python scripts/ci/run_exact_cargo_test.py \
-            native_windows_refuses_authoritative_required_checks_without_mutation \
-            -- cargo test --locked --test walking_skeleton \
-            native_windows_refuses_authoritative_required_checks_without_mutation \
-            -- --exact --test-threads=1 --nocapture
-          git restore --source=HEAD --worktree -- tests/walking_skeleton.rs
-          git diff --exit-code -- tests/walking_skeleton.rs
+          TEMP_PARENT="$(cd .. && pwd)/winds-t064-windows-${GITHUB_RUN_ID}-${RANDOM}"
+          TEMP_WORKTREE="$TEMP_PARENT/candidate"
+          mkdir "$TEMP_PARENT"
+          cleanup_historical_worktree() {
+            git worktree remove --force "$TEMP_WORKTREE" >/dev/null 2>&1 || true
+            rmdir "$TEMP_PARENT" >/dev/null 2>&1 || true
+          }
+          trap cleanup_historical_worktree EXIT
+          git worktree add --detach "$TEMP_WORKTREE" "$CANDIDATE_SHA"
+          git show "${SOURCE_SHA}:tests/walking_skeleton.rs" > "$TEMP_WORKTREE/tests/walking_skeleton.rs"
+          (
+            cd "$TEMP_WORKTREE"
+            python scripts/ci/run_exact_cargo_test.py \
+              native_windows_refuses_authoritative_required_checks_without_mutation \
+              -- cargo test --locked --test walking_skeleton \
+              native_windows_refuses_authoritative_required_checks_without_mutation \
+              -- --exact --test-threads=1 --nocapture
+          )
+          cleanup_historical_worktree
+          trap - EXIT
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          git diff --exit-code
           echo "T064_PINNED_WINDOWS_AUTHORITY_PROVEN=$SOURCE_SHA"
 
   soak:
