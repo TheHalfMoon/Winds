@@ -387,7 +387,7 @@ fn terminal_spawn_cwd(canonical_cwd: &Path) -> Result<PathBuf> {
     let value = canonical_cwd
         .to_str()
         .ok_or("native Windows terminal cwd is not valid UTF-8")?;
-    if value.starts_with(r"\\?\UNC\") || value.starts_with(r"\\") {
+    if value.starts_with(r"\\?\UNC\") {
         return Err(
             "native Windows terminal cwd cannot use a UNC path in Spec 003 T051; refusing to let the shell silently fall back to another directory"
                 .into(),
@@ -401,11 +401,16 @@ fn terminal_spawn_cwd(canonical_cwd: &Path) -> Result<PathBuf> {
             && matches!(bytes[2], b'\\' | b'/');
         if !ordinary_drive_path {
             return Err(
-                "native Windows terminal cwd cannot be represented safely for the PTY child"
-                    .into(),
+                "native Windows terminal cwd cannot be represented safely for the PTY child".into(),
             );
         }
         return Ok(PathBuf::from(rest));
+    }
+    if value.starts_with(r"\\") {
+        return Err(
+            "native Windows terminal cwd cannot use a UNC path in Spec 003 T051; refusing to let the shell silently fall back to another directory"
+                .into(),
+        );
     }
     Ok(canonical_cwd.to_path_buf())
 }
