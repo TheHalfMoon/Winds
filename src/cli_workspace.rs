@@ -445,7 +445,8 @@ fn require_execution_repo(store: &Store, execution_id: &str, repo: &Repo) -> Res
     let workspace = store.load_workspace(&execution.workspace_id)?;
     let repo_root = utf8_path(repo.root(), "repository worktree root")?;
     let repo_common_dir = utf8_path(repo.common_dir(), "repository Git common directory")?;
-    if workspace.canonical_worktree_root != repo_root || workspace.git_common_dir != repo_common_dir {
+    if workspace.canonical_worktree_root != repo_root || workspace.git_common_dir != repo_common_dir
+    {
         return Err(format!(
             "execution {execution_id} belongs to a different Winds workspace Git identity than --repo"
         )
