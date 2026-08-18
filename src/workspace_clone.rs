@@ -745,7 +745,13 @@ mod tests {
             360,
             |staged, requested| {
                 staged_checkout = Some(staged.to_path_buf());
-                assert_eq!(requested, destination);
+                let expected_requested = destination
+                    .parent()
+                    .unwrap()
+                    .canonicalize()
+                    .unwrap()
+                    .join(destination.file_name().unwrap());
+                assert_eq!(requested, expected_requested);
                 fs::create_dir(requested)?;
                 fs::write(requested.join("replacement-marker"), b"replacement\n")?;
                 Ok(())
