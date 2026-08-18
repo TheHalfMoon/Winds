@@ -231,7 +231,7 @@ fn execution_snapshot_with_ownership_truth(
             execution.status,
             ExecutionStatus::Requested | ExecutionStatus::Running
         ) {
-            return Ok(snapshot);
+            return execution_snapshot(store, execution_id);
         }
 
         match probe_execution_lease(home, execution_id)? {
