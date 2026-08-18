@@ -643,6 +643,11 @@ impl Store {
             )
             .into());
         }
+        if exit_code.is_none() && observed_end_unix_ms.is_none() {
+            return Err(
+                "shell-command exit observation requires an exit code or observed end time".into(),
+            );
+        }
         validate_optional_command_times(requested_unix_ms, started_unix_ms, observed_end_unix_ms)?;
         let updated = tx.execute(
             "UPDATE shell_commands
@@ -696,7 +701,9 @@ impl Store {
             )
             .into());
         }
-        if row.4.as_deref() != Some(FactSource::WindsObserved.as_str()) {
+        if row.4.as_deref() != Some(FactSource::WindsObserved.as_str())
+            || (row.3.is_none() && row.5.is_none())
+        {
             return Err(
                 "shell-command completion requires a durable WINDS_OBSERVED exit fact".into(),
             );
@@ -759,9 +766,9 @@ impl Store {
     pub fn reconcile_unowned_shell_commands_after_restart(&mut self, now_ms: i64) -> Result<usize> {
         self.finalize_observed_shell_commands()?;
         let tx = self.connection.transaction()?;
-        let execution_ids = {
+        let executions = {
             let mut statement = tx.prepare(
-                "SELECT e.execution_id
+                "SELECT e.execution_id, e.requested_unix_ms
                  FROM executions e
                  INNER JOIN shell_commands c ON c.execution_id = e.execution_id
                  WHERE e.kind = ?1 AND e.status IN (?2, ?3)
@@ -774,11 +781,11 @@ impl Store {
                         ExecutionStatus::Requested.as_str(),
                         ExecutionStatus::Running.as_str(),
                     ],
-                    |row| row.get::<_, String>(0),
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
                 )?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         };
-        for execution_id in &execution_ids {
+        for (execution_id, requested_unix_ms) in &executions {
             let updated = tx.execute(
                 "UPDATE executions
                  SET status = ?2, status_source = ?3,
@@ -803,11 +810,11 @@ impl Store {
                 execution_id,
                 "ShellCommandOwnershipLostAfterRestart",
                 FactSource::WindsObserved,
-                now_ms,
+                now_ms.max(*requested_unix_ms),
             )?;
         }
         tx.commit()?;
-        Ok(execution_ids.len())
+        Ok(executions.len())
     }
 
     pub fn mark_terminal_running(&mut self, execution_id: &str, now_ms: i64) -> Result<()> {
@@ -1120,7 +1127,7 @@ impl Store {
         let tx = self.connection.transaction()?;
         let executions = {
             let mut statement = tx.prepare(
-                "SELECT e.execution_id, t.execution_id
+                "SELECT e.execution_id, t.execution_id, e.requested_unix_ms
              FROM executions e
              LEFT JOIN terminal_sessions t ON t.execution_id = e.execution_id
              WHERE e.kind = ?1 AND e.status IN (?2, ?3)
@@ -1133,12 +1140,18 @@ impl Store {
                         ExecutionStatus::Requested.as_str(),
                         ExecutionStatus::Running.as_str(),
                     ],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, i64>(2)?,
+                        ))
+                    },
                 )?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         };
 
-        for (execution_id, terminal_session_id) in &executions {
+        for (execution_id, terminal_session_id, requested_unix_ms) in &executions {
             let updated = tx.execute(
                 "UPDATE executions
              SET status = ?2, status_source = ?3,
@@ -1170,7 +1183,7 @@ impl Store {
                 execution_id,
                 "TerminalOwnershipLostAfterRestart",
                 FactSource::WindsObserved,
-                now_ms,
+                now_ms.max(*requested_unix_ms),
             )?;
         }
         tx.commit()?;
@@ -1276,6 +1289,23 @@ impl Store {
     }
 
     pub fn create_terminal_session(&self, session: NewTerminalSession<'_>) -> Result<()> {
+        let kind = self
+            .connection
+            .query_row(
+                "SELECT kind FROM executions WHERE execution_id = ?1",
+                params![session.execution_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or_else(|| {
+                format!(
+                    "unknown Winds execution for terminal session: {}",
+                    session.execution_id
+                )
+            })?;
+        if kind != ExecutionKind::Terminal.as_str() {
+            return Err("terminal session persistence requires TERMINAL execution kind".into());
+        }
         let shell_arguments_json = serde_json::to_string(session.shell_arguments)?;
         self.connection.execute(
             "INSERT INTO terminal_sessions(
