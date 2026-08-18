@@ -483,11 +483,37 @@ impl LiveWinds {
 
     fn finish(mut self) -> Output {
         self.signal_release();
-        self.child
+        let mut child = self
+            .child
             .take()
-            .expect("T066 live Winds child must exist until finish")
-            .wait_with_output()
-            .unwrap()
+            .expect("T066 live Winds child must exist until finish");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => return child.wait_with_output().unwrap(),
+                Ok(None) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Ok(None) => {
+                    let _ = child.kill();
+                    let output = child.wait_with_output().unwrap();
+                    panic!(
+                        "T066 live Winds child did not exit after release signal\nstdout:\n{}\nstderr:\n{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                }
+                Err(error) => {
+                    let _ = child.kill();
+                    let output = child.wait_with_output().unwrap();
+                    panic!(
+                        "T066 live Winds child status check failed after release signal: {error}\nstdout:\n{}\nstderr:\n{}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                }
+            }
+        }
     }
 }
 
