@@ -475,10 +475,6 @@ fn sanitize_scp_like_remote(remote: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(windows)]
-    use super::git_cli_local_path;
-    #[cfg(unix)]
-    use super::git_remote_argument;
     use super::{
         clone_and_register_workspace, clone_and_register_workspace_impl, sanitize_remote_identity,
     };
@@ -846,7 +842,7 @@ mod tests {
 
         fs::remove_file(&link).unwrap();
         symlink(&second_remote, &link).unwrap();
-        let git_argument = git_remote_argument(link.to_str().unwrap(), &identity).unwrap();
+        let git_argument = super::git_remote_argument(link.to_str().unwrap(), &identity).unwrap();
         assert_eq!(PathBuf::from(git_argument), PathBuf::from(&identity));
         assert_ne!(
             identity,
@@ -875,15 +871,15 @@ mod tests {
     #[test]
     fn windows_git_cli_local_path_removes_only_supported_verbatim_prefixes() {
         assert_eq!(
-            git_cli_local_path(Path::new(r"\\?\C:\Temp\Winds Clone")).unwrap(),
+            super::git_cli_local_path(Path::new(r"\\?\C:\Temp\Winds Clone")).unwrap(),
             PathBuf::from(r"C:\Temp\Winds Clone")
         );
         assert_eq!(
-            git_cli_local_path(Path::new(r"\\?\UNC\server\share\Winds Clone")).unwrap(),
+            super::git_cli_local_path(Path::new(r"\\?\UNC\server\share\Winds Clone")).unwrap(),
             PathBuf::from(r"\\server\share\Winds Clone")
         );
-        assert!(git_cli_local_path(Path::new(r"\\?\UNC\server")).is_err());
-        assert!(git_cli_local_path(Path::new(r"\\?\UNC\")).is_err());
-        assert!(git_cli_local_path(Path::new(r"\\?\Volume{abc}\repo")).is_err());
+        assert!(super::git_cli_local_path(Path::new(r"\\?\UNC\server")).is_err());
+        assert!(super::git_cli_local_path(Path::new(r"\\?\UNC\")).is_err());
+        assert!(super::git_cli_local_path(Path::new(r"\\?\Volume{abc}\repo")).is_err());
     }
 }
