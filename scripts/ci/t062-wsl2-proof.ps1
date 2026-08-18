@@ -1,19 +1,53 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function Invoke-NativeResult {
+    param(
+        [Parameter(Mandatory = $true)][string]$File,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $File
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    foreach ($argument in $Arguments) {
+        [void]$startInfo.ArgumentList.Add($argument)
+    }
+
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) {
+        throw "failed to start native command: $File"
+    }
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    $process.WaitForExit()
+    $stdout = $stdoutTask.GetAwaiter().GetResult().Trim()
+    $stderr = $stderrTask.GetAwaiter().GetResult().Trim()
+
+    return [pscustomobject]@{
+        ExitCode = $process.ExitCode
+        Stdout = $stdout
+        Stderr = $stderr
+    }
+}
+
 function Invoke-Captured {
     param(
         [Parameter(Mandatory = $true)][string]$File,
         [Parameter(Mandatory = $true)][string[]]$Arguments
     )
 
-    $output = & $File @Arguments 2>&1
-    $exitCode = $LASTEXITCODE
-    $text = (@($output) -join "`n").Trim()
-    if ($exitCode -ne 0) {
-        throw "command failed ($exitCode): $File $($Arguments -join ' ')`n$text"
+    $result = Invoke-NativeResult $File $Arguments
+    if ($result.ExitCode -ne 0) {
+        throw "command failed ($($result.ExitCode)): $File $($Arguments -join ' ')`nstdout:`n$($result.Stdout)`nstderr:`n$($result.Stderr)"
     }
-    return $text
+    if (-not [string]::IsNullOrWhiteSpace($result.Stderr)) {
+        Write-Host "native command diagnostic ($File): $($result.Stderr)"
+    }
+    return $result.Stdout
 }
 
 function Invoke-ProductionWslBackendProof {
@@ -66,6 +100,36 @@ function Assert-WindowsPathEqual {
     if (-not [string]::Equals($actualCanonical, $expectedCanonical, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "$Label mismatch: actual=$actualCanonical expected=$expectedCanonical"
     }
+}
+
+function Wait-ForAutomountDisabled {
+    param([Parameter(Mandatory = $true)][string]$Distribution)
+
+    $deadline = [DateTime]::UtcNow.AddSeconds(20)
+    $lastDiagnostic = ""
+    do {
+        $probe = Invoke-NativeResult "wsl.exe" @(
+            "--distribution", $Distribution,
+            "--user", "root",
+            "--exec", "/bin/sh", "-c", "test ! -e /mnt/d"
+        )
+        if ($probe.ExitCode -eq 0) {
+            return
+        }
+        $lastDiagnostic = "stdout=$($probe.Stdout); stderr=$($probe.Stderr)"
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $deadline)
+
+    throw "WSL did not restart with automount disabled within the bounded probe window: $lastDiagnostic"
+}
+
+function Limit-Diagnostic {
+    param([AllowEmptyString()][string]$Value)
+
+    if ($Value.Length -le 4096) {
+        return $Value
+    }
+    return $Value.Substring(0, 4096) + "...[truncated]"
 }
 
 $distro = $env:WINDS_T062_WSL_DISTRO
@@ -127,7 +191,9 @@ Assert-Equal "WSL Git HEAD" $linuxHead $hostHead
 
 $mismatchExitCode = $null
 $mismatchBehavior = $null
+$mismatchDiagnostic = $null
 $observedMismatchCwd = $null
+$mappedWorkspaceEquivalenceBroken = $false
 $fallbackHome = $null
 $fallbackWindows = $null
 $fallbackBackendLaunch = $null
@@ -139,8 +205,7 @@ try {
         "printf '[automount]\nenabled=false\n[interop]\nappendWindowsPath=false\n[user]\ndefault=root\n' > /etc/wsl.conf"
     ) | Out-Null
     Invoke-Captured "wsl.exe" @("--terminate", $distro) | Out-Null
-    Start-Sleep -Seconds 2
-    Invoke-Captured "wsl.exe" @("--distribution", $distro, "--user", "root", "--exec", "/bin/true") | Out-Null
+    Wait-ForAutomountDisabled $distro
 
     Invoke-ProductionWslBackendProof "FALLBACK"
     $fallbackBackendLaunch = "PASS"
@@ -152,11 +217,16 @@ try {
         "--cd", $linuxRepo,
         "--exec", "/bin/sh", "-c", "pwd -P > $mismatchMarker"
     )
-    $mismatchOutput = & wsl.exe @mismatchArguments 2>&1
-    $mismatchExitCode = $LASTEXITCODE
+    $mismatchResult = Invoke-NativeResult "wsl.exe" $mismatchArguments
+    $mismatchExitCode = $mismatchResult.ExitCode
+    $mismatchDiagnostic = Limit-Diagnostic ((@(
+        $mismatchResult.Stderr,
+        $mismatchResult.Stdout
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join "`n")
 
     if ($mismatchExitCode -ne 0) {
         $mismatchBehavior = "CD_REJECTED"
+        $mappedWorkspaceEquivalenceBroken = $true
     }
     else {
         $observedMismatchCwd = Invoke-Captured "wsl.exe" @(
@@ -168,6 +238,10 @@ try {
             throw "WSL silently preserved mapped-workspace equivalence after automount was disabled"
         }
         $mismatchBehavior = "VISIBLE_CWD_MISMATCH"
+        $mappedWorkspaceEquivalenceBroken = $true
+    }
+    if (-not $mappedWorkspaceEquivalenceBroken) {
+        throw "T062 mismatch proof did not establish broken mapped-workspace equivalence"
     }
 
     $fallbackHome = Invoke-Captured "wsl.exe" @("--distribution", $distro, "--user", "root", "--cd", "~", "--exec", "/bin/pwd", "-P")
@@ -229,8 +303,9 @@ $summary = [ordered]@{
         automount_disabled = $true
         behavior = $mismatchBehavior
         mapped_cwd_exit_code = $mismatchExitCode
+        diagnostic = $mismatchDiagnostic
         observed_cwd = $observedMismatchCwd
-        mapped_workspace_equivalence_broken = $true
+        mapped_workspace_equivalence_broken = $mappedWorkspaceEquivalenceBroken
         fallback_home = $fallbackHome
         fallback_windows = $fallbackWindows
         fallback_equivalent_to_mapped_workspace = $false
