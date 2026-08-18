@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -136,6 +136,7 @@ fn concurrent_live_owner_is_preserved_while_unrelated_stale_row_reconciles() {
     let root = temp.path();
     let repo = root.join("repo");
     let winds_home = root.join("winds-home");
+    let release_file = root.join("release-live-command");
     init_repo(&repo);
 
     let opened = winds(&winds_home, ["workspace-open", "--repo", test_path(&repo)]);
@@ -144,9 +145,9 @@ fn concurrent_live_owner_is_preserved_while_unrelated_stale_row_reconciles() {
     let workspace_id = opened_json["workspace_id"].as_str().unwrap().to_owned();
     let canonical_repo = repo.canonicalize().unwrap();
 
-    let (executable, arguments) = blocking_command();
+    let (executable, arguments) = blocking_command(root);
     let arguments_json = serde_json::to_string(&arguments).unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_winds"))
+    let child = Command::new(env!("CARGO_BIN_EXE_winds"))
         .args([
             "run",
             "--repo",
@@ -161,16 +162,13 @@ fn concurrent_live_owner_is_preserved_while_unrelated_stale_row_reconciles() {
             "disabled",
         ])
         .env("WINDS_HOME", &winds_home)
-        .stdin(Stdio::piped())
+        .env("WINDS_T066_RELEASE_FILE", &release_file)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    let stdin = child
-        .stdin
-        .take()
-        .expect("T066 live Winds fixture must retain a stdin release handle");
-    let live = LiveWinds::new(child, stdin);
+    let live = LiveWinds::new(child, release_file);
 
     wait_for_status(&winds_home, "t066-live-command", "RUNNING");
 
@@ -351,22 +349,34 @@ fn wait_for_status(home: &Path, execution_id: &str, expected: &str) {
 }
 
 #[cfg(unix)]
-fn blocking_command() -> (PathBuf, Vec<String>) {
+fn blocking_command(root: &Path) -> (PathBuf, Vec<String>) {
+    let script = root.join("wait-release.sh");
+    fs::write(
+        &script,
+        "#!/bin/sh\nwhile [ ! -f \"$WINDS_T066_RELEASE_FILE\" ]; do sleep 0.05; done\n",
+    )
+    .unwrap();
     (
         PathBuf::from("/bin/sh"),
-        vec!["-c".to_owned(), "IFS= read -r _".to_owned()],
+        vec![test_path(&script).to_owned()],
     )
 }
 
 #[cfg(windows)]
-fn blocking_command() -> (PathBuf, Vec<String>) {
+fn blocking_command(root: &Path) -> (PathBuf, Vec<String>) {
+    let script = root.join("wait-release.cmd");
+    fs::write(
+        &script,
+        "@echo off\r\n:wait\r\nif exist \"%WINDS_T066_RELEASE_FILE%\" exit /b 0\r\nping -n 2 127.0.0.1 >NUL\r\ngoto wait\r\n",
+    )
+    .unwrap();
     (
         PathBuf::from(std::env::var_os("COMSPEC").expect("COMSPEC on Windows CI")),
         vec![
             "/D".to_owned(),
             "/Q".to_owned(),
             "/C".to_owned(),
-            "set /p winds_t066_block=".to_owned(),
+            test_path(&script).to_owned(),
         ],
     )
 }
@@ -455,19 +465,24 @@ fn test_path(path: &Path) -> &str {
 
 struct LiveWinds {
     child: Option<Child>,
-    stdin: Option<ChildStdin>,
+    release_file: PathBuf,
 }
 
 impl LiveWinds {
-    fn new(child: Child, stdin: ChildStdin) -> Self {
+    fn new(child: Child, release_file: PathBuf) -> Self {
         Self {
             child: Some(child),
-            stdin: Some(stdin),
+            release_file,
         }
     }
 
+    fn signal_release(&self) {
+        fs::write(&self.release_file, b"release\n")
+            .expect("T066 release signal file must be writable");
+    }
+
     fn finish(mut self) -> Output {
-        self.stdin.take();
+        self.signal_release();
         self.child
             .take()
             .expect("T066 live Winds child must exist until finish")
@@ -478,7 +493,10 @@ impl LiveWinds {
 
 impl Drop for LiveWinds {
     fn drop(&mut self) {
-        self.stdin.take();
+        if self.child.is_none() {
+            return;
+        }
+        let _ = fs::write(&self.release_file, b"release\n");
         let Some(mut child) = self.child.take() else {
             return;
         };
