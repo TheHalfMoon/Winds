@@ -4,7 +4,8 @@ $ErrorActionPreference = "Stop"
 function Invoke-NativeResult {
     param(
         [Parameter(Mandatory = $true)][string]$File,
-        [Parameter(Mandatory = $true)][string[]]$Arguments
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [ValidateRange(1, 600000)][int]$TimeoutMilliseconds = 120000
     )
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
@@ -23,12 +24,31 @@ function Invoke-NativeResult {
     }
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
-    $process.WaitForExit()
+    if (-not $process.WaitForExit($TimeoutMilliseconds)) {
+        try {
+            if (-not $process.HasExited) {
+                $process.Kill($true)
+            }
+        }
+        catch {
+            Write-Warning "failed to kill timed-out native command $File: $_"
+        }
+        if (-not $process.WaitForExit(2000)) {
+            $process.Dispose()
+            throw "native command timed out after ${TimeoutMilliseconds}ms and could not be reaped: $File $($Arguments -join ' ')"
+        }
+        $stdout = $stdoutTask.GetAwaiter().GetResult().Trim()
+        $stderr = $stderrTask.GetAwaiter().GetResult().Trim()
+        $process.Dispose()
+        throw "native command timed out after ${TimeoutMilliseconds}ms: $File $($Arguments -join ' ')`nstdout:`n$stdout`nstderr:`n$stderr"
+    }
     $stdout = $stdoutTask.GetAwaiter().GetResult().Trim()
     $stderr = $stderrTask.GetAwaiter().GetResult().Trim()
+    $exitCode = $process.ExitCode
+    $process.Dispose()
 
     return [pscustomobject]@{
-        ExitCode = $process.ExitCode
+        ExitCode = $exitCode
         Stdout = $stdout
         Stderr = $stderr
     }
@@ -37,10 +57,11 @@ function Invoke-NativeResult {
 function Invoke-Captured {
     param(
         [Parameter(Mandatory = $true)][string]$File,
-        [Parameter(Mandatory = $true)][string[]]$Arguments
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [ValidateRange(1, 600000)][int]$TimeoutMilliseconds = 120000
     )
 
-    $result = Invoke-NativeResult $File $Arguments
+    $result = Invoke-NativeResult -File $File -Arguments $Arguments -TimeoutMilliseconds $TimeoutMilliseconds
     if ($result.ExitCode -ne 0) {
         throw "command failed ($($result.ExitCode)): $File $($Arguments -join ' ')`nstdout:`n$($result.Stdout)`nstderr:`n$($result.Stderr)"
     }
@@ -121,13 +142,17 @@ function Wait-ForMappedWorkspaceMismatch {
     $marker = "/tmp/winds-t062-observed-cwd"
     $lastDiagnostic = ""
     do {
+        $remainingMilliseconds = [int][Math]::Floor(($deadline - [DateTime]::UtcNow).TotalMilliseconds)
+        if ($remainingMilliseconds -le 0) {
+            break
+        }
         $arguments = @(
             "--distribution", $Distribution,
             "--user", "root",
             "--cd", $LinuxWorkspaceRoot,
             "--exec", "/bin/sh", "-c", "pwd -P > $marker"
         )
-        $result = Invoke-NativeResult "wsl.exe" $arguments
+        $result = Invoke-NativeResult -File "wsl.exe" -Arguments $arguments -TimeoutMilliseconds ([Math]::Min(5000, $remainingMilliseconds))
         $diagnostic = Limit-Diagnostic ((@(
             $result.Stderr,
             $result.Stdout
@@ -142,11 +167,16 @@ function Wait-ForMappedWorkspaceMismatch {
             }
         }
 
-        $markerResult = Invoke-NativeResult "wsl.exe" @(
+        $remainingMilliseconds = [int][Math]::Floor(($deadline - [DateTime]::UtcNow).TotalMilliseconds)
+        if ($remainingMilliseconds -le 0) {
+            $lastDiagnostic = "mapped probe completed at deadline; diagnostic=$diagnostic"
+            break
+        }
+        $markerResult = Invoke-NativeResult -File "wsl.exe" -Arguments @(
             "--distribution", $Distribution,
             "--user", "root",
             "--exec", "/bin/cat", $marker
-        )
+        ) -TimeoutMilliseconds ([Math]::Min(5000, $remainingMilliseconds))
         if ($markerResult.ExitCode -eq 0) {
             $observedCwd = $markerResult.Stdout.Trim()
             if ($observedCwd -cne $LinuxWorkspaceRoot) {
@@ -177,11 +207,15 @@ $distro = $env:WINDS_T062_WSL_DISTRO
 if ([string]::IsNullOrWhiteSpace($distro)) {
     throw "WINDS_T062_WSL_DISTRO must name the exact installed WSL distribution"
 }
+$tempRoot = $env:RUNNER_TEMP
+if ([string]::IsNullOrWhiteSpace($tempRoot)) {
+    throw "RUNNER_TEMP must point at the runner-owned scratch directory"
+}
 
 $repo = Resolve-CanonicalWindowsPath (Invoke-Captured "git.exe" @("rev-parse", "--show-toplevel"))
 $hostHead = Invoke-Captured "git.exe" @("-C", $repo, "rev-parse", "--verify", "HEAD^{commit}")
 $hostCommon = Resolve-CanonicalWindowsPath (Invoke-Captured "git.exe" @("-C", $repo, "rev-parse", "--path-format=absolute", "--git-common-dir"))
-$windsHome = Join-Path $env:RUNNER_TEMP ("winds-t062-home-" + $hostHead.Substring(0, 12))
+$windsHome = Join-Path $tempRoot ("winds-t062-home-" + $hostHead.Substring(0, 12))
 if (Test-Path -LiteralPath $windsHome) {
     throw "refusing to reuse pre-existing exact-head T062 Winds home: $windsHome"
 }
@@ -238,6 +272,16 @@ $mappedWorkspaceEquivalenceBroken = $false
 $fallbackHome = $null
 $fallbackWindows = $null
 $fallbackBackendLaunch = $null
+$wslConfBackup = "/tmp/winds-t062-wsl-conf-$($hostHead.Substring(0, 12)).bak"
+$wslConfOriginalState = Invoke-Captured "wsl.exe" @(
+    "--distribution", $distro,
+    "--user", "root",
+    "--exec", "/bin/sh", "-c",
+    "if [ -f /etc/wsl.conf ]; then cp /etc/wsl.conf '$wslConfBackup'; printf PRESENT; else rm -f '$wslConfBackup'; printf ABSENT; fi"
+)
+if ($wslConfOriginalState -notin @("PRESENT", "ABSENT")) {
+    throw "unexpected /etc/wsl.conf snapshot state: $wslConfOriginalState"
+}
 try {
     Invoke-Captured "wsl.exe" @(
         "--distribution", $distro,
@@ -281,16 +325,21 @@ try {
 }
 finally {
     try {
+        $restoreCommand = if ($wslConfOriginalState -ceq "PRESENT") {
+            "mv '$wslConfBackup' /etc/wsl.conf"
+        }
+        else {
+            "rm -f /etc/wsl.conf '$wslConfBackup'"
+        }
         Invoke-Captured "wsl.exe" @(
             "--distribution", $distro,
             "--user", "root",
-            "--exec", "/bin/sh", "-c",
-            "printf '[automount]\nenabled=true\n[interop]\nappendWindowsPath=true\n[user]\ndefault=root\n' > /etc/wsl.conf"
+            "--exec", "/bin/sh", "-c", $restoreCommand
         ) | Out-Null
         Invoke-Captured "wsl.exe" @("--terminate", $distro) | Out-Null
     }
     catch {
-        Write-Warning "T062 cleanup could not restore WSL automount: $_"
+        Write-Warning "T062 cleanup could not restore the original WSL configuration: $_"
     }
 }
 
