@@ -1,0 +1,202 @@
+name: windows-terminal
+
+on:
+  pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "src/**"
+      - "tests/**"
+      - "migrations/**"
+      - "scripts/ci/t062-wsl2-proof.ps1"
+      - ".github/workflows/windows-terminal.yml"
+  push:
+    branches: [main]
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "src/**"
+      - "tests/**"
+      - "migrations/**"
+      - "scripts/ci/t062-wsl2-proof.ps1"
+      - ".github/workflows/windows-terminal.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  unix-terminal-integration:
+    name: unix-terminal-integration (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04
+          - macos-15
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.97.1
+      - name: PTY lifecycle integration
+        run: cargo test --locked --bin winds git::terminal::tests -- --test-threads=1
+      - name: CLI terminal proof integration
+        run: cargo test --locked --test t057_cli minimal_cli_proves_workspace_profiles_execution_and_terminal_paths -- --test-threads=1
+
+  native-windows-terminal:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Compile touched surface
+        run: cargo check --locked --all-targets --all-features
+      - name: Clippy touched surface
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - name: Full Spec 003 touched-surface tests
+        run: cargo test --locked --all-targets --all-features -- --test-threads=1
+      - name: Native Windows ConPTY lifecycle tests
+        run: cargo test --locked --bin winds terminal::windows_tests -- --test-threads=1
+      - name: WSL launch unit tests
+        run: cargo test --locked --bin winds wsl_launch::tests -- --test-threads=1
+      - name: Terminal ledger persistence tests
+        run: cargo test --locked --bin winds store::persistence_tests -- --test-threads=1
+      - name: Explicit command observability tests
+        run: cargo test --locked --bin winds command::tests -- --test-threads=1
+
+  real-wsl2-integration:
+    name: real-wsl2-integration (windows-2025 / Ubuntu)
+    runs-on: windows-2025
+    timeout-minutes: 40
+    steps:
+      - name: Checkout exact candidate head
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify checkout identity
+        shell: pwsh
+        run: |
+          $expected = "${{ github.event.pull_request.head.sha || github.sha }}"
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -cne $expected) {
+            throw "checkout identity mismatch: actual=$actual expected=$expected"
+          }
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.97.1
+
+      - name: Provision real Ubuntu WSL2 distribution
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          wsl.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "wsl --version failed" }
+          wsl.exe --status
+          if ($LASTEXITCODE -ne 0) { throw "wsl --status failed" }
+          wsl.exe --set-default-version 2
+          if ($LASTEXITCODE -ne 0) { throw "failed to set WSL2 as default" }
+
+          $installed = @(
+            wsl.exe --list --quiet |
+              ForEach-Object { ($_ -replace "`0", "").Trim() } |
+              Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+          )
+          if ($LASTEXITCODE -ne 0) { throw "failed to enumerate installed WSL distributions" }
+
+          if ($installed -ccontains "Ubuntu") {
+            $verbose = ((wsl.exe --list --verbose) -join "`n") -replace "`0", ""
+            if ($LASTEXITCODE -ne 0) { throw "failed to inspect existing Ubuntu WSL version" }
+            $match = [regex]::Match($verbose, '(?m)^\s*\*?\s*Ubuntu\s+\S+\s+([12])\s*$')
+            if (-not $match.Success) {
+              throw "could not parse existing Ubuntu WSL version from: $verbose"
+            }
+            if ($match.Groups[1].Value -ne "2") {
+              $null = & wsl.exe --terminate Ubuntu 2>&1
+              wsl.exe --set-version Ubuntu 2
+              if ($LASTEXITCODE -ne 0) { throw "failed to convert existing Ubuntu distribution to WSL2" }
+            }
+          }
+          else {
+            wsl.exe --install --distribution Ubuntu --web-download --no-launch
+            if ($LASTEXITCODE -ne 0) { throw "failed to install Ubuntu through supported WSL web-download surface" }
+          }
+
+          wsl.exe --distribution Ubuntu --user root --exec /bin/true
+          if ($LASTEXITCODE -ne 0) { throw "failed to initialize Ubuntu as root" }
+          wsl.exe --distribution Ubuntu --user root --exec /bin/sh -lc "command -v git >/dev/null 2>&1 || (apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git)"
+          if ($LASTEXITCODE -ne 0) { throw "failed to ensure Git inside Ubuntu" }
+          wsl.exe --distribution Ubuntu --user root --exec /usr/bin/git config --global --add safe.directory '*'
+          if ($LASTEXITCODE -ne 0) { throw "failed to configure test-only WSL Git safe.directory" }
+          wsl.exe --list --verbose
+          if ($LASTEXITCODE -ne 0) { throw "wsl --list --verbose failed after Ubuntu provisioning" }
+
+      - name: Preserve T052 unit contract
+        run: cargo test --locked --bin winds wsl_launch::tests -- --test-threads=1
+
+      - name: Prove T062 real Windows plus WSL2 integration
+        shell: pwsh
+        env:
+          WINDS_T062_WSL_DISTRO: Ubuntu
+        run: |
+          $evidencePath = "$env:RUNNER_TEMP/t062-wsl2-evidence.json"
+          ./scripts/ci/t062-wsl2-proof.ps1 | Tee-Object -FilePath $evidencePath
+          if (-not (Test-Path -LiteralPath $evidencePath -PathType Leaf)) {
+            throw "T062 evidence JSON was not produced"
+          }
+          $evidence = Get-Content -LiteralPath $evidencePath -Raw | ConvertFrom-Json
+          $expected = "${{ github.event.pull_request.head.sha || github.sha }}"
+          if ([int]$evidence.schema_version -ne 1) { throw "unexpected T062 evidence schema_version" }
+          if ($evidence.evidence -cne "T062_REAL_WINDOWS_WSL2_INTEGRATION") { throw "unexpected T062 evidence marker" }
+          if ($evidence.repository_head -cne $expected) { throw "T062 evidence is not bound to exact candidate head" }
+          if ($evidence.distribution.name -cne "Ubuntu" -or [int]$evidence.distribution.version -ne 2) {
+            throw "T062 evidence does not attest the selected Ubuntu WSL2 distribution"
+          }
+          if ($evidence.production_backend.mapped_prepare_and_launch -cne "PASS") {
+            throw "T062 evidence does not prove production mapped prepare+launch"
+          }
+          if ($evidence.production_backend.fallback_prepare_and_launch -cne "PASS") {
+            throw "T062 evidence does not prove production fallback prepare+launch"
+          }
+          if ($evidence.mapped_workspace.git_head_oid -cne $expected) {
+            throw "T062 evidence does not attest exact Git HEAD inside WSL"
+          }
+          if ($evidence.mapped_workspace.effective_cwd -cne $evidence.mapped_workspace.linux_root) {
+            throw "T062 evidence does not attest the mapped effective cwd"
+          }
+          if ($evidence.mismatch.behavior -notin @("CD_REJECTED", "VISIBLE_CWD_MISMATCH")) {
+            throw "T062 evidence does not record a visible mapped-workspace mismatch"
+          }
+          if (-not [bool]$evidence.mismatch.mapped_workspace_equivalence_broken) {
+            throw "T062 evidence did not establish broken mapped-workspace equivalence"
+          }
+          if ([bool]$evidence.mismatch.fallback_equivalent_to_mapped_workspace) {
+            throw "T062 fallback still claims equivalence to the mapped workspace"
+          }
+          if ($evidence.mismatch.fallback_launch -cne "PASS") {
+            throw "T062 evidence does not prove fallback launch"
+          }
+
+      - name: Upload T062 evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: t062-real-windows-wsl2-evidence
+          path: ${{ runner.temp }}/t062-wsl2-evidence.json
+          if-no-files-found: error
+          retention-days: 14

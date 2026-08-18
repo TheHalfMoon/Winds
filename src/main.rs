@@ -1,5 +1,16 @@
 mod check;
+mod cli_workspace;
+#[allow(
+    dead_code,
+    reason = "Spec 003 command backend includes lifecycle surfaces beyond the minimal T057 CLI caller"
+)]
+mod command;
 mod domain;
+#[allow(
+    dead_code,
+    reason = "Spec 003 terminal backend includes lifecycle surfaces beyond the minimal T057 CLI caller"
+)]
+mod execution;
 mod git;
 mod store;
 
@@ -41,6 +52,8 @@ fn run() -> Result<()> {
         "verify" => verify(flags),
         "promote" => promote(flags),
         "recover" => recover(flags),
+        "workspace-open" | "workspace-clone" | "profiles" | "run" | "terminal-proof"
+        | "execution" => cli_workspace::dispatch(command.as_str(), flags),
         _ => Err(usage().into()),
     }
 }
@@ -50,6 +63,7 @@ fn verify(flags: HashMap<String, String>) -> Result<()> {
         &flags,
         &["repo", "base", "candidate", "check", "timeout-secs", "home"],
     )?;
+    require_required_check_runtime()?;
     let repo_arg = required(&flags, "repo")?;
     let base_ref = required(&flags, "base")?;
     let candidate_ref = required(&flags, "candidate")?;
@@ -172,6 +186,7 @@ fn verify(flags: HashMap<String, String>) -> Result<()> {
 
 fn promote(flags: HashMap<String, String>) -> Result<()> {
     ensure_allowed_flags(&flags, &["repo", "run", "home"])?;
+    require_required_check_runtime()?;
     let repo_arg = required(&flags, "repo")?;
     let run_id = required(&flags, "run")?;
     let repo = Repo::open(Path::new(repo_arg))?;
@@ -352,6 +367,19 @@ fn recover(flags: HashMap<String, String>) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+fn require_required_check_runtime() -> Result<()> {
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn require_required_check_runtime() -> Result<()> {
+    Err(
+        "authoritative required-check execution is unsupported on native Windows in Spec 003 T051"
+            .into(),
+    )
+}
+
 fn parse_flags(args: Vec<String>) -> Result<HashMap<String, String>> {
     let mut result = HashMap::new();
     let mut index = 0;
@@ -448,5 +476,5 @@ fn unix_ms() -> Result<i64> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  winds verify --repo PATH --base REF --candidate REF --check COMMAND [--timeout-secs N] [--home PATH]\n  winds promote --repo PATH --run RUN_ID [--home PATH]\n  winds recover --repo PATH [--home PATH]"
+    "usage:\n  winds verify --repo PATH --base REF --candidate REF --check COMMAND [--timeout-secs N] [--home PATH]\n  winds promote --repo PATH --run RUN_ID [--home PATH]\n  winds recover --repo PATH [--home PATH]\n  winds workspace-open --repo PATH [--home PATH]\n  winds workspace-clone --remote REMOTE --destination ABS_PATH [--home PATH]\n  winds profiles --repo PATH [--home PATH]\n  winds run --repo PATH --execution-id ID --executable ABS_PATH [--args-json JSON_ARRAY] [--history command|disabled] [--home PATH]\n  winds terminal-proof --repo PATH --execution-id ID --profile-id PROFILE_ID [--rows N] [--cols N] [--home PATH]\n  winds execution --repo PATH --execution-id ID [--home PATH]"
 }
