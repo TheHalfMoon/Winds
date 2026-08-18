@@ -648,7 +648,19 @@ fn ensure_private_directory(path: &Path) -> Result<()> {
             }
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            create_private_directory(path)?;
+            let mut builder = DirBuilder::new();
+            builder.recursive(false);
+            #[cfg(unix)]
+            builder.mode(0o700);
+            match builder.create(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error.into()),
+            }
+            let metadata = fs::symlink_metadata(path)?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err("terminal history path must be a real directory".into());
+            }
         }
         Err(error) => return Err(error.into()),
     }
@@ -895,9 +907,9 @@ fn utf8_relative(path: &Path) -> Result<String> {
 mod tests {
     use super::{
         HARD_MAX_TRANSCRIPT_BYTES, HISTORY_DISABLED, REDACTED, SessionHistoryPolicy,
-        SessionHistoryRecorder, history_logical_bytes, history_storage_key, lower_sha256,
-        persisted_arguments, prune_for_write, remove_owned_history_session,
-        sanitize_persisted_arguments, with_history_write_lock,
+        SessionHistoryRecorder, ensure_private_directory, history_logical_bytes,
+        history_storage_key, lower_sha256, persisted_arguments, prune_for_write,
+        remove_owned_history_session, sanitize_persisted_arguments, with_history_write_lock,
     };
     use crate::domain::{ExecutionKind, FactSource};
     use crate::store::{NewExecution, NewTerminalSession, NewWorkspace, Store};
@@ -906,6 +918,8 @@ mod tests {
     use std::io::{Cursor, Read};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Barrier};
+    use std::thread;
 
     static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
@@ -1052,6 +1066,29 @@ mod tests {
         assert!(!joined.contains("token=abc"));
         assert!(!joined.contains("Bearer abc"));
         assert!(!joined.contains("opaque=value"));
+    }
+
+    #[test]
+    fn concurrent_history_root_initialization_is_idempotent_and_fail_closed() {
+        let root = TestRoot::new("history-root-race");
+        let history = Arc::new(root.path().join("history"));
+        let barrier = Arc::new(Barrier::new(8));
+        let handles = (0..8)
+            .map(|_| {
+                let history = Arc::clone(&history);
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    ensure_private_directory(&history)
+                })
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            handle.join().unwrap().unwrap();
+        }
+        let metadata = fs::symlink_metadata(history.as_path()).unwrap();
+        assert!(!metadata.file_type().is_symlink());
+        assert!(metadata.is_dir());
     }
 
     #[test]
