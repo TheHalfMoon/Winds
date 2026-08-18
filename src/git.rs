@@ -4,10 +4,13 @@ use std::ffi::OsStr;
 #[cfg(unix)]
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
+use std::io::{self, Read};
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 #[path = "shell_profiles.rs"]
 pub(crate) mod shell_profiles;
@@ -95,6 +98,8 @@ const GIT_CONTEXT_ENV_VARS: &[&str] = &[
     "GIT_CONFIG_PARAMETERS",
     "GIT_PREFIX",
 ];
+const OBSERVATION_GIT_OUTPUT_LIMIT: usize = 1024 * 1024;
+const OBSERVATION_GIT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
 pub struct Repo {
@@ -116,6 +121,10 @@ impl Repo {
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub fn common_dir(&self) -> &Path {
+        &self.common_dir
     }
 
     pub fn require_external_state_path(&self, path: &Path) -> Result<()> {
@@ -262,32 +271,124 @@ impl Repo {
 }
 
 fn observed_status_bytes(repo: &Repo) -> Result<Vec<u8>> {
-    let output = git_command(repo.root())
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .args([
-            "status",
-            "--porcelain=v2",
-            "--branch",
-            "--no-ahead-behind",
-            "-z",
-            "--untracked-files=all",
-            "--ignore-submodules=none",
-            "--no-renames",
-        ])
-        .output()?;
-    if output.status.success() {
-        return Ok(output.stdout);
+    let mut command = git_command(repo.root());
+    command.env("GIT_OPTIONAL_LOCKS", "0").args([
+        "status",
+        "--porcelain=v2",
+        "--branch",
+        "--no-ahead-behind",
+        "-z",
+        "--untracked-files=all",
+        "--ignore-submodules=none",
+        "--no-renames",
+    ]);
+    run_bounded_read_only_git(command, "workspace Git observation")
+}
+
+pub(super) fn run_bounded_read_only_git(mut command: Command, label: &str) -> Result<Vec<u8>> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("{label} could not start Git: {error}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| format!("{label} could not capture Git stdout"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| format!("{label} could not capture Git stderr"))?;
+    let stdout_reader = thread::spawn(move || read_bounded(stdout));
+    let stderr_reader = thread::spawn(move || read_bounded(stderr));
+    let started = Instant::now();
+
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() >= OBSERVATION_GIT_TIMEOUT => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = join_bounded_reader(stdout_reader, label, "stdout");
+                let _ = join_bounded_reader(stderr_reader, label, "stderr");
+                return Err(format!(
+                    "{label} exceeded the {} second safety timeout",
+                    OBSERVATION_GIT_TIMEOUT.as_secs()
+                )
+                .into());
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(10)),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = join_bounded_reader(stdout_reader, label, "stdout");
+                let _ = join_bounded_reader(stderr_reader, label, "stderr");
+                return Err(format!("{label} failed while waiting for Git: {error}").into());
+            }
+        }
+    };
+
+    let stdout = join_bounded_reader(stdout_reader, label, "stdout")?;
+    let stderr = join_bounded_reader(stderr_reader, label, "stderr")?;
+    if stdout.truncated || stderr.truncated {
+        return Err(format!(
+            "{label} output exceeded the {} byte per-stream safety bound",
+            OBSERVATION_GIT_OUTPUT_LIMIT
+        )
+        .into());
     }
-    Err(format!(
-        "failed to inspect workspace Git state: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    )
-    .into())
+    if !status.success() {
+        return Err(format!(
+            "{label} failed with status {status}: {}",
+            String::from_utf8_lossy(&stderr.bytes).trim()
+        )
+        .into());
+    }
+    Ok(stdout.bytes)
+}
+
+struct BoundedCapture {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
+fn read_bounded<R: Read>(mut reader: R) -> io::Result<BoundedCapture> {
+    let mut bytes = Vec::new();
+    let mut truncated = false;
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let count = reader.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        let remaining = OBSERVATION_GIT_OUTPUT_LIMIT.saturating_sub(bytes.len());
+        let retained = remaining.min(count);
+        bytes.extend_from_slice(&buffer[..retained]);
+        if retained < count {
+            truncated = true;
+        }
+    }
+    Ok(BoundedCapture { bytes, truncated })
+}
+
+fn join_bounded_reader(
+    handle: thread::JoinHandle<io::Result<BoundedCapture>>,
+    label: &str,
+    stream: &str,
+) -> Result<BoundedCapture> {
+    handle
+        .join()
+        .map_err(|_| format!("{label} {stream} reader thread panicked"))?
+        .map_err(|error| format!("{label} failed reading Git {stream}: {error}").into())
 }
 
 fn parse_worktree_status(bytes: &[u8]) -> Result<WorktreeStateObservation> {
     let mut head_oid: Option<Option<String>> = None;
     let mut branch: Option<Option<String>> = None;
+    let mut upstream_seen = false;
+    let mut ahead_behind_seen = false;
     let mut dirty = false;
     let mut worktree_hasher = Sha256::new();
 
@@ -323,10 +424,25 @@ fn parse_worktree_status(bytes: &[u8]) -> Result<WorktreeStateObservation> {
             });
             continue;
         }
-        if field.starts_with(b"# ") {
+        if let Some(value) = field.strip_prefix(b"# branch.upstream ") {
+            if upstream_seen || value.is_empty() {
+                return Err("Git status returned invalid branch.upstream headers".into());
+            }
+            upstream_seen = true;
             continue;
         }
+        if let Some(value) = field.strip_prefix(b"# branch.ab ") {
+            if ahead_behind_seen || value.is_empty() {
+                return Err("Git status returned invalid branch.ab headers".into());
+            }
+            ahead_behind_seen = true;
+            continue;
+        }
+        if field.starts_with(b"# ") {
+            return Err("Git status returned an unrecognized porcelain-v2 branch header".into());
+        }
 
+        validate_worktree_record(field)?;
         dirty = true;
         worktree_hasher.update(field);
         worktree_hasher.update([0]);
@@ -347,6 +463,44 @@ fn parse_worktree_status(bytes: &[u8]) -> Result<WorktreeStateObservation> {
         dirty,
         worktree_state_sha256,
     })
+}
+
+fn validate_worktree_record(field: &[u8]) -> Result<()> {
+    if let Some(rest) = field.strip_prefix(b"1 ") {
+        if fixed_fields_then_path(rest, 7) {
+            return Ok(());
+        }
+        return Err("Git status returned a malformed ordinary changed-entry record".into());
+    }
+    if let Some(rest) = field.strip_prefix(b"u ") {
+        if fixed_fields_then_path(rest, 9) {
+            return Ok(());
+        }
+        return Err("Git status returned a malformed unmerged-entry record".into());
+    }
+    if let Some(path) = field.strip_prefix(b"? ") {
+        if !path.is_empty() {
+            return Ok(());
+        }
+        return Err("Git status returned an empty untracked path".into());
+    }
+    if field.starts_with(b"2 ") {
+        return Err("Git status returned a rename/copy record despite --no-renames".into());
+    }
+    Err("Git status returned an unrecognized porcelain-v2 worktree record".into())
+}
+
+fn fixed_fields_then_path(mut rest: &[u8], fixed_fields: usize) -> bool {
+    for _ in 0..fixed_fields {
+        let Some(separator) = rest.iter().position(|byte| *byte == b' ') else {
+            return false;
+        };
+        if separator == 0 {
+            return false;
+        }
+        rest = &rest[separator + 1..];
+    }
+    !rest.is_empty()
 }
 
 fn hex_digest(digest: impl AsRef<[u8]>) -> String {
@@ -488,5 +642,21 @@ mod git_observation_tests {
         assert!(
             parse_worktree_status(b"# branch.oid (initial)\0# branch.head (detached)\0").is_err()
         );
+    }
+
+    #[test]
+    fn malformed_or_unexpected_porcelain_v2_records_fail_closed() {
+        let prefix = b"# branch.oid abc\0# branch.head main\0";
+        for invalid in [
+            b"garbage\0".as_slice(),
+            b"? \0".as_slice(),
+            b"1 MM N... 100644\0".as_slice(),
+            b"2 MM N... 100644 100644 100644 abc def R100 new\0old\0".as_slice(),
+            b"# unexpected header\0".as_slice(),
+        ] {
+            let mut bytes = prefix.to_vec();
+            bytes.extend_from_slice(invalid);
+            assert!(parse_worktree_status(&bytes).is_err());
+        }
     }
 }
