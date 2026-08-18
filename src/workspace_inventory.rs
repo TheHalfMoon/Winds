@@ -347,6 +347,16 @@ mod tests {
     fn inventory_fails_when_workspace_identity_path_exists_but_is_noncanonical() {
         let root = test_root("noncanonical-path");
         let (mut workspace, worktree) = fixture_workspace(&root);
+
+        #[cfg(windows)]
+        let noncanonical = {
+            let canonical = worktree.to_str().unwrap();
+            let ordinary = canonical
+                .strip_prefix(r"\\?\")
+                .expect("Windows temp canonical path should use the verbatim drive prefix");
+            PathBuf::from(ordinary)
+        };
+        #[cfg(not(windows))]
         let noncanonical = worktree.join("..");
 
         assert!(noncanonical.is_absolute());
