@@ -16,9 +16,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 #[cfg(windows)]
 use std::thread;
+#[cfg(windows)]
+use std::time::{Duration, Instant};
 
 #[cfg(any(windows, test))]
 const WSL_OUTPUT_CAP_BYTES: usize = 1024 * 1024;
+#[cfg(windows)]
+const WSL_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[cfg(windows)]
 #[link(name = "kernel32")]
@@ -145,9 +149,31 @@ fn run_wsl<const N: usize>(executable: &Path, args: [&str; N]) -> Result<Vec<u8>
 
     let stdout_reader = thread::spawn(move || read_capped(stdout));
     let stderr_reader = thread::spawn(move || read_capped(stderr));
-    let status = child
-        .wait()
-        .map_err(|error| format!("WSL discovery failed waiting for wsl.exe: {error}"))?;
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() >= WSL_DISCOVERY_TIMEOUT => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = join_reader(stdout_reader, "stdout");
+                let _ = join_reader(stderr_reader, "stderr");
+                return Err(format!(
+                    "WSL discovery command exceeded the {} second safety timeout",
+                    WSL_DISCOVERY_TIMEOUT.as_secs()
+                )
+                .into());
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(10)),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = join_reader(stdout_reader, "stdout");
+                let _ = join_reader(stderr_reader, "stderr");
+                return Err(format!("WSL discovery failed waiting for wsl.exe: {error}").into());
+            }
+        }
+    };
     let stdout = join_reader(stdout_reader, "stdout")?;
     let stderr = join_reader(stderr_reader, "stderr")?;
 
