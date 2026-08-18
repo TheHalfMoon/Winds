@@ -70,11 +70,7 @@ fn cli_process_start_reconciles_stale_execution_truth_before_display() {
         "t066-stale-command",
         "ShellCommandOwnershipLostAfterRestart",
     );
-    assert_event(
-        &connection,
-        "t066-observed-command",
-        "ShellCommandExited",
-    );
+    assert_event(&connection, "t066-observed-command", "ShellCommandExited");
     drop(connection);
 
     let terminal = winds(
@@ -246,7 +242,9 @@ fn concurrent_live_owner_is_preserved_and_ambiguous_stale_display_fails_closed()
 
 fn seed_stale_execution_rows(home: &Path, workspace_id: &str, repo: &Path) {
     let mut connection = Connection::open(home.join("winds.db")).unwrap();
-    connection.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    connection
+        .execute_batch("PRAGMA foreign_keys = ON;")
+        .unwrap();
     let tx = connection.transaction().unwrap();
     let execution_domain = execution_domain_json();
     let cwd = test_path(repo);
@@ -303,14 +301,11 @@ fn seed_stale_execution_rows(home: &Path, workspace_id: &str, repo: &Path) {
     tx.commit().unwrap();
 }
 
-fn seed_one_stale_shell_command(
-    home: &Path,
-    workspace_id: &str,
-    repo: &Path,
-    execution_id: &str,
-) {
+fn seed_one_stale_shell_command(home: &Path, workspace_id: &str, repo: &Path, execution_id: &str) {
     let mut connection = Connection::open(home.join("winds.db")).unwrap();
-    connection.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+    connection
+        .execute_batch("PRAGMA foreign_keys = ON;")
+        .unwrap();
     let tx = connection.transaction().unwrap();
     tx.execute(
         "INSERT INTO executions(
