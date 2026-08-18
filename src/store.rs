@@ -583,7 +583,7 @@ impl Store {
         observed_unix_ms: Option<i64>,
     ) -> Result<()> {
         let tx = self.connection.transaction()?;
-        let (status, requested_unix_ms, _started_unix_ms) =
+        let (status, requested_unix_ms, started_unix_ms) =
             shell_command_execution_state(&tx, execution_id)?;
         if !matches!(
             status,
@@ -595,9 +595,11 @@ impl Store {
             )
             .into());
         }
-        if observed_unix_ms.is_some_and(|value| value < requested_unix_ms) {
+        let observation_floor = started_unix_ms.unwrap_or(requested_unix_ms).max(requested_unix_ms);
+        if observed_unix_ms.is_some_and(|value| value < observation_floor) {
             return Err(
-                "shell-command ownership-loss observation cannot precede its request time".into(),
+                "shell-command ownership-loss observation cannot precede its observed start/request time"
+                    .into(),
             );
         }
         let updated = tx.execute(
@@ -768,7 +770,7 @@ impl Store {
         let tx = self.connection.transaction()?;
         let executions = {
             let mut statement = tx.prepare(
-                "SELECT e.execution_id, e.requested_unix_ms
+                "SELECT e.execution_id, e.requested_unix_ms, e.started_unix_ms
                  FROM executions e
                  INNER JOIN shell_commands c ON c.execution_id = e.execution_id
                  WHERE e.kind = ?1 AND e.status IN (?2, ?3)
@@ -781,11 +783,17 @@ impl Store {
                         ExecutionStatus::Requested.as_str(),
                         ExecutionStatus::Running.as_str(),
                     ],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, Option<i64>>(2)?,
+                        ))
+                    },
                 )?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         };
-        for (execution_id, requested_unix_ms) in &executions {
+        for (execution_id, requested_unix_ms, started_unix_ms) in &executions {
             let updated = tx.execute(
                 "UPDATE executions
                  SET status = ?2, status_source = ?3,
@@ -805,12 +813,15 @@ impl Store {
                 )
                 .into());
             }
+            let observation_floor = started_unix_ms
+                .unwrap_or(*requested_unix_ms)
+                .max(*requested_unix_ms);
             insert_execution_event(
                 &tx,
                 execution_id,
                 "ShellCommandOwnershipLostAfterRestart",
                 FactSource::WindsObserved,
-                now_ms.max(*requested_unix_ms),
+                now_ms.max(observation_floor),
             )?;
         }
         tx.commit()?;
@@ -1068,7 +1079,7 @@ impl Store {
         observed_unix_ms: i64,
     ) -> Result<()> {
         let tx = self.connection.transaction()?;
-        let (status, requested_unix_ms, _started_unix_ms) =
+        let (status, requested_unix_ms, started_unix_ms) =
             terminal_execution_state(&tx, execution_id)?;
         if !matches!(
             status,
@@ -1080,9 +1091,11 @@ impl Store {
             )
             .into());
         }
-        if observed_unix_ms < requested_unix_ms {
+        let observation_floor = started_unix_ms.unwrap_or(requested_unix_ms).max(requested_unix_ms);
+        if observed_unix_ms < observation_floor {
             return Err(
-                "terminal ownership-loss observation cannot precede its request time".into(),
+                "terminal ownership-loss observation cannot precede its observed start/request time"
+                    .into(),
             );
         }
         let updated = tx.execute(
@@ -1127,7 +1140,7 @@ impl Store {
         let tx = self.connection.transaction()?;
         let executions = {
             let mut statement = tx.prepare(
-                "SELECT e.execution_id, t.execution_id, e.requested_unix_ms
+                "SELECT e.execution_id, t.execution_id, e.requested_unix_ms, e.started_unix_ms
              FROM executions e
              LEFT JOIN terminal_sessions t ON t.execution_id = e.execution_id
              WHERE e.kind = ?1 AND e.status IN (?2, ?3)
@@ -1145,13 +1158,14 @@ impl Store {
                             row.get::<_, String>(0)?,
                             row.get::<_, Option<String>>(1)?,
                             row.get::<_, i64>(2)?,
+                            row.get::<_, Option<i64>>(3)?,
                         ))
                     },
                 )?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         };
 
-        for (execution_id, terminal_session_id, requested_unix_ms) in &executions {
+        for (execution_id, terminal_session_id, requested_unix_ms, started_unix_ms) in &executions {
             let updated = tx.execute(
                 "UPDATE executions
              SET status = ?2, status_source = ?3,
@@ -1178,12 +1192,15 @@ impl Store {
                     TerminalCloseReason::OwnershipLostProcessStateUnknown,
                 )?;
             }
+            let observation_floor = started_unix_ms
+                .unwrap_or(*requested_unix_ms)
+                .max(*requested_unix_ms);
             insert_execution_event(
                 &tx,
                 execution_id,
                 "TerminalOwnershipLostAfterRestart",
                 FactSource::WindsObserved,
-                now_ms.max(*requested_unix_ms),
+                now_ms.max(observation_floor),
             )?;
         }
         tx.commit()?;
