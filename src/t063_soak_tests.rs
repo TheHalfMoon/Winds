@@ -268,17 +268,15 @@ fn complete_headless_terminal_startup(
 
 #[cfg(unix)]
 fn ready_command(cycle: usize) -> Vec<u8> {
-    format!("w=WINDS_T063_READY_; printf '%s%s\\n' \"$w\" '{cycle}'\n").into_bytes()
+    format!(
+        "w=WINDS_T063_READY_; printf '%s%s\\n' \"$w\" '{cycle}'; IFS= read -r _winds_t063_gate; d=$(stty size); p=WINDS_T063_SIZE_; printf '%s%s\\n' \"$p\" \"$d\"\n"
+    )
+    .into_bytes()
 }
 
 #[cfg(windows)]
 fn ready_command(cycle: usize) -> Vec<u8> {
     format!("set \"W=WINDS_T063_READY_\"\r\necho %W%{cycle}\r\n").into_bytes()
-}
-
-#[cfg(unix)]
-fn size_probe_command() -> &'static [u8] {
-    b"d=$(stty size); p=WINDS_T063_SIZE_; printf '%s%s\\n' \"$p\" \"$d\"\n"
 }
 
 #[cfg(unix)]
@@ -293,7 +291,7 @@ fn prove_resized_terminal(
     size: TerminalSize,
     cycle: usize,
 ) {
-    execution.send_input(size_probe_command()).unwrap();
+    execution.send_input(b"\n").unwrap();
     output.wait_for(&size_marker(size), cycle);
 }
 
