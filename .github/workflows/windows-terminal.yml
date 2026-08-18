@@ -112,8 +112,32 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "wsl --status failed" }
           wsl.exe --set-default-version 2
           if ($LASTEXITCODE -ne 0) { throw "failed to set WSL2 as default" }
-          wsl.exe --install --distribution Ubuntu --web-download --no-launch
-          if ($LASTEXITCODE -ne 0) { throw "failed to install Ubuntu through supported WSL web-download surface" }
+
+          $installed = @(
+            wsl.exe --list --quiet |
+              ForEach-Object { ($_ -replace "`0", "").Trim() } |
+              Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+          )
+          if ($LASTEXITCODE -ne 0) { throw "failed to enumerate installed WSL distributions" }
+
+          if ($installed -ccontains "Ubuntu") {
+            $verbose = ((wsl.exe --list --verbose) -join "`n") -replace "`0", ""
+            if ($LASTEXITCODE -ne 0) { throw "failed to inspect existing Ubuntu WSL version" }
+            $match = [regex]::Match($verbose, '(?m)^\s*\*?\s*Ubuntu\s+\S+\s+([12])\s*$')
+            if (-not $match.Success) {
+              throw "could not parse existing Ubuntu WSL version from: $verbose"
+            }
+            if ($match.Groups[1].Value -ne "2") {
+              $null = & wsl.exe --terminate Ubuntu 2>&1
+              wsl.exe --set-version Ubuntu 2
+              if ($LASTEXITCODE -ne 0) { throw "failed to convert existing Ubuntu distribution to WSL2" }
+            }
+          }
+          else {
+            wsl.exe --install --distribution Ubuntu --web-download --no-launch
+            if ($LASTEXITCODE -ne 0) { throw "failed to install Ubuntu through supported WSL web-download surface" }
+          }
+
           wsl.exe --distribution Ubuntu --user root --exec /bin/true
           if ($LASTEXITCODE -ne 0) { throw "failed to initialize Ubuntu as root" }
           wsl.exe --distribution Ubuntu --user root --exec /bin/sh -lc "command -v git >/dev/null 2>&1 || (apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y git)"
