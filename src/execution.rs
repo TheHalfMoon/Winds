@@ -234,9 +234,7 @@ impl<'store> TerminalExecution<'store> {
                 },
             ),
             TerminalDropCleanupOutcome::Unproven => {
-                self.pending_final = Some(TerminalFinalization::OwnershipLost {
-                    observed_unix_ms,
-                });
+                self.pending_final = Some(TerminalFinalization::OwnershipLost { observed_unix_ms });
                 self.persist_pending_final()?;
                 return Err(format!(
                     "terminal {operation} could not prove owned child exit inside bounded cleanup window"
