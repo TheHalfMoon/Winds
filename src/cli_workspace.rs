@@ -1,6 +1,6 @@
 use crate::command::history::SessionHistoryPolicy;
 use crate::command::{ExplicitCommandRequest, run_explicit_command_with_history_policy};
-use crate::domain::ExecutionKind;
+use crate::domain::{ExecutionKind, ExecutionStatus, FactSource};
 use crate::execution::TerminalExecution;
 use crate::git::Repo;
 use crate::git::shell_profiles::{ShellProfile, discover_native_shell_profiles};
@@ -15,12 +15,15 @@ use crate::{
     Result, ensure_allowed_flags, required, resolve_without_creation, unix_ms, utf8_path,
     winds_home,
 };
+use rusqlite::{Connection, ErrorCode, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use serde::Serialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 pub(crate) fn dispatch(command: &str, flags: HashMap<String, String>) -> Result<()> {
     match command {
@@ -40,6 +43,7 @@ fn workspace_open(flags: HashMap<String, String>) -> Result<()> {
     let repo = Repo::open(Path::new(repo_arg))?;
     let home = winds_home(flags.get("home").map(String::as_str), &repo)?;
     let workspace = open_existing_workspace(Path::new(repo_arg), &home, unix_ms()?)?;
+    let _store = open_reconciled_cli_store(&home)?;
     print_json(&workspace)
 }
 
@@ -53,6 +57,7 @@ fn workspace_clone(flags: HashMap<String, String>) -> Result<()> {
         remote,
     )?;
     let workspace = clone_and_register_workspace(remote, destination, &home, unix_ms()?)?;
+    let _store = open_reconciled_cli_store(&home)?;
     print_json(&workspace)
 }
 
@@ -62,6 +67,7 @@ fn profiles(flags: HashMap<String, String>) -> Result<()> {
     let repo = Repo::open(Path::new(repo_arg))?;
     let home = winds_home(flags.get("home").map(String::as_str), &repo)?;
     let workspace = open_existing_workspace(Path::new(repo_arg), &home, unix_ms()?)?;
+    let _store = open_reconciled_cli_store(&home)?;
     let inventory = inventory_workspace_environment(&workspace)?;
     let native_shell_profiles = discover_native_shell_profiles(&inventory)?;
     let wsl = wsl_inventory();
@@ -96,7 +102,8 @@ fn run_command(flags: HashMap<String, String>) -> Result<()> {
     let home = winds_home(flags.get("home").map(String::as_str), &repo)?;
     let workspace = open_existing_workspace(Path::new(repo_arg), &home, unix_ms()?)?;
     let cwd = Path::new(&workspace.canonical_worktree_root);
-    let mut store = Store::open(&home)?;
+    let mut store = open_reconciled_cli_store(&home)?;
+    let _lease = acquire_execution_lease(&home, execution_id)?;
     let result = run_explicit_command_with_history_policy(
         &mut store,
         ExplicitCommandRequest {
@@ -139,7 +146,8 @@ fn terminal_proof(flags: HashMap<String, String>) -> Result<()> {
     let native_shell_profiles = discover_native_shell_profiles(&inventory)?;
     let profile = select_profile(&native_shell_profiles, profile_id)?;
     let cwd = Path::new(&workspace.canonical_worktree_root);
-    let mut store = Store::open(&home)?;
+    let mut store = open_reconciled_cli_store(&home)?;
+    let _lease = acquire_execution_lease(&home, execution_id)?;
 
     let exit = {
         let mut execution = TerminalExecution::start_native(
@@ -172,9 +180,264 @@ fn execution(flags: HashMap<String, String>) -> Result<()> {
     let execution_id = required(&flags, "execution-id")?;
     let repo = Repo::open(Path::new(repo_arg))?;
     let home = winds_home(flags.get("home").map(String::as_str), &repo)?;
-    let store = Store::open(&home)?;
+    let mut store = open_reconciled_cli_store(&home)?;
     require_execution_repo(&store, execution_id, &repo)?;
-    print_json(&execution_snapshot(&store, execution_id)?)
+    print_json(&execution_snapshot_with_ownership_truth(
+        &home,
+        &mut store,
+        execution_id,
+    )?)
+}
+
+fn open_reconciled_cli_store(home: &Path) -> Result<Store> {
+    let mut store = Store::open(home)?;
+    reconcile_unowned_cli_executions(home, &mut store, ExecutionKind::Terminal)?;
+    reconcile_unowned_cli_executions(home, &mut store, ExecutionKind::ShellCommand)?;
+    Ok(store)
+}
+
+fn reconcile_unowned_cli_executions(
+    home: &Path,
+    store: &mut Store,
+    kind: ExecutionKind,
+) -> Result<()> {
+    let execution_ids = nonfinal_execution_ids(home, kind)?;
+    for execution_id in execution_ids {
+        match probe_execution_lease(home, &execution_id)? {
+            LeaseProbe::Active => {}
+            LeaseProbe::Acquired(lease) => {
+                let result =
+                    reconcile_unowned_execution_row(home, store, &execution_id, kind, unix_ms()?);
+                drop(lease);
+                result?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn execution_snapshot_with_ownership_truth(
+    home: &Path,
+    store: &mut Store,
+    execution_id: &str,
+) -> Result<Value> {
+    loop {
+        // Build the complete point-in-time view before proving ownership. The value is
+        // intentionally discarded because an active-owner proof requires a fresh read.
+        execution_snapshot(store, execution_id)?;
+        let execution = store.load_execution(execution_id)?;
+        if !matches!(
+            execution.status,
+            ExecutionStatus::Requested | ExecutionStatus::Running
+        ) {
+            return execution_snapshot(store, execution_id);
+        }
+
+        match probe_execution_lease(home, execution_id)? {
+            LeaseProbe::Active => return execution_snapshot(store, execution_id),
+            LeaseProbe::Acquired(lease) => {
+                let result = reconcile_unowned_execution_row(
+                    home,
+                    store,
+                    execution_id,
+                    execution.kind,
+                    unix_ms()?,
+                );
+                drop(lease);
+                result?;
+            }
+        }
+    }
+}
+
+fn reconcile_unowned_execution_row(
+    home: &Path,
+    store: &mut Store,
+    execution_id: &str,
+    kind: ExecutionKind,
+    now_ms: i64,
+) -> Result<()> {
+    if kind == ExecutionKind::ShellCommand {
+        let execution = store.load_execution(execution_id)?;
+        if execution.status == ExecutionStatus::Running {
+            let command = store.load_shell_command(execution_id)?;
+            if command.exit_source == Some(FactSource::WindsObserved) {
+                store.finalize_shell_command_from_observation(execution_id)?;
+                return Ok(());
+            }
+        }
+    }
+
+    let database = home.join("winds.db");
+    let mut connection = Connection::open_with_flags(
+        database,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )?;
+    let tx = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let row = tx
+        .query_row(
+            "SELECT status, requested_unix_ms
+             FROM executions
+             WHERE execution_id = ?1 AND kind = ?2",
+            params![execution_id, kind.as_str()],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?
+        .ok_or_else(|| {
+            format!("unknown Winds execution during restart reconciliation: {execution_id}")
+        })?;
+    let status = ExecutionStatus::from_db(&row.0).ok_or_else(|| {
+        format!(
+            "unknown execution status during restart reconciliation for {execution_id}: {}",
+            row.0
+        )
+    })?;
+    if !matches!(
+        status,
+        ExecutionStatus::Requested | ExecutionStatus::Running
+    ) {
+        tx.commit()?;
+        return Ok(());
+    }
+    let event_unix_ms = now_ms.max(row.1);
+    let updated = tx.execute(
+        "UPDATE executions
+         SET status = ?2, status_source = ?3,
+             ended_unix_ms = NULL, duration_ms = NULL
+         WHERE execution_id = ?1 AND status IN (?4, ?5)",
+        params![
+            execution_id,
+            ExecutionStatus::OwnershipLost.as_str(),
+            FactSource::WindsObserved.as_str(),
+            ExecutionStatus::Requested.as_str(),
+            ExecutionStatus::Running.as_str(),
+        ],
+    )?;
+    if updated != 1 {
+        return Err(format!(
+            "targeted restart reconciliation lost its non-final execution row: {execution_id}"
+        )
+        .into());
+    }
+    if kind == ExecutionKind::Terminal {
+        tx.execute(
+            "UPDATE terminal_sessions
+             SET close_reason = 'OWNERSHIP_LOST_PROCESS_STATE_UNKNOWN'
+             WHERE execution_id = ?1",
+            params![execution_id],
+        )?;
+    }
+    let event_kind = match kind {
+        ExecutionKind::Terminal => "TerminalOwnershipLostAfterRestart",
+        ExecutionKind::ShellCommand => "ShellCommandOwnershipLostAfterRestart",
+    };
+    tx.execute(
+        "INSERT INTO execution_events(execution_id, kind, fact_source, created_unix_ms)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![
+            execution_id,
+            event_kind,
+            FactSource::WindsObserved.as_str(),
+            event_unix_ms,
+        ],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn nonfinal_execution_ids(home: &Path, kind: ExecutionKind) -> Result<Vec<String>> {
+    let database = home.join("winds.db");
+    let connection = Connection::open_with_flags(
+        database,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )?;
+    let mut statement = connection.prepare(
+        "SELECT execution_id
+         FROM executions
+         WHERE kind = ?1 AND status IN (?2, ?3)
+         ORDER BY requested_unix_ms, execution_id",
+    )?;
+    let execution_ids = statement
+        .query_map(
+            params![
+                kind.as_str(),
+                ExecutionStatus::Requested.as_str(),
+                ExecutionStatus::Running.as_str(),
+            ],
+            |row| row.get::<_, String>(0),
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(execution_ids)
+}
+
+fn acquire_execution_lease(home: &Path, execution_id: &str) -> Result<ExecutionLease> {
+    match probe_execution_lease(home, execution_id)? {
+        LeaseProbe::Acquired(lease) => Ok(lease),
+        LeaseProbe::Active => Err(format!(
+            "execution ownership lease is already held by another live Winds process: {execution_id}"
+        )
+        .into()),
+    }
+}
+
+enum LeaseProbe {
+    Acquired(ExecutionLease),
+    Active,
+}
+
+struct ExecutionLease {
+    connection: Option<Connection>,
+}
+
+impl Drop for ExecutionLease {
+    fn drop(&mut self) {
+        if let Some(connection) = self.connection.take() {
+            let _ = connection.execute_batch("ROLLBACK");
+        }
+    }
+}
+
+fn probe_execution_lease(home: &Path, execution_id: &str) -> Result<LeaseProbe> {
+    if execution_id.is_empty() || execution_id.chars().any(char::is_control) {
+        return Err("execution ownership lease requires a non-empty control-free identity".into());
+    }
+    let path = home.join(execution_lease_filename(execution_id));
+    let connection = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_CREATE
+            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )?;
+    connection.busy_timeout(Duration::from_millis(0))?;
+    match connection.execute_batch("BEGIN IMMEDIATE") {
+        Ok(()) => Ok(LeaseProbe::Acquired(ExecutionLease {
+            connection: Some(connection),
+        })),
+        Err(error) if sqlite_busy_or_locked(&error) => Ok(LeaseProbe::Active),
+        Err(error) => Err(format!(
+            "execution ownership lease could not be checked for {execution_id}: {error}"
+        )
+        .into()),
+    }
+}
+
+fn execution_lease_filename(execution_id: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(b"WindsExecutionOwnershipLeaseV1\0");
+    digest.update(execution_id.as_bytes());
+    let hex: String = digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("execution-ownership-{hex}.sqlite3")
+}
+
+fn sqlite_busy_or_locked(error: &rusqlite::Error) -> bool {
+    matches!(
+        error.sqlite_error_code(),
+        Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
+    )
 }
 
 fn require_execution_repo(store: &Store, execution_id: &str, repo: &Repo) -> Result<()> {
@@ -398,7 +661,9 @@ fn print_json(value: &impl Serialize) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_arguments, parse_history_policy, parse_terminal_size};
+    use super::{
+        execution_lease_filename, parse_arguments, parse_history_policy, parse_terminal_size,
+    };
     use crate::command::history::SessionHistoryPolicy;
 
     #[test]
@@ -431,5 +696,16 @@ mod tests {
         assert_eq!(size.cols, 80);
         assert!(parse_terminal_size(Some("0"), None).is_err());
         assert!(parse_terminal_size(None, Some("0")).is_err());
+    }
+
+    #[test]
+    fn ownership_lease_filename_is_deterministic_and_path_safe() {
+        let first = execution_lease_filename("workspace/execution:1");
+        let second = execution_lease_filename("workspace/execution:1");
+        assert_eq!(first, second);
+        assert!(first.starts_with("execution-ownership-"));
+        assert!(first.ends_with(".sqlite3"));
+        assert!(!first.contains('/'));
+        assert!(!first.contains(':'));
     }
 }

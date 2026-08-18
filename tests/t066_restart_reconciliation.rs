@@ -1,0 +1,693 @@
+use rusqlite::{Connection, OptionalExtension, params};
+use serde_json::{Value, json};
+use std::ffi::OsString;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+#[test]
+fn cli_process_start_reconciles_stale_execution_truth_before_display() {
+    let temp = TestTempDir::new("winds-t066-restart")
+        .expect("T066 restart fixture must run from a canonical UTF-8 temporary directory");
+    let root = temp.path();
+    let repo = root.join("repo");
+    let winds_home = root.join("winds-home");
+    init_repo(&repo);
+
+    let opened = winds(&winds_home, ["workspace-open", "--repo", test_path(&repo)]);
+    assert_success(&opened);
+    let opened_json: Value = serde_json::from_slice(&opened.stdout).unwrap();
+    let workspace_id = opened_json["workspace_id"].as_str().unwrap().to_owned();
+    let canonical_repo = repo.canonicalize().unwrap();
+
+    seed_stale_execution_rows(&winds_home, &workspace_id, &canonical_repo);
+    let future_requested_unix_ms = 4_102_444_800_000_i64;
+    seed_stale_shell_command_at(
+        &winds_home,
+        &workspace_id,
+        &canonical_repo,
+        "t066-future-clock-stale",
+        future_requested_unix_ms,
+        future_requested_unix_ms + 1,
+    );
+
+    let reopened = winds(&winds_home, ["workspace-open", "--repo", test_path(&repo)]);
+    assert_success(&reopened);
+
+    let connection = Connection::open(winds_home.join("winds.db")).unwrap();
+    assert_execution_state(
+        &connection,
+        "t066-stale-terminal",
+        "OWNERSHIP_LOST",
+        None,
+        None,
+    );
+    assert_execution_state(
+        &connection,
+        "t066-stale-command",
+        "OWNERSHIP_LOST",
+        None,
+        None,
+    );
+    assert_execution_state(
+        &connection,
+        "t066-observed-command",
+        "EXITED",
+        Some(120),
+        Some(10),
+    );
+    assert_execution_state(
+        &connection,
+        "t066-future-clock-stale",
+        "OWNERSHIP_LOST",
+        None,
+        None,
+    );
+    let future_event_unix_ms: i64 = connection
+        .query_row(
+            "SELECT created_unix_ms FROM execution_events
+             WHERE execution_id = ?1 AND kind = 'ShellCommandOwnershipLostAfterRestart'
+             ORDER BY event_id DESC LIMIT 1",
+            ["t066-future-clock-stale"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(future_event_unix_ms, future_requested_unix_ms);
+
+    let terminal_reason: String = connection
+        .query_row(
+            "SELECT close_reason FROM terminal_sessions WHERE execution_id = ?1",
+            ["t066-stale-terminal"],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(terminal_reason, "OWNERSHIP_LOST_PROCESS_STATE_UNKNOWN");
+
+    assert_event(
+        &connection,
+        "t066-stale-terminal",
+        "TerminalOwnershipLostAfterRestart",
+    );
+    assert_event(
+        &connection,
+        "t066-stale-command",
+        "ShellCommandOwnershipLostAfterRestart",
+    );
+    assert_event(&connection, "t066-observed-command", "ShellCommandExited");
+    assert_event(
+        &connection,
+        "t066-future-clock-stale",
+        "ShellCommandOwnershipLostAfterRestart",
+    );
+    drop(connection);
+
+    let terminal = winds(
+        &winds_home,
+        [
+            "execution",
+            "--repo",
+            test_path(&repo),
+            "--execution-id",
+            "t066-stale-terminal",
+        ],
+    );
+    assert_success(&terminal);
+    let terminal_json: Value = serde_json::from_slice(&terminal.stdout).unwrap();
+    assert_eq!(terminal_json["status"], "OWNERSHIP_LOST");
+    assert!(terminal_json["ended_unix_ms"].is_null());
+    assert!(terminal_json["duration_ms"].is_null());
+    assert_eq!(
+        terminal_json["terminal"]["close_reason"],
+        "OWNERSHIP_LOST_PROCESS_STATE_UNKNOWN"
+    );
+
+    let command = winds(
+        &winds_home,
+        [
+            "execution",
+            "--repo",
+            test_path(&repo),
+            "--execution-id",
+            "t066-stale-command",
+        ],
+    );
+    assert_success(&command);
+    let command_json: Value = serde_json::from_slice(&command.stdout).unwrap();
+    assert_eq!(command_json["status"], "OWNERSHIP_LOST");
+    assert!(command_json["ended_unix_ms"].is_null());
+    assert!(command_json["duration_ms"].is_null());
+
+    let observed = winds(
+        &winds_home,
+        [
+            "execution",
+            "--repo",
+            test_path(&repo),
+            "--execution-id",
+            "t066-observed-command",
+        ],
+    );
+    assert_success(&observed);
+    let observed_json: Value = serde_json::from_slice(&observed.stdout).unwrap();
+    assert_eq!(observed_json["status"], "EXITED");
+    assert_eq!(observed_json["ended_unix_ms"], 120);
+    assert_eq!(observed_json["duration_ms"], 10);
+    assert_eq!(
+        observed_json["shell_command"]["exit_source"],
+        "WINDS_OBSERVED"
+    );
+}
+
+#[test]
+fn concurrent_live_owner_is_preserved_while_unrelated_stale_row_reconciles() {
+    let temp = TestTempDir::new("winds-t066-concurrent")
+        .expect("T066 concurrency fixture must run from a canonical UTF-8 temporary directory");
+    let root = temp.path();
+    let repo = root.join("repo");
+    let winds_home = root.join("winds-home");
+    let release_file = root.join("release-live-command");
+    assert!(
+        !release_file.exists(),
+        "T066 release signal must not exist before the live execution starts"
+    );
+    init_repo(&repo);
+
+    let opened = winds(&winds_home, ["workspace-open", "--repo", test_path(&repo)]);
+    assert_success(&opened);
+    let opened_json: Value = serde_json::from_slice(&opened.stdout).unwrap();
+    let workspace_id = opened_json["workspace_id"].as_str().unwrap().to_owned();
+    let canonical_repo = repo.canonicalize().unwrap();
+
+    let (executable, arguments) = blocking_command(root);
+    assert!(
+        !release_file.exists(),
+        "T066 blocking-command setup must not emit the release signal"
+    );
+    let arguments_json = serde_json::to_string(&arguments).unwrap();
+    let child = Command::new(env!("CARGO_BIN_EXE_winds"))
+        .args([
+            "run",
+            "--repo",
+            test_path(&repo),
+            "--execution-id",
+            "t066-live-command",
+            "--executable",
+            test_path(&executable),
+            "--args-json",
+            &arguments_json,
+            "--history",
+            "disabled",
+        ])
+        .env("WINDS_HOME", &winds_home)
+        .env("WINDS_T066_RELEASE_FILE", &release_file)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let live = LiveWinds::new(child, release_file.clone());
+
+    wait_for_status(&winds_home, "t066-live-command", "RUNNING");
+    assert!(
+        !release_file.exists(),
+        "T066 live execution reached RUNNING only before its release signal"
+    );
+
+    seed_one_stale_shell_command(
+        &winds_home,
+        &workspace_id,
+        &canonical_repo,
+        "t066-concurrent-stale",
+    );
+
+    let stale_during_live = winds(
+        &winds_home,
+        [
+            "execution",
+            "--repo",
+            test_path(&repo),
+            "--execution-id",
+            "t066-concurrent-stale",
+        ],
+    );
+    assert_success(&stale_during_live);
+    let stale_during_live_json: Value = serde_json::from_slice(&stale_during_live.stdout).unwrap();
+    assert_eq!(stale_during_live_json["status"], "OWNERSHIP_LOST");
+    assert!(stale_during_live_json["ended_unix_ms"].is_null());
+    assert!(stale_during_live_json["duration_ms"].is_null());
+    assert!(
+        !release_file.exists(),
+        "reconciling an unrelated stale row must not release the live execution"
+    );
+
+    let inspected_live = winds(
+        &winds_home,
+        [
+            "execution",
+            "--repo",
+            test_path(&repo),
+            "--execution-id",
+            "t066-live-command",
+        ],
+    );
+    assert_success(&inspected_live);
+    let inspected_live_json: Value = serde_json::from_slice(&inspected_live.stdout).unwrap();
+    assert_eq!(inspected_live_json["status"], "RUNNING");
+
+    let live_output = live.finish();
+    assert_success(&live_output);
+
+    let final_live = winds(
+        &winds_home,
+        [
+            "execution",
+            "--repo",
+            test_path(&repo),
+            "--execution-id",
+            "t066-live-command",
+        ],
+    );
+    assert_success(&final_live);
+    let final_live_json: Value = serde_json::from_slice(&final_live.stdout).unwrap();
+    assert_eq!(final_live_json["status"], "EXITED");
+}
+
+fn seed_stale_execution_rows(home: &Path, workspace_id: &str, repo: &Path) {
+    let mut connection = Connection::open(home.join("winds.db")).unwrap();
+    connection
+        .execute_batch("PRAGMA foreign_keys = ON;")
+        .unwrap();
+    let tx = connection.transaction().unwrap();
+    let execution_domain = execution_domain_json();
+    let cwd = test_path(repo);
+
+    tx.execute(
+        "INSERT INTO executions(
+            execution_id, workspace_id, kind, request_source, execution_domain,
+            status, status_source, requested_unix_ms,
+            started_unix_ms, ended_unix_ms, duration_ms
+         ) VALUES (?1, ?2, 'TERMINAL', 'CALLER_REQUESTED', ?3,
+                   'RUNNING', 'WINDS_OBSERVED', 100, 110, NULL, NULL)",
+        params!["t066-stale-terminal", workspace_id, execution_domain],
+    )
+    .unwrap();
+    tx.execute(
+        "INSERT INTO terminal_sessions(
+            execution_id, profile_id, shell_executable, shell_arguments_json,
+            requested_cwd, initial_cols, initial_rows, close_reason
+         ) VALUES (?1, 't066-profile', 'stale-shell', '[]', ?2, 80, 24, NULL)",
+        params!["t066-stale-terminal", cwd],
+    )
+    .unwrap();
+
+    for execution_id in ["t066-stale-command", "t066-observed-command"] {
+        tx.execute(
+            "INSERT INTO executions(
+                execution_id, workspace_id, kind, request_source, execution_domain,
+                status, status_source, requested_unix_ms,
+                started_unix_ms, ended_unix_ms, duration_ms
+             ) VALUES (?1, ?2, 'SHELL_COMMAND', 'CALLER_REQUESTED', ?3,
+                       'RUNNING', 'WINDS_OBSERVED', 100, 110, NULL, NULL)",
+            params![execution_id, workspace_id, execution_domain],
+        )
+        .unwrap();
+    }
+    tx.execute(
+        "INSERT INTO shell_commands(
+            execution_id, executable, arguments_json, command_source,
+            requested_cwd, cwd_source, exit_code, exit_source, observed_end_unix_ms
+         ) VALUES (?1, 'stale-command', '[]', 'CALLER_REQUESTED', ?2,
+                   'CALLER_REQUESTED', NULL, NULL, NULL)",
+        params!["t066-stale-command", cwd],
+    )
+    .unwrap();
+    tx.execute(
+        "INSERT INTO shell_commands(
+            execution_id, executable, arguments_json, command_source,
+            requested_cwd, cwd_source, exit_code, exit_source, observed_end_unix_ms
+         ) VALUES (?1, 'observed-command', '[]', 'CALLER_REQUESTED', ?2,
+                   'CALLER_REQUESTED', 0, 'WINDS_OBSERVED', 120)",
+        params!["t066-observed-command", cwd],
+    )
+    .unwrap();
+    tx.commit().unwrap();
+}
+
+fn seed_one_stale_shell_command(home: &Path, workspace_id: &str, repo: &Path, execution_id: &str) {
+    seed_stale_shell_command_at(home, workspace_id, repo, execution_id, 100, 110);
+}
+
+fn seed_stale_shell_command_at(
+    home: &Path,
+    workspace_id: &str,
+    repo: &Path,
+    execution_id: &str,
+    requested_unix_ms: i64,
+    started_unix_ms: i64,
+) {
+    let mut connection = Connection::open(home.join("winds.db")).unwrap();
+    connection
+        .execute_batch("PRAGMA foreign_keys = ON;")
+        .unwrap();
+    let tx = connection.transaction().unwrap();
+    tx.execute(
+        "INSERT INTO executions(
+            execution_id, workspace_id, kind, request_source, execution_domain,
+            status, status_source, requested_unix_ms,
+            started_unix_ms, ended_unix_ms, duration_ms
+         ) VALUES (?1, ?2, 'SHELL_COMMAND', 'CALLER_REQUESTED', ?3,
+                   'RUNNING', 'WINDS_OBSERVED', ?4, ?5, NULL, NULL)",
+        params![
+            execution_id,
+            workspace_id,
+            execution_domain_json(),
+            requested_unix_ms,
+            started_unix_ms
+        ],
+    )
+    .unwrap();
+    tx.execute(
+        "INSERT INTO shell_commands(
+            execution_id, executable, arguments_json, command_source,
+            requested_cwd, cwd_source, exit_code, exit_source, observed_end_unix_ms
+         ) VALUES (?1, 'stale-command', '[]', 'CALLER_REQUESTED', ?2,
+                   'CALLER_REQUESTED', NULL, NULL, NULL)",
+        params![execution_id, test_path(repo)],
+    )
+    .unwrap();
+    tx.commit().unwrap();
+}
+
+fn execution_domain_json() -> String {
+    json!({
+        "kind": "NATIVE_HOST",
+        "os": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+    })
+    .to_string()
+}
+
+fn wait_for_status(home: &Path, execution_id: &str, expected: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let connection = Connection::open(home.join("winds.db")).unwrap();
+        let status = connection
+            .query_row(
+                "SELECT status FROM executions WHERE execution_id = ?1",
+                [execution_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .unwrap();
+        if status.as_deref() == Some(expected) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for execution {execution_id} to reach {expected}; last status: {status:?}"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
+fn blocking_command(root: &Path) -> (PathBuf, Vec<String>) {
+    let script = root.join("wait-release.sh");
+    fs::write(
+        &script,
+        "#!/bin/sh\nwhile [ ! -f \"$WINDS_T066_RELEASE_FILE\" ]; do sleep 0.05; done\n",
+    )
+    .unwrap();
+    (
+        PathBuf::from("/bin/sh"),
+        vec![test_path(&script).to_owned()],
+    )
+}
+
+#[cfg(windows)]
+fn blocking_command(root: &Path) -> (PathBuf, Vec<String>) {
+    let script = root.join("wait-release.ps1");
+    fs::write(
+        &script,
+        "while (-not (Test-Path -LiteralPath $env:WINDS_T066_RELEASE_FILE)) { Start-Sleep -Milliseconds 50 }\r\n",
+    )
+    .unwrap();
+    let system_root = PathBuf::from(
+        std::env::var_os("SystemRoot").expect("SystemRoot must identify Windows system binaries"),
+    );
+    let powershell = system_root
+        .join("System32")
+        .join("WindowsPowerShell")
+        .join("v1.0")
+        .join("powershell.exe");
+    assert!(
+        powershell.is_absolute() && powershell.is_file(),
+        "T066 Windows fixture requires the system Windows PowerShell executable: {}",
+        powershell.display()
+    );
+    (
+        powershell,
+        vec![
+            "-NoLogo".to_owned(),
+            "-NoProfile".to_owned(),
+            "-NonInteractive".to_owned(),
+            "-ExecutionPolicy".to_owned(),
+            "Bypass".to_owned(),
+            "-File".to_owned(),
+            test_path(&script).to_owned(),
+        ],
+    )
+}
+
+fn assert_execution_state(
+    connection: &Connection,
+    execution_id: &str,
+    expected_status: &str,
+    expected_end: Option<i64>,
+    expected_duration: Option<i64>,
+) {
+    let row = connection
+        .query_row(
+            "SELECT status, ended_unix_ms, duration_ms
+             FROM executions WHERE execution_id = ?1",
+            [execution_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<i64>>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(row.0, expected_status);
+    assert_eq!(row.1, expected_end);
+    assert_eq!(row.2, expected_duration);
+}
+
+fn assert_event(connection: &Connection, execution_id: &str, kind: &str) {
+    let found = connection
+        .query_row(
+            "SELECT kind FROM execution_events
+             WHERE execution_id = ?1 AND kind = ?2 LIMIT 1",
+            params![execution_id, kind],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()
+        .unwrap();
+    assert_eq!(found.as_deref(), Some(kind));
+}
+
+fn init_repo(path: &Path) {
+    fs::create_dir_all(path).unwrap();
+    git(path, ["init", "-b", "main"]);
+    git(path, ["config", "user.email", "winds-test@example.invalid"]);
+    git(path, ["config", "user.name", "Winds Test"]);
+    fs::write(path.join("file.txt"), b"t066\n").unwrap();
+    git(path, ["add", "file.txt"]);
+    git(path, ["commit", "-m", "initial"]);
+}
+
+fn winds<const N: usize>(home: &Path, args: [&str; N]) -> Output {
+    let child = Command::new(env!("CARGO_BIN_EXE_winds"))
+        .args(args)
+        .env("WINDS_HOME", home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    wait_with_output_bounded(child, Duration::from_secs(10), "T066 CLI subprocess")
+}
+
+fn git<const N: usize>(repo: &Path, args: [&str; N]) {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .unwrap();
+    assert_success(&output);
+}
+
+fn assert_success(output: &Output) {
+    assert!(
+        output.status.success(),
+        "command failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn test_path(path: &Path) -> &str {
+    path.to_str().expect(
+        "T066 CLI integration fixture root is validated as UTF-8; derived ASCII child paths must remain UTF-8",
+    )
+}
+
+fn wait_with_output_bounded(mut child: Child, timeout: Duration, context: &str) -> Output {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().unwrap(),
+            Ok(None) if Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let output = child.wait_with_output().unwrap();
+                panic!(
+                    "{context} did not exit within {timeout:?}\nstdout:\n{}\nstderr:\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            Err(error) => {
+                let _ = child.kill();
+                let output = child.wait_with_output().unwrap();
+                panic!(
+                    "{context} status check failed: {error}\nstdout:\n{}\nstderr:\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        }
+    }
+}
+
+struct LiveWinds {
+    child: Option<Child>,
+    release_file: PathBuf,
+}
+
+impl LiveWinds {
+    fn new(child: Child, release_file: PathBuf) -> Self {
+        Self {
+            child: Some(child),
+            release_file,
+        }
+    }
+
+    fn signal_release(&self) {
+        fs::write(&self.release_file, b"release\n")
+            .expect("T066 release signal file must be writable");
+    }
+
+    fn finish(mut self) -> Output {
+        self.signal_release();
+        let child = self
+            .child
+            .take()
+            .expect("T066 live Winds child must exist until finish");
+        wait_with_output_bounded(
+            child,
+            Duration::from_secs(10),
+            "T066 live Winds child after release signal",
+        )
+    }
+}
+
+impl Drop for LiveWinds {
+    fn drop(&mut self) {
+        if self.child.is_none() {
+            return;
+        }
+        let _ = fs::write(&self.release_file, b"release\n");
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Ok(None) | Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return;
+                }
+            }
+        }
+    }
+}
+
+struct TestTempDir {
+    path: PathBuf,
+    canonical_parent: PathBuf,
+    expected_name: OsString,
+}
+
+impl TestTempDir {
+    fn new(prefix: &str) -> Option<Self> {
+        let canonical_parent = std::env::temp_dir().canonicalize().ok()?;
+        canonical_parent.to_str()?;
+
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()?
+            .as_nanos();
+        let expected_name = OsString::from(format!("{prefix}-{nanos}-{}", std::process::id()));
+        let path = canonical_parent.join(&expected_name);
+        fs::create_dir(&path).ok()?;
+
+        let canonical = match path.canonicalize() {
+            Ok(canonical) => canonical,
+            Err(_) => {
+                let _ = fs::remove_dir_all(&path);
+                return None;
+            }
+        };
+        if canonical != path || canonical.to_str().is_none() {
+            let _ = fs::remove_dir_all(&path);
+            return None;
+        }
+
+        Some(Self {
+            path,
+            canonical_parent,
+            expected_name,
+        })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TestTempDir {
+    fn drop(&mut self) {
+        let Ok(canonical) = self.path.canonicalize() else {
+            return;
+        };
+        if canonical.parent() != Some(self.canonical_parent.as_path())
+            || canonical.file_name() != Some(self.expected_name.as_os_str())
+        {
+            return;
+        }
+        let _ = fs::remove_dir_all(canonical);
+    }
+}
