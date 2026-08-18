@@ -2,10 +2,22 @@ use super::workspace::{WorkspaceInspection, inspect_existing_workspace};
 use super::{Result, git_command};
 use crate::store::{NewWorkspace, Store};
 use serde::Serialize;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::ffi::CString;
 use std::ffi::OsString;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::DirBuilderExt;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::os::unix::ffi::OsStrExt;
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_CLONE_STAGING_ID: AtomicU64 = AtomicU64::new(0);
+const MAX_STAGING_ATTEMPTS: usize = 128;
 
 #[allow(
     dead_code,
@@ -27,16 +39,38 @@ pub fn clone_and_register_workspace(
     canonical_state_root: &Path,
     now_ms: i64,
 ) -> Result<ClonedWorkspace> {
+    clone_and_register_workspace_impl(
+        remote,
+        destination,
+        canonical_state_root,
+        now_ms,
+        |_, _| Ok(()),
+    )
+}
+
+fn clone_and_register_workspace_impl<F>(
+    remote: &str,
+    destination: &Path,
+    canonical_state_root: &Path,
+    now_ms: i64,
+    after_staging_created: F,
+) -> Result<ClonedWorkspace>
+where
+    F: FnOnce(&Path, &Path) -> Result<()>,
+{
     let remote_identity = sanitize_remote_identity(remote)?;
-    let reserved_destination = reserve_clone_destination(destination, canonical_state_root)?;
-    let parent = reserved_destination
+    let planned_destination = plan_clone_destination(destination, canonical_state_root)?;
+    let parent = planned_destination
         .parent()
         .ok_or("clone destination has no parent directory")?;
+    let staging_root = create_private_clone_staging(parent)?;
+    let staged_checkout = staging_root.join("checkout");
     let git_remote = git_remote_argument(remote, &remote_identity)?;
-    let git_destination = git_cli_local_path(&reserved_destination)?;
+    let git_destination = git_cli_local_path(&staged_checkout)?;
 
-    require_reserved_clone_destination(&reserved_destination)?;
-    let status = git_command(parent)
+    after_staging_created(&staged_checkout, &planned_destination)?;
+
+    let status = git_command(&staging_root)
         .arg("-c")
         .arg("core.askPass=")
         .arg("clone")
@@ -57,23 +91,30 @@ pub fn clone_and_register_workspace(
         let status = status
             .code()
             .map_or_else(|| "signal".to_owned(), |code| code.to_string());
-        return match cleanup_failed_clone_destination(&reserved_destination) {
-            Ok(()) => Err(format!(
-                "system Git clone failed with status {status}; reserved destination was removed and not registered"
-            )
-            .into()),
-            Err(cleanup_error) => Err(format!(
-                "system Git clone failed with status {status}; destination was not registered and could not be safely removed: {cleanup_error}"
-            )
-            .into()),
-        };
+        return Err(format!(
+            "system Git clone failed with status {status}; requested destination was not published or registered; partial private staging was retained at {}",
+            staging_root.display()
+        )
+        .into());
     }
 
-    require_reserved_clone_destination(&reserved_destination)?;
-    let workspace = inspect_existing_workspace(&reserved_destination, canonical_state_root)?;
-    if Path::new(&workspace.canonical_worktree_root) != reserved_destination {
+    require_owned_staged_checkout(&staging_root, &staged_checkout)?;
+    atomic_publish_no_replace(&staged_checkout, &planned_destination).map_err(|error| {
+        format!(
+            "cloned checkout could not be atomically published without replacing the requested destination; requested destination was not registered and private staging was retained at {}: {error}",
+            staging_root.display()
+        )
+    })?;
+
+    // Only the now-empty private staging parent is removed. The public requested
+    // destination is never recursively cleaned by Winds.
+    let _ = fs::remove_dir(&staging_root);
+
+    let workspace = inspect_existing_workspace(&planned_destination, canonical_state_root)?;
+    if Path::new(&workspace.canonical_worktree_root) != planned_destination {
         return Err(
-            "cloned workspace canonical root does not match the reserved clone destination".into(),
+            "cloned workspace canonical root does not match the atomically published clone destination"
+                .into(),
         );
     }
     let mut store = Store::open(canonical_state_root)?;
@@ -93,16 +134,9 @@ pub fn clone_and_register_workspace(
     })
 }
 
-fn reserve_clone_destination(destination: &Path, canonical_state_root: &Path) -> Result<PathBuf> {
+fn plan_clone_destination(destination: &Path, canonical_state_root: &Path) -> Result<PathBuf> {
     if !destination.is_absolute() {
         return Err("clone destination must be an absolute path".into());
-    }
-    if destination.exists() {
-        return Err(format!(
-            "clone destination already exists: {}",
-            destination.display()
-        )
-        .into());
     }
 
     let state_root = canonical_state_root
@@ -129,50 +163,175 @@ fn reserve_clone_destination(destination: &Path, canonical_state_root: &Path) ->
     }
 
     let planned = canonical_parent.join(file_name);
-    if planned.starts_with(&state_root) || state_root.starts_with(&planned) {
-        return Err("clone destination and Winds state root must not overlap".into());
+    match fs::symlink_metadata(&planned) {
+        Ok(_) => {
+            return Err(format!(
+                "clone destination already exists: {}",
+                planned.display()
+            )
+            .into());
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "clone destination cannot be inspected before clone: {}: {error}",
+                planned.display()
+            )
+            .into());
+        }
     }
 
-    fs::create_dir(&planned).map_err(|error| {
-        format!(
-            "failed to reserve clone destination {}: {error}",
-            planned.display()
-        )
-    })?;
-    let canonical_reserved = planned
-        .canonicalize()
-        .map_err(|error| format!("reserved clone destination cannot be canonicalized: {error}"))?;
-    if canonical_reserved != planned {
-        return Err("reserved clone destination changed identity during validation".into());
+    if planned.starts_with(&state_root) || state_root.starts_with(&planned) {
+        return Err("clone destination and Winds state root must not overlap".into());
     }
 
     Ok(planned)
 }
 
-fn require_reserved_clone_destination(destination: &Path) -> Result<()> {
-    let metadata = fs::symlink_metadata(destination)
-        .map_err(|error| format!("reserved clone destination cannot be inspected: {error}"))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err("reserved clone destination is no longer a real directory".into());
+fn create_private_clone_staging(parent: &Path) -> Result<PathBuf> {
+    for _ in 0..MAX_STAGING_ATTEMPTS {
+        let sequence = NEXT_CLONE_STAGING_ID.fetch_add(1, Ordering::Relaxed);
+        let staging = parent.join(format!(
+            ".winds-clone-stage-{}-{sequence}",
+            std::process::id()
+        ));
+        let mut builder = fs::DirBuilder::new();
+        builder.recursive(false);
+        #[cfg(unix)]
+        builder.mode(0o700);
+        match builder.create(&staging) {
+            Ok(()) => {
+                let canonical = staging.canonicalize().map_err(|error| {
+                    format!("private clone staging cannot be canonicalized: {error}")
+                })?;
+                if canonical != staging {
+                    return Err("private clone staging changed identity during creation".into());
+                }
+                return Ok(staging);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(format!(
+                    "failed to create private clone staging under {}: {error}",
+                    parent.display()
+                )
+                .into());
+            }
+        }
     }
-    let canonical = destination
+    Err("could not allocate a unique private clone staging directory".into())
+}
+
+fn require_owned_staged_checkout(staging_root: &Path, staged_checkout: &Path) -> Result<()> {
+    let staging_metadata = fs::symlink_metadata(staging_root)
+        .map_err(|error| format!("private clone staging cannot be inspected: {error}"))?;
+    if staging_metadata.file_type().is_symlink() || !staging_metadata.is_dir() {
+        return Err("private clone staging is no longer a real directory".into());
+    }
+    let canonical_staging = staging_root
         .canonicalize()
-        .map_err(|error| format!("reserved clone destination cannot be canonicalized: {error}"))?;
-    if canonical != destination {
-        return Err("reserved clone destination changed identity after reservation".into());
+        .map_err(|error| format!("private clone staging cannot be canonicalized: {error}"))?;
+    if canonical_staging != staging_root {
+        return Err("private clone staging changed identity after creation".into());
+    }
+
+    let checkout_metadata = fs::symlink_metadata(staged_checkout)
+        .map_err(|error| format!("staged clone checkout cannot be inspected: {error}"))?;
+    if checkout_metadata.file_type().is_symlink() || !checkout_metadata.is_dir() {
+        return Err("staged clone checkout is not a real directory".into());
+    }
+    let canonical_checkout = staged_checkout
+        .canonicalize()
+        .map_err(|error| format!("staged clone checkout cannot be canonicalized: {error}"))?;
+    if canonical_checkout != staged_checkout
+        || canonical_checkout.parent() != Some(canonical_staging.as_path())
+    {
+        return Err("staged clone checkout escaped its private staging parent".into());
     }
     Ok(())
 }
 
-fn cleanup_failed_clone_destination(destination: &Path) -> Result<()> {
-    require_reserved_clone_destination(destination)?;
-    fs::remove_dir_all(destination).map_err(|error| {
-        format!(
-            "failed to remove reserved clone destination {}: {error}",
-            destination.display()
+#[cfg(target_os = "linux")]
+fn atomic_publish_no_replace(source: &Path, destination: &Path) -> Result<()> {
+    let source = unix_path_cstring(source, "staged clone source")?;
+    let destination = unix_path_cstring(destination, "clone destination")?;
+    let result = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            source.as_ptr(),
+            libc::AT_FDCWD,
+            destination.as_ptr(),
+            libc::RENAME_NOREPLACE,
         )
-        .into()
-    })
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "atomic no-replace clone publish failed: {}",
+            std::io::Error::last_os_error()
+        )
+        .into())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn atomic_publish_no_replace(source: &Path, destination: &Path) -> Result<()> {
+    let source = unix_path_cstring(source, "staged clone source")?;
+    let destination = unix_path_cstring(destination, "clone destination")?;
+    let result = unsafe { libc::renamex_np(source.as_ptr(), destination.as_ptr(), libc::RENAME_EXCL) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "atomic no-replace clone publish failed: {}",
+            std::io::Error::last_os_error()
+        )
+        .into())
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn unix_path_cstring(path: &Path, label: &str) -> Result<CString> {
+    CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| format!("{label} contains an embedded NUL byte").into())
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn MoveFileExW(existing_file_name: *const u16, new_file_name: *const u16, flags: u32) -> i32;
+}
+
+#[cfg(windows)]
+fn atomic_publish_no_replace(source: &Path, destination: &Path) -> Result<()> {
+    let source = windows_path_wide(source, "staged clone source")?;
+    let destination = windows_path_wide(destination, "clone destination")?;
+    let result = unsafe { MoveFileExW(source.as_ptr(), destination.as_ptr(), 0) };
+    if result != 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "atomic no-replace clone publish failed: {}",
+            std::io::Error::last_os_error()
+        )
+        .into())
+    }
+}
+
+#[cfg(windows)]
+fn windows_path_wide(path: &Path, label: &str) -> Result<Vec<u16>> {
+    let mut encoded = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    if encoded.contains(&0) {
+        return Err(format!("{label} contains an embedded NUL code unit").into());
+    }
+    encoded.push(0);
+    Ok(encoded)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn atomic_publish_no_replace(_source: &Path, _destination: &Path) -> Result<()> {
+    Err("atomic no-replace clone publish is unsupported on this platform".into())
 }
 
 fn git_remote_argument(remote: &str, remote_identity: &str) -> Result<OsString> {
@@ -325,9 +484,11 @@ fn sanitize_scp_like_remote(remote: &str) -> Option<String> {
 mod tests {
     #[cfg(windows)]
     use super::git_cli_local_path;
-    use super::{clone_and_register_workspace, sanitize_remote_identity};
+    use super::{
+        clone_and_register_workspace, clone_and_register_workspace_impl, sanitize_remote_identity,
+    };
     #[cfg(unix)]
-    use super::{git_remote_argument, reserve_clone_destination};
+    use super::git_remote_argument;
     use crate::store::Store;
     use rusqlite::{Connection, params};
     use std::ffi::OsStr;
@@ -575,6 +736,68 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_destination_creation_blocks_atomic_publish_without_replacement() {
+        let root = test_root("publish-race");
+        let marker = root.join("bootstrap-ran");
+        let (remote, _) = initialize_remote(&root, &marker);
+        let state_root = create_state_root(&root);
+        let destination = root.join("raced-destination");
+        let replacement_marker = destination.join("replacement-marker");
+        let mut staged_checkout = None;
+
+        let error = clone_and_register_workspace_impl(
+            remote.to_str().unwrap(),
+            &destination,
+            &state_root,
+            360,
+            |staged, requested| {
+                staged_checkout = Some(staged.to_path_buf());
+                assert_eq!(requested, destination);
+                fs::create_dir(requested)?;
+                fs::write(requested.join("replacement-marker"), b"replacement\n")?;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("atomically published"));
+        assert_eq!(fs::read(&replacement_marker).unwrap(), b"replacement\n");
+        assert!(staged_checkout.unwrap().is_dir());
+        assert!(!state_root.join("winds.db").exists());
+
+        cleanup_owned_root(&root);
+    }
+
+    #[test]
+    fn failed_clone_never_recursively_cleans_a_concurrent_destination() {
+        let root = test_root("failure-race");
+        let state_root = create_state_root(&root);
+        let not_a_repo = root.join("not-a-repo");
+        fs::write(&not_a_repo, b"not git\n").unwrap();
+        let destination = root.join("raced-destination");
+        let replacement_marker = destination.join("replacement-marker");
+
+        let error = clone_and_register_workspace_impl(
+            not_a_repo.to_str().unwrap(),
+            &destination,
+            &state_root,
+            361,
+            |_, requested| {
+                fs::create_dir(requested)?;
+                fs::write(requested.join("replacement-marker"), b"replacement\n")?;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("system Git clone failed"));
+        assert_eq!(fs::read(&replacement_marker).unwrap(), b"replacement\n");
+        assert!(!state_root.join("winds.db").exists());
+
+        cleanup_owned_root(&root);
+    }
+
+    #[test]
     fn remote_sanitization_removes_credentials_and_url_secret_components() {
         let sanitized = sanitize_remote_identity(
             "https://alice:super-secret@example.test/org/repo.git?token=also-secret#private",
@@ -636,19 +859,16 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn reserved_destination_revalidation_rejects_symlink_replacement() {
-        let root = test_root("destination-replacement");
+    fn destination_validation_rejects_broken_symlink_before_staging() {
+        let root = test_root("broken-destination");
         let state_root = create_state_root(&root);
-        let destination = root.join("clone");
-        let replacement = root.join("replacement");
-        fs::create_dir(&replacement).unwrap();
-        let reserved = reserve_clone_destination(&destination, &state_root).unwrap();
-        fs::remove_dir(&reserved).unwrap();
-        symlink(&replacement, &reserved).unwrap();
+        let destination = root.join("broken-destination");
+        symlink(root.join("missing-target"), &destination).unwrap();
 
-        assert!(super::require_reserved_clone_destination(&reserved).is_err());
+        let error = super::plan_clone_destination(&destination, &state_root).unwrap_err();
+        assert!(error.to_string().contains("already exists"));
 
-        fs::remove_file(&reserved).unwrap();
+        fs::remove_file(&destination).unwrap();
         cleanup_owned_root(&root);
     }
 
