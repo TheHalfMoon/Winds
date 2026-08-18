@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/release-candidate.yml
       - .github/workflows/windows-terminal.yml
+      - scripts/ci/**
       - scripts/release/**
       - third-party/licenses/**
       - rust-toolchain.toml
@@ -93,11 +94,68 @@ jobs:
       - name: Run SC-001 100-cycle soak
         run: cargo test --locked --test pre_release_soak -- --ignored --nocapture
 
+  terminal-soak:
+    name: t063-terminal-soak (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            python: python3
+          - os: macos-15
+            python: python3
+          - os: windows-2025
+            python: python
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact candidate head
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          ref: ${{ env.CANDIDATE_SHA }}
+
+      - name: Verify checkout identity (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+
+      - name: Verify checkout identity (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -cne $env:CANDIDATE_SHA) {
+            throw "checkout identity mismatch: actual=$actual expected=$env:CANDIDATE_SHA"
+          }
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.97.1
+
+      - name: Run exact T063 100-cycle terminal lifecycle soak
+        run: >-
+          ${{ matrix.python }} scripts/ci/run_exact_cargo_test.py
+          git::t063_soak_tests::controlled_terminal_lifecycle_soak_100_cycles
+          -- cargo test --locked --bin winds
+          git::t063_soak_tests::controlled_terminal_lifecycle_soak_100_cycles
+          -- --ignored --exact --test-threads=1 --nocapture
+
+      - name: Run exact T063 active-close and child-resize guard
+        run: >-
+          ${{ matrix.python }} scripts/ci/run_exact_cargo_test.py
+          git::t063_soak_tests::active_close_and_windows_child_resize_guard
+          -- cargo test --locked --bin winds
+          git::t063_soak_tests::active_close_and_windows_child_resize_guard
+          -- --ignored --exact --test-threads=1 --nocapture
+
   build:
     name: build (${{ matrix.target }})
     needs:
       - quality
       - soak
+      - terminal-soak
     strategy:
       fail-fast: false
       matrix:
