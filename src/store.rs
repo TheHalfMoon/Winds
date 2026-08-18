@@ -595,7 +595,9 @@ impl Store {
             )
             .into());
         }
-        let observation_floor = started_unix_ms.unwrap_or(requested_unix_ms).max(requested_unix_ms);
+        let observation_floor = started_unix_ms
+            .unwrap_or(requested_unix_ms)
+            .max(requested_unix_ms);
         if observed_unix_ms.is_some_and(|value| value < observation_floor) {
             return Err(
                 "shell-command ownership-loss observation cannot precede its observed start/request time"
@@ -1091,7 +1093,9 @@ impl Store {
             )
             .into());
         }
-        let observation_floor = started_unix_ms.unwrap_or(requested_unix_ms).max(requested_unix_ms);
+        let observation_floor = started_unix_ms
+            .unwrap_or(requested_unix_ms)
+            .max(requested_unix_ms);
         if observed_unix_ms < observation_floor {
             return Err(
                 "terminal ownership-loss observation cannot precede its observed start/request time"
