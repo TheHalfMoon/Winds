@@ -83,10 +83,18 @@ where
     let parent = planned_destination
         .parent()
         .ok_or("clone destination has no parent directory")?;
+    let git_remote = git_remote_argument(remote, &remote_identity)?;
     let staging = create_private_clone_staging(parent)?;
     let staged_checkout = staging.path.join("checkout");
-    let git_remote = git_remote_argument(remote, &remote_identity)?;
-    let git_destination = git_cli_local_path(&staged_checkout)?;
+    let git_destination = match git_cli_local_path(&staged_checkout) {
+        Ok(destination) => destination,
+        Err(error) => {
+            return fail_with_owned_staging_cleanup(
+                format!("clone destination could not be prepared for system Git: {error}"),
+                &staging,
+            );
+        }
+    };
 
     if let Err(error) = after_staging_created(&staged_checkout, &planned_destination) {
         return fail_with_owned_staging_cleanup(

@@ -343,6 +343,10 @@ impl TerminalSession {
         result
     }
 
+    pub(crate) fn suppress_drop_cleanup_after_ownership_loss(&mut self) {
+        self.drop_cleanup_attempted = true;
+    }
+
     fn require_active(&mut self) -> Result<()> {
         if self.try_wait()?.is_some() {
             return Err("terminal session has already exited".into());

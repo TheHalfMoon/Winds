@@ -8,10 +8,14 @@ use std::io::{self, Read};
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
+
+#[path = "process_scope.rs"]
+mod process_scope;
+use process_scope::{OwnedProcess, operation_deadlines, spawn_owned_process};
 
 #[path = "shell_profiles.rs"]
 pub(crate) mod shell_profiles;
@@ -291,42 +295,121 @@ pub(super) fn run_bounded_read_only_git(mut command: Command, label: &str) -> Re
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("{label} could not start Git: {error}"))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| format!("{label} could not capture Git stdout"))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| format!("{label} could not capture Git stderr"))?;
+    let started = Instant::now();
+    let (command_deadline, cleanup_deadline) =
+        operation_deadlines(started, OBSERVATION_GIT_TIMEOUT);
+    let mut child = spawn_owned_process(&mut command, label)?;
+
+    let stdout = match child.take_stdout() {
+        Some(stdout) => stdout,
+        None => {
+            let cleanup = child.terminate_and_prove(cleanup_deadline, label);
+            return Err(format!(
+                "{label} could not capture Git stdout; owned cleanup {}",
+                cleanup
+                    .map(|()| "succeeded".to_owned())
+                    .unwrap_or_else(|error| format!("was not proven: {error}"))
+            )
+            .into());
+        }
+    };
+    let stderr = match child.take_stderr() {
+        Some(stderr) => stderr,
+        None => {
+            let cleanup = child.terminate_and_prove(cleanup_deadline, label);
+            return Err(format!(
+                "{label} could not capture Git stderr; owned cleanup {}",
+                cleanup
+                    .map(|()| "succeeded".to_owned())
+                    .unwrap_or_else(|error| format!("was not proven: {error}"))
+            )
+            .into());
+        }
+    };
     let stdout_reader = spawn_bounded_reader(stdout);
     let stderr_reader = spawn_bounded_reader(stderr);
-    let deadline = Instant::now() + OBSERVATION_GIT_TIMEOUT;
 
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() >= deadline => {
-                cleanup_child_async(child);
-                return Err(format!(
-                    "{label} exceeded the {} second safety timeout",
-                    OBSERVATION_GIT_TIMEOUT.as_secs()
-                )
-                .into());
+            Ok(None) if Instant::now() >= command_deadline => {
+                return fail_bounded_git_observation(
+                    &mut child,
+                    &stdout_reader,
+                    &stderr_reader,
+                    cleanup_deadline,
+                    label,
+                    format!(
+                        "{label} exceeded the bounded execution phase of its {} second safety timeout",
+                        OBSERVATION_GIT_TIMEOUT.as_secs()
+                    ),
+                );
             }
             Ok(None) => thread::sleep(Duration::from_millis(10)),
             Err(error) => {
-                cleanup_child_async(child);
-                return Err(format!("{label} failed while waiting for Git: {error}").into());
+                return fail_bounded_git_observation(
+                    &mut child,
+                    &stdout_reader,
+                    &stderr_reader,
+                    cleanup_deadline,
+                    label,
+                    format!("{label} failed while waiting for Git: {error}"),
+                );
             }
         }
     };
 
-    let stdout = receive_bounded_reader(stdout_reader, label, "stdout", deadline)?;
-    let stderr = receive_bounded_reader(stderr_reader, label, "stderr", deadline)?;
+    let stdout = match receive_bounded_reader(&stdout_reader, label, "stdout", command_deadline) {
+        Ok(output) => output,
+        Err(error) => {
+            return fail_bounded_git_observation(
+                &mut child,
+                &stdout_reader,
+                &stderr_reader,
+                cleanup_deadline,
+                label,
+                error.to_string(),
+            );
+        }
+    };
+    let stderr = match receive_bounded_reader(&stderr_reader, label, "stderr", command_deadline) {
+        Ok(output) => output,
+        Err(error) => {
+            return fail_bounded_git_observation(
+                &mut child,
+                &stdout_reader,
+                &stderr_reader,
+                cleanup_deadline,
+                label,
+                error.to_string(),
+            );
+        }
+    };
+
+    match child.wait_for_scope_quiescence(command_deadline, label) {
+        Ok(true) => {}
+        Ok(false) => {
+            return fail_bounded_git_observation(
+                &mut child,
+                &stdout_reader,
+                &stderr_reader,
+                cleanup_deadline,
+                label,
+                format!("{label} direct Git child exited while owned descendants remained live"),
+            );
+        }
+        Err(error) => {
+            return fail_bounded_git_observation(
+                &mut child,
+                &stdout_reader,
+                &stderr_reader,
+                cleanup_deadline,
+                label,
+                format!("{label} could not prove owned process-scope quiescence: {error}"),
+            );
+        }
+    }
+
     if stdout.truncated || stderr.truncated {
         return Err(format!(
             "{label} output exceeded the {} byte per-stream safety bound",
@@ -342,6 +425,40 @@ pub(super) fn run_bounded_read_only_git(mut command: Command, label: &str) -> Re
         .into());
     }
     Ok(stdout.bytes)
+}
+
+fn fail_bounded_git_observation(
+    child: &mut OwnedProcess,
+    stdout_reader: &Receiver<io::Result<BoundedCapture>>,
+    stderr_reader: &Receiver<io::Result<BoundedCapture>>,
+    cleanup_deadline: Instant,
+    label: &str,
+    primary_error: String,
+) -> Result<Vec<u8>> {
+    let mut cleanup_failures = Vec::new();
+    if let Err(error) = child.terminate_and_prove(cleanup_deadline, label) {
+        cleanup_failures.push(error.to_string());
+    }
+    if let Err(error) =
+        wait_bounded_reader_shutdown(stdout_reader, label, "stdout", cleanup_deadline)
+    {
+        cleanup_failures.push(error.to_string());
+    }
+    if let Err(error) =
+        wait_bounded_reader_shutdown(stderr_reader, label, "stderr", cleanup_deadline)
+    {
+        cleanup_failures.push(error.to_string());
+    }
+
+    if cleanup_failures.is_empty() {
+        Err(primary_error.into())
+    } else {
+        Err(format!(
+            "{primary_error}; owned subprocess cleanup was not proven: {}",
+            cleanup_failures.join("; ")
+        )
+        .into())
+    }
 }
 
 struct BoundedCapture {
@@ -361,7 +478,7 @@ where
 }
 
 fn receive_bounded_reader(
-    receiver: Receiver<io::Result<BoundedCapture>>,
+    receiver: &Receiver<io::Result<BoundedCapture>>,
     label: &str,
     stream: &str,
     deadline: Instant,
@@ -372,7 +489,7 @@ fn receive_bounded_reader(
             result.map_err(|error| format!("{label} failed reading Git {stream}: {error}").into())
         }
         Err(RecvTimeoutError::Timeout) => Err(format!(
-            "{label} {stream} reader exceeded the overall {} second safety timeout",
+            "{label} {stream} reader exceeded the bounded execution phase of the overall {} second safety timeout",
             OBSERVATION_GIT_TIMEOUT.as_secs()
         )
         .into()),
@@ -382,11 +499,20 @@ fn receive_bounded_reader(
     }
 }
 
-fn cleanup_child_async(mut child: Child) {
-    thread::spawn(move || {
-        let _ = child.kill();
-        let _ = child.wait();
-    });
+fn wait_bounded_reader_shutdown(
+    receiver: &Receiver<io::Result<BoundedCapture>>,
+    label: &str,
+    stream: &str,
+    deadline: Instant,
+) -> Result<()> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    match receiver.recv_timeout(remaining) {
+        Ok(_) | Err(RecvTimeoutError::Disconnected) => Ok(()),
+        Err(RecvTimeoutError::Timeout) => Err(format!(
+            "{label} {stream} reader shutdown was not proven inside the bounded cleanup window"
+        )
+        .into()),
+    }
 }
 
 fn read_bounded<R: Read>(mut reader: R) -> io::Result<BoundedCapture> {

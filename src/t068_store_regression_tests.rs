@@ -1,8 +1,10 @@
-use crate::domain::{ExecutionKind, ExecutionStatus, FactSource};
+use crate::domain::{ExecutionKind, ExecutionStatus, FactSource, TerminalCloseReason};
 use crate::store::git_observation::{
     GitObservationAvailability, GitObservationBoundary, NewExecutionGitObservation,
 };
-use crate::store::{NewExecution, NewShellCommand, NewTerminalSession, NewWorkspace, Store};
+use crate::store::{
+    NewExecution, NewShellCommand, NewTerminalSession, NewWorkspace, Store, TerminalFinalization,
+};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -249,4 +251,116 @@ fn terminal_session_child_requires_terminal_execution_kind() {
             .contains("requires TERMINAL execution kind")
     );
     assert!(store.load_terminal_session("command-1").is_err());
+}
+
+#[test]
+fn restart_reconciliation_recovers_legacy_empty_observed_exit_without_poisoning_valid_exit() {
+    let home = TestHome::new("legacy-empty-exit");
+    let mut store = store_with_workspace(&home);
+    create_shell_command(&mut store, "legacy-command", 100);
+    create_shell_command(&mut store, "valid-command", 101);
+    store
+        .mark_shell_command_running("legacy-command", Some(110))
+        .unwrap();
+    store
+        .mark_shell_command_running("valid-command", Some(111))
+        .unwrap();
+    store
+        .record_shell_command_exit_observation("valid-command", Some(0), Some(150))
+        .unwrap();
+
+    let legacy_connection = rusqlite::Connection::open(home.path().join("winds.db")).unwrap();
+    legacy_connection
+        .execute(
+            "UPDATE shell_commands
+             SET exit_code = NULL, exit_source = 'WINDS_OBSERVED', observed_end_unix_ms = NULL
+             WHERE execution_id = ?1",
+            ["legacy-command"],
+        )
+        .unwrap();
+    drop(legacy_connection);
+
+    assert_eq!(
+        store
+            .reconcile_unowned_shell_commands_after_restart(200)
+            .unwrap(),
+        1
+    );
+
+    let legacy = store.load_execution("legacy-command").unwrap();
+    assert_eq!(legacy.status, ExecutionStatus::OwnershipLost);
+    assert_eq!(legacy.ended_unix_ms, None);
+    assert_eq!(legacy.duration_ms, None);
+    let legacy_events = store.execution_events("legacy-command").unwrap();
+    assert!(
+        legacy_events
+            .iter()
+            .any(|event| { event.kind == "ShellCommandOwnershipLostAfterRestart" })
+    );
+    assert!(
+        legacy_events
+            .iter()
+            .all(|event| event.kind != "ShellCommandExited")
+    );
+
+    let valid = store.load_execution("valid-command").unwrap();
+    assert_eq!(valid.status, ExecutionStatus::Exited);
+    assert_eq!(valid.ended_unix_ms, Some(150));
+    assert_eq!(valid.duration_ms, Some(39));
+}
+
+#[test]
+fn terminal_finalization_can_preserve_unknown_end_time_without_fabrication() {
+    let home = TestHome::new("terminal-unknown-end");
+    let mut store = store_with_workspace(&home);
+    let shell_arguments = Vec::new();
+    store
+        .create_terminal_execution(
+            NewExecution {
+                execution_id: "terminal-unknown-end",
+                workspace_id: "workspace-1",
+                kind: ExecutionKind::Terminal,
+                request_source: FactSource::CallerRequested,
+                execution_domain: "host-test",
+            },
+            NewTerminalSession {
+                execution_id: "terminal-unknown-end",
+                profile_id: "profile-1",
+                shell_executable: "test-shell",
+                shell_arguments: &shell_arguments,
+                requested_cwd: "/tmp/t068-workspace",
+                initial_cols: Some(80),
+                initial_rows: Some(24),
+            },
+            100,
+        )
+        .unwrap();
+    store
+        .mark_terminal_running("terminal-unknown-end", 110)
+        .unwrap();
+    store
+        .apply_terminal_finalization(
+            "terminal-unknown-end",
+            TerminalFinalization::Exited {
+                ended_unix_ms: None,
+            },
+        )
+        .unwrap();
+
+    let execution = store.load_execution("terminal-unknown-end").unwrap();
+    assert_eq!(execution.status, ExecutionStatus::Exited);
+    assert_eq!(execution.ended_unix_ms, None);
+    assert_eq!(execution.duration_ms, None);
+    let terminal = store.load_terminal_session("terminal-unknown-end").unwrap();
+    assert_eq!(
+        terminal.close_reason,
+        Some(TerminalCloseReason::ProcessExited)
+    );
+    assert!(
+        store
+            .execution_events("terminal-unknown-end")
+            .unwrap()
+            .iter()
+            .all(|event| event.kind != "TerminalExited")
+    );
 }

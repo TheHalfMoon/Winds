@@ -32,6 +32,7 @@ pub struct TerminalExecution<'store> {
     history: SessionHistoryRecorder,
     pending_final: Option<TerminalFinalization>,
     final_recorded: bool,
+    ownership_revoked: bool,
     finalization_lower_bound_unix_ms: i64,
 }
 
@@ -129,6 +130,7 @@ impl<'store> TerminalExecution<'store> {
     }
 
     pub fn take_output_reader(&mut self) -> Result<Box<dyn Read + Send>> {
+        self.require_owned_session("take output reader")?;
         let reader = self.session.take_output_reader()?;
         self.history.wrap_output_reader(reader)
     }
@@ -138,6 +140,7 @@ impl<'store> TerminalExecution<'store> {
     }
 
     pub fn send_input(&mut self, bytes: &[u8]) -> Result<()> {
+        self.require_owned_session("send input")?;
         if self.try_wait()?.is_some() {
             return Err("terminal execution has already exited".into());
         }
@@ -145,6 +148,7 @@ impl<'store> TerminalExecution<'store> {
     }
 
     pub fn resize(&mut self, size: TerminalSize) -> Result<()> {
+        self.require_owned_session("resize")?;
         if self.try_wait()?.is_some() {
             return Err("terminal execution has already exited".into());
         }
@@ -152,10 +156,12 @@ impl<'store> TerminalExecution<'store> {
     }
 
     pub fn current_size(&self) -> Result<TerminalSize> {
+        self.require_owned_session("read current size")?;
         self.session.current_size()
     }
 
     pub fn interrupt(&mut self) -> Result<()> {
+        self.require_owned_session("interrupt")?;
         if self.try_wait()?.is_some() {
             return Err("terminal execution has already exited".into());
         }
@@ -163,6 +169,7 @@ impl<'store> TerminalExecution<'store> {
     }
 
     pub fn try_wait(&mut self) -> Result<Option<TerminalExit>> {
+        self.require_owned_session("try-wait")?;
         if self.pending_final.is_some() {
             self.persist_pending_final()?;
         }
@@ -181,6 +188,7 @@ impl<'store> TerminalExecution<'store> {
     }
 
     pub fn wait(&mut self) -> Result<TerminalExit> {
+        self.require_owned_session("wait")?;
         if self.pending_final.is_some() {
             self.persist_pending_final()?;
             return self.session.wait();
@@ -198,10 +206,12 @@ impl<'store> TerminalExecution<'store> {
     }
 
     pub fn terminate(&mut self) -> Result<TerminalExit> {
+        self.require_owned_session("terminate")?;
         self.controlled_cleanup(TerminalCloseReason::TerminatedByWinds, "terminate")
     }
 
     pub fn close(&mut self) -> Result<TerminalExit> {
+        self.require_owned_session("close")?;
         self.controlled_cleanup(TerminalCloseReason::ClosedByWinds, "close")
     }
 
@@ -235,6 +245,7 @@ impl<'store> TerminalExecution<'store> {
                 },
             ),
             Ok(TerminalDropCleanupOutcome::Unproven) => {
+                self.revoke_session_ownership();
                 self.pending_final = Some(TerminalFinalization::OwnershipLost { observed_unix_ms });
                 self.persist_pending_final()?;
                 return Err(format!(
@@ -243,6 +254,7 @@ impl<'store> TerminalExecution<'store> {
                 .into());
             }
             Err(cleanup_error) => {
+                self.revoke_session_ownership();
                 self.pending_final = Some(TerminalFinalization::OwnershipLost { observed_unix_ms });
                 match self.persist_pending_final() {
                     Ok(()) => {
@@ -265,10 +277,17 @@ impl<'store> TerminalExecution<'store> {
         Ok(exit)
     }
 
-    fn finalization_unix_ms(&self) -> i64 {
-        unix_ms()
-            .unwrap_or(self.finalization_lower_bound_unix_ms)
-            .max(self.finalization_lower_bound_unix_ms)
+    fn require_owned_session(&self, operation: &str) -> Result<()> {
+        ensure_execution_ownership_active(self.ownership_revoked, operation)
+    }
+
+    fn revoke_session_ownership(&mut self) {
+        self.ownership_revoked = true;
+        self.session.suppress_drop_cleanup_after_ownership_loss();
+    }
+
+    fn finalization_unix_ms(&self) -> Option<i64> {
+        validated_finalization_time(unix_ms().ok(), self.finalization_lower_bound_unix_ms)
     }
 
     fn persist_pending_final(&mut self) -> Result<()> {
@@ -308,6 +327,9 @@ impl Drop for TerminalExecution<'_> {
             self.persist_or_defer_on_drop(pending);
             return;
         }
+        if self.ownership_revoked {
+            return;
+        }
 
         let cleanup = self.session.cleanup_for_drop(Duration::from_millis(500));
         let observed_unix_ms = self.finalization_unix_ms();
@@ -322,6 +344,7 @@ impl Drop for TerminalExecution<'_> {
                 reason: TerminalCloseReason::ClosedByWinds,
             },
             Ok(TerminalDropCleanupOutcome::Unproven) | Err(_) => {
+                self.revoke_session_ownership();
                 TerminalFinalization::OwnershipLost { observed_unix_ms }
             }
         };
@@ -441,7 +464,7 @@ fn finish_started_session<'store>(
         let cleanup = session.terminate();
         let cleanup_proven = cleanup.is_ok();
         let repair = if cleanup_proven {
-            let ended_unix_ms = unix_ms().unwrap_or(started_unix_ms).max(started_unix_ms);
+            let ended_unix_ms = validated_finalization_time(unix_ms().ok(), started_unix_ms);
             store.mark_terminal_start_persistence_failed(
                 execution_id,
                 started_unix_ms,
@@ -472,6 +495,7 @@ fn finish_started_session<'store>(
         history,
         pending_final: None,
         final_recorded: false,
+        ownership_revoked: false,
         finalization_lower_bound_unix_ms: started_unix_ms,
     })
 }
@@ -497,9 +521,41 @@ fn utf8_path<'a>(path: &'a Path, label: &str) -> Result<&'a str> {
         .ok_or_else(|| format!("{label} is not valid UTF-8").into())
 }
 
+fn ensure_execution_ownership_active(ownership_revoked: bool, operation: &str) -> Result<()> {
+    if ownership_revoked {
+        Err(format!("terminal execution ownership was lost; refusing to {operation}").into())
+    } else {
+        Ok(())
+    }
+}
+
+fn validated_finalization_time(sample: Option<i64>, lower_bound_unix_ms: i64) -> Option<i64> {
+    sample.filter(|value| *value >= lower_bound_unix_ms)
+}
+
 fn unix_ms() -> Result<i64> {
     let millis = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis();
     Ok(i64::try_from(millis)?)
+}
+
+#[cfg(test)]
+mod t068_finalization_truth_tests {
+    use super::{ensure_execution_ownership_active, validated_finalization_time};
+
+    #[test]
+    fn finalization_time_preserves_unknown_and_rejects_regression() {
+        assert_eq!(validated_finalization_time(Some(101), 100), Some(101));
+        assert_eq!(validated_finalization_time(Some(100), 100), Some(100));
+        assert_eq!(validated_finalization_time(None, 100), None);
+        assert_eq!(validated_finalization_time(Some(99), 100), None);
+    }
+
+    #[test]
+    fn ownership_loss_revokes_terminal_control_operations() {
+        assert!(ensure_execution_ownership_active(false, "send input").is_ok());
+        let error = ensure_execution_ownership_active(true, "send input").unwrap_err();
+        assert!(error.to_string().contains("ownership was lost"));
+    }
 }
 
 #[cfg(all(test, unix))]

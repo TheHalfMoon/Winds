@@ -26,14 +26,14 @@ pub struct Store {
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum TerminalFinalization {
     Exited {
-        ended_unix_ms: i64,
+        ended_unix_ms: Option<i64>,
     },
     Interrupted {
-        ended_unix_ms: i64,
+        ended_unix_ms: Option<i64>,
         reason: TerminalCloseReason,
     },
     OwnershipLost {
-        observed_unix_ms: i64,
+        observed_unix_ms: Option<i64>,
     },
 }
 
@@ -748,6 +748,7 @@ impl Store {
                  FROM executions e
                  INNER JOIN shell_commands c ON c.execution_id = e.execution_id
                  WHERE e.kind = ?1 AND e.status = ?2 AND c.exit_source = ?3
+                   AND (c.exit_code IS NOT NULL OR c.observed_end_unix_ms IS NOT NULL)
                  ORDER BY e.requested_unix_ms, e.execution_id",
             )?;
             statement
@@ -916,7 +917,7 @@ impl Store {
         &mut self,
         execution_id: &str,
         started_unix_ms: i64,
-        ended_unix_ms: i64,
+        ended_unix_ms: Option<i64>,
     ) -> Result<()> {
         let tx = self.connection.transaction()?;
         let (status, requested_unix_ms, persisted_started_unix_ms) =
@@ -928,10 +929,12 @@ impl Store {
         )
         .into());
         }
-        if started_unix_ms < requested_unix_ms || ended_unix_ms < started_unix_ms {
+        if started_unix_ms < requested_unix_ms
+            || ended_unix_ms.is_some_and(|value| value < started_unix_ms)
+        {
             return Err("terminal start-persistence recovery timestamps are inconsistent".into());
         }
-        let duration_ms = ended_unix_ms - started_unix_ms;
+        let duration_ms = ended_unix_ms.map(|value| value - started_unix_ms);
         let updated = tx.execute(
             "UPDATE executions
          SET status = ?2, status_source = ?3, started_unix_ms = ?4,
@@ -955,7 +958,7 @@ impl Store {
             execution_id,
             TerminalCloseReason::StartPersistenceFailed,
         )?;
-        insert_execution_event(
+        insert_execution_event_if_time(
             &tx,
             execution_id,
             "TerminalStartPersistenceFailed",
@@ -966,7 +969,11 @@ impl Store {
         Ok(())
     }
 
-    pub fn mark_terminal_exited(&mut self, execution_id: &str, ended_unix_ms: i64) -> Result<()> {
+    pub fn mark_terminal_exited(
+        &mut self,
+        execution_id: &str,
+        ended_unix_ms: Option<i64>,
+    ) -> Result<()> {
         finalize_running_terminal(
             &mut self.connection,
             execution_id,
@@ -981,7 +988,7 @@ impl Store {
         &mut self,
         execution_id: &str,
         reason: TerminalCloseReason,
-        ended_unix_ms: i64,
+        ended_unix_ms: Option<i64>,
     ) -> Result<()> {
         if !matches!(
             reason,
@@ -1078,7 +1085,7 @@ impl Store {
         &mut self,
         execution_id: &str,
         event_kind: &str,
-        observed_unix_ms: i64,
+        observed_unix_ms: Option<i64>,
     ) -> Result<()> {
         let tx = self.connection.transaction()?;
         let (status, requested_unix_ms, started_unix_ms) =
@@ -1096,7 +1103,7 @@ impl Store {
         let observation_floor = started_unix_ms
             .unwrap_or(requested_unix_ms)
             .max(requested_unix_ms);
-        if observed_unix_ms < observation_floor {
+        if observed_unix_ms.is_some_and(|value| value < observation_floor) {
             return Err(
                 "terminal ownership-loss observation cannot precede its observed start/request time"
                     .into(),
@@ -1125,7 +1132,7 @@ impl Store {
             execution_id,
             TerminalCloseReason::OwnershipLostProcessStateUnknown,
         )?;
-        insert_execution_event(
+        insert_execution_event_if_time(
             &tx,
             execution_id,
             event_kind,
@@ -1797,7 +1804,7 @@ fn finalize_running_terminal(
     status: ExecutionStatus,
     close_reason: TerminalCloseReason,
     event_kind: &str,
-    ended_unix_ms: i64,
+    ended_unix_ms: Option<i64>,
 ) -> Result<()> {
     if !matches!(
         status,
@@ -1817,10 +1824,10 @@ fn finalize_running_terminal(
     }
     let started_unix_ms =
         started_unix_ms.ok_or("RUNNING terminal execution is missing its observed start time")?;
-    if ended_unix_ms < started_unix_ms {
+    if ended_unix_ms.is_some_and(|value| value < started_unix_ms) {
         return Err("terminal end time cannot precede its observed start time".into());
     }
-    let duration_ms = ended_unix_ms - started_unix_ms;
+    let duration_ms = ended_unix_ms.map(|value| value - started_unix_ms);
     let updated = tx.execute(
         "UPDATE executions
          SET status = ?2, status_source = ?3,
@@ -1839,7 +1846,7 @@ fn finalize_running_terminal(
         return Err("terminal finalization lost its expected RUNNING row".into());
     }
     set_terminal_close_reason(&tx, execution_id, close_reason)?;
-    insert_execution_event(
+    insert_execution_event_if_time(
         &tx,
         execution_id,
         event_kind,
@@ -2186,7 +2193,9 @@ mod persistence_tests {
             )
             .unwrap();
         store.mark_terminal_running("execution-1", 120).unwrap();
-        store.mark_terminal_exited("execution-1", 155).unwrap();
+        store
+            .mark_terminal_exited("execution-1", Some(155))
+            .unwrap();
 
         let execution = store.load_execution("execution-1").unwrap();
         assert_eq!(execution.status, ExecutionStatus::Exited);
@@ -2213,7 +2222,11 @@ mod persistence_tests {
                 .iter()
                 .all(|event| event.source == FactSource::WindsObserved)
         );
-        assert!(store.mark_terminal_exited("execution-1", 160).is_err());
+        assert!(
+            store
+                .mark_terminal_exited("execution-1", Some(160))
+                .is_err()
+        );
 
         drop(store);
         cleanup_test_home(&home);
@@ -2260,7 +2273,11 @@ mod persistence_tests {
         store.mark_terminal_failed_to_start("failed", 115).unwrap();
         store.mark_terminal_running("interrupted", 120).unwrap();
         store
-            .mark_terminal_interrupted("interrupted", TerminalCloseReason::TerminatedByWinds, 150)
+            .mark_terminal_interrupted(
+                "interrupted",
+                TerminalCloseReason::TerminatedByWinds,
+                Some(150),
+            )
             .unwrap();
 
         let failed = store.load_execution("failed").unwrap();
@@ -2471,7 +2488,7 @@ mod persistence_tests {
         store.defer_terminal_finalization(
             "execution-deferred",
             TerminalFinalization::Interrupted {
-                ended_unix_ms: 150,
+                ended_unix_ms: Some(150),
                 reason: TerminalCloseReason::ClosedByWinds,
             },
         );

@@ -192,6 +192,7 @@ function Wait-ForMappedWorkspaceMismatch {
             $control = Invoke-NativeResult -File "wsl.exe" -Arguments @(
                 "--distribution", $Distribution,
                 "--user", "root",
+                "--cd", "~",
                 "--exec", "/bin/true"
             ) -TimeoutMilliseconds ([Math]::Min(5000, $remainingMilliseconds))
             if ($control.ExitCode -eq 0) {
@@ -219,6 +220,7 @@ function Wait-ForMappedWorkspaceMismatch {
         $markerResult = Invoke-NativeResult -File "wsl.exe" -Arguments @(
             "--distribution", $Distribution,
             "--user", "root",
+            "--cd", "~",
             "--exec", "/bin/cat", $marker
         ) -TimeoutMilliseconds ([Math]::Min(5000, $remainingMilliseconds))
         if ($markerResult.ExitCode -eq 0) {
@@ -321,19 +323,29 @@ $wslConfBackup = "/etc/.winds-t062-wsl-conf-$($hostHead.Substring(0, 12))-$backu
 $wslConfOriginalState = Invoke-Captured -File "wsl.exe" -Arguments @(
     "--distribution", $distro,
     "--user", "root",
+    "--cd", "~",
     "--exec", "/bin/sh", "-c",
-    "if [ -e '$wslConfBackup' ]; then exit 73; fi; if [ -f /etc/wsl.conf ]; then umask 077; cp -p -- /etc/wsl.conf '$wslConfBackup'; printf PRESENT; else printf ABSENT; fi"
+    "set -eu; if [ -e '$wslConfBackup' ]; then exit 73; fi; if [ -f /etc/wsl.conf ]; then trap 'rm -f -- `"$wslConfBackup`"' EXIT; umask 077; cp -p -- /etc/wsl.conf '$wslConfBackup'; printf 'PRESENT:'; stat -c '%a' '$wslConfBackup'; trap - EXIT; else printf ABSENT; fi"
 )
-if ($wslConfOriginalState -notin @("PRESENT", "ABSENT")) {
-    throw "unexpected /etc/wsl.conf snapshot state: $wslConfOriginalState"
-}
 $wslConfOriginalMode = $null
-if ($wslConfOriginalState -ceq "PRESENT") {
-    $wslConfOriginalMode = Invoke-Captured -File "wsl.exe" -Arguments @(
-        "--distribution", $distro,
-        "--user", "root",
-        "--exec", "/usr/bin/stat", "-c", "%a", "/etc/wsl.conf"
-    )
+if ($wslConfOriginalState -match '^PRESENT:([0-7]{3,4})$') {
+    $wslConfOriginalMode = $Matches[1]
+    $wslConfOriginalState = "PRESENT"
+}
+elseif ($wslConfOriginalState -cne "ABSENT") {
+    $snapshotFailure = "unexpected /etc/wsl.conf snapshot state: $wslConfOriginalState"
+    try {
+        Invoke-Captured -File "wsl.exe" -Arguments @(
+            "--distribution", $distro,
+            "--user", "root",
+            "--cd", "~",
+            "--exec", "/bin/rm", "-f", "--", $wslConfBackup
+        ) | Out-Null
+    }
+    catch {
+        throw "$snapshotFailure; generated backup cleanup also failed: $($_.Exception.Message)"
+    }
+    throw $snapshotFailure
 }
 $proofFailure = $null
 $cleanupFailure = $null
@@ -341,6 +353,7 @@ try {
     Invoke-Captured -File "wsl.exe" -Arguments @(
         "--distribution", $distro,
         "--user", "root",
+        "--cd", "~",
         "--exec", "/bin/sh", "-c",
         "printf '[automount]\nenabled=false\n[interop]\nappendWindowsPath=false\n[user]\ndefault=root\n' > /etc/wsl.conf"
     ) | Out-Null
@@ -369,6 +382,7 @@ try {
     $fallbackWindows = Invoke-Captured -File "wsl.exe" -Arguments @(
         "--distribution", $distro,
         "--user", "root",
+        "--cd", "~",
         "--exec", "/usr/bin/wslpath", "-w", $fallbackHome
     )
     $fallbackWindowsComparable = Normalize-WindowsPath -Path $fallbackWindows
@@ -392,12 +406,14 @@ finally {
         Invoke-Captured -File "wsl.exe" -Arguments @(
             "--distribution", $distro,
             "--user", "root",
+            "--cd", "~",
             "--exec", "/bin/sh", "-c", $restoreCommand
         ) | Out-Null
         if ($wslConfOriginalState -ceq "PRESENT") {
             $restoredMode = Invoke-Captured -File "wsl.exe" -Arguments @(
                 "--distribution", $distro,
                 "--user", "root",
+                "--cd", "~",
                 "--exec", "/usr/bin/stat", "-c", "%a", "/etc/wsl.conf"
             )
             Assert-Equal -Label "/etc/wsl.conf restored mode" -Actual $restoredMode -Expected $wslConfOriginalMode
