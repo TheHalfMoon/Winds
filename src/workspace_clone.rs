@@ -83,6 +83,7 @@ where
     let parent = planned_destination
         .parent()
         .ok_or("clone destination has no parent directory")?;
+    require_no_retained_clone_payload(parent)?;
     let git_remote = git_remote_argument(remote, &remote_identity)?;
     let staging = create_private_clone_staging(parent)?;
     let staged_checkout = staging.path.join("checkout");
@@ -213,9 +214,9 @@ where
         );
     }
 
-    if let Err(error) = remove_empty_owned_clone_staging(&staging) {
+    if let Err(error) = retain_empty_owned_clone_staging(&staging) {
         return Err(format!(
-            "atomically published clone staging could not be removed safely; destination was not registered and was retained for recovery: {error}"
+            "atomically published clone staging retention could not be proven safely; destination was not registered and was retained for recovery: {error}"
         )
         .into());
     }
@@ -302,6 +303,55 @@ fn plan_clone_destination(destination: &Path, canonical_state_root: &Path) -> Re
     }
 
     Ok(planned)
+}
+
+fn require_no_retained_clone_payload(parent: &Path) -> Result<()> {
+    let entries = fs::read_dir(parent).map_err(|error| {
+        format!(
+            "clone destination parent cannot be inspected for retained private staging: {error}"
+        )
+    })?;
+
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            format!("clone destination parent contains an unreadable entry: {error}")
+        })?;
+        let name = entry.file_name();
+        if !name.as_encoded_bytes().starts_with(b".winds-clone-stage-") {
+            continue;
+        }
+
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            format!(
+                "retained private clone staging candidate {} cannot be inspected: {error}",
+                path.display()
+            )
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(format!(
+                "clone destination parent contains an ambiguous Winds staging entry {}; refusing a new clone until it is inspected and recovered manually",
+                path.display()
+            )
+            .into());
+        }
+
+        let mut contents = fs::read_dir(&path).map_err(|error| {
+            format!(
+                "retained private clone staging {} cannot be inspected safely: {error}",
+                path.display()
+            )
+        })?;
+        if contents.next().is_some() {
+            return Err(format!(
+                "retained private clone staging {} contains clone payload from an earlier failed operation; refusing to allocate another staging payload under the same parent until manual recovery prevents unbounded disk growth",
+                path.display()
+            )
+            .into());
+        }
+    }
+
+    Ok(())
 }
 
 fn create_private_clone_staging(parent: &Path) -> Result<OwnedCloneStaging> {
@@ -457,7 +507,17 @@ fn require_owned_staged_checkout(
     clone_directory_identity(staged_checkout, "staged clone checkout")
 }
 
-fn cleanup_owned_clone_staging(staging: &OwnedCloneStaging) -> Result<()> {
+fn retain_owned_clone_staging(staging: &OwnedCloneStaging) -> Result<()> {
+    retain_owned_clone_staging_impl(staging, || Ok(()))
+}
+
+fn retain_owned_clone_staging_impl<F>(
+    staging: &OwnedCloneStaging,
+    after_identity_proven: F,
+) -> Result<()>
+where
+    F: FnOnce() -> Result<()>,
+{
     require_clone_directory_identity(
         &staging.path,
         &staging.identity,
@@ -465,24 +525,27 @@ fn cleanup_owned_clone_staging(staging: &OwnedCloneStaging) -> Result<()> {
     )
     .map_err(|error| {
         format!(
-            "private clone staging ownership is ambiguous; refusing recursive cleanup of {}: {error}",
+            "private clone staging ownership is ambiguous; refusing recursive cleanup and retaining {}: {error}",
             staging.path.display()
         )
     })?;
-    fs::remove_dir_all(&staging.path).map_err(|error| {
-        format!(
-            "failed to remove proven-owned private clone staging {}: {error}",
-            staging.path.display()
-        )
-        .into()
-    })
+
+    // No destructive operation follows this proof. Production passes a
+    // no-op; the regression swaps the pathname here to prove that even a
+    // post-proof replacement is retained untouched.
+    after_identity_proven()?;
+    Ok(())
 }
 
-fn remove_empty_owned_clone_staging(staging: &OwnedCloneStaging) -> Result<()> {
-    require_clone_directory_identity(&staging.path, &staging.identity, "private clone staging")?;
-    fs::remove_dir(&staging.path).map_err(|error| {
+fn retain_empty_owned_clone_staging(staging: &OwnedCloneStaging) -> Result<()> {
+    require_clone_directory_identity(
+        &staging.path,
+        &staging.identity,
+        "private clone staging",
+    )
+    .map_err(|error| {
         format!(
-            "failed to remove empty proven-owned private clone staging {}: {error}",
+            "empty private clone staging ownership is ambiguous; retaining {} without unlink: {error}",
             staging.path.display()
         )
         .into()
@@ -490,19 +553,28 @@ fn remove_empty_owned_clone_staging(staging: &OwnedCloneStaging) -> Result<()> {
 }
 
 fn fail_with_owned_staging_cleanup<T>(primary: String, staging: &OwnedCloneStaging) -> Result<T> {
-    match cleanup_owned_clone_staging(staging) {
-        Ok(()) => Err(primary.into()),
-        Err(cleanup_error) => {
-            Err(format!("{primary}; private staging cleanup also failed: {cleanup_error}").into())
-        }
+    match retain_owned_clone_staging(staging) {
+        Ok(()) => Err(format!(
+            "{primary}; private clone staging was retained for recovery at {} because recursive deletion cannot be bound safely to stable filesystem objects on every supported platform",
+            staging.path.display()
+        )
+        .into()),
+        Err(identity_error) => Err(format!(
+            "{primary}; private clone staging ownership is ambiguous, so Winds refused recursive cleanup and retained the staging path without mutation: {identity_error}"
+        )
+        .into()),
     }
 }
 
 fn fail_after_publication<T>(primary: String, staging: &OwnedCloneStaging) -> Result<T> {
-    match remove_empty_owned_clone_staging(staging) {
-        Ok(()) => Err(primary.into()),
-        Err(cleanup_error) => Err(format!(
-            "{primary}; empty private staging cleanup also failed: {cleanup_error}"
+    match retain_empty_owned_clone_staging(staging) {
+        Ok(()) => Err(format!(
+            "{primary}; empty private clone staging shell was retained at {} because Winds does not unlink the root through a mutable parent pathname",
+            staging.path.display()
+        )
+        .into()),
+        Err(retention_error) => Err(format!(
+            "{primary}; private staging retention proof also failed and the staging path was left untouched: {retention_error}"
         )
         .into()),
     }
@@ -826,7 +898,8 @@ fn sanitize_scp_like_remote(remote: &str) -> Option<String> {
 mod tests {
     use super::{
         clone_and_register_workspace, clone_and_register_workspace_impl, clone_directory_identity,
-        require_clone_directory_identity, sanitize_remote_identity,
+        create_private_clone_staging, require_clone_directory_identity,
+        retain_owned_clone_staging_impl, sanitize_remote_identity,
     };
     use crate::store::Store;
     use rusqlite::{Connection, params};
@@ -938,6 +1011,20 @@ mod tests {
             })
             .collect()
     }
+    fn assert_private_clone_staging_failure_state_is_safe(root: &Path) {
+        let staging_paths = private_clone_staging_paths(root);
+        assert!(
+            !staging_paths.is_empty(),
+            "fail-closed clone cleanup must retain private staging for recovery"
+        );
+        for staging in staging_paths {
+            let metadata = fs::symlink_metadata(&staging).unwrap();
+            assert!(
+                metadata.is_dir() && !metadata.file_type().is_symlink(),
+                "retained private staging must remain a real directory"
+            );
+        }
+    }
 
     #[test]
     fn clone_registers_workspace_and_persists_only_sanitized_remote_identity() {
@@ -1004,7 +1091,7 @@ mod tests {
         assert!(error.to_string().contains("system Git clone failed"));
         assert!(!destination.exists());
         assert!(!state_root.join("winds.db").exists());
-        assert!(private_clone_staging_paths(&root).is_empty());
+        assert_private_clone_staging_failure_state_is_safe(&root);
 
         let marker = root.join("retry-bootstrap-ran");
         let retry_root = root.join("retry-source");
@@ -1120,8 +1207,72 @@ mod tests {
 
         assert!(error.to_string().contains("atomically published"));
         assert_eq!(fs::read(&replacement_marker).unwrap(), b"replacement\n");
-        assert!(!staged_checkout.unwrap().exists());
-        assert!(private_clone_staging_paths(&root).is_empty());
+        let staged_checkout = staged_checkout.unwrap();
+        assert!(staged_checkout.is_dir());
+        assert!(
+            fs::read_dir(&staged_checkout).unwrap().next().is_some(),
+            "failed publication must retain clone payload rather than recursively delete through mutable pathnames"
+        );
+        assert_private_clone_staging_failure_state_is_safe(&root);
+        assert!(!state_root.join("winds.db").exists());
+
+        cleanup_owned_root(&root);
+    }
+
+    #[test]
+    fn retained_failed_clone_payload_blocks_additional_staging_allocation() {
+        let root = test_root("retained-staging-bound");
+        let marker = root.join("bootstrap-ran");
+        let (remote, _) = initialize_remote(&root, &marker);
+        let state_root = create_state_root(&root);
+        let first_destination = root.join("first-raced-destination");
+
+        let first_error = clone_and_register_workspace_impl(
+            remote.to_str().unwrap(),
+            &first_destination,
+            &state_root,
+            363,
+            |_, requested| {
+                fs::create_dir(requested)?;
+                fs::write(requested.join("foreign-marker"), b"foreign\n")?;
+                Ok(())
+            },
+        )
+        .unwrap_err();
+
+        assert!(first_error.to_string().contains("atomically published"));
+        let staging_before_retry = private_clone_staging_paths(&root);
+        assert_eq!(
+            staging_before_retry.len(),
+            1,
+            "the failed publication must retain exactly one private staging payload fixture"
+        );
+        assert!(
+            fs::read_dir(&staging_before_retry[0])
+                .unwrap()
+                .next()
+                .is_some(),
+            "the retained staging fixture must contain payload so the bounded-retention gate is exercised"
+        );
+
+        let second_destination = root.join("second-clone-destination");
+        let second_error = clone_and_register_workspace(
+            remote.to_str().unwrap(),
+            &second_destination,
+            &state_root,
+            364,
+        )
+        .unwrap_err();
+
+        let second_error = second_error.to_string();
+        assert!(second_error.contains("retained private clone staging"));
+        assert!(second_error.contains("unbounded disk growth"));
+        assert!(!second_destination.exists());
+        assert_eq!(
+            private_clone_staging_paths(&root),
+            staging_before_retry,
+            "a blocked retry must not allocate another private staging directory"
+        );
         assert!(!state_root.join("winds.db").exists());
 
         cleanup_owned_root(&root);
@@ -1152,6 +1303,42 @@ mod tests {
         assert!(error.to_string().contains("system Git clone failed"));
         assert_eq!(fs::read(&replacement_marker).unwrap(), b"replacement\n");
         assert!(!state_root.join("winds.db").exists());
+
+        cleanup_owned_root(&root);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    #[test]
+    fn cleanup_swap_after_identity_proof_never_deletes_foreign_replacement() {
+        let root = test_root("cleanup-final-identity-swap")
+            .canonicalize()
+            .unwrap();
+        let staging = create_private_clone_staging(&root).unwrap();
+        let original_staging_path = staging.path.clone();
+        let moved_owned_staging = root.join("moved-owned-staging");
+        let checkout = original_staging_path.join("checkout");
+        fs::create_dir(&checkout).unwrap();
+        fs::write(checkout.join("owned-payload"), b"owned\n").unwrap();
+
+        let foreign_marker = original_staging_path.join("foreign-replacement-marker");
+        let retention = retain_owned_clone_staging_impl(&staging, || {
+            fs::rename(&original_staging_path, &moved_owned_staging)?;
+            fs::create_dir(&original_staging_path)?;
+            fs::write(&foreign_marker, b"foreign\n")?;
+            Ok(())
+        });
+
+        retention.unwrap();
+        assert_eq!(
+            fs::read(&foreign_marker).unwrap(),
+            b"foreign\n",
+            "post-proof pathname replacement must remain untouched"
+        );
+        assert_eq!(
+            fs::read(moved_owned_staging.join("checkout").join("owned-payload")).unwrap(),
+            b"owned\n",
+            "post-proof pathname replacement must retain the original owned payload as well as the foreign replacement"
+        );
 
         cleanup_owned_root(&root);
     }
