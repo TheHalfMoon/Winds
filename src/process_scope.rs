@@ -355,18 +355,8 @@ pub(super) fn spawn_owned_process(command: &mut Command, label: &str) -> Result<
         format!("{label} could not start its suspended owned subprocess: {error}")
     })?;
 
-    if let Err(assign_error) = job.assign(child.as_raw_handle().cast(), label) {
-        let _ = child.kill();
-        let cleanup_deadline = Instant::now() + MAX_CLEANUP_RESERVE;
-        while Instant::now() < cleanup_deadline {
-            match child.try_wait() {
-                Ok(Some(_)) => break,
-                Ok(None) => thread::sleep(POLL_INTERVAL),
-                Err(_) => break,
-            }
-        }
-        return Err(assign_error);
-    }
+    let assignment = job.assign(child.as_raw_handle().cast(), label);
+    handle_windows_job_assignment(&mut child, assignment, label)?;
 
     let mut owned = OwnedProcess { child, job };
     if let Err(resume_error) = resume_suspended_primary_thread(owned.child.id(), label) {
@@ -380,6 +370,90 @@ pub(super) fn spawn_owned_process(command: &mut Command, label: &str) -> Result<
         };
     }
     Ok(owned)
+}
+
+#[cfg(windows)]
+fn handle_windows_job_assignment(
+    child: &mut Child,
+    assignment: Result<()>,
+    label: &str,
+) -> Result<()> {
+    let Err(assign_error) = assignment else {
+        return Ok(());
+    };
+
+    let cleanup =
+        cleanup_unassigned_suspended_child(child, Instant::now() + MAX_CLEANUP_RESERVE, label);
+    finish_windows_job_assignment_failure(assign_error, cleanup, label)
+}
+
+#[cfg(windows)]
+fn cleanup_unassigned_suspended_child(
+    child: &mut Child,
+    deadline: Instant,
+    label: &str,
+) -> Result<()> {
+    match child.try_wait() {
+        Ok(Some(_)) => return Ok(()),
+        Ok(None) => {}
+        Err(error) => {
+            return Err(format!(
+                "{label} could not inspect the unassigned suspended child before cleanup: {error}"
+            )
+            .into());
+        }
+    }
+
+    if let Err(kill_error) = child.kill() {
+        return match child.try_wait() {
+            Ok(Some(_)) => Ok(()),
+            Ok(None) => Err(format!(
+                "{label} failed to terminate the unassigned suspended child: {kill_error}; direct-child termination and reap remain unproven"
+            )
+            .into()),
+            Err(wait_error) => Err(format!(
+                "{label} failed to terminate the unassigned suspended child: {kill_error}; direct-child reap state is also unproven: {wait_error}"
+            )
+            .into()),
+        };
+    }
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return Ok(()),
+            Ok(None) => {}
+            Err(error) => {
+                return Err(format!(
+                    "{label} terminated the unassigned suspended child but could not prove reap: {error}"
+                )
+                .into());
+            }
+        }
+
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(format!(
+                "{label} unassigned suspended child could not be proven terminated and reaped inside the bounded cleanup window"
+            )
+            .into());
+        }
+        thread::sleep(POLL_INTERVAL.min(deadline.saturating_duration_since(now)));
+    }
+}
+
+#[cfg(windows)]
+fn finish_windows_job_assignment_failure(
+    assign_error: Box<dyn std::error::Error + Send + Sync>,
+    cleanup: Result<()>,
+    label: &str,
+) -> Result<()> {
+    match cleanup {
+        Ok(()) => Err(assign_error),
+        Err(cleanup_error) => Err(format!(
+            "{assign_error}; {label} suspended child was never assigned to the Windows Job Object and cleanup could not be proven: {cleanup_error}"
+        )
+        .into()),
+    }
 }
 
 #[cfg(not(any(unix, windows)))]
@@ -689,7 +763,13 @@ fn resume_suspended_primary_thread(process_id: u32, label: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use super::{
+        CREATE_SUSPENDED, finish_windows_job_assignment_failure, handle_windows_job_assignment,
+    };
     use super::{operation_deadlines, spawn_owned_process};
+    #[cfg(windows)]
+    use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
     use std::thread;
     use std::time::{Duration, Instant};
@@ -706,6 +786,62 @@ mod tests {
             }
             thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_assignment_failure_terminates_and_reaps_unassigned_suspended_child() {
+        let mut command = Command::new("cmd.exe");
+        command
+            .args(["/d", "/s", "/c", "exit 0"])
+            .creation_flags(CREATE_SUSPENDED)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+
+        let mut child = command.spawn().unwrap();
+        let error = handle_windows_job_assignment(
+            &mut child,
+            Err("forced Windows Job Object assignment failure".into()),
+            "process-scope forced assignment fixture",
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("forced Windows Job Object assignment failure")
+        );
+        assert!(
+            !error.to_string().contains("cleanup could not be proven"),
+            "successful direct-child cleanup must preserve the assignment error without falsely claiming unproven cleanup"
+        );
+
+        let reaped = child.try_wait().unwrap().is_some();
+        if !reaped {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        assert!(
+            reaped,
+            "assignment failure must not return until the unassigned suspended child is proven reaped"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_assignment_failure_reports_unproven_cleanup_truth() {
+        let error = finish_windows_job_assignment_failure(
+            "forced Windows Job Object assignment failure".into(),
+            Err("forced direct-child cleanup unproven".into()),
+            "process-scope forced cleanup fixture",
+        )
+        .unwrap_err();
+        let message = error.to_string();
+
+        assert!(message.contains("forced Windows Job Object assignment failure"));
+        assert!(message.contains("cleanup could not be proven"));
+        assert!(message.contains("forced direct-child cleanup unproven"));
     }
 
     #[test]
