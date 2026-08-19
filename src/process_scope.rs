@@ -153,11 +153,18 @@ impl Drop for OwnedProcess {
     fn drop(&mut self) {
         #[cfg(unix)]
         {
-            // A successful quiescence proof disarms this numeric identity. Drop
-            // signals only a scope that may still be owned/live, so PGID reuse
-            // cannot redirect fallback cleanup to an unrelated process group.
-            if let Some(process_group_id) = self.process_group_id.take() {
-                let _ = unsafe { libc::kill(-process_group_id, libc::SIGKILL) };
+            // Destructor fallback must never signal the numeric process-group
+            // identity. If an earlier bounded cleanup could not prove
+            // quiescence, the original group may disappear and the PGID may be
+            // reused before Drop runs. Preserve that unproven-cleanup truth
+            // instead of risking a signal to an unrelated group.
+            self.process_group_id = None;
+
+            // Best effort is limited to the directly-owned child identity.
+            // `try_wait() == None` means the direct child has not been reaped,
+            // so its PID cannot have been recycled at this point.
+            if matches!(self.child.try_wait(), Ok(None)) {
+                let _ = self.child.kill();
             }
         }
         #[cfg(not(any(unix, windows)))]
@@ -768,6 +775,8 @@ mod tests {
         CREATE_SUSPENDED, finish_windows_job_assignment_failure, handle_windows_job_assignment,
     };
     use super::{operation_deadlines, spawn_owned_process};
+    #[cfg(unix)]
+    use std::os::unix::process::CommandExt;
     #[cfg(windows)]
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
@@ -873,6 +882,57 @@ mod tests {
         assert!(
             process.process_group_id.is_none(),
             "proven Unix quiescence must disarm fallback PGID signaling"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_drop_does_not_signal_a_reused_numeric_process_group() {
+        let mut unrelated_command = Command::new("/bin/sleep");
+        unrelated_command
+            .arg("30")
+            .process_group(0)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut unrelated = unrelated_command.spawn().unwrap();
+        let unrelated_pgid = libc::pid_t::try_from(unrelated.id()).unwrap();
+        assert!(
+            unrelated.try_wait().unwrap().is_none(),
+            "unrelated process-group fixture must begin live"
+        );
+
+        let mut owned_command = Command::new("/bin/sh");
+        owned_command
+            .args(["-c", "exit 0"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let mut owned =
+            spawn_owned_process(&mut owned_command, "process-scope recycled-PGID fixture").unwrap();
+        assert!(wait_for_direct_exit(
+            &mut owned,
+            Instant::now() + Duration::from_secs(5)
+        ));
+
+        // Simulate the exact unsafe destructor state from the review finding:
+        // the original owned group is already gone/reaped, while the stored
+        // numeric PGID has since been reused by an unrelated live group.
+        owned.process_group_id = Some(unrelated_pgid);
+        drop(owned);
+
+        thread::sleep(Duration::from_millis(50));
+        let unrelated_still_live = unrelated.try_wait().unwrap().is_none();
+
+        // Always clean up the fixture through its directly-owned Child handle.
+        if unrelated_still_live {
+            let _ = unrelated.kill();
+            let _ = unrelated.wait();
+        }
+
+        assert!(
+            unrelated_still_live,
+            "Unix OwnedProcess::drop must never signal a numeric PGID whose ownership is no longer provable"
         );
     }
 
