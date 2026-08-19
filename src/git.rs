@@ -8,7 +8,7 @@ use std::io::{self, Read};
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -106,6 +106,13 @@ const GIT_CONTEXT_ENV_VARS: &[&str] = &[
 const OBSERVATION_GIT_OUTPUT_LIMIT: usize = 1024 * 1024;
 const OBSERVATION_GIT_TIMEOUT: Duration = Duration::from_secs(30);
 
+#[derive(Debug)]
+pub(super) struct BoundedGitOutput {
+    pub(super) status: ExitStatus,
+    pub(super) stdout: Vec<u8>,
+    pub(super) stderr: Vec<u8>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Repo {
     root: PathBuf,
@@ -114,11 +121,16 @@ pub struct Repo {
 
 impl Repo {
     pub fn open(path: &Path) -> Result<Self> {
-        let root = run_git_text(path, ["rev-parse", "--show-toplevel"])?;
+        let root = run_read_only_git_text(
+            path,
+            ["rev-parse", "--show-toplevel"],
+            "workspace Git root discovery",
+        )?;
         let root = PathBuf::from(strip_git_line_ending(&root)).canonicalize()?;
-        let common_dir = run_git_text(
+        let common_dir = run_read_only_git_text(
             &root,
             ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            "workspace Git common-directory discovery",
         )?;
         let common_dir = PathBuf::from(strip_git_line_ending(&common_dir)).canonicalize()?;
         Ok(Self { root, common_dir })
@@ -153,9 +165,10 @@ impl Repo {
     }
 
     pub fn require_clean_primary(&self) -> Result<()> {
-        let status = run_git_bytes(
+        let status = run_read_only_git_bytes(
             &self.root,
             ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            "primary checkout cleanliness inspection",
         )?;
         if !status.is_empty() {
             return Err("primary checkout is dirty; Winds refuses to provision a candidate".into());
@@ -165,9 +178,10 @@ impl Repo {
 
     pub fn resolve_commit(&self, value: &str) -> Result<String> {
         let spec = format!("{value}^{{commit}}");
-        Ok(run_git_text(
+        Ok(run_read_only_git_text(
             &self.root,
             ["rev-parse", "--verify", "--end-of-options", spec.as_str()],
+            "commit resolution",
         )?
         .trim()
         .to_owned())
@@ -175,9 +189,10 @@ impl Repo {
 
     pub fn tree_oid(&self, commit_oid: &str) -> Result<String> {
         let spec = format!("{commit_oid}^{{tree}}");
-        Ok(run_git_text(
+        Ok(run_read_only_git_text(
             &self.root,
             ["rev-parse", "--verify", "--end-of-options", spec.as_str()],
+            "tree resolution",
         )?
         .trim()
         .to_owned())
@@ -193,7 +208,7 @@ impl Repo {
             std::fs::create_dir_all(parent)?;
         }
 
-        run_git_os(
+        run_mutating_git_os(
             &self.root,
             [
                 OsStr::new("worktree"),
@@ -204,7 +219,7 @@ impl Repo {
             ],
         )?;
 
-        run_git_os(
+        run_mutating_git_os(
             &self.root,
             [
                 OsStr::new("worktree"),
@@ -218,19 +233,28 @@ impl Repo {
     }
 
     pub fn worktree_head(&self, path: &Path) -> Result<String> {
-        Ok(run_git_text(path, ["rev-parse", "HEAD"])?.trim().to_owned())
+        Ok(
+            run_read_only_git_text(path, ["rev-parse", "HEAD"], "worktree HEAD inspection")?
+                .trim()
+                .to_owned(),
+        )
     }
 
     pub fn worktree_is_clean(&self, path: &Path) -> Result<bool> {
-        Ok(run_git_bytes(
+        Ok(run_read_only_git_bytes(
             path,
             ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            "candidate worktree cleanliness inspection",
         )?
         .is_empty())
     }
 
     pub fn worktree_paths(&self) -> Result<Vec<PathBuf>> {
-        let output = run_git_bytes(&self.root, ["worktree", "list", "--porcelain", "-z"])?;
+        let output = run_read_only_git_bytes(
+            &self.root,
+            ["worktree", "list", "--porcelain", "-z"],
+            "worktree inventory inspection",
+        )?;
         let mut paths = Vec::new();
         for field in output.split(|byte| *byte == 0) {
             if let Some(path) = field.strip_prefix(b"worktree ") {
@@ -243,15 +267,17 @@ impl Repo {
     pub fn create_selected_branch(&self, branch: &str, commit_oid: &str) -> Result<()> {
         let full_ref = format!("refs/heads/{branch}");
         let spec = format!("{full_ref}^{{commit}}");
-        let existing = git_command(&self.root)
-            .args([
+        let existing = run_read_only_git_output(
+            &self.root,
+            [
                 "rev-parse",
                 "--verify",
                 "--quiet",
                 "--end-of-options",
                 spec.as_str(),
-            ])
-            .output()?;
+            ],
+            "selected branch existence inspection",
+        )?;
 
         if existing.status.success() {
             let current = String::from_utf8(existing.stdout)?.trim().to_owned();
@@ -270,7 +296,7 @@ impl Repo {
             .into());
         }
 
-        run_git_text(&self.root, ["branch", branch, commit_oid])?;
+        run_mutating_git_text(&self.root, ["branch", branch, commit_oid])?;
         Ok(())
     }
 }
@@ -290,7 +316,20 @@ fn observed_status_bytes(repo: &Repo) -> Result<Vec<u8>> {
     run_bounded_read_only_git(command, "workspace Git observation")
 }
 
-pub(super) fn run_bounded_read_only_git(mut command: Command, label: &str) -> Result<Vec<u8>> {
+pub(super) fn run_bounded_read_only_git(command: Command, label: &str) -> Result<Vec<u8>> {
+    let output = run_bounded_read_only_git_output(command, label)?;
+    if !output.status.success() {
+        return Err(format!(
+            "{label} failed with status {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
+    }
+    Ok(output.stdout)
+}
+
+fn run_bounded_read_only_git_output(mut command: Command, label: &str) -> Result<BoundedGitOutput> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -417,24 +456,21 @@ pub(super) fn run_bounded_read_only_git(mut command: Command, label: &str) -> Re
         )
         .into());
     }
-    if !status.success() {
-        return Err(format!(
-            "{label} failed with status {status}: {}",
-            String::from_utf8_lossy(&stderr.bytes).trim()
-        )
-        .into());
-    }
-    Ok(stdout.bytes)
+    Ok(BoundedGitOutput {
+        status,
+        stdout: stdout.bytes,
+        stderr: stderr.bytes,
+    })
 }
 
-fn fail_bounded_git_observation(
+fn fail_bounded_git_observation<T>(
     child: &mut OwnedProcess,
     stdout_reader: &Receiver<io::Result<BoundedCapture>>,
     stderr_reader: &Receiver<io::Result<BoundedCapture>>,
     cleanup_deadline: Instant,
     label: &str,
     primary_error: String,
-) -> Result<Vec<u8>> {
+) -> Result<T> {
     let mut cleanup_failures = Vec::new();
     if let Err(error) = child.terminate_and_prove(cleanup_deadline, label) {
         cleanup_failures.push(error.to_string());
@@ -696,7 +732,51 @@ fn git_command(cwd: &Path) -> Command {
     command
 }
 
-fn run_git_bytes<I, S>(cwd: &Path, args: I) -> Result<Vec<u8>>
+pub(super) fn run_read_only_git_output<I, S>(
+    cwd: &Path,
+    args: I,
+    label: &str,
+) -> Result<BoundedGitOutput>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let mut command = git_command(cwd);
+    command.env("GIT_OPTIONAL_LOCKS", "0").args(args);
+    run_bounded_read_only_git_output(command, label)
+}
+
+pub(super) fn run_read_only_git_bytes<I, S>(cwd: &Path, args: I, label: &str) -> Result<Vec<u8>>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let output = run_read_only_git_output(cwd, args, label)?;
+    if !output.status.success() {
+        return Err(format!(
+            "{label} failed with status {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
+    }
+    Ok(output.stdout)
+}
+
+pub(super) fn run_read_only_git_text<I, S>(cwd: &Path, args: I, label: &str) -> Result<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    Ok(String::from_utf8(run_read_only_git_bytes(
+        cwd, args, label,
+    )?)?)
+}
+
+// Mutation-capable Git operations intentionally remain outside the read-only
+// observation timeout/containment contract. Read-only callers must use the
+// bounded helpers above.
+fn run_mutating_git_bytes<I, S>(cwd: &Path, args: I) -> Result<Vec<u8>>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
@@ -712,20 +792,20 @@ where
     .into())
 }
 
-fn run_git_text<I, S>(cwd: &Path, args: I) -> Result<String>
+fn run_mutating_git_text<I, S>(cwd: &Path, args: I) -> Result<String>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    Ok(String::from_utf8(run_git_bytes(cwd, args)?)?)
+    Ok(String::from_utf8(run_mutating_git_bytes(cwd, args)?)?)
 }
 
-fn run_git_os<I, S>(cwd: &Path, args: I) -> Result<()>
+fn run_mutating_git_os<I, S>(cwd: &Path, args: I) -> Result<()>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    run_git_bytes(cwd, args).map(|_| ())
+    run_mutating_git_bytes(cwd, args).map(|_| ())
 }
 
 fn strip_git_line_ending(value: &str) -> &str {
@@ -737,9 +817,10 @@ fn strip_git_line_ending(value: &str) -> &str {
 mod git_observation_tests {
     use super::{
         GIT_WORKTREE_STATE_FORMAT, OBSERVATION_GIT_OUTPUT_LIMIT, parse_worktree_status,
-        read_bounded,
+        read_bounded, run_bounded_read_only_git_output,
     };
     use std::io::Cursor;
+    use std::process::Command;
 
     #[test]
     fn clean_attached_status_parses_branch_and_empty_state_digest() {
@@ -827,5 +908,22 @@ mod git_observation_tests {
         let captured = read_bounded(Cursor::new(input)).unwrap();
         assert_eq!(captured.bytes.len(), OBSERVATION_GIT_OUTPUT_LIMIT);
         assert!(captured.truncated);
+    }
+
+    #[test]
+    fn bounded_read_only_runner_preserves_expected_nonzero_status() {
+        let command = if cfg!(windows) {
+            let mut command = Command::new("cmd.exe");
+            command.args(["/d", "/s", "/c", "exit 7"]);
+            command
+        } else {
+            let mut command = Command::new("/bin/sh");
+            command.args(["-c", "exit 7"]);
+            command
+        };
+        let output =
+            run_bounded_read_only_git_output(command, "bounded nonzero-status fixture").unwrap();
+        assert_eq!(output.status.code(), Some(7));
+        assert!(output.stdout.is_empty());
     }
 }

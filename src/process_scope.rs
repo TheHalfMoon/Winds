@@ -18,7 +18,7 @@ pub(super) fn operation_deadlines(started: Instant, total_timeout: Duration) -> 
 pub(super) struct OwnedProcess {
     child: Child,
     #[cfg(unix)]
-    process_group_id: libc::pid_t,
+    process_group_id: Option<libc::pid_t>,
     #[cfg(windows)]
     job: WindowsJob,
 }
@@ -43,6 +43,7 @@ impl OwnedProcess {
     ) -> Result<bool> {
         loop {
             if self.scope_is_quiescent(label)? {
+                self.disarm_unix_process_group();
                 return Ok(true);
             }
             let now = Instant::now();
@@ -65,6 +66,7 @@ impl OwnedProcess {
                 .is_some();
             let scope_quiescent = self.scope_is_quiescent(label)?;
             if direct_exited && scope_quiescent {
+                self.disarm_unix_process_group();
                 return Ok(());
             }
             let now = Instant::now();
@@ -80,7 +82,10 @@ impl OwnedProcess {
 
     #[cfg(unix)]
     fn terminate_scope(&mut self, label: &str) -> Result<()> {
-        let result = unsafe { libc::kill(-self.process_group_id, libc::SIGKILL) };
+        let Some(process_group_id) = self.process_group_id else {
+            return Ok(());
+        };
+        let result = unsafe { libc::kill(-process_group_id, libc::SIGKILL) };
         if result == 0 {
             return Ok(());
         }
@@ -110,7 +115,10 @@ impl OwnedProcess {
 
     #[cfg(unix)]
     fn scope_is_quiescent(&self, label: &str) -> Result<bool> {
-        let result = unsafe { libc::kill(-self.process_group_id, 0) };
+        let Some(process_group_id) = self.process_group_id else {
+            return Ok(true);
+        };
+        let result = unsafe { libc::kill(-process_group_id, 0) };
         if result == 0 {
             return Ok(false);
         }
@@ -121,6 +129,14 @@ impl OwnedProcess {
             _ => Err(format!("{label} could not inspect its owned process group: {error}").into()),
         }
     }
+
+    #[cfg(unix)]
+    fn disarm_unix_process_group(&mut self) {
+        self.process_group_id = None;
+    }
+
+    #[cfg(not(unix))]
+    fn disarm_unix_process_group(&mut self) {}
 
     #[cfg(windows)]
     fn scope_is_quiescent(&self, label: &str) -> Result<bool> {
@@ -137,9 +153,12 @@ impl Drop for OwnedProcess {
     fn drop(&mut self) {
         #[cfg(unix)]
         {
-            // Always terminate the owned process group on fallback Drop. The direct
-            // child may already be reaped while a descendant remains in the group.
-            let _ = unsafe { libc::kill(-self.process_group_id, libc::SIGKILL) };
+            // A successful quiescence proof disarms this numeric identity. Drop
+            // signals only a scope that may still be owned/live, so PGID reuse
+            // cannot redirect fallback cleanup to an unrelated process group.
+            if let Some(process_group_id) = self.process_group_id.take() {
+                let _ = unsafe { libc::kill(-process_group_id, libc::SIGKILL) };
+            }
         }
         #[cfg(not(any(unix, windows)))]
         {
@@ -150,11 +169,28 @@ impl Drop for OwnedProcess {
     }
 }
 
-#[cfg(unix)]
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos"
+))]
 pub(super) fn spawn_owned_process(command: &mut Command, label: &str) -> Result<OwnedProcess> {
     use std::os::unix::process::CommandExt;
 
-    command.process_group(0);
+    #[cfg(target_os = "macos")]
+    if unsafe { libc::getuid() } == 0 {
+        return Err(format!("{label} refuses Unix owned-process containment as macOS root").into());
+    }
+
+    // SAFETY: pre_exec runs after fork and before exec. The callback performs
+    // only direct libc syscalls and stack-only filter setup: setsid plus the
+    // narrow platform containment primitive. It does not allocate, lock, or
+    // touch shared Rust state.
+    unsafe {
+        command.pre_exec(configure_unix_owned_scope);
+    }
     let child = command
         .spawn()
         .map_err(|error| format!("{label} could not start its owned subprocess: {error}"))?;
@@ -162,8 +198,150 @@ pub(super) fn spawn_owned_process(command: &mut Command, label: &str) -> Result<
         .map_err(|_| format!("{label} child process id does not fit a Unix process-group id"))?;
     Ok(OwnedProcess {
         child,
-        process_group_id,
+        process_group_id: Some(process_group_id),
     })
+}
+
+#[cfg(all(
+    unix,
+    not(any(
+        all(
+            target_os = "linux",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        ),
+        target_os = "macos"
+    ))
+))]
+pub(super) fn spawn_owned_process(_command: &mut Command, label: &str) -> Result<OwnedProcess> {
+    Err(
+        format!("{label} owned subprocess containment is not implemented for this Unix target")
+            .into(),
+    )
+}
+
+#[cfg(any(
+    all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ),
+    target_os = "macos"
+))]
+fn configure_unix_owned_scope() -> io::Result<()> {
+    if unsafe { libc::setsid() } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+
+    #[cfg(target_os = "linux")]
+    install_linux_process_group_escape_filter()?;
+
+    #[cfg(target_os = "macos")]
+    constrain_macos_descendant_creation()?;
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn constrain_macos_descendant_creation() -> io::Result<()> {
+    let mut current = std::mem::MaybeUninit::<libc::rlimit>::uninit();
+    if unsafe { libc::getrlimit(libc::RLIMIT_NPROC, current.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let current = unsafe { current.assume_init() };
+    let hard_limit = current.rlim_max.min(2 as libc::rlim_t);
+    let bounded = libc::rlimit {
+        rlim_cur: hard_limit,
+        rlim_max: hard_limit,
+    };
+    if unsafe { libc::setrlimit(libc::RLIMIT_NPROC, &bounded) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+fn install_linux_process_group_escape_filter() -> io::Result<()> {
+    const BPF_LD_W_ABS: u16 = 0x20;
+    const BPF_ALU_AND_K: u16 = 0x54;
+    const BPF_JMP_JEQ_K: u16 = 0x15;
+    const BPF_RET_K: u16 = 0x06;
+
+    const SECCOMP_RET_KILL_THREAD: u32 = 0x0000_0000;
+    const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
+    const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
+    const SECCOMP_MODE_FILTER: libc::c_ulong = 2;
+    const PR_SET_SECCOMP: libc::c_int = 22;
+    const PR_SET_NO_NEW_PRIVS: libc::c_int = 38;
+
+    #[cfg(target_arch = "x86_64")]
+    const AUDIT_ARCH: u32 = 0xc000_003e;
+    #[cfg(target_arch = "aarch64")]
+    const AUDIT_ARCH: u32 = 0xc000_00b7;
+
+    const SECCOMP_DATA_NR_OFFSET: u32 = 0;
+    const SECCOMP_DATA_ARCH_OFFSET: u32 = 4;
+    const X32_SYSCALL_BIT_CLEAR_MASK: u32 = 0xbfff_ffff;
+
+    const fn statement(code: u16, k: u32) -> libc::sock_filter {
+        libc::sock_filter {
+            code,
+            jt: 0,
+            jf: 0,
+            k,
+        }
+    }
+
+    const fn jump(code: u16, k: u32, jt: u8, jf: u8) -> libc::sock_filter {
+        libc::sock_filter { code, jt, jf, k }
+    }
+
+    let deny_errno = SECCOMP_RET_ERRNO | (libc::EPERM as u32 & 0x0000_ffff);
+    let mut filter = [
+        statement(BPF_LD_W_ABS, SECCOMP_DATA_ARCH_OFFSET),
+        jump(BPF_JMP_JEQ_K, AUDIT_ARCH, 1, 0),
+        statement(BPF_RET_K, SECCOMP_RET_KILL_THREAD),
+        statement(BPF_LD_W_ABS, SECCOMP_DATA_NR_OFFSET),
+        statement(BPF_ALU_AND_K, X32_SYSCALL_BIT_CLEAR_MASK),
+        jump(BPF_JMP_JEQ_K, libc::SYS_setsid as u32, 0, 1),
+        statement(BPF_RET_K, deny_errno),
+        jump(BPF_JMP_JEQ_K, libc::SYS_setpgid as u32, 0, 1),
+        statement(BPF_RET_K, deny_errno),
+        statement(BPF_RET_K, SECCOMP_RET_ALLOW),
+    ];
+    let mut program = libc::sock_fprog {
+        len: filter.len() as u16,
+        filter: filter.as_mut_ptr(),
+    };
+
+    let no_new_privs = unsafe {
+        libc::prctl(
+            PR_SET_NO_NEW_PRIVS,
+            1 as libc::c_ulong,
+            0 as libc::c_ulong,
+            0 as libc::c_ulong,
+            0 as libc::c_ulong,
+        )
+    };
+    if no_new_privs != 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    let installed = unsafe {
+        libc::prctl(
+            PR_SET_SECCOMP,
+            SECCOMP_MODE_FILTER,
+            &mut program as *mut libc::sock_fprog,
+            0 as libc::c_ulong,
+            0 as libc::c_ulong,
+        )
+    };
+    if installed != 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -555,9 +733,118 @@ mod tests {
                 .wait_for_scope_quiescence(cleanup_deadline, "process-scope short fixture")
                 .unwrap()
         );
+        #[cfg(unix)]
+        assert!(
+            process.process_group_id.is_none(),
+            "proven Unix quiescence must disarm fallback PGID signaling"
+        );
     }
 
-    #[cfg(any(unix, windows))]
+    #[cfg(unix)]
+    #[test]
+    fn proven_quiescent_unix_scope_disarms_drop_pgid_signal() {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "exit 0"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+
+        let mut process =
+            spawn_owned_process(&mut command, "process-scope Unix disarm fixture").unwrap();
+        assert!(process.process_group_id.is_some());
+        assert!(wait_for_direct_exit(
+            &mut process,
+            Instant::now() + Duration::from_secs(5)
+        ));
+        assert!(
+            process
+                .wait_for_scope_quiescence(
+                    Instant::now() + Duration::from_secs(2),
+                    "process-scope Unix disarm fixture",
+                )
+                .unwrap()
+        );
+        assert!(
+            process.process_group_id.is_none(),
+            "Drop must have no numeric PGID left to signal after quiescence proof"
+        );
+
+        drop(process);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_owned_scope_blocks_setsid_escape() {
+        let marker =
+            std::env::temp_dir().join(format!("winds-t068-setsid-escape-{}", std::process::id()));
+        let _ = std::fs::remove_file(&marker);
+        let marker_text = marker.to_str().unwrap();
+
+        let mut command = Command::new("/usr/bin/setsid");
+        command.args([
+            "/bin/sh",
+            "-c",
+            "printf escaped > \"$1\"",
+            "winds-t068-setsid",
+            marker_text,
+        ]);
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+
+        let mut process =
+            spawn_owned_process(&mut command, "process-scope setsid escape fixture").unwrap();
+        assert!(wait_for_direct_exit(
+            &mut process,
+            Instant::now() + Duration::from_secs(5)
+        ));
+        assert!(
+            process
+                .wait_for_scope_quiescence(
+                    Instant::now() + Duration::from_secs(2),
+                    "process-scope setsid escape fixture",
+                )
+                .unwrap()
+        );
+
+        let escaped = marker.exists();
+        let _ = std::fs::remove_file(&marker);
+        assert!(
+            !escaped,
+            "the inherited Linux containment filter must prevent a descendant from escaping with setsid"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_owned_scope_denies_descendant_creation() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "/bin/sleep 30 &"]);
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+
+        let mut process =
+            spawn_owned_process(&mut command, "process-scope macOS descendant fixture").unwrap();
+        assert!(wait_for_direct_exit(
+            &mut process,
+            Instant::now() + Duration::from_secs(5)
+        ));
+        assert!(
+            process
+                .wait_for_scope_quiescence(
+                    Instant::now() + Duration::from_secs(2),
+                    "process-scope macOS descendant fixture",
+                )
+                .unwrap(),
+            "macOS RLIMIT_NPROC containment must prevent an owned observation child from leaving a descendant"
+        );
+    }
+
+    #[cfg(any(target_os = "linux", windows))]
     #[test]
     fn surviving_descendant_is_detected_and_terminated_as_owned_scope() {
         let mut command = if cfg!(windows) {
@@ -600,6 +887,11 @@ mod tests {
                 "process-scope descendant fixture",
             )
             .unwrap();
+        #[cfg(unix)]
+        assert!(
+            process.process_group_id.is_none(),
+            "successful terminate-and-prove must disarm fallback PGID signaling"
+        );
         assert!(
             process
                 .wait_for_scope_quiescence(

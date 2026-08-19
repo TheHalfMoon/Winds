@@ -1,5 +1,6 @@
 use super::{
-    Repo, Result, git_command, run_bounded_read_only_git, run_git_text, strip_git_line_ending,
+    Repo, Result, git_command, run_bounded_read_only_git, run_read_only_git_output,
+    run_read_only_git_text, strip_git_line_ending,
 };
 use crate::store::{NewWorkspace, Store};
 use serde::Serialize;
@@ -91,9 +92,11 @@ fn inspect_worktree(repo: &Repo) -> Result<WorkspaceInspection> {
 }
 
 fn exact_head(repo: &Repo, branch: Option<&str>) -> Result<Option<String>> {
-    let output = git_command(repo.root())
-        .args(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])
-        .output()?;
+    let output = run_read_only_git_output(
+        repo.root(),
+        ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+        "workspace HEAD resolution",
+    )?;
     if output.status.success() {
         let head = String::from_utf8(output.stdout)?;
         let head = strip_git_line_ending(&head);
@@ -114,10 +117,12 @@ fn exact_head(repo: &Repo, branch: Option<&str>) -> Result<Option<String>> {
         return Err("detached workspace HEAD does not resolve to a commit".into());
     };
     let full_ref = format!("refs/heads/{branch}");
-    let ref_status = git_command(repo.root())
-        .args(["show-ref", "--verify", "--quiet", full_ref.as_str()])
-        .status()?;
-    match ref_status.code() {
+    let ref_status = run_read_only_git_output(
+        repo.root(),
+        ["show-ref", "--verify", "--quiet", full_ref.as_str()],
+        "workspace HEAD branch verification",
+    )?;
+    match ref_status.status.code() {
         Some(1) => Ok(None),
         Some(0) => Err(format!(
             "workspace HEAD branch exists but does not resolve to a commit: {full_ref}"
@@ -128,9 +133,11 @@ fn exact_head(repo: &Repo, branch: Option<&str>) -> Result<Option<String>> {
 }
 
 fn branch_name(repo: &Repo) -> Result<Option<String>> {
-    let output = git_command(repo.root())
-        .args(["symbolic-ref", "--quiet", "--short", "HEAD"])
-        .output()?;
+    let output = run_read_only_git_output(
+        repo.root(),
+        ["symbolic-ref", "--quiet", "--short", "HEAD"],
+        "workspace branch-state inspection",
+    )?;
     match output.status.code() {
         Some(0) => {
             let branch = String::from_utf8(output.stdout)?;
@@ -230,7 +237,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let value = run_git_text(cwd, args)?;
+    let value = run_read_only_git_text(cwd, args, "workspace Git boolean inspection")?;
     match strip_git_line_ending(&value) {
         "true" => Ok(true),
         "false" => Ok(false),

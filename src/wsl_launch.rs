@@ -4,7 +4,7 @@ use super::wsl::WslDistribution;
 #[cfg(windows)]
 use super::wsl::discover_wsl_distributions;
 #[cfg(windows)]
-use super::{GIT_CONTEXT_ENV_VARS, Repo, run_git_text, strip_git_line_ending};
+use super::{GIT_CONTEXT_ENV_VARS, Repo, run_read_only_git_text, strip_git_line_ending};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -468,7 +468,11 @@ fn attest_workspace(
         &["rev-parse", "--verify", "HEAD^{commit}"],
         "WSL Git HEAD",
     )?;
-    let windows_head = run_git_text(repo.root(), ["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let windows_head = run_read_only_git_text(
+        repo.root(),
+        ["rev-parse", "--verify", "HEAD^{commit}"],
+        "Windows Git HEAD attestation",
+    )?;
     let windows_head_oid = strip_git_line_ending(&windows_head);
     if windows_head_oid.is_empty() {
         return Err("Windows Git returned an empty HEAD object id".into());
