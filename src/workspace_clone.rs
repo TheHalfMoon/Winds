@@ -32,10 +32,15 @@ type ClonePathIdentity = (u64, [u8; 16]);
 #[cfg(not(any(unix, windows)))]
 type ClonePathIdentity = ();
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct OwnedCloneStaging {
     path: PathBuf,
     identity: ClonePathIdentity,
+    // Holding the original Unix directory open pins its inode until this
+    // staging owner is dropped. That prevents delete+recreate from being
+    // accepted through immediate inode-number reuse.
+    #[cfg(unix)]
+    _identity_handle: fs::File,
 }
 
 #[allow(
@@ -310,6 +315,32 @@ fn create_private_clone_staging(parent: &Path) -> Result<OwnedCloneStaging> {
                 if canonical != staging {
                     return Err("private clone staging changed identity during creation".into());
                 }
+                #[cfg(unix)]
+                let identity_handle = fs::File::open(&staging).map_err(|error| {
+                    format!(
+                        "private clone staging could not be pinned by an open directory handle after creation; staging was retained at {}: {error}",
+                        staging.display()
+                    )
+                })?;
+                #[cfg(unix)]
+                let identity =
+                    clone_directory_identity_from_handle(&identity_handle, "private clone staging")
+                        .map_err(|error| {
+                            format!(
+                                "private clone staging filesystem identity could not be captured from its pinned handle after creation; staging was retained at {}: {error}",
+                                staging.display()
+                            )
+                        })?;
+                #[cfg(unix)]
+                require_clone_directory_identity(&staging, &identity, "private clone staging")
+                    .map_err(|error| {
+                        format!(
+                            "private clone staging path no longer matches its pinned creation handle; staging was retained at {}: {error}",
+                            staging.display()
+                        )
+                    })?;
+
+                #[cfg(not(unix))]
                 let identity = clone_directory_identity(&staging, "private clone staging")
                     .map_err(|error| {
                         format!(
@@ -317,9 +348,12 @@ fn create_private_clone_staging(parent: &Path) -> Result<OwnedCloneStaging> {
                             staging.display()
                         )
                     })?;
+
                 return Ok(OwnedCloneStaging {
                     path: staging,
                     identity,
+                    #[cfg(unix)]
+                    _identity_handle: identity_handle,
                 });
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -333,6 +367,20 @@ fn create_private_clone_staging(parent: &Path) -> Result<OwnedCloneStaging> {
         }
     }
     Err("could not allocate a unique private clone staging directory".into())
+}
+
+#[cfg(unix)]
+fn clone_directory_identity_from_handle(
+    handle: &fs::File,
+    label: &str,
+) -> Result<ClonePathIdentity> {
+    let metadata = handle
+        .metadata()
+        .map_err(|error| format!("{label} pinned handle cannot be inspected: {error}"))?;
+    if !metadata.is_dir() {
+        return Err(format!("{label} pinned handle is not a directory").into());
+    }
+    Ok((metadata.dev(), metadata.ino()))
 }
 
 #[cfg(unix)]
