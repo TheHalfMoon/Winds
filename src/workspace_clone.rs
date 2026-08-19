@@ -9,15 +9,34 @@ use std::fs;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::os::unix::ffi::OsStrExt;
 #[cfg(unix)]
-use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(windows)]
+use std::{ffi::c_void, mem::MaybeUninit};
 
 static NEXT_CLONE_STAGING_ID: AtomicU64 = AtomicU64::new(0);
 const MAX_STAGING_ATTEMPTS: usize = 128;
+
+#[cfg(unix)]
+type ClonePathIdentity = (u64, u64);
+#[cfg(windows)]
+type ClonePathIdentity = (u64, [u8; 16]);
+#[cfg(not(any(unix, windows)))]
+type ClonePathIdentity = ();
+
+#[derive(Debug, Clone)]
+struct OwnedCloneStaging {
+    path: PathBuf,
+    identity: ClonePathIdentity,
+}
 
 #[allow(
     dead_code,
@@ -59,14 +78,28 @@ where
     let parent = planned_destination
         .parent()
         .ok_or("clone destination has no parent directory")?;
-    let staging_root = create_private_clone_staging(parent)?;
-    let staged_checkout = staging_root.join("checkout");
+    let staging = create_private_clone_staging(parent)?;
+    let staged_checkout = staging.path.join("checkout");
     let git_remote = git_remote_argument(remote, &remote_identity)?;
     let git_destination = git_cli_local_path(&staged_checkout)?;
 
-    after_staging_created(&staged_checkout, &planned_destination)?;
+    if let Err(error) = after_staging_created(&staged_checkout, &planned_destination) {
+        return fail_with_owned_staging_cleanup(
+            format!("clone staging callback failed before Git clone: {error}"),
+            &staging,
+        );
+    }
 
-    let status = git_command(&staging_root)
+    if let Err(error) =
+        require_clone_directory_identity(&staging.path, &staging.identity, "private clone staging")
+    {
+        return fail_with_owned_staging_cleanup(
+            format!("private clone staging ownership changed before Git clone: {error}"),
+            &staging,
+        );
+    }
+
+    let status = match git_command(&staging.path)
         .arg("-c")
         .arg("core.askPass=")
         .arg("clone")
@@ -82,29 +115,97 @@ where
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status()?;
+        .status()
+    {
+        Ok(status) => status,
+        Err(error) => {
+            return fail_with_owned_staging_cleanup(
+                format!(
+                    "system Git clone could not be started or observed: {error}; requested destination was not published or registered"
+                ),
+                &staging,
+            );
+        }
+    };
     if !status.success() {
         let status = status
             .code()
             .map_or_else(|| "signal".to_owned(), |code| code.to_string());
+        return fail_with_owned_staging_cleanup(
+            format!(
+                "system Git clone failed with status {status}; requested destination was not published or registered"
+            ),
+            &staging,
+        );
+    }
+
+    let checkout_identity = match require_owned_staged_checkout(&staging, &staged_checkout) {
+        Ok(identity) => identity,
+        Err(error) => {
+            return fail_with_owned_staging_cleanup(
+                format!(
+                    "cloned checkout failed private staging validation; requested destination was not published or registered: {error}"
+                ),
+                &staging,
+            );
+        }
+    };
+
+    if let Err(error) =
+        require_clone_directory_identity(&staging.path, &staging.identity, "private clone staging")
+    {
+        return fail_with_owned_staging_cleanup(
+            format!("private clone staging ownership changed before publication: {error}"),
+            &staging,
+        );
+    }
+    if let Err(error) = require_clone_directory_identity(
+        &staged_checkout,
+        &checkout_identity,
+        "staged clone checkout",
+    ) {
+        return fail_with_owned_staging_cleanup(
+            format!("staged clone checkout ownership changed before publication: {error}"),
+            &staging,
+        );
+    }
+
+    if let Err(error) = atomic_publish_no_replace(&staged_checkout, &planned_destination) {
+        return fail_with_owned_staging_cleanup(
+            format!(
+                "cloned checkout could not be atomically published without replacing the requested destination; requested destination was not registered: {error}"
+            ),
+            &staging,
+        );
+    }
+
+    let published_identity = match clone_directory_identity(
+        &planned_destination,
+        "published clone destination",
+    ) {
+        Ok(identity) => identity,
+        Err(error) => {
+            return fail_after_publication(
+                format!(
+                    "published clone destination identity could not be proven after atomic publication; destination was not registered and was retained for recovery: {error}"
+                ),
+                &staging,
+            );
+        }
+    };
+    if published_identity != checkout_identity {
+        return fail_after_publication(
+            "published clone destination filesystem identity does not match the approved staged checkout; destination was not registered and was retained for recovery".to_owned(),
+            &staging,
+        );
+    }
+
+    if let Err(error) = remove_empty_owned_clone_staging(&staging) {
         return Err(format!(
-            "system Git clone failed with status {status}; requested destination was not published or registered; partial private staging was retained at {}",
-            staging_root.display()
+            "atomically published clone staging could not be removed safely; destination was not registered and was retained for recovery: {error}"
         )
         .into());
     }
-
-    require_owned_staged_checkout(&staging_root, &staged_checkout)?;
-    atomic_publish_no_replace(&staged_checkout, &planned_destination).map_err(|error| {
-        format!(
-            "cloned checkout could not be atomically published without replacing the requested destination; requested destination was not registered and private staging was retained at {}: {error}",
-            staging_root.display()
-        )
-    })?;
-
-    // Only the now-empty private staging parent is removed. The public requested
-    // destination is never recursively cleaned by Winds.
-    let _ = fs::remove_dir(&staging_root);
 
     let workspace = inspect_existing_workspace(&planned_destination, canonical_state_root)?;
     if Path::new(&workspace.canonical_worktree_root) != planned_destination {
@@ -114,6 +215,16 @@ where
         );
     }
     let mut store = Store::open(canonical_state_root)?;
+    require_clone_directory_identity(
+        &planned_destination,
+        &checkout_identity,
+        "published clone destination",
+    )
+    .map_err(|error| {
+        format!(
+            "published clone destination changed filesystem identity before registration; destination was not registered and was retained for recovery: {error}"
+        )
+    })?;
     store.register_cloned_workspace(
         NewWorkspace {
             workspace_id: &workspace.workspace_id,
@@ -180,7 +291,7 @@ fn plan_clone_destination(destination: &Path, canonical_state_root: &Path) -> Re
     Ok(planned)
 }
 
-fn create_private_clone_staging(parent: &Path) -> Result<PathBuf> {
+fn create_private_clone_staging(parent: &Path) -> Result<OwnedCloneStaging> {
     for _ in 0..MAX_STAGING_ATTEMPTS {
         let sequence = NEXT_CLONE_STAGING_ID.fetch_add(1, Ordering::Relaxed);
         let staging = parent.join(format!(
@@ -199,7 +310,17 @@ fn create_private_clone_staging(parent: &Path) -> Result<PathBuf> {
                 if canonical != staging {
                     return Err("private clone staging changed identity during creation".into());
                 }
-                return Ok(staging);
+                let identity = clone_directory_identity(&staging, "private clone staging")
+                    .map_err(|error| {
+                        format!(
+                            "private clone staging filesystem identity could not be captured after creation; staging was retained at {}: {error}",
+                            staging.display()
+                        )
+                    })?;
+                return Ok(OwnedCloneStaging {
+                    path: staging,
+                    identity,
+                });
             }
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(error) => {
@@ -214,17 +335,54 @@ fn create_private_clone_staging(parent: &Path) -> Result<PathBuf> {
     Err("could not allocate a unique private clone staging directory".into())
 }
 
-fn require_owned_staged_checkout(staging_root: &Path, staged_checkout: &Path) -> Result<()> {
-    let staging_metadata = fs::symlink_metadata(staging_root)
-        .map_err(|error| format!("private clone staging cannot be inspected: {error}"))?;
-    if staging_metadata.file_type().is_symlink() || !staging_metadata.is_dir() {
-        return Err("private clone staging is no longer a real directory".into());
+#[cfg(unix)]
+fn clone_directory_identity(path: &Path, label: &str) -> Result<ClonePathIdentity> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("{label} cannot be inspected: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(format!("{label} is not a real directory").into());
     }
-    let canonical_staging = staging_root
+    Ok((metadata.dev(), metadata.ino()))
+}
+
+#[cfg(windows)]
+fn clone_directory_identity(path: &Path, label: &str) -> Result<ClonePathIdentity> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("{label} cannot be inspected: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(format!("{label} is not a real directory").into());
+    }
+    windows_directory_identity(path, label)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn clone_directory_identity(_path: &Path, label: &str) -> Result<ClonePathIdentity> {
+    Err(format!("{label} filesystem identity is unsupported on this platform").into())
+}
+
+fn require_clone_directory_identity(
+    path: &Path,
+    expected: &ClonePathIdentity,
+    label: &str,
+) -> Result<()> {
+    let current = clone_directory_identity(path, label)?;
+    if current != *expected {
+        return Err(format!("{label} filesystem identity changed").into());
+    }
+    Ok(())
+}
+
+fn require_owned_staged_checkout(
+    staging: &OwnedCloneStaging,
+    staged_checkout: &Path,
+) -> Result<ClonePathIdentity> {
+    require_clone_directory_identity(&staging.path, &staging.identity, "private clone staging")?;
+    let canonical_staging = staging
+        .path
         .canonicalize()
         .map_err(|error| format!("private clone staging cannot be canonicalized: {error}"))?;
-    if canonical_staging != staging_root {
-        return Err("private clone staging changed identity after creation".into());
+    if canonical_staging != staging.path {
+        return Err("private clone staging path is no longer canonical".into());
     }
 
     let checkout_metadata = fs::symlink_metadata(staged_checkout)
@@ -240,7 +398,58 @@ fn require_owned_staged_checkout(staging_root: &Path, staged_checkout: &Path) ->
     {
         return Err("staged clone checkout escaped its private staging parent".into());
     }
-    Ok(())
+    clone_directory_identity(staged_checkout, "staged clone checkout")
+}
+
+fn cleanup_owned_clone_staging(staging: &OwnedCloneStaging) -> Result<()> {
+    require_clone_directory_identity(
+        &staging.path,
+        &staging.identity,
+        "private clone staging",
+    )
+    .map_err(|error| {
+        format!(
+            "private clone staging ownership is ambiguous; refusing recursive cleanup of {}: {error}",
+            staging.path.display()
+        )
+    })?;
+    fs::remove_dir_all(&staging.path).map_err(|error| {
+        format!(
+            "failed to remove proven-owned private clone staging {}: {error}",
+            staging.path.display()
+        )
+        .into()
+    })
+}
+
+fn remove_empty_owned_clone_staging(staging: &OwnedCloneStaging) -> Result<()> {
+    require_clone_directory_identity(&staging.path, &staging.identity, "private clone staging")?;
+    fs::remove_dir(&staging.path).map_err(|error| {
+        format!(
+            "failed to remove empty proven-owned private clone staging {}: {error}",
+            staging.path.display()
+        )
+        .into()
+    })
+}
+
+fn fail_with_owned_staging_cleanup<T>(primary: String, staging: &OwnedCloneStaging) -> Result<T> {
+    match cleanup_owned_clone_staging(staging) {
+        Ok(()) => Err(primary.into()),
+        Err(cleanup_error) => {
+            Err(format!("{primary}; private staging cleanup also failed: {cleanup_error}").into())
+        }
+    }
+}
+
+fn fail_after_publication<T>(primary: String, staging: &OwnedCloneStaging) -> Result<T> {
+    match remove_empty_owned_clone_staging(staging) {
+        Ok(()) => Err(primary.into()),
+        Err(cleanup_error) => Err(format!(
+            "{primary}; empty private staging cleanup also failed: {cleanup_error}"
+        )
+        .into()),
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -291,9 +500,93 @@ fn unix_path_cstring(path: &Path, label: &str) -> Result<CString> {
 }
 
 #[cfg(windows)]
+const WINDOWS_FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
+#[cfg(windows)]
+const WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+#[cfg(windows)]
+const WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+#[cfg(windows)]
+const WINDOWS_FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+#[cfg(windows)]
+const WINDOWS_FILE_ATTRIBUTE_TAG_INFO_CLASS: i32 = 9;
+#[cfg(windows)]
+const WINDOWS_FILE_ID_INFO_CLASS: i32 = 18;
+
+#[cfg(windows)]
+#[repr(C)]
+struct WindowsFileAttributeTagInfo {
+    file_attributes: u32,
+    _reparse_tag: u32,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct WindowsFileIdInfo {
+    volume_serial_number: u64,
+    file_id: [u8; 16],
+}
+
+#[cfg(windows)]
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn MoveFileExW(existing_file_name: *const u16, new_file_name: *const u16, flags: u32) -> i32;
+    fn GetFileInformationByHandleEx(
+        file_handle: *mut c_void,
+        file_information_class: i32,
+        file_information: *mut c_void,
+        buffer_size: u32,
+    ) -> i32;
+}
+
+#[cfg(windows)]
+fn windows_directory_identity(path: &Path, label: &str) -> Result<ClonePathIdentity> {
+    let handle = fs::OpenOptions::new()
+        .access_mode(0)
+        .custom_flags(WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT | WINDOWS_FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+        .map_err(|error| format!("{label} cannot be opened for identity inspection: {error}"))?;
+
+    let mut attribute_info = MaybeUninit::<WindowsFileAttributeTagInfo>::uninit();
+    let attribute_result = unsafe {
+        GetFileInformationByHandleEx(
+            handle.as_raw_handle(),
+            WINDOWS_FILE_ATTRIBUTE_TAG_INFO_CLASS,
+            attribute_info.as_mut_ptr().cast::<c_void>(),
+            std::mem::size_of::<WindowsFileAttributeTagInfo>() as u32,
+        )
+    };
+    if attribute_result == 0 {
+        return Err(format!(
+            "{label} handle attributes cannot be inspected: {}",
+            std::io::Error::last_os_error()
+        )
+        .into());
+    }
+    let attribute_info = unsafe { attribute_info.assume_init() };
+    if attribute_info.file_attributes & WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || attribute_info.file_attributes & WINDOWS_FILE_ATTRIBUTE_DIRECTORY == 0
+    {
+        return Err(format!("{label} handle is a reparse point or not a real directory").into());
+    }
+
+    let mut identity_info = MaybeUninit::<WindowsFileIdInfo>::uninit();
+    let identity_result = unsafe {
+        GetFileInformationByHandleEx(
+            handle.as_raw_handle(),
+            WINDOWS_FILE_ID_INFO_CLASS,
+            identity_info.as_mut_ptr().cast::<c_void>(),
+            std::mem::size_of::<WindowsFileIdInfo>() as u32,
+        )
+    };
+    if identity_result == 0 {
+        return Err(format!(
+            "{label} filesystem identity cannot be inspected: {}",
+            std::io::Error::last_os_error()
+        )
+        .into());
+    }
+    let identity_info = unsafe { identity_info.assume_init() };
+    Ok((identity_info.volume_serial_number, identity_info.file_id))
 }
 
 #[cfg(windows)]
@@ -476,7 +769,8 @@ fn sanitize_scp_like_remote(remote: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        clone_and_register_workspace, clone_and_register_workspace_impl, sanitize_remote_identity,
+        clone_and_register_workspace, clone_and_register_workspace_impl, clone_directory_identity,
+        require_clone_directory_identity, sanitize_remote_identity,
     };
     use crate::store::Store;
     use rusqlite::{Connection, params};
@@ -577,6 +871,18 @@ mod tests {
         fs::remove_dir_all(&canonical_root).unwrap();
     }
 
+    fn private_clone_staging_paths(root: &Path) -> Vec<PathBuf> {
+        fs::read_dir(root)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(OsStr::to_str)
+                    .is_some_and(|name| name.starts_with(".winds-clone-stage-"))
+            })
+            .collect()
+    }
+
     #[test]
     fn clone_registers_workspace_and_persists_only_sanitized_remote_identity() {
         let root = test_root("clone");
@@ -642,6 +948,7 @@ mod tests {
         assert!(error.to_string().contains("system Git clone failed"));
         assert!(!destination.exists());
         assert!(!state_root.join("winds.db").exists());
+        assert!(private_clone_staging_paths(&root).is_empty());
 
         let marker = root.join("retry-bootstrap-ran");
         let retry_root = root.join("retry-source");
@@ -757,7 +1064,8 @@ mod tests {
 
         assert!(error.to_string().contains("atomically published"));
         assert_eq!(fs::read(&replacement_marker).unwrap(), b"replacement\n");
-        assert!(staged_checkout.unwrap().is_dir());
+        assert!(!staged_checkout.unwrap().exists());
+        assert!(private_clone_staging_paths(&root).is_empty());
         assert!(!state_root.join("winds.db").exists());
 
         cleanup_owned_root(&root);
@@ -788,6 +1096,84 @@ mod tests {
         assert!(error.to_string().contains("system Git clone failed"));
         assert_eq!(fs::read(&replacement_marker).unwrap(), b"replacement\n");
         assert!(!state_root.join("winds.db").exists());
+
+        cleanup_owned_root(&root);
+    }
+
+    #[test]
+    fn staging_path_replacement_is_not_cleaned_or_registered() {
+        let root = test_root("staging-replacement");
+        let marker = root.join("bootstrap-ran");
+        let (remote, _) = initialize_remote(&root, &marker);
+        let state_root = create_state_root(&root);
+        let destination = root.join("clone-destination");
+        let mut replacement_marker = None;
+
+        let error = clone_and_register_workspace_impl(
+            remote.to_str().unwrap(),
+            &destination,
+            &state_root,
+            362,
+            |staged, _| {
+                let staging_root = staged.parent().unwrap();
+                fs::remove_dir(staging_root)?;
+                fs::create_dir(staging_root)?;
+                let marker = staging_root.join("foreign-replacement-marker");
+                fs::write(&marker, b"foreign\n")?;
+                replacement_marker = Some(marker);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+
+        let error = error.to_string();
+        assert!(error.contains("filesystem identity changed"));
+        assert!(error.contains("refusing recursive cleanup"));
+        assert_eq!(fs::read(replacement_marker.unwrap()).unwrap(), b"foreign\n");
+        assert!(!destination.exists());
+        assert!(!state_root.join("winds.db").exists());
+
+        cleanup_owned_root(&root);
+    }
+
+    #[test]
+    fn clone_directory_identity_rejects_same_path_replacement() {
+        let root = test_root("directory-identity");
+        let checkout = root.join("checkout");
+        let original = root.join("checkout-original");
+        fs::create_dir(&checkout).unwrap();
+        let identity = clone_directory_identity(&checkout, "test checkout").unwrap();
+        assert_eq!(
+            clone_directory_identity(&checkout, "test checkout").unwrap(),
+            identity
+        );
+
+        fs::rename(&checkout, &original).unwrap();
+        fs::create_dir(&checkout).unwrap();
+        let replacement = clone_directory_identity(&checkout, "test checkout").unwrap();
+        assert_ne!(replacement, identity);
+        let error =
+            require_clone_directory_identity(&checkout, &identity, "test checkout").unwrap_err();
+        assert!(error.to_string().contains("filesystem identity changed"));
+
+        cleanup_owned_root(&root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_clone_directory_identity_is_stable_and_detects_replacement() {
+        let root = test_root("windows-directory-identity");
+        let checkout = root.join("checkout");
+        let original = root.join("checkout-original");
+        fs::create_dir(&checkout).unwrap();
+        let first = clone_directory_identity(&checkout, "Windows checkout").unwrap();
+        let same = clone_directory_identity(&checkout, "Windows checkout").unwrap();
+        assert_eq!(first, same);
+
+        fs::rename(&checkout, &original).unwrap();
+        fs::create_dir(&checkout).unwrap();
+        let replacement = clone_directory_identity(&checkout, "Windows checkout").unwrap();
+        assert_ne!(first, replacement);
 
         cleanup_owned_root(&root);
     }
