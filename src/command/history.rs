@@ -1251,8 +1251,7 @@ mod tests {
     #[test]
     fn total_quota_refuses_new_history_without_deleting_retained_sessions() {
         let root = TestRoot::new("retention");
-        let state_root =
-            state_with_terminal_executions(&root, &["retention-one", "retention-two"]);
+        let state_root = state_with_terminal_executions(&root, &["retention-one", "retention-two"]);
         let policy = SessionHistoryPolicy::local_bounded(false, 4, 1_024).unwrap();
 
         let first =
@@ -1303,18 +1302,12 @@ mod tests {
         fs::write(session.join("owned-marker"), b"owned\n").unwrap();
         let foreign_marker = session.join("foreign-marker");
 
-        let error = prune_for_write_impl(
-            &history,
-            &history_storage_key("new"),
-            8,
-            8,
-            || {
-                fs::rename(&session, &moved_owned)?;
-                fs::create_dir(&session)?;
-                fs::write(&foreign_marker, b"foreign\n")?;
-                Ok(())
-            },
-        )
+        let error = prune_for_write_impl(&history, &history_storage_key("new"), 8, 8, || {
+            fs::rename(&session, &moved_owned)?;
+            fs::create_dir(&session)?;
+            fs::write(&foreign_marker, b"foreign\n")?;
+            Ok(())
+        })
         .unwrap_err()
         .to_string();
 
