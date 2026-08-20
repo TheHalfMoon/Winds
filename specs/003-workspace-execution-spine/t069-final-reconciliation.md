@@ -1,12 +1,12 @@
 # T069 Final Reconciliation
 
-Status: **IN PROGRESS — DOCS-ONLY RECONCILIATION CANDIDATE; T069 NOT YET COMPLETE**
+Status: **CLOSEOUT CANDIDATE — TASK TRUTH MARKED COMPLETE; NOT CANONICAL UNTIL FINAL EXACT-HEAD GATES AND MERGE**
 
 This artifact performs Spec 003 T069 evidence reconciliation only. It does not change runtime behavior, dependencies, migrations, workflow semantics, verification authority, or platform behavior. It does not start Spec 006 or authorize any daemon/session-owner, IPC, MCP/ACP/A2A, provider/plugin runtime, remote execution, Agent Fleet, Herdr, Pi, SQL, or LLM implementation.
 
 ## 1. Canonical start state
 
-T069 starts from exact canonical `main`:
+T069 started from exact canonical `main`:
 
 - commit: `c19ad598cd353bc53b852a693495addbd05e74a3`
 - tree: `61f008f58900f3a74a8b3f4fdb5b5dbcb25e50b3`
@@ -28,7 +28,7 @@ Therefore the merge introduced no tree drift beyond the accepted final PR head.
 
 ## 2. T068 accepted implementation and review evidence
 
-T068 is already CLOSED_CANONICAL. Its accepted final implementation/review candidate was:
+T068 is CLOSED_CANONICAL. Its accepted final implementation/review candidate was:
 
 - implementation head: `badfa984d7aa5552478aaba5b7da5819290253df`
 - implementation tree: `d5e6ffcdd97af9cf0281c2606f799fb88b9e6b0e`
@@ -46,7 +46,7 @@ Exact-head deterministic evidence on that implementation head:
 
 The final material CodeRabbit WSL post-exit-drain finding was repaired and resolved on the bound implementation head. A fresh independent Qodo full-implementation review was explicitly bound to that exact implementation head/tree/base and returned `NO MATERIAL FINDING REMAINING` after focused re-evaluation of bounded WSL draining, object-bound history pruning, clone staging cleanup, and the complete current implementation surface.
 
-This evidence is historical T068 acceptance evidence. T069 does not reinterpret itself as another implementation review and does not mutate the accepted runtime candidate.
+This is historical T068 acceptance evidence. T069 does not reinterpret itself as another runtime implementation review and does not mutate the accepted runtime candidate.
 
 ## 3. PR #63 closeout-head evidence and canonical adoption
 
@@ -62,15 +62,17 @@ PR #63 was then merged as canonical main `c19ad598cd353bc53b852a693495addbd05e74
 
 Any text inside T068 evidence files stating that PR #63 "remains unmerged" or that T069 is "NOT STARTED" is preserved as historical checkpoint truth from the moment that evidence was authored. It is not current canonical repository-state truth after merge `c19ad598...`. T069 records that chronology rather than rewriting accepted historical evidence artifacts.
 
-## 4. T065-T068 acceptance-stack reconciliation
+## 4. T065-T069 acceptance-stack reconciliation
 
-The final Spec 003 acceptance stack before T069 is:
+The Spec 003 acceptance stack represented by this closeout candidate is:
 
 - T065 documentation update: CLOSED_CANONICAL
 - T066 correctness/safety review: CLOSED_CANONICAL
 - T067 Ponytail v4.9.0 simplicity review: CLOSED_CANONICAL
 - T068 fresh independent exact-head review and reconciliation: CLOSED_CANONICAL
-- T069 final evidence reconciliation: IN PROGRESS / NOT YET COMPLETE
+- T069 final evidence reconciliation: TASK TRUTH MARKED COMPLETE ON PR #65 CLOSEOUT CANDIDATE
+
+T069 is not yet canonical merely because `tasks.md` is checked on the branch. Canonical completion requires the final PR #65 closeout head itself to pass exact-head repository CI and a fresh independent review, followed by guarded merge. Until that merge, canonical `main` still contains T069 unchecked.
 
 The acceptance stack preserves these authority boundaries:
 
@@ -83,7 +85,7 @@ The acceptance stack preserves these authority boundaries:
 
 ## 5. Late post-closeout review artifacts on merged PR #63
 
-GitHub currently retains two Qodo review threads on merged PR #63 that are unresolved and not outdated. T069 must record them truthfully; it must not silently claim that all historical PR #63 threads are resolved.
+GitHub retains two Qodo review threads on merged PR #63 that are unresolved and not outdated. T069 records them truthfully and does not claim that all historical PR #63 threads are resolved.
 
 ### L1. `release-candidate.yml` recursive target cleanup
 
@@ -91,13 +93,7 @@ Qodo reports that the release-candidate workflow uses recursive cleanup of `$CAR
 
 T069 disposition: **LATE_POST_CLOSEOUT_REVIEW_ARTIFACT / NOT MUTATED BY T069**.
 
-Reasoning:
-
-- the thread arrived after the accepted T068 implementation/review gate and after the final PR-head acceptance cycle;
-- T069 is docs-only final evidence reconciliation;
-- current T069 authorization explicitly forbids workflow semantic mutation;
-- T069 therefore does not resolve, dismiss, or represent this thread as fixed;
-- the thread does not by itself change the already-recorded exact-head CI results, but it remains a visible post-closeout review artifact that must be considered separately if workflow-hardening work is later authorized.
+The relevant canonical workflow constructs the cleanup target under a run-scoped temporary parent created by the workflow. Nevertheless, the Qodo thread remains unresolved on GitHub. Under the current T069 authorization, workflow-semantic mutation is prohibited. T069 therefore neither resolves nor dismisses the thread and does not represent it as fixed. It remains a separately actionable workflow-hardening item if such work is later authorized.
 
 No workflow change is made in T069.
 
@@ -113,34 +109,48 @@ CodeRabbit independently re-evaluated this exact limitation during T068, confirm
 
 The GitHub fact remains explicit: the Qodo thread itself is still unresolved on merged PR #63. T069 records its disposition but does not mutate source or falsely state that GitHub marked the thread resolved.
 
-## 6. Future-research / Spec 006 boundary
+## 6. T069 reconciliation-candidate evidence
+
+PR #65 initial reconciliation head:
+
+- head: `5159ee1eebc1a65caac80dc62771a4ecf2bfced4`
+- tree: `7affc1d80113f15ef5840c212c7304c1f4f05af7`
+- changed path at that stage: `specs/003-workspace-execution-spine/t069-final-reconciliation.md` only
+- `quality #625` / run `32420641899` = SUCCESS
+- author-side documentation/evidence-integrity verdict: `AUTHOR_RECONCILIATION_REVIEW_PASS`
+- author-side simplicity verdict: `PONYTAIL_PASS_NO_REQUIRED_REMOVALS`
+- fresh independent Qodo review explicitly identified commit `5159ee1eebc1a65caac80dc62771a4ecf2bfced4` and reported Bugs (0), Rule violations (0), Requirement gaps (0), and no material issues
+
+Those results justified creating the T069 task-truth closeout candidate. They do not satisfy exact-head gates for a later commit that changes `tasks.md` or this artifact. Every later closeout head invalidates earlier-head CI/review as final merge evidence.
+
+## 7. Final closeout-head gate
+
+The final T069 closeout head MUST satisfy all of the following before merge:
+
+1. Canonical base remains `c19ad598cd353bc53b852a693495addbd05e74a3` or any later main movement is explicitly reconciled.
+2. Changed paths remain exactly T069 documentation/task-truth surfaces; no runtime, dependency, migration, or workflow-semantic change is present.
+3. Repository deterministic CI applicable to the exact closeout head is green.
+4. At least one fresh independent reviewer inspects that exact closeout head after the task-truth/artifact changes.
+5. All material findings against that exact closeout head are reconciled.
+6. Merge uses an exact expected-head guard; if the head moves, prior merge authorization/evidence is stale.
+7. Only after merge may Spec 003 be described as `CLOSED_CANONICAL`.
+
+The final closeout SHA is intentionally not written into this file, which would create a self-referential follow-up commit. The PR metadata, exact-head CI, and independent review bind the final immutable candidate externally.
+
+## 8. Future-research / Spec 006 boundary
 
 PR #64, `docs: finalize future agentic development master plan`, is merged as `29c394084631afd6d1890362372b8a162dac083a` and is future-research documentation only. It does not amend Spec 003 runtime scope and does not authorize Spec 006 implementation.
 
-Completion of T069, if later accepted and merged, closes Spec 003 canonical task truth only. Spec 006 remains separately gated by an explicit future authorization and the normal Constitution -> Spec -> Plan -> Tasks sequence.
+Canonical completion of T069 closes Spec 003 only. Spec 006 remains separately gated by explicit future authorization and the normal Constitution -> Spec -> Plan -> Tasks sequence.
 
-## 7. T069 candidate acceptance gates
-
-T069 MUST remain incomplete until one exact docs-only candidate head satisfies all of the following:
-
-1. Base identity remains canonical `c19ad598cd353bc53b852a693495addbd05e74a3` or any later canonical main is explicitly reconciled before acceptance.
-2. Changed paths remain limited to T069 documentation/task-truth files; no runtime, dependency, migration, or workflow-semantic change is present.
-3. Repository deterministic CI applicable to the exact candidate head is green.
-4. Documentation/evidence correctness and authority review finds no unsupported completion claim.
-5. Ponytail simplicity review confirms no unnecessary architecture, implementation, or duplicate evidence machinery was introduced.
-6. At least one fresh independent reviewer inspects the exact final T069 candidate head.
-7. All material findings against that exact T069 candidate are reconciled.
-8. Only after those gates pass may `tasks.md` mark T069 `[x]` and bind the final exact candidate/review evidence.
-9. Only after that canonical closeout is merged may Spec 003 be described as `CLOSED_CANONICAL`.
-
-## 8. Current T069 verdict
+## 9. Current verdict
 
 ```text
 T068=CLOSED_CANONICAL
-T069=IN_PROGRESS
-T069_COMPLETE=NO
+T069_TASK_TRUTH_MARKED=YES
+T069_CANONICAL=NO
 T069_MODE=DOCS_ONLY
-SPEC_003_COMPLETE=NO
+SPEC_003_CANONICAL_COMPLETE=NO
 SPEC_006_STARTED=NO
 RUNTIME_MUTATION=NO
 DEPENDENCY_MUTATION=NO
@@ -148,4 +158,4 @@ MIGRATION_MUTATION=NO
 WORKFLOW_SEMANTIC_MUTATION=NO
 ```
 
-This artifact intentionally does not mark T069 complete. The final completion claim belongs only to a later exact-head task-truth closeout after the T069 candidate itself passes its required gates.
+This is the final closeout-candidate posture. The repository may claim `T069=CLOSED_CANONICAL` and `SPEC_003=CLOSED_CANONICAL` only after this final docs-only head passes its exact-head gates and is merged into canonical main.
