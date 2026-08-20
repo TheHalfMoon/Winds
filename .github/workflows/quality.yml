@@ -13,7 +13,7 @@ env:
 
 jobs:
   t068-history-prune-repair:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.sha == 'af6c45a73538dc1592d13623f7f9e4844ab13ff0'
+    if: github.event_name == 'pull_request' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout exact repair carrier
@@ -50,7 +50,7 @@ jobs:
       - name: Remove repair scaffolding and verify bounded diff
         shell: bash
         run: |
-          git checkout HEAD^ -- .github/workflows/quality.yml
+          git show af6c45a73538dc1592d13623f7f9e4844ab13ff0:.github/workflows/quality.yml > .github/workflows/quality.yml
           git rm .github/workflows/t068-safe-history-prune-repair.yml
           mapfile -t changed < <(git status --short | sed -E 's/^.. //')
           printf 'changed=%s\n' "${changed[*]}"
@@ -62,7 +62,7 @@ jobs:
           done
           test -f src/command/history/history_prune.rs
           ! grep -R "remove_dir_all" -n src/command/history.rs src/command/history/history_prune.rs
-          git diff --exit-code HEAD^ -- .github/workflows/quality.yml
+          git diff --exit-code af6c45a73538dc1592d13623f7f9e4844ab13ff0 -- .github/workflows/quality.yml
       - name: Commit bounded repair
         shell: bash
         env:
