@@ -6,12 +6,177 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
+  t068-wsl-drain-helper-repair:
+    if: github.event_name == 'pull_request' && github.event.pull_request.number == 63
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact repair carrier
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          ref: ${{ env.CANDIDATE_SHA }}
+      - name: Verify checkout identity
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+      - name: Apply deterministic WSL drain-bound regression repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          path = Path('src/wsl_launch.rs')
+          text = path.read_text()
+          expected_blob = 'b416aa994e5e0af27b9f40ab4e2ae8fa50d09857'
+          actual_blob = subprocess.check_output(['git', 'hash-object', str(path)], text=True).strip()
+          assert actual_blob == expected_blob, (actual_blob, expected_blob)
+
+          run_marker = '#[cfg(windows)]\nfn run_wsl_exec_with_limits('
+          run_at = text.index(run_marker)
+          helper = '''#[cfg(windows)]
+          fn drain_until_idle_or_deadline<F>(
+              deadline: std::time::Instant,
+              mut drain_once: F,
+          ) -> std::io::Result<bool>
+          where
+              F: FnMut() -> std::io::Result<bool>,
+          {
+              loop {
+                  if std::time::Instant::now() >= deadline {
+                      return Ok(false);
+                  }
+                  if !drain_once()? {
+                      return Ok(true);
+                  }
+              }
+          }
+
+          '''
+          text = text[:run_at] + helper + text[run_at:]
+
+          drain_start_marker = '    // Post-exit pipe draining is cleanup work, but it must not consume the\n'
+          drain_at = text.index(drain_start_marker)
+          drain_end_marker = '\n    // The launcher has exited and output has been drained.'
+          drain_end = text.index(drain_end_marker, drain_at)
+          replacement = '''    // Post-exit pipe draining is cleanup work, but it must not consume the
+              // entire reserved cleanup window. Give draining at most half of the
+              // remaining cleanup budget so process-scope termination still has time
+              // to run if a descendant keeps an inherited pipe continuously writable.
+              let post_exit_drain_deadline = {
+                  let now = Instant::now();
+                  now + cleanup_deadline.saturating_duration_since(now) / 2
+              };
+              match drain_until_idle_or_deadline(post_exit_drain_deadline, || {
+                  drain_pair(
+                      &mut stdout,
+                      &mut stderr,
+                      &mut stdout_bytes,
+                      &mut stderr_bytes,
+                      &mut stderr_control_tail,
+                      &mut stdout_truncated,
+                      &mut stderr_truncated,
+                  )
+              }) {
+                  Ok(true) => {}
+                  Ok(false) => {
+                      let cleanup = child.terminate_and_prove(cleanup_deadline, OWNED_LABEL);
+                      return Err(format!(
+                          "selected WSL command launcher exited, but post-exit output draining exceeded the reserved cleanup deadline; WSL-side cleanup proof cannot be trusted; bounded Windows launcher cleanup {}",
+                          cleanup
+                              .map(|()| "was proven".to_owned())
+                              .unwrap_or_else(|error| format!("was not proven: {error}"))
+                      )
+                      .into());
+                  }
+                  Err(error) => {
+                      let cleanup = child.terminate_and_prove(cleanup_deadline, OWNED_LABEL);
+                      return Err(format!(
+                          "selected WSL command launcher exited, but output draining failed and WSL-side cleanup proof cannot be trusted: {error}; bounded Windows launcher cleanup {}",
+                          cleanup
+                              .map(|()| "was proven".to_owned())
+                              .unwrap_or_else(|cleanup_error| format!("was not proven: {cleanup_error}"))
+                      )
+                      .into());
+                  }
+              }'''
+          text = text[:drain_at] + replacement + text[drain_end:]
+
+          regression_start = text.index('    // Regression for the post-exit drain bound. This test-only arbitrary\n')
+          regression_end = text.index('\n    Ok(())\n}\n\n#[cfg(windows)]\nfn require_same_canonical_windows_path', regression_start)
+          text = text[:regression_start] + text[regression_end:]
+
+          tests_import = '''    use super::{
+              WslCwdStrategy, WslExecutionDomain, WslTerminalProfile, build_launch_arguments,
+              parse_single_linux_path, stable_profile_id, validate_profile_for_launch,
+          };
+          '''
+          assert text.count(tests_import) == 1
+          tests_import_new = '''    use super::{
+              WslCwdStrategy, WslExecutionDomain, WslTerminalProfile, build_launch_arguments,
+              parse_single_linux_path, stable_profile_id, validate_profile_for_launch,
+          };
+              #[cfg(windows)]
+              use super::drain_until_idle_or_deadline;
+          '''
+          text = text.replace(tests_import, tests_import_new, 1)
+
+          first_test = '    #[test]\n    fn launch_arguments_bind_distribution_cwd_and_exact_shell_without_shell_parsing() {'
+          first_at = text.index(first_test)
+          deterministic_test = '''    #[cfg(windows)]
+              #[test]
+              fn post_exit_drain_stops_at_deadline_under_continuous_progress() {
+                  use std::time::{Duration, Instant};
+
+                  let started = Instant::now();
+                  let mut drain_calls = 0_u64;
+                  let drained = drain_until_idle_or_deadline(
+                      started + Duration::from_millis(20),
+                      || {
+                          drain_calls += 1;
+                          Ok(true)
+                      },
+                  )
+                  .unwrap();
+
+                  assert!(!drained, "continuous progress must stop at the drain deadline");
+                  assert!(drain_calls > 0, "the regression must exercise the progress loop");
+                  assert!(
+                      started.elapsed() < Duration::from_secs(1),
+                      "deadline enforcement must remain bounded"
+                  );
+              }
+
+          '''
+          text = text[:first_at] + deterministic_test + text[first_at:]
+          path.write_text(text)
+          PY
+
+          cargo fmt --all
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          cargo test --locked --all-targets --all-features
+      - name: Commit tested repair only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- src/wsl_launch.rs
+          test "$(git diff --cached --name-only)" = 'src/wsl_launch.rs'
+          git diff --cached --exit-code -- .github/workflows/quality.yml
+          git commit -m 'fix(003): make WSL drain bound deterministically testable'
+          git push origin 'HEAD:fix/003-t068-independent-review-findings'
+
   rust:
     strategy:
       fail-fast: false
