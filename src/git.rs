@@ -111,6 +111,7 @@ pub(super) struct BoundedGitOutput {
     pub(super) status: ExitStatus,
     pub(super) stdout: Vec<u8>,
     pub(super) stderr: Vec<u8>,
+    stdout_truncated: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -165,12 +166,12 @@ impl Repo {
     }
 
     pub fn require_clean_primary(&self) -> Result<()> {
-        let status = run_read_only_git_bytes(
+        let dirty = run_read_only_git_has_output(
             &self.root,
             ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
             "primary checkout cleanliness inspection",
         )?;
-        if !status.is_empty() {
+        if dirty {
             return Err("primary checkout is dirty; Winds refuses to provision a candidate".into());
         }
         Ok(())
@@ -241,12 +242,11 @@ impl Repo {
     }
 
     pub fn worktree_is_clean(&self, path: &Path) -> Result<bool> {
-        Ok(run_read_only_git_bytes(
+        Ok(!run_read_only_git_has_output(
             path,
             ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
             "candidate worktree cleanliness inspection",
-        )?
-        .is_empty())
+        )?)
     }
 
     pub fn worktree_paths(&self) -> Result<Vec<PathBuf>> {
@@ -318,6 +318,7 @@ fn observed_status_bytes(repo: &Repo) -> Result<Vec<u8>> {
 
 pub(super) fn run_bounded_read_only_git(command: Command, label: &str) -> Result<Vec<u8>> {
     let output = run_bounded_read_only_git_output(command, label)?;
+    require_complete_stdout(&output, label)?;
     if !output.status.success() {
         return Err(format!(
             "{label} failed with status {}: {}",
@@ -398,7 +399,9 @@ fn run_bounded_read_only_git_output(mut command: Command, label: &str) -> Result
         }
     };
 
-    let stdout = match receive_bounded_reader(&stdout_reader, label, "stdout", command_deadline) {
+    // After Git exits, reader drain and descendant quiescence are cleanup work
+    // and use the cleanup reserve rather than the command-phase deadline.
+    let stdout = match receive_bounded_reader(&stdout_reader, label, "stdout", cleanup_deadline) {
         Ok(output) => output,
         Err(error) => {
             return fail_bounded_git_observation(
@@ -411,7 +414,7 @@ fn run_bounded_read_only_git_output(mut command: Command, label: &str) -> Result
             );
         }
     };
-    let stderr = match receive_bounded_reader(&stderr_reader, label, "stderr", command_deadline) {
+    let stderr = match receive_bounded_reader(&stderr_reader, label, "stderr", cleanup_deadline) {
         Ok(output) => output,
         Err(error) => {
             return fail_bounded_git_observation(
@@ -425,7 +428,7 @@ fn run_bounded_read_only_git_output(mut command: Command, label: &str) -> Result
         }
     };
 
-    match child.wait_for_scope_quiescence(command_deadline, label) {
+    match child.wait_for_scope_quiescence(cleanup_deadline, label) {
         Ok(true) => {}
         Ok(false) => {
             return fail_bounded_git_observation(
@@ -449,9 +452,9 @@ fn run_bounded_read_only_git_output(mut command: Command, label: &str) -> Result
         }
     }
 
-    if stdout.truncated || stderr.truncated {
+    if stderr.truncated {
         return Err(format!(
-            "{label} output exceeded the {} byte per-stream safety bound",
+            "{label} stderr exceeded the {} byte safety bound",
             OBSERVATION_GIT_OUTPUT_LIMIT
         )
         .into());
@@ -460,7 +463,20 @@ fn run_bounded_read_only_git_output(mut command: Command, label: &str) -> Result
         status,
         stdout: stdout.bytes,
         stderr: stderr.bytes,
+        stdout_truncated: stdout.truncated,
     })
+}
+
+fn require_complete_stdout(output: &BoundedGitOutput, label: &str) -> Result<()> {
+    if output.stdout_truncated {
+        Err(format!(
+            "{label} stdout exceeded the {} byte safety bound",
+            OBSERVATION_GIT_OUTPUT_LIMIT
+        )
+        .into())
+    } else {
+        Ok(())
+    }
 }
 
 fn fail_bounded_git_observation<T>(
@@ -553,11 +569,15 @@ fn wait_bounded_reader_shutdown(
 
 fn read_bounded<R: Read>(mut reader: R) -> io::Result<BoundedCapture> {
     let mut bytes = Vec::new();
+    let mut truncated = false;
     let mut buffer = [0_u8; 8192];
     loop {
         let count = reader.read(&mut buffer)?;
         if count == 0 {
             break;
+        }
+        if truncated {
+            continue;
         }
         let probe_limit = OBSERVATION_GIT_OUTPUT_LIMIT + 1;
         let remaining = probe_limit.saturating_sub(bytes.len());
@@ -565,16 +585,10 @@ fn read_bounded<R: Read>(mut reader: R) -> io::Result<BoundedCapture> {
         bytes.extend_from_slice(&buffer[..retained]);
         if bytes.len() > OBSERVATION_GIT_OUTPUT_LIMIT {
             bytes.truncate(OBSERVATION_GIT_OUTPUT_LIMIT);
-            return Ok(BoundedCapture {
-                bytes,
-                truncated: true,
-            });
+            truncated = true;
         }
     }
-    Ok(BoundedCapture {
-        bytes,
-        truncated: false,
-    })
+    Ok(BoundedCapture { bytes, truncated })
 }
 
 fn parse_worktree_status(bytes: &[u8]) -> Result<WorktreeStateObservation> {
@@ -743,7 +757,28 @@ where
 {
     let mut command = git_command(cwd);
     command.env("GIT_OPTIONAL_LOCKS", "0").args(args);
-    run_bounded_read_only_git_output(command, label)
+    let output = run_bounded_read_only_git_output(command, label)?;
+    require_complete_stdout(&output, label)?;
+    Ok(output)
+}
+
+fn run_read_only_git_has_output<I, S>(cwd: &Path, args: I, label: &str) -> Result<bool>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let mut command = git_command(cwd);
+    command.env("GIT_OPTIONAL_LOCKS", "0").args(args);
+    let output = run_bounded_read_only_git_output(command, label)?;
+    if !output.status.success() {
+        return Err(format!(
+            "{label} failed with status {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
+    }
+    Ok(output.stdout_truncated || !output.stdout.is_empty())
 }
 
 pub(super) fn run_read_only_git_bytes<I, S>(cwd: &Path, args: I, label: &str) -> Result<Vec<u8>>
@@ -903,7 +938,7 @@ mod git_observation_tests {
     }
 
     #[test]
-    fn bounded_reader_stops_at_the_safety_cap() {
+    fn bounded_reader_drains_after_the_safety_cap() {
         let input = vec![b'x'; OBSERVATION_GIT_OUTPUT_LIMIT + 17];
         let captured = read_bounded(Cursor::new(input)).unwrap();
         assert_eq!(captured.bytes.len(), OBSERVATION_GIT_OUTPUT_LIMIT);
