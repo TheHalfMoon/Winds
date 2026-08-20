@@ -14,7 +14,9 @@ struct TestHome {
 impl TestHome {
     fn new(name: &str) -> Self {
         assert!(
-            Path::new(name).components().all(|component| matches!(component, Component::Normal(_))),
+            Path::new(name)
+                .components()
+                .all(|component| matches!(component, Component::Normal(_))),
             "test-home name must contain only normal path components"
         );
         let sequence = NEXT_HOME.fetch_add(1, Ordering::Relaxed);
