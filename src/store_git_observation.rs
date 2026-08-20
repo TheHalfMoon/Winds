@@ -424,7 +424,9 @@ fn is_lower_hex_sha256(value: &str) -> bool {
 mod tests {
     use super::*;
     use crate::domain::{ExecutionKind, FactSource, TerminalCloseReason};
-    use crate::store::{NewExecution, NewShellCommand, NewTerminalSession, NewWorkspace, TerminalFinalization};
+    use crate::store::{
+        NewExecution, NewShellCommand, NewTerminalSession, NewWorkspace, TerminalFinalization,
+    };
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -555,7 +557,12 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(store.retry_deferred_terminal_finalizations_resilient().unwrap(), 0);
+        assert_eq!(
+            store
+                .retry_deferred_terminal_finalizations_resilient()
+                .unwrap(),
+            0
+        );
         assert_eq!(store.deferred_terminal_finalizations.len(), 1);
         assert_eq!(
             store.load_execution("terminal-stuck").unwrap().status,
