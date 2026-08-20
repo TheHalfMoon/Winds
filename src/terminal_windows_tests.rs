@@ -1,7 +1,10 @@
 use super::{TerminalSession, TerminalSize, terminal_spawn_cwd};
 use crate::git::shell_profiles::{ShellProfile, discover_native_shell_profiles};
 use crate::git::workspace_inventory::WorkspaceEnvironmentInventory;
-use crate::git::wsl_launch::{WslCwdResolution, launch_wsl_terminal, prepare_wsl_terminal_launch};
+use crate::git::wsl_launch::{
+    WslCwdResolution, launch_wsl_terminal, prepare_wsl_terminal_launch,
+    prove_wsl_exec_scope_cleanup_for_test,
+};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -273,6 +276,11 @@ fn t062_real_wsl_backend_launch_is_opt_in_and_uses_production_path() {
         .expect("T062 backend proof must have a current directory")
         .canonicalize()
         .expect("T062 backend proof repository must canonicalize");
+
+    if expected == "MAPPED" {
+        prove_wsl_exec_scope_cleanup_for_test(&distro)
+            .expect("real WSL2 attestation helper must prove descendant and timeout cleanup");
+    }
 
     let plan = prepare_wsl_terminal_launch(&repo, &distro)
         .expect("production WSL launch preparation must succeed on the provisioned distribution");
