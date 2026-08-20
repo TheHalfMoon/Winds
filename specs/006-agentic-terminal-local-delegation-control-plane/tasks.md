@@ -4,70 +4,54 @@
 
 - Constitution 1.1.0: canonical.
 - Spec 006 specification: canonical via PR #67.
-- Spec 006 implementation Plan: canonical via PR #68.
-- Tasks planning base: `d37f4f869f76d0715c0a0aee3d818c775771affe`.
+- Spec 006 Plan: canonical via PR #68.
+- Tasks base: `d37f4f869f76d0715c0a0aee3d818c775771affe`.
 - Canonical Plan tree: `d30b617e7cf038c91d5cdbff03f73142ebe07609`.
 
 This file decomposes Spec 006 into independently reviewable slices. It does not itself execute an Agent, send a prompt, call a model/provider API, install a runtime, accept terms, duplicate credentials, enable MCP, add a daemon, or authorize remote execution.
 
-## Global Execution Rules
+## Global Rules
 
-1. Tasks execute strictly in dependency order unless this file explicitly marks independence.
-2. Only one acceptance-critical task may be active for canonical landing at a time unless the tasks are explicitly documentation/review-only and cannot mutate overlapping product state.
-3. Every implementation task starts from exact then-canonical `main`; stale handoff SHA values never override live repository truth.
-4. Every task must preserve the canonical invariants:
-   - `RUNTIME != MODEL`;
-   - `NEW_SESSION != NEW_TASK`;
-   - native resume != canonical Winds continuity;
-   - live process ownership != durable native session identity;
-   - imported history != canonical evidence;
-   - worktree / ACP root != sandbox;
-   - Planner direct authority != delegation ceiling;
-   - child authority <= explicit child/delegation/team/human ceilings;
-   - agent completion != verified/accepted;
-   - changed candidate invalidates earlier candidate-bound review/evidence applicability;
-   - no automatic winner or landing.
-5. No task may add a generic runtime/plugin framework, public IPC, local network listener, remote execution, MCP runtime, ACP draft v2, recursive fleet scheduler, custom renderer, SQL Studio, LLM Observatory, vector/RAG memory system, or model gateway.
-6. No task may add a dependency unless that exact task explicitly authorizes it and includes fresh exact-version/checksum/license/MSRV/platform/YAGNI review. The currently planned T070–T086 program requires no ACP dependency.
-7. `agent-client-protocol` remains pinned provenance only. It is not an implementation dependency in any task below. A future ACP-speaking runtime requires a newly reviewed task amendment.
-8. Protected Winds authority/trust state must not be writable as ordinary governed worktree content by the actor it controls.
-9. `WINDS_ENFORCED` may be claimed only for operations actually mediated by Winds. Runtime-native restrictions remain `AGENT_NATIVE_ENFORCED` or weaker unless stronger enforcement is independently proven.
-10. Any branch/head movement after review or deterministic evidence invalidates merge-ready status until exact-head gates are rerun.
+1. Execute tasks in dependency order. Only the next dependency-satisfied task is authorized.
+2. Every implementation task starts from exact then-canonical `main`; live repository truth overrides stale handoffs.
+3. Preserve: `RUNTIME != MODEL`, `NEW_SESSION != NEW_TASK`, native resume != canonical continuity, live ownership != durable native ID, imported history != canonical evidence, worktree/ACP root != sandbox, Planner direct authority != delegation ceiling, child authority <= approved child/delegation/team/human ceilings, Agent completion != verification/acceptance, and candidate movement invalidates earlier candidate-bound review/evidence applicability.
+4. No automatic winner, merge, rebase, cherry-pick, push, PR creation, force-clean, or autonomous landing.
+5. No generic runtime/plugin framework, public IPC, listener, remote execution, MCP runtime, ACP v2, recursive fleet, custom renderer, SQL Studio, LLM Observatory, vector/RAG memory system, or model gateway.
+6. No new dependency unless the exact task explicitly authorizes it with fresh exact-version/checksum/license/MSRV/platform/YAGNI review. T070–T086 do not authorize `agent-client-protocol`.
+7. Protected Winds policy/trust state must not be ordinary governed worktree content writable by the actor it controls.
+8. `WINDS_ENFORCED` is reserved for operations actually mediated by Winds; vendor restrictions are `AGENT_NATIVE_ENFORCED` or weaker unless stronger enforcement is independently proven.
+9. Any head movement after evidence/review invalidates merge-ready state until exact-head gates are rerun.
 
-## Standard Acceptance Gate for Every Implementation Task
+## Standard Acceptance Gate
 
-Unless a task explicitly requires stronger evidence, acceptance requires on the exact final candidate:
+Every implementation task requires on its exact final candidate:
 
-- repository `quality` workflow SUCCESS;
-- focused deterministic tests for the task's changed surface;
-- relevant Linux/macOS/Windows behavior only where the task claims it;
+- repository `quality` = SUCCESS;
+- focused deterministic tests for the changed surface;
+- platform evidence only for platforms/domains claimed;
 - author correctness/safety/evidence-integrity review;
 - Ponytail/YAGNI review;
-- at least one independent reviewer pass on the exact acceptance-critical candidate or a review stack whose final delta reaches that exact head;
-- zero unresolved material review findings;
-- exact changed-file reconciliation against the task scope;
+- independent review on the exact candidate, or a review stack whose final delta reaches it;
+- zero unresolved material findings;
+- exact changed-file/scope reconciliation;
 - no unauthorized dependency/runtime/protocol/authority expansion;
-- guarded merge against the expected head SHA;
-- post-merge canonical main/tree verification before the next dependent task starts.
+- expected-head guarded merge;
+- post-merge canonical main/tree verification before the next task starts.
 
-Historical evidence remains historical and must not be rewritten as current exact-head evidence.
+Historical evidence remains historical.
 
-## Implementation Authorization Ladder
+## Authorization Ladder
 
-Canonical acceptance of this `tasks.md` authorizes **T070 only** to begin implementation.
-
-Each subsequent task becomes authorized only after all listed dependencies are `CLOSED_CANONICAL` and the current repository truth still satisfies this file. This avoids turning the whole program into one blanket mutation authorization.
-
-Two tasks carry additional explicit real-runtime gates:
+Canonical acceptance of this file authorizes **T070 only**. Each later task is dependency-gated.
 
 ```text
 FIRST_REAL_CODEX_PROMPT_TASK=T079
 FIRST_REAL_CLAUDE_PROMPT_TASK=T080
 ```
 
-No task before T079 may launch a real Codex Agent/App Server for Agent work or send a Codex prompt.
-No task before T080 may launch a real Claude Code Agent for Agent work or send a Claude prompt.
-Safe non-Agent executable discovery/version inspection remains allowed in T072 because `DISCOVERY != AGENT_EXECUTION`.
+Before T079: no real Codex Agent/App Server Agent work and no Codex prompt.
+Before T080: no real Claude Agent work and no Claude prompt.
+T072 may perform documented non-Agent executable/version discovery because `DISCOVERY != AGENT_EXECUTION`.
 
 ---
 
@@ -75,233 +59,178 @@ Safe non-Agent executable discovery/version inspection remains allowed in T072 b
 
 ### [ ] T070 — Workstream and Winds-session persistence substrate
 
-**Purpose**: Add the minimum structural identity chain required for canonical work continuity without any Agent process.
+**Purpose**: add structural canonical identity without any Agent process.
 
-**Exact intended product paths**:
+**Authorized paths**:
+- `migrations/0006_agentic_identity.sql`
+- `src/domain.rs`
+- `src/store.rs`
+- `src/t070_agentic_identity_tests.rs`
+- `src/main.rs` only if test-module registration is required
 
-- `migrations/0006_agentic_identity.sql` — new forward-only migration;
-- `src/domain.rs` — typed workstream/session records and fail-closed vocabularies only as required;
-- `src/store.rs` — minimal Store create/read/update/list operations;
-- `src/t070_agentic_identity_tests.rs` — deterministic migration/Store/identity tests;
-- `src/main.rs` only if required to register the focused test module; no user-facing Agent command is required in T070.
-
-**Required schema invariant**:
-
+**Required schema**:
 ```text
 workspaces(workspace_id)
   -> workstreams(workstream_id, workspace_id)
       -> winds_sessions(session_id, workstream_id)
 ```
 
-`winds_sessions` MUST NOT duplicate an independent `workspace_id` column in this slice.
+`winds_sessions` MUST NOT duplicate an independent `workspace_id`.
 
-**Acceptance requirements**:
+**Acceptance**:
+- stable opaque IDs independent of display names;
+- rename preserves identity/links;
+- >=20 sessions across >=5 workstreams in one fixture workspace;
+- duplicate/case/Unicode names do not collide with identity;
+- cross-workspace session/workstream mismatch structurally impossible;
+- invalid/unknown values fail closed;
+- no runtime discovery/binding, Agent launch, prompt, delegation, or candidate acceptance behavior.
 
-- stable opaque workstream/session IDs independent of display names;
-- rename does not change identity or orphan relationships;
-- at least 20 fixture sessions across at least 5 workstreams in one workspace;
-- duplicate/case/Unicode display names do not collide with identity;
-- cross-workspace session/workstream mismatch is structurally impossible through the schema path;
-- invalid/unknown persistence values fail closed;
-- no Agent runtime discovery, launch, prompt, model/provider call, runtime binding, delegation, or candidate acceptance behavior.
+**Depends on**: canonical Tasks. **Closes to authorize**: T071.
 
-**Dependencies**: canonical Tasks only.
+### [ ] T071 — Continue / fork / new-session / new-task semantics
 
-**Authorization after closure**: T071.
+**Authorized paths**:
+- `src/agentic_identity.rs`
+- `src/cli_workspace.rs` and/or `src/main.rs` only for the smallest proof surface
+- minimal `src/store.rs` / `src/domain.rs` extensions
+- `src/t071_agentic_continuity_tests.rs`
 
-### [ ] T071 — Continue / fork / new-session / new-task canonical semantics
-
-**Purpose**: Prove `NEW_SESSION != NEW_TASK` and explicit canonical relationships before runtime-native continuity exists.
-
-**Intended paths**:
-
-- `src/agentic_identity.rs` — concrete canonical workstream/session operations;
-- `src/cli_workspace.rs` and/or `src/main.rs` — smallest CLI proof surface only if needed;
-- `src/store.rs` / `src/domain.rs` — only minimal extensions required by accepted semantics;
-- `src/t071_agentic_continuity_tests.rs`.
-
-**Acceptance requirements**:
-
-- create/list/rename/select Winds sessions deterministically;
-- new session can continue the same workstream without creating a new task;
+**Acceptance**:
+- deterministic create/list/rename/select;
+- new session can continue same workstream without creating a task;
 - explicit new task creates a distinct workstream even with identical display text;
-- fork records origin while creating a distinct Winds session identity;
-- ambiguous continuation returns explicit candidates rather than choosing by recency alone;
-- no runtime-native session ID is required;
-- no Agent process or prompt.
+- fork records origin with a distinct Winds session ID;
+- ambiguous continuation returns explicit candidates, not recency guessing;
+- no native runtime ID or Agent process/prompt.
 
-**Dependencies**: T070 `CLOSED_CANONICAL`.
-
-**Authorization after closure**: T072.
+**Depends on**: T070 `CLOSED_CANONICAL`. **Closes to authorize**: T072.
 
 ---
 
-## Phase 2 — Runtime Discovery and Native-Binding Truth, Fixture-Only
+## Phase 2 — Runtime Discovery / Binding Truth, Fixture-Only
 
-### [ ] T072 — Codex/Claude safe runtime discovery with fake executables
+### [ ] T072 — Codex/Claude safe discovery with fake executables
 
-**Purpose**: Represent exact local runtime identity and capability provenance without turning discovery into trust or Agent execution.
+**Authorized paths**:
+- `src/agentic_runtime.rs`
+- `src/t072_agentic_runtime_discovery_tests.rs`
+- minimal read-only CLI proof in `src/main.rs` only if justified
 
-**Intended paths**:
-
-- `src/agentic_runtime.rs` — closed `CODEX` / `CLAUDE` discovery model and concrete discovery functions;
-- `src/t072_agentic_runtime_discovery_tests.rs`;
-- `src/main.rs` / CLI only for a minimal read-only discovery proof if justified.
-
-**Acceptance requirements**:
-
-- absent/present/unsupported-version/changed-after-discovery fake executable cases;
-- exact executable path/identity plus safely observable version;
+**Acceptance**:
+- absent/present/unsupported/replaced-after-discovery fixtures;
+- exact executable identity/path + safely observable version;
 - declared vs locally observed vs unavailable capability provenance;
 - runtime identity remains separate from model/provider identity;
-- auth readiness remains unknown/unavailable when it cannot be safely observed;
-- no auto-install/update/auth/terms acceptance;
-- no prompt/model/provider call;
-- discovery cannot create a Winds execution that claims Agent work occurred;
-- launch-significant identity can be revalidated before a later real start/resume.
+- auth readiness remains unknown when not safely observable;
+- no install/update/auth/terms/prompt/model call;
+- discovery cannot claim Agent execution occurred;
+- launch-significant identity can be revalidated later.
 
-**Dependencies**: T071 `CLOSED_CANONICAL`.
+**Depends on**: T071. **Closes to authorize**: T073.
 
-**Authorization after closure**: T073.
+### [ ] T073 — Runtime-session binding persistence and continuity truth
 
-### [ ] T073 — Runtime-session binding persistence and truthful continuity states
+**Authorized paths**:
+- `migrations/0007_runtime_session_bindings.sql`
+- minimal `src/domain.rs` / `src/store.rs`
+- `src/agentic_runtime.rs`
+- `src/t073_runtime_binding_tests.rs`
 
-**Purpose**: Persist only the native mapping facts needed to decide `RESUMED` vs `RECONSTRUCTED` vs `OWNERSHIP_LOST` without pretending a durable native ID is live ownership.
-
-**Intended paths**:
-
-- `migrations/0007_runtime_session_bindings.sql`;
-- `src/domain.rs` / `src/store.rs` — typed binding record/state;
-- `src/agentic_runtime.rs` — mapping/revalidation decision seam;
-- `src/t073_runtime_binding_tests.rs`.
-
-**Acceptance requirements**:
-
-- binding links to `winds_sessions(session_id)` and stores concrete runtime kind plus exact executable/version provenance and optional native ID;
-- exact valid mapping may be eligible for future native resume;
+**Acceptance**:
+- binding -> `winds_sessions(session_id)` with concrete runtime kind, exact executable/version provenance, optional native ID;
+- exact valid mapping may become a future resume candidate;
 - stale/missing/ambiguous mapping never yields false `RESUMED`;
-- replacement executable/version invalidates launch-significant mapping applicability;
-- persisted PID/native ID alone cannot establish `LIVE` after Winds restart;
-- ownership loss is explicit; no blind process/native-session attachment;
-- no real Agent process or prompt.
+- executable/version replacement invalidates mapping applicability;
+- persisted PID/native ID alone cannot establish `LIVE` after restart;
+- ownership loss explicit; no blind attachment;
+- no real Agent process/prompt.
 
-**Dependencies**: T072 `CLOSED_CANONICAL`.
-
-**Authorization after closure**: T074.
+**Depends on**: T072. **Closes to authorize**: T074.
 
 ---
 
 ## Phase 3 — Canonical Context, Fixture-Only
 
-### [ ] T074 — Deterministic canonical context capsule and transfer report
+### [ ] T074 — Deterministic context capsule and transfer report
 
-**Purpose**: Prove cross-session/runtime continuity without building a transcript database or claiming inaccessible private-state transfer.
+**Authorized paths**:
+- `src/agentic_context.rs`
+- minimal existing `src/domain.rs` / `src/store.rs` use only; **no migration is authorized in T074**
+- `src/t074_agentic_context_tests.rs`
 
-**Intended paths**:
+T074 must first prove the canonical capsule using existing workstream/session fields plus in-memory typed fixture facts/references. If a new persistent context-fact table is demonstrably required, **STOP T074 and amend/review Tasks before adding a migration**. Do not opportunistically consume migration `0008`.
 
-- `src/agentic_context.rs`;
-- `src/domain.rs` / `src/store.rs` only for the smallest bounded canonical fact/reference persistence proven necessary;
-- optional `migrations/0008_agentic_context_facts.sql` only if T074 demonstrates core workstream fields are insufficient; otherwise do not create it;
-- `src/t074_agentic_context_tests.rs`.
+**Acceptance**:
+- deterministic versioned serialization + SHA-256 for identical canonical input/policy;
+- stable ordering/normalization/omission rules;
+- workspace/workstream/session/objective/constraints/decisions/candidate/evidence references;
+- per-fact provenance;
+- imported history cannot overwrite `WINDS_OBSERVED` / `HUMAN_DECIDED` facts;
+- prompt/tool-like imported text remains data;
+- transfer report distinguishes transferred, derived/reconstructed, omitted, unavailable;
+- no private hidden-state/reasoning transfer claim;
+- compaction does not mutate canonical truth;
+- no vector DB/embedding/retrieval/tokenizer/Agent process/prompt.
 
-**Acceptance requirements**:
-
-- deterministic schema/versioned serialization and SHA-256 digest for identical canonical input/policy;
-- stable ordering and explicit normalization/omission rules;
-- canonical workspace/workstream/session/objective/constraints/decisions/candidate/evidence references;
-- per-fact provenance retained;
-- imported runtime/provider history cannot overwrite `WINDS_OBSERVED` / `HUMAN_DECIDED` facts;
-- prompt/tool-like imported text remains data and grants no authority;
-- transfer report distinguishes transferred, reconstructed/derived, omitted-by-policy/budget, and unavailable state;
-- provider-private hidden state/private reasoning is never claimed as transferred;
-- compaction does not mutate canonical work/evidence truth;
-- no vector DB, embeddings, retrieval service, tokenizer, Agent process, or prompt.
-
-**Dependencies**: T073 `CLOSED_CANONICAL`.
-
-**Authorization after closure**: T075.
+**Depends on**: T073. **Closes to authorize**: T075.
 
 ---
 
-## Phase 4 — Authority and Approval, Fixture-Only
+## Phase 4 — Authority / Approval, Fixture-Only
 
 ### [ ] T075 — Pure authority/delegation evaluator
 
-**Purpose**: Freeze deterministic authority semantics before any live Agent can request an operation.
+**Authorized paths**:
+- `src/agentic_authority.rs`
+- minimal authority/enforcement types in `src/domain.rs`
+- `src/t075_agentic_authority_tests.rs`
 
-**Intended paths**:
+**Acceptance**:
+- Planner direct authority and delegation ceiling are independent;
+- Worker authority <= Worker grant ∩ Planner delegation ceiling ∩ team policy ∩ human ceiling;
+- deny precedence fail-closed;
+- repo/model/tool/imported text cannot self-escalate;
+- evaluator returns decision/reason/human-action and performs no operation;
+- enforcement labels cannot overclaim `WINDS_ENFORCED`;
+- worktree/root visibility is not authorization/sandboxing;
+- one Planner -> one Worker only;
+- no real Agent process/prompt.
 
-- `src/agentic_authority.rs`;
-- `src/domain.rs` for minimal typed authority/enforcement values;
-- `src/t075_agentic_authority_tests.rs`.
+**Depends on**: T074. **Closes to authorize**: T076.
 
-**Acceptance requirements**:
+### [ ] T076 — Content-bound human approval digest / audit substrate
 
-- Planner direct authority and delegation ceiling are independent values;
-- Worker effective authority cannot exceed explicit Worker grant ∩ Planner delegation ceiling ∩ applicable team policy ∩ human ceiling;
-- explicit deny precedence is fail-closed;
-- repo/model/tool/imported text cannot self-expand authority;
-- evaluator returns decision/reason/required-human-action and performs no operation itself;
-- all required enforcement-quality labels exist and cannot overclaim `WINDS_ENFORCED`;
-- worktree/additional-root visibility never implies authorization or sandboxing;
-- one Planner -> one Worker model only; no recursive fleet;
-- no real Agent process or prompt.
+**Authorized paths**:
+- `migrations/0008_agentic_delegation_audit.sql`
+- `src/agentic_authority.rs`
+- minimal `src/store.rs` / `src/domain.rs`
+- `src/t076_agentic_approval_tests.rs`
 
-**Dependencies**: T074 `CLOSED_CANONICAL`.
+Approval identity includes, as applicable: workstream/session IDs, requested Worker role/runtime, workspace/worktree/root, capability/resource/path scope, context digest, delegation ceiling/Worker grant, budgets, and exact base/candidate identity.
 
-**Authorization after closure**: T076.
-
-### [ ] T076 — Content-bound human approval digest and delegation audit substrate
-
-**Purpose**: Bind explicit human approval to the exact normalized contract so changed content/resources cannot reuse stale approval.
-
-**Intended paths**:
-
-- `migrations/0008_agentic_delegation_audit.sql` if T074 did not consume 0008; otherwise use the next forward-only migration number resolved from live canonical truth;
-- `src/agentic_authority.rs`;
-- `src/store.rs` / `src/domain.rs`;
-- `src/t076_agentic_approval_tests.rs`.
-
-**Normalized approval identity must include, when applicable**:
-
-- workstream/session IDs;
-- requested Worker role/runtime;
-- workspace/worktree/root identity;
-- requested capability/resource/path scope;
-- context capsule digest;
-- delegation ceiling + Worker grant;
-- budget fields when used;
-- exact candidate/base identity when known.
-
-**Acceptance requirements**:
-
+**Acceptance**:
 - stable digest for identical normalized content;
-- material normalized-content change invalidates approval and returns to ask/deny policy;
-- approval audit contains no credential/token/full-environment duplication;
-- protected policy/approval state is not ordinary governed repo content;
-- no PKI/signing dependency is introduced for same-user approval;
-- no real Agent process or prompt.
+- material change invalidates approval and returns to ask/deny;
+- no credential/token/full-environment duplication;
+- protected policy/approval state is outside ordinary governed repo content;
+- no PKI/signing dependency;
+- no real Agent process/prompt.
 
-**Dependencies**: T075 `CLOSED_CANONICAL`.
-
-**Authorization after closure**: T077.
+**Depends on**: T075. **Closes to authorize**: T077.
 
 ---
 
-## Phase 5 — Codex Structured Control, Fake Before Real
+## Phase 5 — Structured Runtime Clients, Fake Before Real
 
 ### [ ] T077 — Fake Codex App Server protocol client
 
-**Purpose**: Prove the exact structured protocol state machine and bounds without starting real Codex or sending a model prompt.
-
-**Intended paths**:
-
-- `src/agentic_codex.rs` — narrow vendor-specific typed JSONL/stdio envelope/state machine;
-- `src/t077_codex_protocol_tests.rs`;
-- existing `process_scope.rs` only if a minimal reusable ownership seam is required and its current terminal/verification semantics remain unchanged.
+**Authorized paths**:
+- `src/agentic_codex.rs`
+- `src/t077_codex_protocol_tests.rs`
+- `src/process_scope.rs` only if a minimal reusable ownership seam is required without weakening existing semantics
 
 **Mandatory handshake**:
-
 ```text
 initialize request
   -> successful initialize response
@@ -309,336 +238,256 @@ initialize request
   -> only then thread/start | thread/resume | thread/fork | accepted later methods
 ```
 
-**Acceptance requirements**:
+**Acceptance**:
+- pre-handshake methods fail closed;
+- malformed/unknown/oversized JSONL bounded and non-authorizing;
+- fake server exit during handshake truthful failure;
+- notifications remain Agent/runtime evidence, not verification evidence;
+- approval request cannot self-authorize;
+- native thread ID != Winds session/workstream ID;
+- cleanup only for proven owned child;
+- no JSON-RPC framework/async dependency/real Codex/prompt.
 
-- pre-handshake thread/turn methods fail closed;
-- malformed/unknown/oversized JSONL is bounded and cannot grant authority;
-- fake server exit during handshake is truthful failure;
-- structured notifications are source-labelled Agent/runtime events, not verification evidence;
-- approval request cannot self-authorize and is routed only to the authority seam;
-- native thread ID remains distinct from canonical Winds session/workstream identity;
-- controlled child cleanup uses proven ownership only;
-- no generic JSON-RPC crate/framework, async runtime, real Codex process, or prompt/model call.
-
-**Dependencies**: T076 `CLOSED_CANONICAL`.
-
-**Authorization after closure**: T078.
+**Depends on**: T076. **Closes to authorize**: T078.
 
 ### [ ] T078 — Fake Claude structured CLI construction/parser
 
-**Purpose**: Prove exact resume, structured-output, and permission construction before launching real Claude.
+**Authorized paths**:
+- `src/agentic_claude.rs`
+- `src/t078_claude_structured_tests.rs`
 
-**Intended paths**:
+**Acceptance**:
+- structured `--print` with `--output-format json|stream-json` as required;
+- exact `--resume <session-id>` only for revalidated binding;
+- `--continue` never canonical continuation;
+- `--dangerously-skip-permissions` impossible in accepted construction;
+- malformed/truncated/oversized output fails truthfully;
+- restrictions labelled `AGENT_NATIVE_ENFORCED` or weaker unless stronger mediation proven;
+- reconstructed new native session = `RECONSTRUCTED`;
+- no real Claude/prompt.
 
-- `src/agentic_claude.rs`;
-- `src/t078_claude_structured_tests.rs`.
-
-**Acceptance requirements**:
-
-- accepted construction uses structured `--print` plus `--output-format json|stream-json` as required by the tested path;
-- exact `--resume <session-id>` only for a revalidated binding;
-- `--continue` is never used for canonical Winds continuation;
-- `--dangerously-skip-permissions` cannot appear in accepted command construction;
-- malformed/truncated/oversized structured output fails truthfully;
-- permission restrictions are labelled `AGENT_NATIVE_ENFORCED` or weaker unless independent stronger mediation exists;
-- reconstructed new native session is labelled `RECONSTRUCTED`, not `RESUMED`;
-- no real Claude process or prompt/model call.
-
-**Dependencies**: T077 `CLOSED_CANONICAL`.
-
-**Authorization after closure**: T079.
+**Depends on**: T077. **Closes to authorize**: T079.
 
 ---
 
 ## Phase 6 — First Real Runtime Proofs
 
-### [ ] T079 — FIRST REAL CODEX PROMPT AUTHORIZED TASK: bounded connected App Server proof
+### [ ] T079 — FIRST REAL CODEX PROMPT: bounded App Server proof
 
-**Special authorization**: This is the first task in Spec 006 permitted to launch the exact locally discovered/revalidated real Codex App Server and send a Codex prompt. No earlier task may do so.
+**Special authorization**: first task permitted to launch the exact locally discovered/revalidated real Codex App Server for Agent work and send a Codex prompt.
 
-**Purpose**: Prove that the fixture-tested client interoperates with the real local App Server without granting editing/delegation authority yet.
-
-**Required safety boundary**:
-
-- use an explicit disposable/fixture repository or non-mutating proof context;
-- one bounded proof session/turn only unless exact-version behavior requires a narrowly documented retry;
+**Safety boundary**:
+- explicit disposable/fixture repo or non-mutating proof context;
+- one bounded proof session/turn unless exact-version behavior requires a narrowly documented retry;
 - no primary-checkout mutation;
-- no network/credential escalation beyond the user's already configured local runtime state;
-- no terms/access request or credential harvesting by Winds;
-- deny/decline unexpected write/tool approval requests unless this exact task's reviewed proof contract explicitly allows a harmless fixture operation;
-- no automatic PR/push/merge.
+- no Winds-driven credential/terms/access escalation;
+- decline unexpected write/tool approvals unless the reviewed task contract explicitly allows a harmless fixture operation;
+- no PR/push/merge automation.
 
-**Intended paths**:
-
-- `src/agentic_codex.rs`;
-- `src/execution.rs`, `src/domain.rs`, `src/store.rs` only for the minimum accepted Agent-execution child record if real execution persistence is proven necessary;
-- corresponding forward-only migration only if the task actually lands that typed child record;
-- `src/t079_codex_connected_tests.rs` for deterministic/fake coverage plus a separately recorded real proof artifact/process outside unit-test assumptions;
-- minimal CLI proof command only if necessary to execute the accepted local proof.
+**Authorized paths**:
+- `src/agentic_codex.rs`
+- minimal `src/execution.rs` / `src/domain.rs` / `src/store.rs` only if an Agent-execution child record is proven necessary
+- a forward-only migration **only if** exact T079 preflight proves that child persistence is necessary; if a migration is needed but not already exact in this Tasks contract, STOP and amend/review Tasks before creating it
+- `src/t079_codex_connected_tests.rs`
+- minimal proof CLI only if required
 
 **Acceptance evidence**:
-
-- exact runtime executable/version and revalidation;
+- exact executable/version revalidation;
 - complete initialize/initialized handshake;
-- exact Winds session <-> native thread binding provenance;
-- one bounded structured response;
-- truthful enforcement/source labels;
-- directly owned process cleanup or explicit `OWNERSHIP_LOST` if proof fails;
-- no claim that the model result is verified/accepted.
+- exact Winds-session <-> native-thread provenance;
+- one bounded structured result;
+- truthful authority/enforcement/source labels;
+- proven child cleanup or explicit ownership loss;
+- model result is not verified/accepted by implication.
 
-**Dependencies**: T078 `CLOSED_CANONICAL`.
+**Depends on**: T078. **Closes to authorize**: T080.
 
-**Authorization after closure**: T080.
+### [ ] T080 — FIRST REAL CLAUDE PROMPT: bounded Planner/read-plan proof
 
-### [ ] T080 — FIRST REAL CLAUDE PROMPT AUTHORIZED TASK: bounded Planner/read-plan proof
+**Special authorization**: first task permitted to launch exact locally discovered/revalidated real Claude Code and send a Claude prompt.
 
-**Special authorization**: This is the first task in Spec 006 permitted to launch exact locally discovered/revalidated real Claude Code and send a Claude prompt. No earlier task may do so.
-
-**Purpose**: Prove one real Claude-backed Planner Winds session using the strongest exact-version read/plan-oriented restriction that can be truthfully represented without MCP or dangerous bypass.
-
-**Required safety boundary**:
-
-- one bounded Planner prompt against an explicit fixture/disposable or read-only planning context;
-- no `--continue` for canonical continuity;
+**Safety boundary**:
+- one bounded Planner prompt in explicit fixture/disposable or read-only planning context;
+- no canonical `--continue`;
 - no `--dangerously-skip-permissions`;
-- no workaround through MCP;
+- no MCP workaround;
 - no primary-checkout mutation;
 - no credential/terms automation;
-- if stronger non-interactive write/tool mediation cannot be proven, remain Planner-only;
-- runtime restriction must be labelled `AGENT_NATIVE_ENFORCED` or weaker unless stronger enforcement is independently proven.
+- if stronger safe mediation cannot be proven, remain Planner-only;
+- enforcement = `AGENT_NATIVE_ENFORCED` or weaker unless stronger mediation proven.
 
-**Intended paths**:
-
-- `src/agentic_claude.rs`;
-- runtime-binding / Agent-execution persistence surfaces only as already justified by T079 or minimally required here;
-- `src/t080_claude_planner_tests.rs` plus separately recorded real proof evidence;
-- minimal CLI proof command only if required.
+**Authorized paths**:
+- `src/agentic_claude.rs`
+- runtime-binding/Agent-execution persistence only if already canonically justified by prior tasks
+- `src/t080_claude_planner_tests.rs`
+- minimal proof CLI only if required
 
 **Acceptance evidence**:
-
 - exact executable/version revalidation;
-- exact native session ID provenance;
-- structured Planner result retained as `AGENT_REPORTED`;
-- exact resume can be demonstrated only if the native binding remains valid;
-- a reconstructed new native session is reported as `RECONSTRUCTED`;
-- no claim that Planner output itself is verified/accepted.
+- exact native-session provenance;
+- structured Planner result remains `AGENT_REPORTED`;
+- exact resume only if binding remains valid;
+- reconstructed session labelled `RECONSTRUCTED`;
+- no verification/acceptance claim from Planner output.
 
-**Dependencies**: T079 `CLOSED_CANONICAL`.
-
-**Authorization after closure**: T081.
+**Depends on**: T079. **Closes to authorize**: T081.
 
 ---
 
-## Phase 7 — Cross-Runtime Handoff and One Bounded Delegation
+## Phase 7 — Cross-Runtime Handoff / One Bounded Delegation
 
-### [ ] T081 — Canonical Claude-Planner -> Codex-Worker handoff contract
+### [ ] T081 — Claude-Planner -> Codex-Worker handoff contract
 
-**Purpose**: Connect the accepted real-runtime paths through deterministic Winds context and one inspectable delegation proposal without yet requiring an editing Worker run.
+**Authorized paths**:
+- `src/agentic_context.rs`
+- `src/agentic_authority.rs`
+- minimal `src/agentic_claude.rs` / `src/agentic_codex.rs` coordination seam
+- optional concrete `src/agentic.rs` only if duplication proves a coordinator is needed; no generic runtime trait/plugin host
+- `src/t081_cross_runtime_handoff_tests.rs`
 
-**Intended paths**:
-
-- `src/agentic_context.rs`;
-- `src/agentic_authority.rs`;
-- `src/agentic_claude.rs` / `src/agentic_codex.rs` only for the smallest coordination seam;
-- optional concrete `src/agentic.rs` coordinator only if duplication otherwise exists; do not introduce a generic runtime trait/plugin host;
-- `src/t081_cross_runtime_handoff_tests.rs`.
-
-**Acceptance requirements**:
-
-- same canonical workstream survives Claude -> Codex runtime change;
-- transfer report enumerates transferred/derived/omitted/unavailable facts;
+**Acceptance**:
+- same canonical workstream survives runtime change;
+- transfer report explicit;
 - Planner Worker proposal remains `AGENT_REPORTED`;
-- human sees exact normalized delegation contract before approval;
-- child-over-ceiling and changed-approval-content paths fail closed;
-- no recursive delegation/fleet;
-- no automatic Worker execution from Planner prose alone.
+- human sees exact normalized contract before approval;
+- over-ceiling and changed-content approvals fail closed;
+- no recursive delegation;
+- Planner prose cannot automatically start Worker execution.
 
-**Dependencies**: T080 `CLOSED_CANONICAL`.
+**Depends on**: T080. **Closes to authorize**: T082.
 
-**Authorization after closure**: T082.
+### [ ] T082 — One human-approved Codex Worker edit in exact worktree
 
-### [ ] T082 — One human-approved Codex Worker edit in exact isolated worktree
+Real Codex Worker is allowed only under the canonical T079 path after explicit approval of the T081 normalized contract.
 
-**Purpose**: Prove the differentiated P1 walking skeleton with exactly one Planner -> one Worker and one human-approved edit scope.
+**Authorized paths**:
+- smallest existing system-Git/worktree extension in `src/git.rs`
+- proven `src/agentic_authority.rs` / `src/agentic_codex.rs` / coordinator seams
+- already-canonical Agent-execution persistence only
+- `src/t082_worker_worktree_tests.rs`
 
-**Live Agent scope**: real Codex Worker prompt is allowed under the already-established T079 runtime path, but only after the normalized T081 contract is explicitly approved through the accepted human-decision path.
+**Acceptance**:
+- explicit exact base and Winds-owned Worker worktree;
+- Worker bound to exact worktree/common-dir identity;
+- worktree never called an OS sandbox;
+- operation scope <= approved grant;
+- approval requests cannot self-authorize;
+- dirty/failed/ambiguous state retained, never force-cleaned;
+- completion remains `AGENT_REPORTED` until Git/evidence observation;
+- no primary-checkout mutation or automatic merge/push/PR.
 
-**Intended paths**:
-
-- existing system-Git/worktree surfaces in `src/git.rs` or the smallest compatible extension;
-- `src/agentic_authority.rs` / `src/agentic_codex.rs` / coordinator seam;
-- Agent execution typed child persistence if not already landed;
-- `src/t082_worker_worktree_tests.rs`.
-
-**Acceptance requirements**:
-
-- explicit exact base/candidate parent and Winds-owned Worker worktree;
-- Worker bound to exact worktree root/common-dir identity;
-- worktree is never called an OS sandbox;
-- operation/resource scope cannot exceed approved Worker grant;
-- unexpected approval request cannot self-authorize;
-- dirty/failed/ambiguous Worker state is retained for recovery, never force-cleaned;
-- Worker completion remains `AGENT_REPORTED` until Git/evidence is independently observed;
-- no primary-checkout mutation, automatic merge/push/PR, or automatic winner.
-
-**Dependencies**: T081 `CLOSED_CANONICAL`.
-
-**Authorization after closure**: T083.
+**Depends on**: T081. **Closes to authorize**: T083.
 
 ---
 
-## Phase 8 — Exact Candidate Review and Verification Authority
+## Phase 8 — Exact Candidate Review / Verification
 
-### [ ] T083 — Candidate binding, review staleness, and existing `winds verify` integration
+### [ ] T083 — Candidate binding, review staleness, `winds verify` bridge
 
-**Purpose**: Preserve Winds' verification-native authority after Agentic editing.
+**Authorized paths**:
+- existing `src/git.rs`, `src/store.rs`, `src/domain.rs`, `src/main.rs` only where required
+- minimal already-proven Agentic candidate/review seam
+- `src/t083_agentic_candidate_evidence_tests.rs`
 
-**Intended paths**:
+**Acceptance**:
+- exact OID/tree is acceptance identity;
+- independent-review context contains exact candidate/diff/criteria/canonical constraints/evidence and excludes builder persuasion as authority;
+- candidate A evidence becomes `STALE` for B while A remains traceable;
+- Agent `done/tests passed` cannot satisfy verification;
+- existing `winds verify` supplies deterministic authority; evidence referenced, not copied as Agent truth;
+- verify/promote/recover and Spec 003 regressions remain green;
+- landing remains human-decided.
 
-- existing `src/git.rs`, `src/store.rs`, `src/domain.rs`, `src/main.rs` only where required;
-- minimal Agentic candidate/review-state seam in the already-proven modules;
-- `src/t083_agentic_candidate_evidence_tests.rs`.
-
-**Acceptance requirements**:
-
-- exact candidate OID/tree, not branch/display name, is the acceptance identity;
-- independent-review context includes exact candidate/diff/criteria/canonical constraints/evidence and excludes builder confidence/persuasion as authority;
-- candidate A review/checks become `STALE` for candidate B while A remains traceable;
-- Agent `done/tests passed` cannot satisfy deterministic verification;
-- existing `winds verify` runs on the exact candidate and resulting evidence is referenced, not duplicated as Agent truth;
-- existing verify/promote/recover semantics and Spec 003 authority regressions stay green;
-- final landing remains explicit human decision.
-
-**Dependencies**: T082 `CLOSED_CANONICAL`.
-
-**Authorization after closure**: T084.
+**Depends on**: T082. **Closes to authorize**: T084.
 
 ---
 
 ## Phase 9 — P2 Findability
 
-### [ ] T084 — Deterministic session/path findability without authority escalation
+### [ ] T084 — Deterministic session/path findability
 
-**Purpose**: Add the smallest useful P2 selection UX only after the P1 continuity/delegation/verification loop is proven.
+**Authorized paths**:
+- existing CLI/workspace selection surfaces where practical
+- optional `src/agentic_find.rs` only if a concrete separate seam is proven necessary
+- `src/t084_agentic_findability_tests.rs`
 
-**Intended paths**:
-
-- reuse existing CLI/workspace selection surfaces where practical;
-- optional `src/agentic_find.rs` only if a concrete separate seam is required;
-- `src/t084_agentic_findability_tests.rs`.
-
-**Acceptance requirements**:
-
+**Acceptance**:
 - deterministic partial/fuzzy session selection with explicit disambiguation;
-- exact canonical path resolution before context/execution use;
+- exact canonical path before context/execution use;
 - Unicode/case/similar-name fixtures;
-- changed/recent/test/symbol-derived candidates retain selection provenance;
-- unavailable semantic/symbol intelligence remains unavailable;
-- visibility in search/picker never grants read/send/modify authority;
-- prefer simple deterministic matching; no fuzzy/search dependency unless measured evidence and a fresh task amendment justify it.
+- changed/recent/test/symbol-derived candidates retain provenance;
+- unavailable semantic intelligence stays unavailable;
+- picker visibility never grants authority;
+- no fuzzy/search dependency without a later reviewed amendment.
 
-**Dependencies**: T083 `CLOSED_CANONICAL`.
-
-**Authorization after closure**: T085.
+**Depends on**: T083. **Closes to authorize**: T085.
 
 ---
 
-## Phase 10 — Hardening and Acceptance
+## Phase 10 — Hardening / Acceptance
 
-### [ ] T085 — Cross-platform negative/fault/repetition regression campaign
+### [ ] T085 — Cross-platform negative/fault/repetition campaign
 
-**Purpose**: Stress the accepted implementation without inventing expensive model soaks or broad unsupported platform claims.
+Cover deterministically: corrupt/unknown identity/binding values, cross-workspace attempts, changed workspace identity, executable replacement, malformed/oversized runtime output, Codex handshake exits/unknown messages, Claude resume rejection/reuse, imported-history injection, explicit context omissions, over-ceiling/deny/approval-replay cases, runtime success conflicting with Git, candidate movement during review/check, dirty Worker recovery, no blind PID/native attachment, bounded fake runtime repetitions, deterministic capsule hashes, and Spec 003 verification/store regressions.
 
-**Required deterministic campaign**:
+Real-runtime repetition, if any, is bounded by measured cost; do not invent a 100-cycle model soak. Platform claims require direct evidence. Native Windows Agentic evidence does not imply native-Windows authoritative `winds verify` support.
 
-- corrupt/unknown workstream/session/native-binding values;
-- cross-workspace mismatch attempts;
-- deleted/changed workspace identity;
-- runtime executable replacement after discovery;
-- malformed/oversized runtime output;
-- Codex exit before initialize response and before initialized completion;
-- unknown protocol message;
-- Claude resume rejection/reuse;
-- imported-history injection attempts;
-- context truncation/omission markers;
-- child-over-ceiling / explicit-deny / approval-replay attempts;
-- runtime success claim conflicting with Git observation;
-- candidate movement during review/check;
-- dirty/failed Worker worktree recovery;
-- no blind PID/native-session attachment after restart;
-- bounded fake Codex/Claude lifecycle repetition;
-- deterministic context hash repetition;
-- Spec 003 verification/store regression suite.
+**Depends on**: T084. **Closes to authorize**: T086.
 
-Real-runtime repetition, if used, must be bounded from measured cost and cannot be presented as a 100-cycle model soak unless separately justified.
+### [ ] T086 — Spec 006 acceptance / exact-head review / evidence reconciliation
 
-Each platform/execution-domain claim must have direct evidence. Native Windows Agentic runtime proof does not imply native-Windows authoritative `winds verify` support.
+**Authorized paths**:
+- task-state updates in this `tasks.md`
+- focused Spec 006 acceptance/evidence artifacts following repository precedent
+- README/docs corrections only for claims actually proven
 
-**Dependencies**: T084 `CLOSED_CANONICAL`.
-
-**Authorization after closure**: T086.
-
-### [ ] T086 — Spec 006 acceptance documentation, exact-head independent review, and canonical evidence reconciliation
-
-**Purpose**: Reconcile the entire accepted Spec 006 first implementation program without adding new runtime scope.
-
-**Intended paths**:
-
-- `specs/006-agentic-terminal-local-delegation-control-plane/tasks.md` task-state updates;
-- focused Spec 006 acceptance/evidence artifact(s) only as required by repository precedent;
-- user-facing README/docs corrections only for claims actually proven by canonical implementation/evidence.
-
-**Acceptance requirements**:
-
-- every T070–T085 task status reconciled against canonical merge truth;
-- all Spec FR/SC requirements either proven by canonical evidence or explicitly recorded as deferred/non-claimed according to scope;
-- no stale older-head review/check represented as current;
+**Acceptance**:
+- T070–T085 reconciled against canonical merges;
+- every Spec FR/SC either proven or explicitly deferred/non-claimed within scope;
+- no stale older-head evidence represented as current;
 - final exact implementation candidate receives correctness/safety, Ponytail, and fresh independent review;
-- zero unresolved material findings;
-- final deterministic gates pass on exact candidate;
-- real-runtime/platform claims are limited to actual evidence;
-- no automatic landing; canonical merge remains a guarded explicit repository action;
-- MCP, daemon/IPC, remote execution, generic plugin framework, ACP dependency, recursive fleets, custom renderer, SQL Studio, and LLM Observatory remain unstarted unless a later separately authorized specification changes scope.
+- zero unresolved material findings and all deterministic gates pass;
+- real-runtime/platform claims limited to actual evidence;
+- final landing guarded and explicit;
+- ACP dependency, MCP, daemon/IPC, remote execution, generic plugin framework, recursive fleets, custom renderer, SQL Studio, and LLM Observatory remain unstarted unless separately respecified.
 
-**Dependencies**: T085 `CLOSED_CANONICAL`.
+**Depends on**: T085.
 
 **Canonical completion condition**:
-
 ```text
 T070..T086=CLOSED_CANONICAL
 SPEC_006_FIRST_IMPLEMENTATION_PROGRAM=CLOSED_CANONICAL
 ```
 
-No later agentic phase is implicitly authorized by closing T086.
+Closing T086 does not authorize a later Agentic phase.
 
 ---
 
-## Task Dependency Chain
+## Dependency Chain
 
 ```text
 T070 identity persistence
-  -> T071 canonical session/task semantics
-  -> T072 safe runtime discovery fixtures
-  -> T073 native-binding/continuity truth
-  -> T074 deterministic context
-  -> T075 pure authority evaluator
-  -> T076 human approval digest/audit
-  -> T077 fake Codex protocol
-  -> T078 fake Claude structured path
-  -> T079 FIRST REAL CODEX PROMPT
-  -> T080 FIRST REAL CLAUDE PROMPT
-  -> T081 cross-runtime handoff contract
-  -> T082 one approved Worker edit
-  -> T083 exact-candidate review/verification bridge
-  -> T084 P2 findability
-  -> T085 hardening/regression
-  -> T086 acceptance/reconciliation
+ -> T071 canonical session/task semantics
+ -> T072 safe discovery fixtures
+ -> T073 runtime binding/continuity truth
+ -> T074 deterministic context
+ -> T075 pure authority
+ -> T076 approval digest/audit
+ -> T077 fake Codex protocol
+ -> T078 fake Claude path
+ -> T079 FIRST REAL CODEX PROMPT
+ -> T080 FIRST REAL CLAUDE PROMPT
+ -> T081 cross-runtime handoff
+ -> T082 one approved Worker edit
+ -> T083 exact-candidate verification bridge
+ -> T084 P2 findability
+ -> T085 hardening
+ -> T086 acceptance
 ```
 
 ## Non-Authorization Summary
 
-Until this Tasks file itself is accepted and merged canonically:
-
+Until this file is canonical:
 ```text
 T070=NOT_AUTHORIZED_TO_IMPLEMENT
 T071_PLUS=NOT_AUTHORIZED_TO_IMPLEMENT
@@ -647,7 +496,6 @@ REAL_CLAUDE_PROMPT=NOT_AUTHORIZED
 ```
 
 After canonical Tasks acceptance:
-
 ```text
 T070=AUTHORIZED_TO_START
 T071_PLUS=DEPENDENCY_GATED
