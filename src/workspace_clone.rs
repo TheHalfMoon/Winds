@@ -51,6 +51,7 @@ struct OwnedCloneStaging {
 pub struct ClonedWorkspace {
     pub workspace: WorkspaceInspection,
     pub remote_identity: String,
+    pub staging_cleanup_warning: Option<String>,
 }
 
 #[allow(
@@ -214,12 +215,13 @@ where
         );
     }
 
-    if let Err(error) = remove_empty_owned_clone_staging(&staging) {
-        return Err(format!(
-            "atomically published clone staging shell could not be removed safely; destination was not registered and was retained for recovery: {error}"
-        )
-        .into());
-    }
+    // Publication and filesystem identity are already proven. Failure to remove
+    // the now-empty private staging shell must not discard that proven publication
+    // or prevent workspace registration. Preserve cleanup uncertainty in the
+    // returned record so callers can surface it without fabricating failure.
+    let staging_cleanup_warning = remove_empty_owned_clone_staging(&staging)
+        .err()
+        .map(|error| format!("empty private clone staging cleanup was not proven: {error}"));
 
     let workspace = inspect_existing_workspace(&planned_destination, canonical_state_root)?;
     if Path::new(&workspace.canonical_worktree_root) != planned_destination {
@@ -252,6 +254,7 @@ where
     Ok(ClonedWorkspace {
         workspace,
         remote_identity,
+        staging_cleanup_warning,
     })
 }
 
@@ -547,6 +550,16 @@ where
 }
 
 fn remove_empty_owned_clone_staging(staging: &OwnedCloneStaging) -> Result<()> {
+    match fs::symlink_metadata(&staging.path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(format!(
+                "empty private clone staging cannot be inspected before non-recursive removal: {error}"
+            )
+            .into());
+        }
+        Ok(_) => {}
+    }
     require_clone_directory_identity(
         &staging.path,
         &staging.identity,
@@ -1073,6 +1086,7 @@ mod tests {
             cloned.remote_identity,
             remote.canonicalize().unwrap().to_str().unwrap()
         );
+        assert_eq!(cloned.staging_cleanup_warning, None);
         assert!(destination.join(".envrc").is_file());
         assert!(destination.join(".mise.toml").is_file());
         assert!(!marker.exists());

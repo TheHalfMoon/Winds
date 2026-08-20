@@ -32,6 +32,10 @@ for required in /usr/bin/setsid /bin/sh /bin/sleep /bin/kill; do
         exit 125
     fi
 done
+if ! /bin/sleep 0.01 2>/dev/null; then
+    printf '__WINDS_WSL_SCOPE_UNSUPPORTED_%s__:%s\n' "$token" '/bin/sleep:fractional-seconds' >&2
+    exit 125
+fi
 
 /usr/bin/setsid /bin/sh -c '
     /bin/sleep 86400 &
@@ -70,7 +74,10 @@ while /bin/kill -0 -- "-$target_leader" 2>/dev/null; do
         printf '__WINDS_WSL_SCOPE_UNPROVEN_%s__:quiescence\n' "$token" >&2
         exit 125
     fi
-    /bin/sleep 0.01
+    if ! /bin/sleep 0.01; then
+        printf '__WINDS_WSL_SCOPE_UNPROVEN_%s__:sleep-failed\n' "$token" >&2
+        exit 125
+    fi
 done
 
 printf '__WINDS_WSL_SCOPE_CLEAN_%s__:%s\n' "$token" "$target_status" >&2
@@ -996,7 +1003,9 @@ fn run_wsl_exec_with_limits(
         }
     }
 
-    match child.wait_for_scope_quiescence(command_deadline, OWNED_LABEL) {
+    // The launcher has exited and output has been drained. Scope quiescence is
+    // cleanup work and must consume only the reserved cleanup budget.
+    match child.wait_for_scope_quiescence(cleanup_deadline, OWNED_LABEL) {
         Ok(true) => {}
         Ok(false) => {
             let cleanup = child.terminate_and_prove(cleanup_deadline, OWNED_LABEL);

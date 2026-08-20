@@ -229,6 +229,7 @@ fn workspace_clone_rejects_unsafe_state_roots_before_creation() {
         test_path(&canonical_destination)
     );
     assert_eq!(cloned_json["remote_identity"], test_path(&canonical_source));
+    assert!(cloned_json["staging_cleanup_warning"].is_null());
 }
 
 fn init_repo(path: &Path, content: &str) {
