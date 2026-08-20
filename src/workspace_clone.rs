@@ -214,9 +214,9 @@ where
         );
     }
 
-    if let Err(error) = retain_empty_owned_clone_staging(&staging) {
+    if let Err(error) = remove_empty_owned_clone_staging(&staging) {
         return Err(format!(
-            "atomically published clone staging retention could not be proven safely; destination was not registered and was retained for recovery: {error}"
+            "atomically published clone staging shell could not be removed safely; destination was not registered and was retained for recovery: {error}"
         )
         .into());
     }
@@ -306,6 +306,7 @@ fn plan_clone_destination(destination: &Path, canonical_state_root: &Path) -> Re
 }
 
 fn require_no_retained_clone_payload(parent: &Path) -> Result<()> {
+    let current_process_prefix = format!(".winds-clone-stage-{}-", std::process::id());
     let entries = fs::read_dir(parent).map_err(|error| {
         format!(
             "clone destination parent cannot be inspected for retained private staging: {error}"
@@ -317,7 +318,15 @@ fn require_no_retained_clone_payload(parent: &Path) -> Result<()> {
             format!("clone destination parent contains an unreadable entry: {error}")
         })?;
         let name = entry.file_name();
-        if !name.as_encoded_bytes().starts_with(b".winds-clone-stage-") {
+        // Staging is intentionally scoped to this process identity. A staging
+        // directory from another Winds process or user is not evidence about
+        // this operation and must not become a cross-process availability
+        // gate. Current-process retained payload still bounds repeated retries
+        // during this process lifetime.
+        if !name
+            .as_encoded_bytes()
+            .starts_with(current_process_prefix.as_bytes())
+        {
             continue;
         }
 
@@ -344,7 +353,7 @@ fn require_no_retained_clone_payload(parent: &Path) -> Result<()> {
         })?;
         if contents.next().is_some() {
             return Err(format!(
-                "retained private clone staging {} contains clone payload from an earlier failed operation; refusing to allocate another staging payload under the same parent until manual recovery prevents unbounded disk growth",
+                "retained private clone staging {} contains clone payload from an earlier failed operation in this process; refusing to allocate another staging payload under the same parent until manual recovery prevents unbounded disk growth",
                 path.display()
             )
             .into());
@@ -537,15 +546,21 @@ where
     Ok(())
 }
 
-fn retain_empty_owned_clone_staging(staging: &OwnedCloneStaging) -> Result<()> {
+fn remove_empty_owned_clone_staging(staging: &OwnedCloneStaging) -> Result<()> {
     require_clone_directory_identity(
         &staging.path,
         &staging.identity,
-        "private clone staging",
+        "empty private clone staging",
     )
     .map_err(|error| {
         format!(
             "empty private clone staging ownership is ambiguous; retaining {} without unlink: {error}",
+            staging.path.display()
+        )
+    })?;
+    fs::remove_dir(&staging.path).map_err(|error| {
+        format!(
+            "empty private clone staging {} could not be removed non-recursively after identity proof: {error}",
             staging.path.display()
         )
         .into()
@@ -567,14 +582,13 @@ fn fail_with_owned_staging_cleanup<T>(primary: String, staging: &OwnedCloneStagi
 }
 
 fn fail_after_publication<T>(primary: String, staging: &OwnedCloneStaging) -> Result<T> {
-    match retain_empty_owned_clone_staging(staging) {
+    match remove_empty_owned_clone_staging(staging) {
         Ok(()) => Err(format!(
-            "{primary}; empty private clone staging shell was retained at {} because Winds does not unlink the root through a mutable parent pathname",
-            staging.path.display()
+            "{primary}; the now-empty private clone staging shell was removed after identity proof"
         )
         .into()),
-        Err(retention_error) => Err(format!(
-            "{primary}; private staging retention proof also failed and the staging path was left untouched: {retention_error}"
+        Err(removal_error) => Err(format!(
+            "{primary}; private staging shell removal also failed and the staging path was retained: {removal_error}"
         )
         .into()),
     }
@@ -594,14 +608,20 @@ fn atomic_publish_no_replace(source: &Path, destination: &Path) -> Result<()> {
         )
     };
     if result == 0 {
-        Ok(())
-    } else {
-        Err(format!(
-            "atomic no-replace clone publish failed: {}",
-            std::io::Error::last_os_error()
-        )
-        .into())
+        return Ok(());
     }
+
+    let error = std::io::Error::last_os_error();
+    if matches!(
+        error.raw_os_error(),
+        Some(libc::ENOSYS | libc::EINVAL | libc::EOPNOTSUPP | libc::EXDEV)
+    ) {
+        return Err(format!(
+            "atomic no-replace clone publish is unsupported by this Linux kernel/filesystem boundary: {error}"
+        )
+        .into());
+    }
+    Err(format!("atomic no-replace clone publish failed: {error}").into())
 }
 
 #[cfg(target_os = "macos")]
@@ -1056,6 +1076,10 @@ mod tests {
         assert!(destination.join(".envrc").is_file());
         assert!(destination.join(".mise.toml").is_file());
         assert!(!marker.exists());
+        assert!(
+            private_clone_staging_paths(&root).is_empty(),
+            "successful clone publication must remove its empty private staging shell"
+        );
 
         let connection = Connection::open(state_root.join("winds.db")).unwrap();
         let (remote_identity, recorded_unix_ms): (String, i64) = connection
@@ -1274,6 +1298,30 @@ mod tests {
             "a blocked retry must not allocate another private staging directory"
         );
         assert!(!state_root.join("winds.db").exists());
+
+        cleanup_owned_root(&root);
+    }
+
+    #[test]
+    fn foreign_process_staging_payload_does_not_block_clone() {
+        let root = test_root("foreign-staging");
+        let marker = root.join("bootstrap-ran");
+        let (remote, _) = initialize_remote(&root, &marker);
+        let state_root = create_state_root(&root);
+        let foreign_pid = std::process::id().wrapping_add(1);
+        let foreign_staging = root.join(format!(".winds-clone-stage-{foreign_pid}-0"));
+        fs::create_dir(&foreign_staging).unwrap();
+        fs::write(foreign_staging.join("foreign-payload"), b"foreign\n").unwrap();
+
+        let destination = root.join("clone-destination");
+        clone_and_register_workspace(remote.to_str().unwrap(), &destination, &state_root, 365)
+            .unwrap();
+
+        assert!(destination.is_dir());
+        assert_eq!(
+            fs::read(foreign_staging.join("foreign-payload")).unwrap(),
+            b"foreign\n"
+        );
 
         cleanup_owned_root(&root);
     }
