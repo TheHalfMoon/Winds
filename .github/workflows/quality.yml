@@ -6,12 +6,193 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
+  t068-final-review-repair:
+    if: github.event_name == 'pull_request' && github.event.pull_request.number == 63
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact repair carrier
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          ref: ${{ env.CANDIDATE_SHA }}
+      - name: Verify checkout identity
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+      - name: Apply bounded final-review repairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          workspace_path = Path('src/workspace_clone.rs')
+          workspace = workspace_path.read_text()
+          if 'pub staging_cleanup_warning: Option<String>,' in workspace:
+              print('repair already present')
+              raise SystemExit(0)
+
+          old = '''pub struct ClonedWorkspace {
+              pub workspace: WorkspaceInspection,
+              pub remote_identity: String,
+          }'''
+          new = '''pub struct ClonedWorkspace {
+              pub workspace: WorkspaceInspection,
+              pub remote_identity: String,
+              pub staging_cleanup_warning: Option<String>,
+          }'''
+          assert old in workspace
+          workspace = workspace.replace(old, new, 1)
+
+          old = '''    if let Err(error) = remove_empty_owned_clone_staging(&staging) {
+              return Err(format!(
+                  "atomically published clone staging shell could not be removed safely; destination was not registered and was retained for recovery: {error}"
+              )
+              .into());
+          }
+
+          let workspace = inspect_existing_workspace(&planned_destination, canonical_state_root)?;'''
+          new = '''    // Publication and filesystem identity are already proven. Failure to remove
+          // the now-empty private staging shell must not discard that proven publication
+          // or prevent workspace registration. Preserve the cleanup uncertainty in the
+          // returned record so callers can surface it without fabricating failure.
+          let staging_cleanup_warning = remove_empty_owned_clone_staging(&staging)
+              .err()
+              .map(|error| format!("empty private clone staging cleanup was not proven: {error}"));
+
+          let workspace = inspect_existing_workspace(&planned_destination, canonical_state_root)?;'''
+          assert old in workspace
+          workspace = workspace.replace(old, new, 1)
+
+          old = '''    Ok(ClonedWorkspace {
+              workspace,
+              remote_identity,
+          })'''
+          new = '''    Ok(ClonedWorkspace {
+              workspace,
+              remote_identity,
+              staging_cleanup_warning,
+          })'''
+          assert old in workspace
+          workspace = workspace.replace(old, new, 1)
+
+          old = '''fn remove_empty_owned_clone_staging(staging: &OwnedCloneStaging) -> Result<()> {
+              require_clone_directory_identity('''
+          new = '''fn remove_empty_owned_clone_staging(staging: &OwnedCloneStaging) -> Result<()> {
+              match fs::symlink_metadata(&staging.path) {
+                  Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                  Err(error) => {
+                      return Err(format!(
+                          "empty private clone staging cannot be inspected before non-recursive removal: {error}"
+                      )
+                      .into());
+                  }
+                  Ok(_) => {}
+              }
+              require_clone_directory_identity('''
+          assert old in workspace
+          workspace = workspace.replace(old, new, 1)
+
+          old = '''        assert_eq!(
+              cloned.remote_identity,
+              remote.canonicalize().unwrap().to_str().unwrap()
+          );'''
+          new = '''        assert_eq!(
+              cloned.remote_identity,
+              remote.canonicalize().unwrap().to_str().unwrap()
+          );
+          assert_eq!(cloned.staging_cleanup_warning, None);'''
+          assert old in workspace
+          workspace = workspace.replace(old, new, 1)
+          workspace_path.write_text(workspace)
+
+          cli_path = Path('tests/t057_cli.rs')
+          cli = cli_path.read_text()
+          old = '''    assert_eq!(cloned_json["remote_identity"], test_path(&canonical_source));'''
+          new = '''    assert_eq!(cloned_json["remote_identity"], test_path(&canonical_source));
+              assert!(cloned_json["staging_cleanup_warning"].is_null());'''
+          assert old in cli
+          cli_path.write_text(cli.replace(old, new, 1))
+
+          wsl_path = Path('src/wsl_launch.rs')
+          wsl = wsl_path.read_text()
+          old = '''for required in /usr/bin/setsid /bin/sh /bin/sleep /bin/kill; do
+              if [ ! -x "$required" ]; then
+                  printf '__WINDS_WSL_SCOPE_UNSUPPORTED_%s__:%s\\n' "$token" "$required" >&2
+                  exit 125
+              fi
+          done
+
+          /usr/bin/setsid'''
+          new = '''for required in /usr/bin/setsid /bin/sh /bin/sleep /bin/kill; do
+              if [ ! -x "$required" ]; then
+                  printf '__WINDS_WSL_SCOPE_UNSUPPORTED_%s__:%s\\n' "$token" "$required" >&2
+                  exit 125
+              fi
+          done
+          if ! /bin/sleep 0.01 2>/dev/null; then
+              printf '__WINDS_WSL_SCOPE_UNSUPPORTED_%s__:%s\\n' "$token" '/bin/sleep:fractional-seconds' >&2
+              exit 125
+          fi
+
+          /usr/bin/setsid'''
+          assert old in wsl
+          wsl = wsl.replace(old, new, 1)
+          old = '''    /bin/sleep 0.01
+          done'''
+          new = '''    if ! /bin/sleep 0.01; then
+              printf '__WINDS_WSL_SCOPE_UNPROVEN_%s__:sleep-failed\\n' "$token" >&2
+              exit 125
+          fi
+          done'''
+          assert old in wsl
+          wsl = wsl.replace(old, new, 1)
+          old = '''    match child.wait_for_scope_quiescence(command_deadline, OWNED_LABEL) {'''
+          new = '''    // The launcher has exited and output has been drained. Scope quiescence is
+              // cleanup work and must consume only the reserved cleanup budget.
+              match child.wait_for_scope_quiescence(cleanup_deadline, OWNED_LABEL) {'''
+          assert old in wsl
+          wsl = wsl.replace(old, new, 1)
+          wsl_path.write_text(wsl)
+
+          addendum_path = Path('specs/003-workspace-execution-spine/t068-independent-review-reconciliation-addendum.md')
+          addendum = addendum_path.read_text()
+          old = '''On Unix, Winds opens the history root and selected retained session as no-follow directory handles, verifies their filesystem identities, validates each direct regular-file entry relative to the already-open session directory, unlinks only those direct entries through `unlinkat`, revalidates the session entry from the already-open root directory, and finally removes the now-empty session directory non-recursively with `unlinkat(..., AT_REMOVEDIR)`. The security claim is deliberately scoped to the session-directory object and direct flat children; Winds does not claim a generic recursive filesystem deletion primitive.'''
+          new = '''On Unix, Winds opens the history root and selected retained session as no-follow directory handles, verifies their filesystem identities, validates each direct regular-file entry relative to the already-open session directory, unlinks only direct names through `unlinkat`, revalidates the session entry from the already-open root directory, and finally removes the now-empty session directory non-recursively with `unlinkat(..., AT_REMOVEDIR)`. The security claim is deliberately scoped to containment inside the already-bound session-directory object and to the supported Winds writer path. POSIX `unlinkat` remains name-based: Winds does **not** claim protection when an external same-principal process concurrently replaces an individual direct child name inside that private session directory between validation and unlink. Such hostile same-principal filesystem mutation is outside the Spec 003 isolation claim. Winds still guarantees that pruning performs no recursive traversal and cannot redirect deletion into another directory tree through that child-name race.'''
+          assert old in addendum
+          addendum_path.write_text(addendum.replace(old, new, 1))
+          PY
+
+          if git diff --quiet; then
+            echo 'No source repair required on this head.'
+            exit 0
+          fi
+          cargo fmt --all
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          cargo test --locked --all-targets --all-features
+      - name: Commit tested repair only
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- src/workspace_clone.rs src/wsl_launch.rs tests/t057_cli.rs specs/003-workspace-execution-spine/t068-independent-review-reconciliation-addendum.md
+          git diff --cached --exit-code -- .github/workflows/quality.yml
+          git commit -m 'fix(003): reconcile final exact-head review findings'
+          git push origin 'HEAD:fix/003-t068-independent-review-findings'
+
   rust:
     strategy:
       fail-fast: false
