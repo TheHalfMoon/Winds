@@ -356,7 +356,11 @@ fn validate_loaded_observation(record: &ExecutionGitObservationRecord) -> Result
             if !is_lower_hex_sha256(digest) {
                 return Err("stored Git worktree-state digest is invalid".into());
             }
-            validate_optional_git_oid(record.head_oid.as_deref(), "stored Git HEAD object id")?;
+            // New writes require a full lowercase object id, but historical
+            // stores may contain a non-empty abbreviated or uppercase OID from
+            // pre-T068 builds. Keep the read path backward-compatible without
+            // weakening validation of newly persisted observations.
+            validate_optional_nonempty(record.head_oid.as_deref(), "stored Git HEAD object id")?;
             validate_optional_nonempty(record.branch.as_deref(), "stored Git branch")?;
             if detached {
                 if record.branch.is_some() || record.head_oid.is_none() {
