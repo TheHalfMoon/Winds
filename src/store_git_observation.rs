@@ -419,3 +419,150 @@ fn is_lower_hex_sha256(value: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{ExecutionKind, FactSource, TerminalCloseReason};
+    use crate::store::{NewExecution, NewShellCommand, NewTerminalSession, NewWorkspace, TerminalFinalization};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
+
+    fn test_root(name: &str) -> PathBuf {
+        let sequence = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "winds-t068-store-git-{name}-{}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        root
+    }
+
+    fn create_workspace(store: &Store) {
+        store
+            .create_workspace(
+                NewWorkspace {
+                    workspace_id: "workspace-1",
+                    canonical_worktree_root: "/tmp/winds-workspace",
+                    git_common_dir: "/tmp/winds-git-common",
+                },
+                100,
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn historical_abbreviated_or_uppercase_git_oid_remains_readable() {
+        let root = test_root("legacy-oid");
+        let mut store = Store::open(&root).unwrap();
+        create_workspace(&store);
+        let arguments = Vec::new();
+        store
+            .create_shell_command_execution(
+                NewExecution {
+                    execution_id: "legacy-shell",
+                    workspace_id: "workspace-1",
+                    kind: ExecutionKind::ShellCommand,
+                    request_source: FactSource::CallerRequested,
+                    execution_domain: "host-test",
+                },
+                NewShellCommand {
+                    execution_id: "legacy-shell",
+                    executable: "git",
+                    arguments: &arguments,
+                    command_source: FactSource::CallerRequested,
+                    requested_cwd: "/tmp/winds-workspace",
+                    cwd_source: FactSource::CallerRequested,
+                },
+                110,
+            )
+            .unwrap();
+
+        store
+            .connection
+            .execute(
+                "INSERT INTO execution_git_observations(
+                    execution_id, boundary, availability, fact_source,
+                    head_oid, branch, detached, dirty,
+                    worktree_state_format, worktree_state_sha256, observed_unix_ms
+                 ) VALUES (?1, 'BEFORE', 'OBSERVED', 'WINDS_OBSERVED', ?2, 'main', 0, 0, ?3, ?4, 120)",
+                params![
+                    "legacy-shell",
+                    "ABC1234",
+                    GIT_WORKTREE_STATE_FORMAT,
+                    "0000000000000000000000000000000000000000000000000000000000000000"
+                ],
+            )
+            .unwrap();
+
+        let observations = store
+            .load_execution_git_observations("legacy-shell")
+            .unwrap();
+        assert_eq!(observations.len(), 1);
+        assert_eq!(observations[0].head_oid.as_deref(), Some("ABC1234"));
+
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_deferred_finalization_stays_pending_without_poisoning_retry_sweep() {
+        let root = test_root("deferred-finalization");
+        let mut store = Store::open(&root).unwrap();
+        create_workspace(&store);
+        let shell_arguments = Vec::new();
+        store
+            .create_terminal_execution(
+                NewExecution {
+                    execution_id: "terminal-stuck",
+                    workspace_id: "workspace-1",
+                    kind: ExecutionKind::Terminal,
+                    request_source: FactSource::CallerRequested,
+                    execution_domain: "host-test",
+                },
+                NewTerminalSession {
+                    execution_id: "terminal-stuck",
+                    profile_id: "profile-1",
+                    shell_executable: "/bin/sh",
+                    shell_arguments: &shell_arguments,
+                    requested_cwd: "/tmp/winds-workspace",
+                    initial_cols: Some(80),
+                    initial_rows: Some(24),
+                },
+                110,
+            )
+            .unwrap();
+        store.mark_terminal_running("terminal-stuck", 120).unwrap();
+        store.defer_terminal_finalization(
+            "terminal-stuck",
+            TerminalFinalization::Interrupted {
+                ended_unix_ms: Some(150),
+                reason: TerminalCloseReason::ClosedByWinds,
+            },
+        );
+        store
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER fail_terminal_stuck_update
+                 BEFORE UPDATE ON executions
+                 WHEN OLD.execution_id = 'terminal-stuck'
+                 BEGIN
+                     SELECT RAISE(ABORT, 'forced deferred finalization failure');
+                 END;",
+            )
+            .unwrap();
+
+        assert_eq!(store.retry_deferred_terminal_finalizations_resilient().unwrap(), 0);
+        assert_eq!(store.deferred_terminal_finalizations.len(), 1);
+        assert_eq!(
+            store.load_execution("terminal-stuck").unwrap().status,
+            ExecutionStatus::Running
+        );
+
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
+    }
+}
