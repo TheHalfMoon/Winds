@@ -1,5 +1,9 @@
 use serde::Serialize;
 
+#[cfg(test)]
+#[path = "t070_agentic_identity_tests.rs"]
+mod t070_agentic_identity_tests;
+
 #[cfg_attr(
     not(unix),
     allow(
@@ -155,6 +159,32 @@ pub struct WorkspaceRecord {
     pub git_common_dir: String,
     pub created_unix_ms: i64,
     pub last_opened_unix_ms: i64,
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 006 T070 persistence substrate; product session semantics land in T071"
+)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkstreamRecord {
+    pub workstream_id: String,
+    pub workspace_id: String,
+    pub display_name: String,
+    pub created_unix_ms: i64,
+    pub updated_unix_ms: i64,
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 006 T070 persistence substrate; product session semantics land in T071"
+)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindsSessionRecord {
+    pub session_id: String,
+    pub workstream_id: String,
+    pub display_name: String,
+    pub created_unix_ms: i64,
+    pub updated_unix_ms: i64,
 }
 
 #[allow(
