@@ -56,7 +56,7 @@ jobs:
           printf 'changed=%s\n' "${changed[*]}"
           for path in "${changed[@]}"; do
             case "$path" in
-              src/command/history.rs|src/command/history/history_prune.rs|.github/workflows/quality.yml|.github/workflows/t068-safe-history-prune-repair.yml) ;;
+              src/command/history.rs|src/command/history/|src/command/history/history_prune.rs|.github/workflows/quality.yml|.github/workflows/t068-safe-history-prune-repair.yml) ;;
               *) echo "unexpected repair path: $path" >&2; exit 1 ;;
             esac
           done
