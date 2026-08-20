@@ -91,7 +91,7 @@ Primary sources:
 - session search/resume/fork;
 - organization-level autonomy ceilings.
 
-**Winds lesson:** role, workflow, runtime/model, and machine authority must be separate concepts. Child authority must never silently exceed parent/team/human ceilings.
+**Winds lesson:** role, workflow, runtime/model, direct execution authority, and delegation authority must be separate concepts. Child execution authority must never silently exceed the human-approved delegation/team ceiling.
 
 Primary sources:
 
@@ -426,16 +426,17 @@ Primary source:
 
 - open-source Rust CLI;
 - discovers/imports persisted coding-agent histories;
-- local SQLite index;
-- normalized sessions, events, metadata, and touched-file records;
+- local Tantivy-backed lexical index with optional local semantic/hybrid retrieval;
+- normalized sessions, events, metadata, relationships, and repository-activity records with cited retrieval;
 - searches prior work and returns cited session/event identities;
 - supports histories from many coding-agent harnesses;
-- local/private by default;
-- no background service or model API required for the core index/search path.
+- local/private by default and does not require a model API for its local search path;
+- automatic indexing is the default and uses a persistent background daemon; manual indexing mode is available when the user wants no persistent daemon.
 
-Primary source:
+Primary sources:
 
 - https://github.com/ctxrs/ctx
+- https://github.com/ctxrs/ctx/blob/main/docs/daemon-semantic-indexing-spec.md
 
 **Strategic consequence:** cross-agent transcript/history search is not itself a Winds moat and should not be rebuilt prematurely. A ctx-style retrieval layer can inform or complement Winds, but imported transcript/history remains **retrieved evidence about prior conversation**, not canonical Winds task/evidence truth.
 
@@ -604,14 +605,19 @@ Winds must be able to report:
 
 ### Gap B — external local authority
 
+Direct execution authority and delegation authority are separate axes. A read-only Planner may coordinate a write-enabled Builder only when the human-approved team contract explicitly grants a delegation ceiling that covers that Builder capability.
+
 ```text
-CHILD_AUTHORITY
-  ⊆ PARENT_AUTHORITY
+CHILD_EXECUTION_AUTHORITY
+  ⊆ PLANNER_DELEGATION_CEILING
   ⊆ APPROVED_TEAM_AUTHORITY
+  ⊆ HUMAN_GRANTED_AUTHORITY
+
+PLANNER_EXECUTION_AUTHORITY
   ⊆ HUMAN_GRANTED_AUTHORITY
 ```
 
-Authority is external to model reasoning and host/domain scoped.
+The Planner cannot self-expand its delegation ceiling, cannot grant a child capabilities outside the approved team contract, and does not need direct possession of every capability it is authorized to delegate. Authority remains external to model reasoning and host/domain scoped.
 
 ### Gap C — evidence separated from claims
 
