@@ -357,19 +357,31 @@ authority:
   ...
 ```
 
-### Compaction rule
+### Compaction and reconciliation rule
+
+Canonical Winds state and imported history must stay on different provenance paths:
 
 ```text
-FULL LOCAL RECORD / IMPORTED HISTORY
+WINDS-OBSERVED FACTS + EXPLICIT HUMAN DECISIONS
       ↓
 canonical Winds work/evidence state
       ↓
 retrieval / bounded context view
       ↓
 MODEL CONTEXT
+
+IMPORTED HISTORY / VENDOR TRANSCRIPTS
+      ↓
+source-labelled retrieval context
+      ├──────────────→ MODEL CONTEXT
+      └→ explicit reconciliation proposal
+              ↓
+        validation / human decision
+              ↓
+        canonical state update
 ```
 
-Compaction may be lossy for conversational detail. It must never rewrite evidence or silently erase active constraints/decisions.
+Imported history may inform a proposal to update canonical work state, but it must never overwrite canonical work/evidence truth merely because it was retrieved. Compaction may be lossy for conversational detail. It must never rewrite evidence or silently erase active constraints/decisions.
 
 ### ctx-informed direction
 
@@ -653,13 +665,16 @@ PLANNER
 
 ### Team proposal gate
 
-Before workers launch, Winds should present the proposed team contract:
+Before workers launch, Winds should present the proposed team contract. The contract distinguishes the Planner's own execution authority from the maximum authority it may delegate:
 
 ```text
-Planner:   Codex              orchestrate/read
-Builder:   Claude             worktree write/test
-Research:  Gemini             read-only
-Reviewer:  Codex fresh        read-only exact candidate
+Planner:                    Codex
+Planner direct authority:   orchestrate/read
+Delegation ceiling:         worktree write/test + read-only research/review
+
+Builder:                    Claude       worktree write/test
+Research:                   Gemini       read-only
+Reviewer:                   Codex fresh  read-only exact candidate
 
 Parallelism: 3
 Max workers: 4
@@ -673,6 +688,8 @@ Budget: ...
 [Approve team] [Edit] [Cancel]
 ```
 
+A read-only Planner may therefore coordinate a write-enabled Builder only because the human-approved delegation ceiling explicitly authorizes that child capability. The Planner does not acquire the Builder's write authority for its own execution.
+
 No worker starts before the approved contract exists unless a standing policy explicitly authorizes that exact class of delegation.
 
 ### Dynamic team changes
@@ -682,11 +699,11 @@ A Planner may request another specialist but must state:
 - role;
 - runtime/model;
 - task;
-- authority;
+- requested child execution authority;
 - budget/concurrency impact;
 - reason.
 
-The request auto-passes only within a pre-approved policy; otherwise it escalates.
+The request auto-passes only when it stays within an already approved delegation policy/ceiling; otherwise it escalates to the human. The Planner cannot self-expand that ceiling.
 
 ### Delegation limits
 
@@ -741,14 +758,19 @@ This is a core Winds moat and must exist outside model reasoning.
 
 ### Authority invariant
 
+Direct execution authority and delegation authority are distinct. A Planner may have narrow direct authority while being authorized by a human-approved team contract to delegate a different or broader bounded capability to a child.
+
 ```text
-CHILD_AUTHORITY
-  ⊆ PARENT_AUTHORITY
+CHILD_EXECUTION_AUTHORITY
+  ⊆ PLANNER_DELEGATION_CEILING
   ⊆ APPROVED_TEAM_AUTHORITY
+  ⊆ HUMAN_GRANTED_AUTHORITY
+
+PLANNER_EXECUTION_AUTHORITY
   ⊆ HUMAN_GRANTED_AUTHORITY
 ```
 
-No Planner can grant what it does not possess. No worker can grant itself authority. A model statement that an operation is safe has no policy authority.
+No Planner can self-expand its delegation ceiling. No worker can grant itself authority. A Planner may delegate a capability it does not directly possess only when that capability is already inside the explicit human-approved delegation/team ceiling. A model statement that an operation is safe has no policy authority.
 
 ### Candidate capability vocabulary
 
@@ -1236,7 +1258,7 @@ Prove without multi-agent complexity:
 ### Phase E — single Planner -> Worker delegation
 
 - Planner proposes one worker/task;
-- user approves team contract;
+- user approves team contract with separate Planner direct authority and delegation ceiling;
 - worker reports structured result;
 - Planner can continue the same resumable worker session;
 - no broad swarm yet.
@@ -1253,7 +1275,7 @@ Prove without multi-agent complexity:
 
 - capability/resource schema;
 - deny/ask/allow;
-- parent/team/human ceilings;
+- direct-execution, delegation, team, and human ceilings;
 - content-bound approvals;
 - protected policy plane;
 - truthful enforcement-quality reporting;
@@ -1342,7 +1364,9 @@ The formal spec should include deterministic/adversarial tests for product claim
 
 ### Authority
 
-- child cannot exceed parent/team ceiling;
+- child execution authority cannot exceed the approved Planner delegation/team/human ceiling;
+- Planner direct execution authority may be narrower than its approved delegation ceiling and must not expand merely because it delegates;
+- Planner cannot self-expand the delegation ceiling;
 - explicit deny cannot be overridden by transient approval;
 - policy files cannot be modified by governed agents;
 - changed approved content requires reapproval;
@@ -1395,7 +1419,7 @@ Future acceptance criteria should include at least:
 6. routine file/folder selection does not require a full absolute path;
 7. `@`/picker selects files/folders and symbols where intelligence exists;
 8. one Planner can delegate a bounded task to one approved worker and continue that worker later;
-9. a child cannot exceed approved authority ceilings;
+9. a child's execution authority cannot exceed the approved delegation/team/human ceilings, while the Planner's own direct execution authority remains independently bounded;
 10. every safety-relevant capability reports actual enforcement quality;
 11. imported/vendor history retains provenance and cannot become canonical evidence by implication;
 12. Winds independently runs/observes required gates against the exact candidate;
@@ -1445,7 +1469,7 @@ continues/creates named Planner Session
   ↓
 Winds binds canonical task/work/evidence state
   ↓
-Planner proposes one Builder + authority + budget
+Planner proposes one Builder + direct/delegated authority + budget
   ↓
 Human approves
   ↓
@@ -1497,7 +1521,9 @@ IMPORTED HISTORY != CANONICAL EVIDENCE.
 
 MODEL CONTEXT MAY COMPACT; CANONICAL WORK/EVIDENCE TRUTH MUST NOT.
 
-CHILD AUTHORITY CAN NEVER EXCEED ITS APPROVED PARENT/TEAM/HUMAN CEILING.
+CHILD EXECUTION AUTHORITY CAN NEVER EXCEED ITS APPROVED DELEGATION/TEAM/HUMAN CEILING.
+
+PLANNER DIRECT EXECUTION AUTHORITY != PLANNER DELEGATION CEILING.
 
 DISCOVERY != TRUST.
 
