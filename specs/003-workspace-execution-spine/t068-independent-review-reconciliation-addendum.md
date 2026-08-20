@@ -1,6 +1,6 @@
 # T068 Independent Review Reconciliation Addendum
 
-Status: **IN PROGRESS — NOT A T068 CLOSEOUT**
+Status: **T068 CLOSEOUT EVIDENCE RECORDED — PR #63 REMAINS UNMERGED; T069 NOT STARTED**
 
 This addendum records material dispositions discovered after the initial T068 reconciliation record was created. It does not check T068, start T069, authorize merge of PR #62 or PR #63, or change the Spec 003 runtime scope.
 
@@ -129,6 +129,28 @@ The repair was generated, formatted with pinned Rust `1.97.1`, and tested in Git
 
 All deterministic CI and independent-review results from earlier candidates remain historical and MUST NOT satisfy the T068 final gate. The cleaned candidate that includes this repair and this addendum requires a complete new exact-head `quality`, `windows-terminal`, and `release-candidate` cycle followed by a fresh independent exact-head review.
 
+### A15. WSL post-exit drain could spin indefinitely while inherited pipes remained continuously readable
+
+**Disposition: REPAIRED / FINAL EXACT-HEAD REVIEW CLEAN.**
+
+A fresh CodeRabbit review of implementation head `f77362ec658c2b3ac1c5c2a99c454eb59a0b7448` identified one remaining material post-exit availability defect in `src/wsl_launch.rs`: after the direct `wsl.exe` child exited, `drain_pair` could continue returning progress while descendants kept inherited stdout/stderr pipes readable, allowing the post-exit drain loop to outlive the reserved cleanup window. The same review separately raised a detached-`setsid` concern, then withdrew it after tracing the production call graph and confirming that the arbitrary-command fixture was not reachable through the supported WSL launch surface. No containment expansion was required for that withdrawn concern.
+
+The drain repair reserves only half of the remaining cleanup budget for post-exit pipe draining and routes the loop through `drain_until_idle_or_deadline`. The helper checks its deadline before each drain attempt, returns `Ok(false)` if continuous progress reaches the drain deadline, and returns `Ok(true)` only when the drain reports no further progress. A drain-deadline miss immediately invokes bounded `terminate_and_prove(cleanup_deadline, ...)` and returns an explicit error stating that WSL-side cleanup proof cannot be trusted; the subsequent Windows process-scope quiescence check is also bounded by `cleanup_deadline`.
+
+The first real-WSL regression fixture attempted to force continuous progress with an escaped writer. Exact-head candidate `ee79131a9752146b072fb60b176b8d5db21f2fad` correctly remained bounded but the fixture was scheduling-dependent: real Windows+Ubuntu WSL2 T062 returned after about five seconds through bounded Windows-scope cleanup rather than the specific drain-deadline branch the test expected. That candidate was rejected rather than weakening the gate. The final regression is deterministic and directly exercises the load-bearing loop property: `post_exit_drain_stops_at_deadline_under_continuous_progress` supplies a drain closure that returns `Ok(true)` continuously and proves the helper exits at its deadline instead of spinning indefinitely. Real WSL2 integration remains separately covered by T062.
+
+The final reviewed implementation candidate is HEAD `badfa984d7aa5552478aaba5b7da5819290253df`, tree `d5e6ffcdd97af9cf0281c2606f799fb88b9e6b0e`, against unchanged canonical base `29c394084631afd6d1890362372b8a162dac083a`, with `behind_by=0`. On that exact head:
+
+- `quality #613` / run `32407334800` = **SUCCESS**;
+- `windows-terminal #338` / run `32407334815` = **SUCCESS**, including native Windows, Unix terminal integration, and real Windows Server 2025 + Ubuntu WSL2 T062 production proof/evidence;
+- `release-candidate #405` / run `32407334775` = **SUCCESS**, including T063 100-cycle terminal lifecycle soak on Ubuntu/macOS/Windows, T064 regression gates, SC-001, native-Windows authority refusal, quality, and release builds;
+- the final CodeRabbit post-exit-drain material thread was reconciled against this exact head and resolved by CodeRabbit; zero material review threads remain unresolved; and
+- fresh independent Qodo full-implementation review, explicitly bound to HEAD `badfa984d7aa5552478aaba5b7da5819290253df`, tree `d5e6ffcdd97af9cf0281c2606f799fb88b9e6b0e`, and base `29c394084631afd6d1890362372b8a162dac083a`, returned **NO MATERIAL FINDING REMAINING**. Qodo specifically re-evaluated the bounded WSL drain, object-bound history pruning, clone staging cleanup, and the complete current implementation surface.
+
+An additional CodeRabbit incremental re-review of the final `src/wsl_launch.rs` delta was requested after the clean Qodo verdict. It is not required or counted as the independent pass unless it completes on the bound head; any later material finding from that run still invalidates closeout and must be reconciled before merge.
+
+This closes the T068 independent-review requirement on the reviewed implementation head. The documentation-only closeout commit that records this fact is not a new runtime implementation candidate and does not authorize merge by itself: PR #63 remains draft/unmerged until its own final exact-head CI/review gate is green. T069 remains **NOT STARTED**, and Spec 003 remains incomplete until T069 is separately executed and canonically reconciled.
+
 ## Historical evidence attribution clarifications
 
 ### H1. `SC-001 100-cycle soak` references in Spec 003 task evidence
@@ -155,14 +177,10 @@ Direct/manual mutation of the local SQLite file is outside the supported Store A
 
 Likewise, T068 does not add a daemon, broker, sandbox, renderer, multiplexer, public runtime protocol, plugin/provider system, SQL/LLM runtime, Agent Fleet runtime, or Herdr integration to answer generic pathname, hostile-repository, or local-database tampering scenarios outside the established Spec 003 boundary.
 
-## Remaining mandatory gate
+## T068 gate result
 
-This addendum is evidence of reconciliation only. T068 remains open until one unchanged final candidate head/tree simultaneously has:
+**T068 independent-review gate: SATISFIED on reviewed implementation head `badfa984d7aa5552478aaba5b7da5819290253df`.**
 
-1. complete exact-head `quality`, `windows-terminal`, and `release-candidate` success;
-2. all material Qodo, CodeRabbit, Cubic, and reconciliation-discovered findings accounted for on that same surface;
-3. a **fresh independent exact-head review performed after the final CI-green repair head exists**;
-4. any new material finding repaired followed by a new full CI and fresh-review cycle; and
-5. zero unresolved material review threads.
+The required exact-head implementation evidence is complete: all three deterministic CI/platform workflows succeeded on the same head; all material Qodo, CodeRabbit, Cubic, and reconciliation-discovered findings are accounted for; fresh independent Qodo review returned `NO MATERIAL FINDING REMAINING` on the exact head/tree/base; and zero material review threads remain unresolved.
 
-Until then, PR #63 remains unmerged, PR #62 remains historical and unmerged, T068 remains unchecked, T069 remains NOT_STARTED, and Spec 003 remains incomplete.
+This addendum and the matching `tasks.md` update are documentation-only closeout evidence. They do not merge PR #63, do not start T069, and do not make the Spec 003 completion claim. Because they create a new documentation-only PR head, that final head must still pass the repository's exact-head CI/review landing gate before merge authorization can be considered. Any new material finding invalidates the closeout candidate and requires reconciliation plus a new exact-head cycle.
