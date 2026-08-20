@@ -10,6 +10,24 @@
 
 **Research basis:** `006-agent-fleet-donor-audit.md`, current primary product/protocol sources, and current agent/security/evaluation research.
 
+### Source reproducibility policy
+
+All claim-bearing external sources in this dossier were retrieved/re-verified on **2026-08-20**. URLs in the body remain navigation links and may move after the freeze.
+
+Where a GitHub-hosted source was materially used and an exact revision was captured, the immutable pin is recorded below and/or beside the claim:
+
+- `earendil-works/pi` — `5cd93f688aaab89dbb6dfa4aca535f21796ae185`;
+- `aaif-goose/goose` — `fc6311acb734923651713cf0e6a4539f7e3b3625`;
+- `openai/codex` — `9bf673718a4605b49e47d00762121d372af95439`;
+- `google-gemini/gemini-cli` — `e90c63fa158b8facd1872d32b34b07e516308f2b`;
+- `cline/cline` — `16875140fbc7bae51aad79c203837b4f51e54aa5`;
+- `mistralai/mistral-vibe` — `5e6aa0f6beb3454454f4c1de74a7652ba577ab05`;
+- `manaflow-ai/cmux` — `10549b7c1289999f298f48af0a55754932569d0a` for the agent-hook/hibernation material inspected during this research cycle;
+- `smtg-ai/claude-squad` — `ce1ffb4392b01f38e2c4599c7c84d2a93973b138`;
+- `ctxrs/ctx` — `94c0d32e1f4c3f7f7c78febdb916066d8df67c6c`.
+
+Vendor documentation sites and product pages that do not expose a public immutable revision are treated as **`MUTABLE_VENDOR_DOC`** sources retrieved on 2026-08-20, not as byte-for-byte frozen evidence. Dated protocol/release posts and research publication identifiers provide a stronger publication identity but must still be re-verified and version-pinned before formal specification or implementation. Absence of an immutable public archive is a source limitation, not permission to treat the current live page as historical truth.
+
 ---
 
 ## 1. Executive conclusion
@@ -71,7 +89,7 @@ The stronger user promise remains:
 
 **Winds lesson:** workspace/session naming, search, resume, `@`-style context selection, and optional IDE intelligence are baseline UX, not differentiation.
 
-Primary sources:
+Primary sources (`MUTABLE_VENDOR_DOC`, retrieved 2026-08-20):
 
 - https://junie.jetbrains.com/docs/junie-cli.html
 - https://junie.jetbrains.com/docs/slash-commands.html
@@ -93,7 +111,7 @@ Primary sources:
 
 **Winds lesson:** role, workflow, runtime/model, direct execution authority, and delegation authority must be separate concepts. Child execution authority must never silently exceed the human-approved delegation/team ceiling.
 
-Primary sources:
+Primary sources (`MUTABLE_VENDOR_DOC`, retrieved 2026-08-20):
 
 - https://docs.factory.ai/droid-cli/quickstart
 - https://docs.factory.ai/droid-cli/cli-reference
@@ -116,7 +134,10 @@ Primary sources:
 
 Primary source:
 
-- https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent/docs
+- immutable: https://github.com/earendil-works/pi/tree/5cd93f688aaab89dbb6dfa4aca535f21796ae185/packages/coding-agent/docs
+- navigation: https://github.com/earendil-works/pi/tree/main/packages/coding-agent/docs
+
+The earlier `badlogic/pi-mono` location now redirects to this repository; the canonical repository identity was re-verified on 2026-08-20.
 
 ### 2.4 Goose
 
@@ -133,8 +154,11 @@ Primary source:
 
 Primary sources:
 
-- https://github.com/block/goose/tree/main/documentation
-- https://goose.docs.block.xyz/
+- immutable repository docs: https://github.com/aaif-goose/goose/tree/fc6311acb734923651713cf0e6a4539f7e3b3625/documentation
+- navigation: https://github.com/aaif-goose/goose/tree/main/documentation
+- live docs (`MUTABLE_VENDOR_DOC`, retrieved 2026-08-20): https://goose.docs.block.xyz/
+
+The earlier `block/goose` location now redirects to `aaif-goose/goose`; the canonical repository identity was re-verified on 2026-08-20.
 
 ### 2.5 Herdr
 
@@ -150,7 +174,7 @@ Primary sources:
 
 **Winds lesson:** persistent execution is strategically important but is not enough. Winds must add canonical task identity, authority provenance, exact candidate identity, evidence, and human decisions.
 
-Primary sources:
+Primary sources (`MUTABLE_VENDOR_DOC`, retrieved 2026-08-20):
 
 - https://herdr.dev/docs/agents/
 - https://herdr.dev/docs/agent-automation/
@@ -167,7 +191,7 @@ Primary sources:
 
 **Winds lesson:** human and agent should eventually share one execution substrate with explicit control ownership and observed handoff events.
 
-Primary source:
+Primary source (`MUTABLE_VENDOR_DOC`, retrieved 2026-08-20):
 
 - https://docs.warp.dev/agent-platform/capabilities/full-terminal-use
 
@@ -183,7 +207,7 @@ Primary source:
 
 **Winds lesson:** a terminal-first heterogeneous runtime is valid. Winds should not force third-party agents through a proprietary model/auth gateway.
 
-Primary sources:
+Primary sources (`MUTABLE_VENDOR_DOC`, retrieved 2026-08-20):
 
 - https://zed.dev/docs/ai/agents
 - https://zed.dev/docs/ai/terminal-threads
@@ -205,7 +229,7 @@ Primary sources:
 
 **Winds lesson:** connected sessions and cross-surface handoff are becoming baseline expectations. Winds must make continuity runtime-neutral and evidence-aware.
 
-Primary sources:
+Primary sources (`MUTABLE_VENDOR_DOC`, retrieved 2026-08-20):
 
 - https://code.visualstudio.com/docs/agents/concepts/sessions
 - https://code.visualstudio.com/docs/agents/agents-window
@@ -224,7 +248,7 @@ Primary sources:
 
 **Winds lesson:** lead/team UX is validated, but Winds must generalize it across heterogeneous runtimes while keeping authority and verification external to agent prose.
 
-Primary sources:
+Primary sources (`MUTABLE_VENDOR_DOC`, retrieved 2026-08-20):
 
 - https://code.claude.com/docs/en/sub-agents
 - https://code.claude.com/docs/en/agent-teams
@@ -243,7 +267,8 @@ Primary sources:
 
 Primary source:
 
-- https://github.com/openai/codex/tree/main/codex-rs/app-server
+- immutable: https://github.com/openai/codex/tree/9bf673718a4605b49e47d00762121d372af95439/codex-rs/app-server
+- navigation: https://github.com/openai/codex/tree/main/codex-rs/app-server
 
 ### 2.11 Gemini CLI
 
@@ -258,9 +283,10 @@ Primary source:
 
 **Winds lesson:** discovery is not trust. Project files, hooks, MCP, skills, and configuration are inputs that need independent authority treatment.
 
-Primary sources:
+Primary source:
 
-- https://github.com/google-gemini/gemini-cli/tree/main/docs
+- immutable: https://github.com/google-gemini/gemini-cli/tree/e90c63fa158b8facd1872d32b34b07e516308f2b/docs
+- navigation: https://github.com/google-gemini/gemini-cli/tree/main/docs
 
 ### 2.12 OpenCode
 
@@ -274,7 +300,7 @@ Primary sources:
 
 **Winds lesson:** a single `sandboxed=true` flag is inadequate. Safety-relevant capabilities need explicit resource/action semantics and truthful enforcement provenance.
 
-Primary sources:
+Primary sources (`MUTABLE_VENDOR_DOC`, retrieved 2026-08-20):
 
 - https://opencode.ai/docs/agents
 - https://opencode.ai/docs/permissions
@@ -290,7 +316,7 @@ Primary sources:
 
 **Winds lesson:** workspace identity and continuation should be uniform across runtimes rather than relearned per agent.
 
-Primary source:
+Primary source (`MUTABLE_VENDOR_DOC`, retrieved 2026-08-20):
 
 - https://cursor.com/docs/cli/using
 
@@ -307,7 +333,7 @@ Primary source:
 
 **Winds lesson:** protect the policy plane from the agents it governs, and do not confuse hook output with independent Winds evidence.
 
-Primary sources:
+Primary sources (`MUTABLE_VENDOR_DOC`, retrieved 2026-08-20):
 
 - https://kiro.dev/docs/cli/v3/specs/
 - https://kiro.dev/docs/cli/chat/permissions/
@@ -330,12 +356,14 @@ These reinforce the same convergence:
 
 Primary sources:
 
-- https://docs.qoder.com/cli/cli-reference
-- https://moonshotai.github.io/kimi-code/
-- https://github.com/cline/cline
-- https://github.com/mistralai/mistral-vibe
-- https://aider.chat/docs/repomap.html
-- https://kilo.ai/docs/code-with-ai/platforms/cli
+- Qoder (`MUTABLE_VENDOR_DOC`, retrieved 2026-08-20): https://docs.qoder.com/cli/cli-reference
+- Kimi (`MUTABLE_VENDOR_DOC`, retrieved 2026-08-20): https://moonshotai.github.io/kimi-code/
+- Cline immutable: https://github.com/cline/cline/tree/16875140fbc7bae51aad79c203837b4f51e54aa5
+- Cline navigation: https://github.com/cline/cline
+- Mistral Vibe immutable: https://github.com/mistralai/mistral-vibe/tree/5e6aa0f6beb3454454f4c1de74a7652ba577ab05
+- Mistral Vibe navigation: https://github.com/mistralai/mistral-vibe
+- Aider (`MUTABLE_VENDOR_DOC`, retrieved 2026-08-20): https://aider.chat/docs/repomap.html
+- Kilo (`MUTABLE_VENDOR_DOC`, retrieved 2026-08-20): https://kilo.ai/docs/code-with-ai/platforms/cli
 
 ---
 
@@ -357,7 +385,7 @@ Superset is a first-class direct competitor to the future Winds environment.
 - MCP server able to create/manage tasks, workspaces, agents, terminals, and automations;
 - remote host server/relay model.
 
-Primary sources:
+Primary sources (`MUTABLE_VENDOR_DOC`, retrieved 2026-08-20):
 
 - https://superset.sh/
 - https://docs.superset.sh/overview
@@ -382,10 +410,11 @@ cmux is a strong adjacent/direct competitor for terminal organization, agent sta
 - process-generation and workspace/surface revalidation before hibernation actions;
 - explicit limitations where arbitrary live process state cannot be restored.
 
-Primary source:
+Primary sources:
 
-- https://github.com/manaflow-ai/cmux
-- https://github.com/manaflow-ai/cmux/blob/main/docs/agent-hooks.md
+- immutable repository: https://github.com/manaflow-ai/cmux/tree/10549b7c1289999f298f48af0a55754932569d0a
+- immutable agent hooks: https://github.com/manaflow-ai/cmux/blob/10549b7c1289999f298f48af0a55754932569d0a/docs/agent-hooks.md
+- navigation: https://github.com/manaflow-ai/cmux
 
 **Strategic consequence:** persistence/resume UX, attention indicators, notifications, and agent-oriented terminal organization are not sufficient differentiation. Winds must source-label state and bind it to task/evidence/authority truth.
 
@@ -400,7 +429,7 @@ Conductor validates the “workspace around an agent task” model.
 - explicit guidance on when agents should share a workspace versus use separate workspaces;
 - built-in review/check/merge flow.
 
-Primary sources:
+Primary sources (`MUTABLE_VENDOR_DOC`, retrieved 2026-08-20):
 
 - https://www.conductor.build/docs/concepts/parallel-agents
 - https://www.conductor.build/docs/guides/parallel-agents/run-multiple-claude-code-sessions
@@ -412,9 +441,10 @@ Primary sources:
 
 Claude Squad and related projects combine tmux/session management, Git worktrees, multiple local coding agents, and diff/review UX.
 
-Primary source:
+Primary sources:
 
-- https://github.com/smtg-ai/claude-squad
+- immutable: https://github.com/smtg-ai/claude-squad/tree/ce1ffb4392b01f38e2c4599c7c84d2a93973b138
+- navigation: https://github.com/smtg-ai/claude-squad
 
 **Strategic consequence:** pane orchestration plus worktrees is already commoditized. Winds should avoid becoming a nicer tmux wrapper.
 
@@ -435,8 +465,9 @@ Primary source:
 
 Primary sources:
 
-- https://github.com/ctxrs/ctx
-- https://github.com/ctxrs/ctx/blob/main/docs/daemon-semantic-indexing-spec.md
+- immutable repository: https://github.com/ctxrs/ctx/tree/94c0d32e1f4c3f7f7c78febdb916066d8df67c6c
+- immutable indexing spec: https://github.com/ctxrs/ctx/blob/94c0d32e1f4c3f7f7c78febdb916066d8df67c6c/docs/daemon-semantic-indexing-spec.md
+- navigation: https://github.com/ctxrs/ctx
 
 **Strategic consequence:** cross-agent transcript/history search is not itself a Winds moat and should not be rebuilt prematurely. A ctx-style retrieval layer can inform or complement Winds, but imported transcript/history remains **retrieved evidence about prior conversation**, not canonical Winds task/evidence truth.
 
@@ -465,7 +496,7 @@ As of the research freeze, ACP primary sources show these as stabilized/complete
 - Boolean Config Options — 2026-07-06;
 - Elicitation — 2026-07-22.
 
-Primary sources:
+Primary sources (`MUTABLE_VENDOR_DOC`, retrieved 2026-08-20; dated update/RFD state recorded above):
 
 - https://agentclientprotocol.com/updates
 - https://agentclientprotocol.com/rfds/additional-directories
@@ -486,7 +517,7 @@ Important details for Winds:
 - Streamable HTTP/WebSocket remote transport work remains Active/evolving.
 - additional draft RFDs continue to move quickly.
 
-Primary sources:
+Primary sources (`MUTABLE_VENDOR_DOC`, retrieved 2026-08-20):
 
 - https://agentclientprotocol.com/updates
 - https://agentclientprotocol.com/rfds
@@ -497,11 +528,11 @@ Primary sources:
 
 ## 5. MCP direction
 
-MCP remains a tool/data interoperability layer, not Winds session truth, authority truth, or candidate-verification truth.
+MCP is an interoperability protocol spanning tools, data/resources, extensions, tasks, and authorization. Those protocol surfaces do **not** make MCP the source of Winds session truth, authority truth, canonical work truth, or candidate-verification truth.
 
-The 2026-07-28 MCP generation materially changed prior assumptions around state, extensions, tasks, and authorization. Winds must pin the exact MCP revision used by a future implementation and must not mirror transient protocol structure into permanent internal persistence without a product reason.
+The dated **2026-07-28** MCP generation materially changed prior assumptions around stateless operation, extensions, tasks, and authorization. Winds must pin the exact MCP specification/SDK revision used by a future implementation and must not mirror transient protocol structure into permanent internal persistence without a product reason.
 
-Primary source:
+Primary source (dated release post, retrieved 2026-08-20):
 
 - https://blog.modelcontextprotocol.io/posts/2026-07-28/
 
@@ -659,7 +690,7 @@ Process state, agent-turn state, task state, evidence state, and decision state 
 
 - ACP stable lifecycle/config/session features, version-pinned;
 - agent-native structured interfaces such as Codex app-server;
-- MCP for external tools/data, version-pinned;
+- MCP for external tools/data, extensions, tasks, and authorization interoperability, version-pinned;
 - system Git/worktrees;
 - OS/runtime controls for real enforcement;
 - existing local agent installations/authentication.
