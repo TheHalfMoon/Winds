@@ -85,11 +85,11 @@ The acceptance stack preserves these authority boundaries:
 
 ## 5. Late post-closeout review artifacts on merged PR #63
 
-GitHub retains two Qodo review threads on merged PR #63 that are unresolved and not outdated. T069 records them truthfully and does not claim that all historical PR #63 threads are resolved.
+GitHub retains two Qodo review threads on merged PR #63 that are unresolved and not outdated. T069 records them truthfully and does not claim that all historical PR #63 threads are resolved. Their stable inline discussion/review-comment identifiers are `3825305219` and `3825305225`; both were observed as created at `2026-08-20T20:59:19Z`.
 
 ### L1. `release-candidate.yml` recursive target cleanup
 
-Qodo reports that the release-candidate workflow uses recursive cleanup of `$CARGO_TARGET_DIR` without a separate canonical ownership/descendant check immediately before deletion.
+Qodo review-comment `3825305219` reports that the release-candidate workflow uses recursive cleanup of `$CARGO_TARGET_DIR` without a separate canonical ownership/descendant check immediately before deletion.
 
 T069 disposition: **LATE_POST_CLOSEOUT_REVIEW_ARTIFACT / NOT MUTATED BY T069**.
 
@@ -99,7 +99,7 @@ No workflow change is made in T069.
 
 ### L2. Unix direct-child `fstatat` -> `unlinkat` replacement race
 
-Qodo reports that a same-principal concurrent rename-and-replace of an individual direct history child between name-based validation and `unlinkat` can cause the replacement name to be deleted.
+Qodo review-comment `3825305225` reports that a same-principal concurrent rename-and-replace of an individual direct history child between name-based validation and `unlinkat` can cause the replacement name to be deleted.
 
 T069 disposition: **RECONCILED_AGAINST_ACCEPTED_T068_BOUNDARY / NO NEW CLAIM EXPANSION**.
 
