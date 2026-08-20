@@ -46,6 +46,69 @@ Rust canonicalization may produce a verbatim drive path such as `\\?\C:\...`. Th
 
 Verbatim UNC/device forms and ordinary UNC forms that cannot satisfy the current native-shell cwd contract remain rejected. The ConPTY test proves the effective cwd through an output-only marker assembled by `cmd.exe`, so input echo or surrounding ANSI terminal traffic cannot satisfy the assertion.
 
+### A6. Unix fallback cleanup could leave an unreaped direct-child zombie
+
+**Disposition: REPAIRED.**
+
+`OwnedProcess::drop` still refuses to signal an unproven numeric process-group identity after ownership may have been lost, but a directly owned child that is still live is now killed and then reaped through a short bounded `try_wait` loop. The destructor therefore does not introduce an unbounded wait while also avoiding a permanent zombie when the direct child can be reaped promptly after `SIGKILL`.
+
+### A7. macOS `RLIMIT_NPROC` containment broke legitimate Git descendants
+
+**Disposition: REPAIRED / CLAIM NARROWED.**
+
+The previous macOS path used `RLIMIT_NPROC=2`, but that limit is accounted per real user rather than per Winds-owned process tree and can prevent Git from creating legitimate subprocesses during `--ignore-submodules=none` status scans. That limit is removed.
+
+On macOS, the supported-path ownership contract is the session/process-group boundary created by `setsid`; normal Git descendants inherit that group and bounded cleanup terminates/reaps the group. Winds does not claim hostile descendant-escape containment on macOS. Linux retains the narrower seccomp rule that denies descendant `setsid`/`setpgid` escape for the bounded read-only Git path.
+
+A macOS regression permits a normal descendant, proves that it keeps the owned process scope non-quiescent, then proves bounded group termination and reap.
+
+### A8. Clone staging shells and foreign staging entries could create persistent availability problems
+
+**Disposition: REPAIRED.**
+
+A successful clone now removes its proven-empty private staging shell with a non-recursive `remove_dir`; no recursive cleanup is introduced. Failed clone payload remains retained for recovery when safe cleanup cannot be proven.
+
+The retained-payload admission gate is now scoped to staging names owned by the current Winds process identity. Another process or user's `0700` staging directory is not read and cannot become a global availability gate for every clone under a shared parent. Current-process retained payload still bounds repeated allocation during that process lifetime.
+
+### A9. Clone publication guarantees exceeded what every supported platform documents
+
+**Disposition: REPAIRED / SUPPORTED FILESYSTEM CONTRACT EXPLICIT.**
+
+Linux continues to use `renameat2(..., RENAME_NOREPLACE)` and now reports `ENOSYS`, `EINVAL`, `EOPNOTSUPP`, and `EXDEV` as an explicit unsupported kernel/filesystem publication boundary instead of collapsing them into a generic failure. macOS continues to use `renamex_np(..., RENAME_EXCL)`.
+
+On Windows, staging and requested destination are siblings under the same canonical parent and `MoveFileExW` is invoked without `MOVEFILE_REPLACE_EXISTING` and without `MOVEFILE_COPY_ALLOWED`. The supported claim is therefore **single same-parent no-replace rename plus post-publication filesystem-identity verification**, not a formal cross-filesystem atomicity guarantee that Microsoft does not document for `MoveFileExW`. If the platform/filesystem cannot perform that rename, the clone fails before workspace registration.
+
+Microsoft documents the no-replace behavior for its handle-based rename surface (`FILE_RENAME_INFO.ReplaceIfExists = FALSE` returns an error when the target exists) and documents that file-information-class behavior can vary by underlying driver. Those facts reinforce the narrowed Winds claim: no separate check/delete/replace fallback is accepted as equivalent to a stronger universal atomicity guarantee.
+
+Primary references re-verified 2026-08-20:
+
+- https://learn.microsoft.com/en-us/windows/win32/api/winbase/ns-winbase-file_rename_info
+- https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-setfileinformationbyhandle
+
+### A10. Post-exit WSL pipe drain could consume an already-expired command deadline
+
+**Disposition: REPAIRED.**
+
+Once the direct `wsl.exe` child has exited, stdout/stderr drain and owned-scope quiescence are cleanup work. They now use the reserved cleanup deadline rather than the command-phase deadline, avoiding spurious zero-budget reader failures when the child exits near the execution deadline.
+
+### A11. Large dirty worktrees were conflated with complete Git evidence capture
+
+**Disposition: REPAIRED.**
+
+The bounded Git reader now keeps only the configured byte cap while continuing to drain the pipe, and records whether stdout was truncated. Callers that require complete Git bytes or exact worktree-state digest still fail closed on truncation. Cleanliness checks use a distinct presence semantic: any stdout, including truncated stdout, proves the worktree is dirty instead of turning a large dirty repository into an infrastructure error.
+
+### A12. Stricter object-ID validation could make historical Git observations unreadable
+
+**Disposition: REPAIRED.**
+
+New Git observation writes continue to require full lowercase 40- or 64-hex object IDs. The read path now preserves historical compatibility by accepting a non-empty legacy stored object-ID string, including pre-T068 abbreviated or uppercase values, while retaining the rest of the stored-observation consistency checks. New admission is not weakened.
+
+### A13. One deferred terminal-finalization persistence failure could poison unrelated future starts
+
+**Disposition: REPAIRED.**
+
+Deferred-finalization retry still preserves the affected historical execution in the in-memory retry queue when Store load or finalization persistence fails; it does not fabricate a terminal final state. The retry sweep now reports the residual failure but returns success to the unrelated terminal-start path, so one permanently unfinalizable historical row cannot block every subsequent terminal session. Obsolete/already-final rows continue to be discarded as completed.
+
 ## Historical evidence attribution clarifications
 
 ### H1. `SC-001 100-cycle soak` references in Spec 003 task evidence
