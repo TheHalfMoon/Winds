@@ -21,13 +21,14 @@ This file decomposes Spec 006 into independently reviewable slices. It does not 
 7. Protected Winds policy/trust state must not be ordinary governed worktree content writable by the actor it controls.
 8. `WINDS_ENFORCED` is reserved for operations actually mediated by Winds; vendor restrictions are `AGENT_NATIVE_ENFORCED` or weaker unless stronger enforcement is independently proven.
 9. Any head movement after evidence/review invalidates merge-ready state until exact-head gates are rerun.
+10. **Focused-test registration rule**: whenever a task authorizes a new `src/tNNN_*.rs` focused test module or a new `src/agentic_*.rs` module that must be reachable from the binary crate, that task also authorizes the smallest necessary `src/main.rs` edit solely to add the corresponding module declaration / `#[cfg(test)]` test-module registration. This rule does not authorize unrelated CLI/runtime behavior. The focused acceptance gate MUST prove the named test module was compiled and executed; a test file merely existing under `src/` is insufficient.
 
 ## Standard Acceptance Gate
 
 Every implementation task requires on its exact final candidate:
 
 - repository `quality` = SUCCESS;
-- focused deterministic tests for the changed surface;
+- focused deterministic tests for the changed surface, with evidence that every task-authorized `src/tNNN_*.rs` module is registered in the crate test graph and actually executed;
 - platform evidence only for platforms/domains claimed;
 - author correctness/safety/evidence-integrity review;
 - Ponytail/YAGNI review;
@@ -66,7 +67,7 @@ T072 may perform documented non-Agent executable/version discovery because `DISC
 - `src/domain.rs`
 - `src/store.rs`
 - `src/t070_agentic_identity_tests.rs`
-- `src/main.rs` only if test-module registration is required
+- `src/main.rs` only for the minimal module/test registration permitted by Global Rule 10
 
 **Required schema**:
 ```text
@@ -84,6 +85,7 @@ workspaces(workspace_id)
 - duplicate/case/Unicode names do not collide with identity;
 - cross-workspace session/workstream mismatch structurally impossible;
 - invalid/unknown values fail closed;
+- T070 focused tests are registered and demonstrably executed;
 - no runtime discovery/binding, Agent launch, prompt, delegation, or candidate acceptance behavior.
 
 **Depends on**: canonical Tasks. **Closes to authorize**: T071.
@@ -92,7 +94,7 @@ workspaces(workspace_id)
 
 **Authorized paths**:
 - `src/agentic_identity.rs`
-- `src/cli_workspace.rs` and/or `src/main.rs` only for the smallest proof surface
+- `src/cli_workspace.rs` and/or `src/main.rs` only for the smallest proof/module-registration surface
 - minimal `src/store.rs` / `src/domain.rs` extensions
 - `src/t071_agentic_continuity_tests.rs`
 
@@ -102,6 +104,7 @@ workspaces(workspace_id)
 - explicit new task creates a distinct workstream even with identical display text;
 - fork records origin with a distinct Winds session ID;
 - ambiguous continuation returns explicit candidates, not recency guessing;
+- focused tests registered/executed;
 - no native runtime ID or Agent process/prompt.
 
 **Depends on**: T070 `CLOSED_CANONICAL`. **Closes to authorize**: T072.
@@ -115,7 +118,7 @@ workspaces(workspace_id)
 **Authorized paths**:
 - `src/agentic_runtime.rs`
 - `src/t072_agentic_runtime_discovery_tests.rs`
-- minimal read-only CLI proof in `src/main.rs` only if justified
+- `src/main.rs` only for minimal read-only proof/module/test registration
 
 **Acceptance**:
 - absent/present/unsupported/replaced-after-discovery fixtures;
@@ -123,6 +126,7 @@ workspaces(workspace_id)
 - declared vs locally observed vs unavailable capability provenance;
 - runtime identity remains separate from model/provider identity;
 - auth readiness remains unknown when not safely observable;
+- focused tests registered/executed;
 - no install/update/auth/terms/prompt/model call;
 - discovery cannot claim Agent execution occurred;
 - launch-significant identity can be revalidated later.
@@ -136,6 +140,7 @@ workspaces(workspace_id)
 - minimal `src/domain.rs` / `src/store.rs`
 - `src/agentic_runtime.rs`
 - `src/t073_runtime_binding_tests.rs`
+- `src/main.rs` only under Global Rule 10
 
 **Acceptance**:
 - binding -> `winds_sessions(session_id)` with concrete runtime kind, exact executable/version provenance, optional native ID;
@@ -144,6 +149,7 @@ workspaces(workspace_id)
 - executable/version replacement invalidates mapping applicability;
 - persisted PID/native ID alone cannot establish `LIVE` after restart;
 - ownership loss explicit; no blind attachment;
+- focused tests registered/executed;
 - no real Agent process/prompt.
 
 **Depends on**: T072. **Closes to authorize**: T074.
@@ -158,6 +164,7 @@ workspaces(workspace_id)
 - `src/agentic_context.rs`
 - minimal existing `src/domain.rs` / `src/store.rs` use only; **no migration is authorized in T074**
 - `src/t074_agentic_context_tests.rs`
+- `src/main.rs` only under Global Rule 10
 
 T074 must first prove the canonical capsule using existing workstream/session fields plus in-memory typed fixture facts/references. If a new persistent context-fact table is demonstrably required, **STOP T074 and amend/review Tasks before adding a migration**. Do not opportunistically consume migration `0008`.
 
@@ -171,6 +178,7 @@ T074 must first prove the canonical capsule using existing workstream/session fi
 - transfer report distinguishes transferred, derived/reconstructed, omitted, unavailable;
 - no private hidden-state/reasoning transfer claim;
 - compaction does not mutate canonical truth;
+- focused tests registered/executed;
 - no vector DB/embedding/retrieval/tokenizer/Agent process/prompt.
 
 **Depends on**: T073. **Closes to authorize**: T075.
@@ -185,6 +193,7 @@ T074 must first prove the canonical capsule using existing workstream/session fi
 - `src/agentic_authority.rs`
 - minimal authority/enforcement types in `src/domain.rs`
 - `src/t075_agentic_authority_tests.rs`
+- `src/main.rs` only under Global Rule 10
 
 **Acceptance**:
 - Planner direct authority and delegation ceiling are independent;
@@ -195,6 +204,7 @@ T074 must first prove the canonical capsule using existing workstream/session fi
 - enforcement labels cannot overclaim `WINDS_ENFORCED`;
 - worktree/root visibility is not authorization/sandboxing;
 - one Planner -> one Worker only;
+- focused tests registered/executed;
 - no real Agent process/prompt.
 
 **Depends on**: T074. **Closes to authorize**: T076.
@@ -206,6 +216,7 @@ T074 must first prove the canonical capsule using existing workstream/session fi
 - `src/agentic_authority.rs`
 - minimal `src/store.rs` / `src/domain.rs`
 - `src/t076_agentic_approval_tests.rs`
+- `src/main.rs` only under Global Rule 10
 
 Approval identity includes, as applicable: workstream/session IDs, requested Worker role/runtime, workspace/worktree/root, capability/resource/path scope, context digest, delegation ceiling/Worker grant, budgets, and exact base/candidate identity.
 
@@ -215,6 +226,7 @@ Approval identity includes, as applicable: workstream/session IDs, requested Wor
 - no credential/token/full-environment duplication;
 - protected policy/approval state is outside ordinary governed repo content;
 - no PKI/signing dependency;
+- focused tests registered/executed;
 - no real Agent process/prompt.
 
 **Depends on**: T075. **Closes to authorize**: T077.
@@ -229,6 +241,7 @@ Approval identity includes, as applicable: workstream/session IDs, requested Wor
 - `src/agentic_codex.rs`
 - `src/t077_codex_protocol_tests.rs`
 - `src/process_scope.rs` only if a minimal reusable ownership seam is required without weakening existing semantics
+- `src/main.rs` only under Global Rule 10
 
 **Mandatory handshake**:
 ```text
@@ -246,6 +259,7 @@ initialize request
 - approval request cannot self-authorize;
 - native thread ID != Winds session/workstream ID;
 - cleanup only for proven owned child;
+- focused tests registered/executed;
 - no JSON-RPC framework/async dependency/real Codex/prompt.
 
 **Depends on**: T076. **Closes to authorize**: T078.
@@ -255,6 +269,7 @@ initialize request
 **Authorized paths**:
 - `src/agentic_claude.rs`
 - `src/t078_claude_structured_tests.rs`
+- `src/main.rs` only under Global Rule 10
 
 **Acceptance**:
 - structured `--print` with `--output-format json|stream-json` as required;
@@ -264,6 +279,7 @@ initialize request
 - malformed/truncated/oversized output fails truthfully;
 - restrictions labelled `AGENT_NATIVE_ENFORCED` or weaker unless stronger mediation proven;
 - reconstructed new native session = `RECONSTRUCTED`;
+- focused tests registered/executed;
 - no real Claude/prompt.
 
 **Depends on**: T077. **Closes to authorize**: T079.
@@ -289,7 +305,7 @@ initialize request
 - minimal `src/execution.rs` / `src/domain.rs` / `src/store.rs` only if an Agent-execution child record is proven necessary
 - a forward-only migration **only if** exact T079 preflight proves that child persistence is necessary; if a migration is needed but not already exact in this Tasks contract, STOP and amend/review Tasks before creating it
 - `src/t079_codex_connected_tests.rs`
-- minimal proof CLI only if required
+- `src/main.rs` only for minimal proof/module/test registration
 
 **Acceptance evidence**:
 - exact executable/version revalidation;
@@ -297,6 +313,7 @@ initialize request
 - exact Winds-session <-> native-thread provenance;
 - one bounded structured result;
 - truthful authority/enforcement/source labels;
+- focused deterministic tests registered/executed;
 - proven child cleanup or explicit ownership loss;
 - model result is not verified/accepted by implication.
 
@@ -320,7 +337,7 @@ initialize request
 - `src/agentic_claude.rs`
 - runtime-binding/Agent-execution persistence only if already canonically justified by prior tasks
 - `src/t080_claude_planner_tests.rs`
-- minimal proof CLI only if required
+- `src/main.rs` only for minimal proof/module/test registration
 
 **Acceptance evidence**:
 - exact executable/version revalidation;
@@ -328,6 +345,7 @@ initialize request
 - structured Planner result remains `AGENT_REPORTED`;
 - exact resume only if binding remains valid;
 - reconstructed session labelled `RECONSTRUCTED`;
+- focused deterministic tests registered/executed;
 - no verification/acceptance claim from Planner output.
 
 **Depends on**: T079. **Closes to authorize**: T081.
@@ -344,6 +362,7 @@ initialize request
 - minimal `src/agentic_claude.rs` / `src/agentic_codex.rs` coordination seam
 - optional concrete `src/agentic.rs` only if duplication proves a coordinator is needed; no generic runtime trait/plugin host
 - `src/t081_cross_runtime_handoff_tests.rs`
+- `src/main.rs` only under Global Rule 10
 
 **Acceptance**:
 - same canonical workstream survives runtime change;
@@ -352,6 +371,7 @@ initialize request
 - human sees exact normalized contract before approval;
 - over-ceiling and changed-content approvals fail closed;
 - no recursive delegation;
+- focused tests registered/executed;
 - Planner prose cannot automatically start Worker execution.
 
 **Depends on**: T080. **Closes to authorize**: T082.
@@ -365,6 +385,7 @@ Real Codex Worker is allowed only under the canonical T079 path after explicit a
 - proven `src/agentic_authority.rs` / `src/agentic_codex.rs` / coordinator seams
 - already-canonical Agent-execution persistence only
 - `src/t082_worker_worktree_tests.rs`
+- `src/main.rs` only under Global Rule 10
 
 **Acceptance**:
 - explicit exact base and Winds-owned Worker worktree;
@@ -374,6 +395,7 @@ Real Codex Worker is allowed only under the canonical T079 path after explicit a
 - approval requests cannot self-authorize;
 - dirty/failed/ambiguous state retained, never force-cleaned;
 - completion remains `AGENT_REPORTED` until Git/evidence observation;
+- focused tests registered/executed;
 - no primary-checkout mutation or automatic merge/push/PR.
 
 **Depends on**: T081. **Closes to authorize**: T083.
@@ -395,6 +417,7 @@ Real Codex Worker is allowed only under the canonical T079 path after explicit a
 - candidate A evidence becomes `STALE` for B while A remains traceable;
 - Agent `done/tests passed` cannot satisfy verification;
 - existing `winds verify` supplies deterministic authority; evidence referenced, not copied as Agent truth;
+- focused tests registered/executed;
 - verify/promote/recover and Spec 003 regressions remain green;
 - landing remains human-decided.
 
@@ -410,6 +433,7 @@ Real Codex Worker is allowed only under the canonical T079 path after explicit a
 - existing CLI/workspace selection surfaces where practical
 - optional `src/agentic_find.rs` only if a concrete separate seam is proven necessary
 - `src/t084_agentic_findability_tests.rs`
+- `src/main.rs` only under Global Rule 10
 
 **Acceptance**:
 - deterministic partial/fuzzy session selection with explicit disambiguation;
@@ -418,6 +442,7 @@ Real Codex Worker is allowed only under the canonical T079 path after explicit a
 - changed/recent/test/symbol-derived candidates retain provenance;
 - unavailable semantic intelligence stays unavailable;
 - picker visibility never grants authority;
+- focused tests registered/executed;
 - no fuzzy/search dependency without a later reviewed amendment.
 
 **Depends on**: T083. **Closes to authorize**: T085.
@@ -429,6 +454,8 @@ Real Codex Worker is allowed only under the canonical T079 path after explicit a
 ### [ ] T085 — Cross-platform negative/fault/repetition campaign
 
 Cover deterministically: corrupt/unknown identity/binding values, cross-workspace attempts, changed workspace identity, executable replacement, malformed/oversized runtime output, Codex handshake exits/unknown messages, Claude resume rejection/reuse, imported-history injection, explicit context omissions, over-ceiling/deny/approval-replay cases, runtime success conflicting with Git, candidate movement during review/check, dirty Worker recovery, no blind PID/native attachment, bounded fake runtime repetitions, deterministic capsule hashes, and Spec 003 verification/store regressions.
+
+Any new focused test module added by T085 must obey Global Rule 10 and be proven executed.
 
 Real-runtime repetition, if any, is bounded by measured cost; do not invent a 100-cycle model soak. Platform claims require direct evidence. Native Windows Agentic evidence does not imply native-Windows authoritative `winds verify` support.
 
