@@ -202,7 +202,10 @@ fn run_wsl<const N: usize>(executable: &Path, args: [&str; N]) -> Result<Vec<u8>
         }
     };
 
-    let stdout = match receive_reader(&stdout_reader, "stdout", command_deadline) {
+    // Once the direct child has exited, pipe drain and scope quiescence are
+    // cleanup work. They must use the reserved cleanup budget rather than the
+    // already-consumed command phase deadline.
+    let stdout = match receive_reader(&stdout_reader, "stdout", cleanup_deadline) {
         Ok(output) => output,
         Err(error) => {
             return fail_wsl_observation(
@@ -214,7 +217,7 @@ fn run_wsl<const N: usize>(executable: &Path, args: [&str; N]) -> Result<Vec<u8>
             );
         }
     };
-    let stderr = match receive_reader(&stderr_reader, "stderr", command_deadline) {
+    let stderr = match receive_reader(&stderr_reader, "stderr", cleanup_deadline) {
         Ok(output) => output,
         Err(error) => {
             return fail_wsl_observation(
@@ -227,7 +230,7 @@ fn run_wsl<const N: usize>(executable: &Path, args: [&str; N]) -> Result<Vec<u8>
         }
     };
 
-    match child.wait_for_scope_quiescence(command_deadline, "WSL discovery") {
+    match child.wait_for_scope_quiescence(cleanup_deadline, "WSL discovery") {
         Ok(true) => {}
         Ok(false) => {
             return fail_wsl_observation(
