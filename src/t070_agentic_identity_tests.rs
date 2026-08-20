@@ -101,22 +101,36 @@ fn twenty_named_sessions_keep_stable_identity_across_renames() {
         .unwrap();
 
     let after_workstream = store.load_workstream("workstream-02").unwrap();
-    assert_eq!(after_workstream.workstream_id, before_workstream.workstream_id);
-    assert_eq!(after_workstream.workspace_id, before_workstream.workspace_id);
-    assert_eq!(after_workstream.created_unix_ms, before_workstream.created_unix_ms);
+    assert_eq!(
+        after_workstream.workstream_id,
+        before_workstream.workstream_id
+    );
+    assert_eq!(
+        after_workstream.workspace_id,
+        before_workstream.workspace_id
+    );
+    assert_eq!(
+        after_workstream.created_unix_ms,
+        before_workstream.created_unix_ms
+    );
     assert_eq!(after_workstream.updated_unix_ms, 500);
     assert_eq!(after_workstream.display_name, "Renamed مهمة");
 
     let after_session = store.load_winds_session("session-02-03").unwrap();
     assert_eq!(after_session.session_id, before_session.session_id);
     assert_eq!(after_session.workstream_id, before_session.workstream_id);
-    assert_eq!(after_session.created_unix_ms, before_session.created_unix_ms);
+    assert_eq!(
+        after_session.created_unix_ms,
+        before_session.created_unix_ms
+    );
     assert_eq!(after_session.updated_unix_ms, 510);
     assert_eq!(after_session.display_name, "Review 复核");
 
     let mut session_count = 0_usize;
     for workstream in &workstreams {
-        let sessions = store.list_winds_sessions(&workstream.workstream_id).unwrap();
+        let sessions = store
+            .list_winds_sessions(&workstream.workstream_id)
+            .unwrap();
         assert_eq!(sessions.len(), 4);
         session_count += sessions.len();
     }
@@ -162,8 +176,16 @@ fn workspace_ownership_is_structural_and_invalid_identity_operations_fail_closed
     assert!(store.load_winds_session("missing-session").is_err());
     assert!(store.list_workstreams("missing-workspace").is_err());
     assert!(store.list_winds_sessions("missing-workstream").is_err());
-    assert!(store.rename_workstream("missing-workstream", "x", 120).is_err());
-    assert!(store.rename_winds_session("missing-session", "x", 120).is_err());
+    assert!(
+        store
+            .rename_workstream("missing-workstream", "x", 120)
+            .is_err()
+    );
+    assert!(
+        store
+            .rename_winds_session("missing-session", "x", 120)
+            .is_err()
+    );
     assert!(
         store
             .create_workstream(
@@ -224,13 +246,25 @@ fn workspace_ownership_is_structural_and_invalid_identity_operations_fail_closed
             )
             .is_err()
     );
-    assert!(store.rename_workstream("workstream-a", "too-early", 99).is_err());
-    assert!(store.rename_winds_session("session-a", "too-early", 109).is_err());
+    assert!(
+        store
+            .rename_workstream("workstream-a", "too-early", 99)
+            .is_err()
+    );
+    assert!(
+        store
+            .rename_winds_session("session-a", "too-early", 109)
+            .is_err()
+    );
 
     let connection = Connection::open(home.database()).unwrap();
-    connection.pragma_update(None, "foreign_keys", "ON").unwrap();
+    connection
+        .pragma_update(None, "foreign_keys", "ON")
+        .unwrap();
     let session_columns = {
-        let mut statement = connection.prepare("PRAGMA table_info(winds_sessions)").unwrap();
+        let mut statement = connection
+            .prepare("PRAGMA table_info(winds_sessions)")
+            .unwrap();
         statement
             .query_map([], |row| row.get::<_, String>(1))
             .unwrap()
@@ -247,7 +281,11 @@ fn workspace_ownership_is_structural_and_invalid_identity_operations_fail_closed
             "updated_unix_ms",
         ]
     );
-    assert!(!session_columns.iter().any(|column| column == "workspace_id"));
+    assert!(
+        !session_columns
+            .iter()
+            .any(|column| column == "workspace_id")
+    );
 
     let foreign_keys = {
         let mut statement = connection
@@ -267,7 +305,11 @@ fn workspace_ownership_is_structural_and_invalid_identity_operations_fail_closed
     };
     assert_eq!(
         foreign_keys,
-        [("workstreams".to_owned(), "workstream_id".to_owned(), "workstream_id".to_owned())]
+        [(
+            "workstreams".to_owned(),
+            "workstream_id".to_owned(),
+            "workstream_id".to_owned()
+        )]
     );
 
     let direct_orphan = connection.execute(
@@ -314,6 +356,15 @@ fn migration_is_idempotent_and_identity_survives_reopen() {
     assert_eq!(workspace.workspace_id, "workspace-reopen");
     assert_eq!(workstream.workspace_id, workspace.workspace_id);
     assert_eq!(session.workstream_id, workstream.workstream_id);
-    assert_eq!(reopened.list_workstreams("workspace-reopen").unwrap().len(), 1);
-    assert_eq!(reopened.list_winds_sessions("workstream-reopen").unwrap().len(), 1);
+    assert_eq!(
+        reopened.list_workstreams("workspace-reopen").unwrap().len(),
+        1
+    );
+    assert_eq!(
+        reopened
+            .list_winds_sessions("workstream-reopen")
+            .unwrap()
+            .len(),
+        1
+    );
 }
