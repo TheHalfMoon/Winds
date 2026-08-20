@@ -2,45 +2,53 @@
 
 **Status:** Research dossier only. No product implementation is authorized by this document.
 
-**Research date:** 2026-08-20
+**Research freeze:** 2026-08-20
 
 **Canonical Winds base inspected:** `048cf59e8bdbe3a757b4d3ead214099ce18369bd`
 
-**Relationship to active work:** This document does **not** amend Spec 003, does **not** authorize T069, and does **not** authorize a daemon, public runtime protocol, Agent Fleet, MCP runtime, plugin runtime, remote execution, or any other future product code. The active repository constitution and Spec 003 remain authoritative until explicitly amended through Constitution -> Spec -> Plan -> Tasks.
+**Authority boundary:** This document does **not** amend the Constitution or Spec 003, does **not** close T068, does **not** start T069, and does **not** authorize a daemon/session owner, public/local IPC, ACP/MCP runtime implementation, generic agent adapters, Agent Fleet, remote execution, plugin runtime, or any other future product code. Future implementation remains gated by Constitution -> Spec -> Plan -> Tasks and exact-candidate verification.
 
-**Relationship to prior research:** This is the final broad market/research sweep after `006-agent-fleet-donor-audit.md`. It expands that audit with current JetBrains Junie, Factory Droid, Pi, Goose, Herdr, Warp, Zed, VS Code/Copilot, Claude Code, Codex, Gemini CLI, OpenCode, Cursor, Kiro, Qoder, Kimi Code, Cline, Mistral Vibe, Aider, Kilo, and the current ACP/MCP direction, plus recent agent-memory, multi-agent, ACI, evaluation, and agent-security research.
+**Research basis:** `006-agent-fleet-donor-audit.md`, current primary product/protocol sources, and current agent/security/evaluation research.
 
 ---
 
 ## 1. Executive conclusion
 
-The market is converging quickly on the same primitives:
+The 2026 market has moved beyond “one AI agent in one terminal.” The following are now table stakes or rapidly becoming table stakes:
 
-- persistent or resumable **sessions**;
-- human-readable session titles and searchable history;
-- parallel agents and subagents;
-- Git worktrees for concurrent edits;
-- plan/read-only versus implementation modes;
-- per-tool or per-command approvals;
+- named/resumable sessions;
+- multiple concurrent agents;
+- Git-worktree isolation;
+- model/runtime selection;
+- read-only/plan versus implementation modes;
+- approvals and trust controls;
 - background/headless execution;
-- skills, hooks, MCP, and custom agents;
-- native or structured machine interfaces for automation;
-- remote monitoring/control;
-- context compaction and repository-aware navigation.
+- persistent or resumable terminal/session UX;
+- notifications/attention routing;
+- fuzzy file/folder selection and repository-aware context;
+- skills, hooks, MCP, custom agents, and structured machine interfaces;
+- remote monitoring/continuation;
+- session-history retrieval and context compaction.
 
-Those features are becoming table stakes. Winds should not try to win by having one more model selector, one more `/fleet` command, or one more terminal sidebar.
+Winds therefore must **not** define its moat as “many agents,” “worktrees,” “persistent terminals,” “session resume,” “an inbox,” “history search,” or “support for every agent.” Competitors already ship substantial parts of that bundle.
 
-The durable opportunity is to combine four properties that remain fragmented across the market:
+The strongest defensible direction is the combination of:
 
-> **Connected sessions across heterogeneous agent runtimes + inherited local authority + persistent terminal ownership + independently verified exact-candidate work.**
+> **runtime-neutral canonical task/work/evidence continuity**
+> + **explicit transfer/loss provenance**
+> + **externally enforced local authority**
+> + **exact workspace/candidate identity**
+> + **exact-candidate deterministic verification**
+> + **independence-preserving review**
+> + **explicit human landing authority**.
 
-The product should therefore target this position:
+Winds should target this position:
 
 > **Winds is the verified local runtime for agentic software development.**
 >
 > **Any agent. One runtime. Verified work.**
 
-A stronger user promise is:
+The stronger user promise remains:
 
 > **Run any agent. Build any team. Keep it alive. Gate its authority. Verify its work.**
 
@@ -50,21 +58,18 @@ A stronger user promise is:
 
 ### 2.1 JetBrains Junie CLI
 
-**Strongest observed ideas**
+**Observed strengths**
 
-- Multiple live sessions in one CLI instance; `/new` can start another task while existing sessions keep running in the background.
-- `/history` provides task history across directories, live/saved status, search, and resume.
-- Human-readable persistent titles through `/title` / `/rename`.
-- `@` gives direct file/folder selection; IDE integration extends this to classes/symbols.
-- Real-time follow-up prompts can be added while the agent is already working.
-- Worktree menu for parallel file-changing sessions.
-- Passive JetBrains IDE bridge: if a matching IDE is running, Junie can use indexing, semantic analysis, inspections, test configurations, refactorings, open-file context, and symbol-aware completion.
-- `/import` can import guidelines, skills, commands, and MCP configuration from other coding agents.
-- Remote continuation to a web/device surface.
+- multiple live sessions in one CLI instance;
+- searchable history and resume;
+- human-readable titles;
+- direct file/folder selection and IDE-assisted symbol intelligence;
+- worktree workflows;
+- follow-up prompts while work is active;
+- imports of guidelines/skills/commands/MCP configuration;
+- remote continuation.
 
-**Winds lesson**
-
-Winds must make workspace/session naming, history, fuzzy file/directory selection, and optional IDE intelligence first-class. It should not require an IDE, but when JetBrains/VS Code/LSP intelligence is available it should opportunistically improve symbol navigation and context selection.
+**Winds lesson:** workspace/session naming, search, resume, `@`-style context selection, and optional IDE intelligence are baseline UX, not differentiation.
 
 Primary sources:
 
@@ -75,85 +80,75 @@ Primary sources:
 
 ### 2.2 Factory Droid
 
-**Strongest observed ideas**
+**Observed strengths**
 
-- Distinguishes **interaction mode** from **autonomy level**: Normal, Spec, and Mission are workflow shapes, while Off/Low/Medium/High control what can happen without approval.
-- Mission mode has an orchestrator plus worker and validator agents, with independent model selection for workers/validators.
-- Custom Droids are subagents with their own model/tool policy and isolated context.
-- Background subagent execution returns a task ID; `TaskOutput` and `TaskStop` provide lifecycle control.
-- A subagent can be **resumed by task ID with its full previous context preserved**; its autonomy is re-aligned to the current parent level on the next turn.
-- Worktree execution, structured JSON/JSON-RPC modes, session search/resume/fork, and separate spec model selection.
-- Organization maximum autonomy clamps local/child choices.
+- separates interaction mode from autonomy level;
+- orchestrator/worker/validator structures;
+- model selection per worker/validator;
+- resumable background subagents;
+- worktree execution;
+- structured JSON/JSON-RPC modes;
+- session search/resume/fork;
+- organization-level autonomy ceilings.
 
-**Winds lesson**
-
-Separate role/mode from authority. A planner should be able to choose a worker model without acquiring extra machine authority. Child authority must never exceed parent/team/human ceilings. Resumable workers should be a primitive, not an accidental vendor feature.
+**Winds lesson:** role, workflow, runtime/model, and machine authority must be separate concepts. Child authority must never silently exceed parent/team/human ceilings.
 
 Primary sources:
 
 - https://docs.factory.ai/droid-cli/quickstart
 - https://docs.factory.ai/droid-cli/cli-reference
-- https://docs.factory.ai/autonomy-and-safety/specification-mode
 - https://docs.factory.ai/autonomy-and-safety/auto-run
 - https://docs.factory.ai/harness/subagents
 - https://docs.factory.ai/droid-exec/overview
 
 ### 2.3 Pi
 
-**Strongest observed ideas**
+**Observed strengths**
 
-- Sessions are durable JSONL records grouped by working directory.
-- `--continue`, interactive resume, explicit names, `/tree`, `/fork`, `/clone`, and `/compact` have distinct meanings.
-- Session picker supports search/rename/delete and project-oriented continuation.
-- Session history is a **tree**, not merely a flat transcript; branch summaries can preserve useful information when moving between branches.
-- Full session storage can retain history while compaction supplies a bounded model context.
-- Pi's extension ecosystem and community subagent/intercom tools demonstrate parent/child delegation and model-per-role patterns without requiring one provider.
+- durable local session records;
+- distinct continue/resume/tree/fork/clone/compact semantics;
+- searchable session picker;
+- branching session history;
+- local full history while model context can compact;
+- flexible models/extensions and community delegation patterns.
 
-**Winds lesson**
-
-`NEW_SESSION != NEW_TASK`. Winds should preserve a canonical workstream/session graph even when the model context is compacted, and should distinguish continue, fork, clone, and new. Human names should hide native IDs in ordinary workflows.
+**Winds lesson:** `NEW_SESSION != NEW_TASK`. Canonical workstream identity must survive context compaction and runtime changes.
 
 Primary source:
 
-- https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/sessions.md
+- https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent/docs
 
-### 2.4 Goose (AAIF / Block lineage)
+### 2.4 Goose
 
-**Strongest observed ideas**
+**Observed strengths**
 
-- Named sessions, resume, fork, history, editable conversation history, and extension/container options.
-- Custom agents define reusable roles and optional model preferences.
-- Delegated agents run in separate sessions and can use a different model.
-- Delegated subagents do not automatically inherit the full parent conversation.
-- One custom agent can delegate to another; repeatable chains are better represented as recipes rather than role definitions.
-- Recipes separate reusable workflow from reusable agent persona/role.
-- MCP/extension support remains central.
+- named sessions, resume/fork/history;
+- custom agents and recipes;
+- delegated agents in separate sessions;
+- model flexibility;
+- MCP/extensions;
+- explicit separation between reusable role and reusable workflow.
 
-**Winds lesson**
-
-Keep `Role`, `Workflow`, `Runtime`, and `Model` separate. Cross-agent delegation should have an explicit context-inheritance policy instead of dumping parent history into every child.
+**Winds lesson:** keep `Role`, `Workflow`, `Runtime`, and `Model` separate. Delegation needs explicit context inheritance rather than raw parent-history dumping.
 
 Primary sources:
 
-- https://github.com/aaif-goose/goose/blob/main/documentation/docs/guides/goose-cli-commands.md
-- https://github.com/aaif-goose/goose/blob/main/documentation/docs/guides/context-engineering/custom-agents.md
-- https://goose-docs.ai/docs/guides/sessions/session-management/
-- https://goose-docs.ai/docs/guides/recipes/recipe-reference/
+- https://github.com/block/goose/tree/main/documentation
+- https://goose.docs.block.xyz/
 
 ### 2.5 Herdr
 
-**Strongest observed ideas**
+**Observed strengths**
 
-- Agent-aware real terminal panes with `idle`, `working`, and `blocked` state.
-- Broad coding-agent detection including Pi, Copilot CLI, Devin, Kimi, Hermes, Qoder, Droid, OpenCode, Kilo, Claude Code, Codex, Cursor Agent, Amp, Grok CLI, Kiro, and others.
-- Persistent terminal/session ownership and detach/reattach-oriented workflows.
-- Agent automation primitives such as start/prompt/wait/read.
-- Remote attachment and a control API.
-- Clear distinction between stronger lifecycle-hook state signals and weaker screen-manifest heuristics.
+- agent-aware terminal panes;
+- broad coding-agent detection;
+- persistent terminal/session ownership;
+- detach/reattach workflows;
+- automation primitives;
+- remote attachment/control;
+- distinction between stronger lifecycle hooks and weaker screen heuristics.
 
-**Winds lesson**
-
-A future persistent session owner is strategically important; teams of agents should not disappear when the client UI closes. But Winds must go beyond multiplexer state by tracking delegation, authority, exact workspace/candidate identity, evidence, and human decisions. Heuristic state must be source-labelled rather than promoted to truth.
+**Winds lesson:** persistent execution is strategically important but is not enough. Winds must add canonical task identity, authority provenance, exact candidate identity, evidence, and human decisions.
 
 Primary sources:
 
@@ -161,19 +156,16 @@ Primary sources:
 - https://herdr.dev/docs/agent-automation/
 - https://herdr.dev/docs/session-state/
 - https://herdr.dev/docs/persistence-remote/
-- https://herdr.dev/docs/socket-api/
 
 ### 2.6 Warp
 
-**Strongest observed ideas**
+**Observed strengths**
 
-- An agent can operate inside the same live PTY the human is viewing, including interactive programs such as `psql`, `vim`, `python`, `gdb`, and long-running services.
-- The human can **Take Over** the same session and later hand control back.
-- Proposed commands can be approved once or auto-approved for a bounded session pattern.
+- agents operate in a real interactive terminal;
+- human Take Over / Hand Back in the same session;
+- command approval and bounded auto-approval patterns.
 
-**Winds lesson**
-
-Human terminal and agent terminal should share the same execution substrate. `Take Over` / `Hand Back` should eventually work for any supported agent runtime, not just a Winds-native model.
+**Winds lesson:** human and agent should eventually share one execution substrate with explicit control ownership and observed handoff events.
 
 Primary source:
 
@@ -181,128 +173,106 @@ Primary source:
 
 ### 2.7 Zed
 
-**Strongest observed ideas**
+**Observed strengths**
 
-- Three agent paths: native agent, ACP External Agents, and Terminal Threads.
-- Terminal Threads let native CLIs keep their own authentication, model/provider, skills, MCP, and configuration while Zed supplies organization/history UX.
-- Parallel threads are grouped by project and can use different agents.
-- Worktree isolation for parallel edits.
-- Thread history and some external-session import.
+- native agent, ACP external agents, and terminal threads;
+- native CLIs retain their own authentication/configuration;
+- project-grouped parallel threads;
+- worktree isolation;
+- thread history and external-agent integration.
 
-**Winds lesson**
-
-A terminal-first heterogeneous runtime is correct. Winds should provide one workspace/session surface over ACP agents and native CLI/TUI sessions without forcing agent credentials or model configuration into a proprietary Winds provider.
+**Winds lesson:** a terminal-first heterogeneous runtime is valid. Winds should not force third-party agents through a proprietary model/auth gateway.
 
 Primary sources:
 
 - https://zed.dev/docs/ai/agents
 - https://zed.dev/docs/ai/terminal-threads
-- https://zed.dev/docs/ai/parallel-agents
 - https://zed.dev/docs/ai/external-agents
 
-### 2.8 VS Code / Microsoft / GitHub Copilot CLI
+### 2.8 VS Code / GitHub Copilot CLI
 
-**Strongest observed ideas**
+**Observed strengths**
 
-- Agent sessions are becoming a shared abstraction across local, background, CLI, cloud, and remote surfaces.
-- VS Code can hand off a local session to Copilot CLI with conversation/context carried forward.
-- Background Copilot CLI sessions run outside the VS Code window and can continue after the window closes.
-- Sessions can contain multiple chats sharing workspace/isolation.
-- Agent-host tooling can list sessions, create sessions/chats, read another session's recent context, and send messages across sessions.
-- Agents window is workspace-first and supports worktree isolation and session configuration.
-- Copilot CLI `/fleet` decomposes work into dependency-aware parallel subagents; subagents can use different specified models/custom agents.
-- Searchable session history, remote control, research agent, a different-model rubber-duck critic, LSP code intelligence, and on-demand tool loading.
-- VS Code terminal shell integration provides command/cwd/exit telemetry plus recent-command and recent-directory pickers.
+- shared agent-session abstractions across local/background/CLI/cloud surfaces;
+- handoff between local/editor and CLI contexts;
+- background sessions that can outlive a window;
+- workspace-oriented session management;
+- fleet/subagent patterns;
+- remote control;
+- searchable history;
+- LSP/code intelligence;
+- shell integration with command/cwd/exit telemetry.
 
-**Winds lesson**
-
-Connected sessions and cross-harness handoff are now strategic table stakes. Winds should exceed them by making continuity runtime-neutral and evidence-aware, not tied to one vendor account or harness.
+**Winds lesson:** connected sessions and cross-surface handoff are becoming baseline expectations. Winds must make continuity runtime-neutral and evidence-aware.
 
 Primary sources:
 
 - https://code.visualstudio.com/docs/agents/concepts/sessions
-- https://code.visualstudio.com/docs/agents/agent-types/copilot-cli
-- https://code.visualstudio.com/docs/agents/run/sessions/manage-sessions
 - https://code.visualstudio.com/docs/agents/agents-window
 - https://code.visualstudio.com/docs/terminal/shell-integration
 - https://docs.github.com/en/copilot/concepts/agents/copilot-cli
-- https://docs.github.com/en/copilot/concepts/agents/copilot-cli/fleet
-- https://docs.github.com/en/copilot/concepts/agents/copilot-cli/about-remote-control
 
 ### 2.9 Claude Code
 
-**Strongest observed ideas**
+**Observed strengths**
 
-- Separate primitives for subagents, agent view, agent teams, worktrees, and batch work.
-- Subagents get isolated context, custom prompts, model/tool/permission controls, optional persistent memory, background execution, and optional worktree isolation.
-- Agent Teams provide lead + teammates, shared tasks, and inter-agent messaging.
-- Worktree isolation is well integrated into parallel workflows.
-- Agent Teams explicitly document coordination/token overhead and current resumption limitations.
+- subagents, teams, worktrees, and background work;
+- isolated context per subagent;
+- model/tool/permission controls;
+- optional persistent memory;
+- lead/teammate coordination.
 
-**Winds lesson**
-
-The lead/team UX is validated, but Winds should generalize it across heterogeneous runtimes/models and make authority inheritance and session continuity stronger than vendor-local teams.
+**Winds lesson:** lead/team UX is validated, but Winds must generalize it across heterogeneous runtimes while keeping authority and verification external to agent prose.
 
 Primary sources:
 
-- https://code.claude.com/docs/en/agents
 - https://code.claude.com/docs/en/sub-agents
 - https://code.claude.com/docs/en/agent-teams
 - https://code.claude.com/docs/en/worktrees
 
 ### 2.10 OpenAI Codex
 
-**Strongest observed ideas**
+**Observed strengths**
 
-- Structured app-server surface rather than TUI scraping.
-- Threads/turns/items expose lifecycle in machine-readable form.
-- Approval requests carry thread/turn identity and support session-scoped acceptance and policy/network amendments.
-- Codex remains a strong reference for separating approval policy from sandbox policy and for structured control of coding-agent work.
+- structured app-server surface;
+- threads/turns/items lifecycle;
+- structured approvals with thread/turn identity;
+- explicit approval-policy/sandbox-policy concepts.
 
-**Winds lesson**
-
-Use native structured surfaces whenever available. Do not parse terminal rendering when an app server / ACP adapter can give exact lifecycle and approval events.
+**Winds lesson:** prefer structured native interfaces over terminal scraping whenever available.
 
 Primary source:
 
-- https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md
+- https://github.com/openai/codex/tree/main/codex-rs/app-server
 
 ### 2.11 Gemini CLI
 
-**Strongest observed ideas**
+**Observed strengths**
 
-- Folder trust discovers project-local commands, MCP, hooks, skills, and setting overrides before trust is granted.
-- Untrusted workspaces run in restricted mode rather than silently loading project automation.
-- Sandboxing supports multiple backends and tool-level isolation.
-- **Sandbox expansion** asks for a narrow additional permission when a command needs filesystem/network access beyond the current sandbox.
-- Mutating tools require confirmation by default.
-- `@` references files/directories.
-- Checkpointing preserves pre-edit project snapshots.
+- folder trust;
+- restricted behavior before trust;
+- sandboxing and narrow sandbox expansion;
+- confirmation for mutating tools;
+- `@` file/directory context;
+- checkpointing.
 
-**Winds lesson**
-
-Workspace discovery is not trust. Project automation, MCP, hooks, skills, and environment inputs should be inventoried before execution. Authority escalation should be explicit and narrow.
+**Winds lesson:** discovery is not trust. Project files, hooks, MCP, skills, and configuration are inputs that need independent authority treatment.
 
 Primary sources:
 
-- https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/trusted-folders.md
-- https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/sandbox.md
-- https://github.com/google-gemini/gemini-cli/blob/main/docs/reference/tools.md
-- https://github.com/google-gemini/gemini-cli/blob/main/docs/cli/checkpointing.md
+- https://github.com/google-gemini/gemini-cli/tree/main/docs
 
 ### 2.12 OpenCode
 
-**Strongest observed ideas**
+**Observed strengths**
 
-- Fine-grained `allow` / `ask` / `deny` rules over actions/resources.
-- Per-agent permission overrides.
-- Separate read-only/explore/plan-style agents.
-- Rules can cover shell patterns, external directories, MCP tools, skills, and subagents.
-- Durable project approvals cannot override explicit deny rules.
+- granular allow/ask/deny rules;
+- per-agent overrides;
+- read-only/plan-style agents;
+- resource-aware rules for shell, external directories, MCP, skills, subagents;
+- explicit deny precedence.
 
-**Winds lesson**
-
-Use a capability/resource policy rather than a single `sandboxed=true` flag. Explicit denies must dominate convenience approvals.
+**Winds lesson:** a single `sandboxed=true` flag is inadequate. Safety-relevant capabilities need explicit resource/action semantics and truthful enforcement provenance.
 
 Primary sources:
 
@@ -311,171 +281,224 @@ Primary sources:
 
 ### 2.13 Cursor Agent CLI
 
-**Strongest observed ideas**
+**Observed strengths**
 
-- Explicit workspace root and agent worktree support.
-- Resume/continue/history surfaces.
-- Human command approval in interactive mode.
-- Structured output in non-interactive mode.
+- explicit workspace root and worktree support;
+- resume/continue/history;
+- human command approval;
+- structured non-interactive output.
 
-**Winds lesson**
-
-Workspace identity, continuation, and worktree selection should be uniform across runtimes rather than relearned per CLI.
+**Winds lesson:** workspace identity and continuation should be uniform across runtimes rather than relearned per agent.
 
 Primary source:
 
 - https://cursor.com/docs/cli/using
 
-### 2.14 AWS Kiro CLI
+### 2.14 Kiro CLI
 
-**Strongest observed ideas**
+**Observed strengths**
 
-- Spec workflow combines requirements/design/planning with task execution and verification.
-- Capability-based permissions include filesystem, shell, web, MCP, subagent, skill, context, diagnostics, and sandbox network.
-- `deny > ask > allow` across user/workspace/agent/session scopes.
-- Permission configuration files are protected by an unoverrideable deny so the agent cannot rewrite its own policy.
-- Hooks can observe/block lifecycle/tool events.
-- Context is explicitly separated into persistent agent resources, temporary session context, and knowledge bases; context usage is inspectable.
+- spec workflow;
+- capability-based permissions;
+- deny/ask/allow precedence;
+- protected permission configuration;
+- lifecycle/tool hooks;
+- inspectable persistent/session/knowledge context.
 
-**Winds lesson**
-
-Protect the policy plane from the agents it governs. Make context composition visible and measured. Keep deterministic lifecycle hooks as a potential gate input, but never confuse hook output with independent Winds evidence unless Winds owns the observation.
+**Winds lesson:** protect the policy plane from the agents it governs, and do not confuse hook output with independent Winds evidence.
 
 Primary sources:
 
 - https://kiro.dev/docs/cli/v3/specs/
 - https://kiro.dev/docs/cli/chat/permissions/
 - https://kiro.dev/docs/cli/hooks/
-- https://kiro.dev/docs/cli/chat/context/
 
-### 2.15 Qoder CLI
+### 2.15 Qoder, Kimi, Cline, Mistral Vibe, Aider, Kilo
 
-**Strongest observed ideas**
+These reinforce the same convergence:
 
-- `--cwd`, repeated `--add-dir`, remote modes, ACP server mode.
-- Agents, skills, hooks, plugins, and MCP as explicit CLI subcommands.
-- Structured/non-interactive automation surfaces.
+- session persistence/search/resume;
+- multi-root/context controls;
+- isolated subagents;
+- structured/headless modes;
+- worktrees;
+- approvals/trust;
+- repository maps;
+- local daemons/relays in some products.
 
-**Winds lesson**
+**Winds lesson:** new agents should enter through capability-discovered adapters rather than architecture-wide agent-name conditionals.
 
-Multi-root and ACP capability negotiation are important, but Winds should replace path-heavy UX with a fuzzy human picker and explicit per-root authority.
-
-Primary source:
+Primary sources:
 
 - https://docs.qoder.com/cli/cli-reference
-
-### 2.16 Kimi Code CLI
-
-**Strongest observed ideas**
-
-- Durable sessions grouped by working directory with session metadata and per-agent event streams.
-- Resume/continue/session picker.
-- Main agent + isolated subagents; subagents return conclusions without polluting the main agent's history.
-- Skills, hooks, MCP, and `--add-dir` support.
-- Session storage includes request traces useful for debugging.
-
-**Winds lesson**
-
-Subagent context isolation and persistent event records are good defaults. Winds should add exact evidence provenance and cross-runtime continuity above them.
-
-Primary sources:
-
-- https://moonshotai.github.io/kimi-code/en/guides/sessions.html
-- https://moonshotai.github.io/kimi-code/en/customization/agents
-- https://moonshotai.github.io/kimi-code/en/reference/kimi-command
-
-### 2.17 Cline
-
-**Strongest observed ideas**
-
-- Shared engine across CLI, IDE, JetBrains, SDK, and multi-agent Kanban.
-- Interactive and headless/JSON automation.
-- Plan/act, MCP, checkpoints, rules, skills, provider configuration.
-- Kanban gives parallel agents their own worktrees and dependency chains.
-
-**Winds lesson**
-
-A shared execution engine with multiple clients is a proven direction. Winds should keep the local truth/authority engine independent from the TUI rather than bake all semantics into one UI process forever.
-
-Primary sources:
-
+- https://moonshotai.github.io/kimi-code/
 - https://github.com/cline/cline
-- https://github.com/cline/cline/blob/main/apps/cli/README.md
-
-### 2.18 Mistral Vibe
-
-**Strongest observed ideas**
-
-- Modern CLI/TUI, `@` path completion, stateful terminal, project-aware context, multiple agent profiles, subagent task delegation, approvals, trust folders, and programmatic JSON/streaming modes.
-- Explicit max turns, max price, and token budgets in programmatic mode.
-- ACP adapter exists in the codebase.
-
-**Winds lesson**
-
-Budget ceilings should be first-class team/session policy. Modern file-selection UX is table stakes.
-
-Primary source:
-
 - https://github.com/mistralai/mistral-vibe
-
-### 2.19 Aider
-
-**Strongest observed idea**
-
-- Repository map uses a concise symbol-oriented representation of the codebase instead of sending every file.
-
-**Winds lesson**
-
-Use an inspectable bounded context map, ideally enriched by LSP/IDE intelligence, instead of raw repository dumping.
-
-Primary source:
-
 - https://aider.chat/docs/repomap.html
-
-### 2.20 Kilo and other long-tail CLIs
-
-Kilo provides workspace-scoped session history/search, session rename/export/delete, past-chat context attachment, resume, remote relay, and a local daemon. Herdr's current support table also demonstrates a fast-moving long tail: Devin CLI, Hermes, Amp, Grok CLI, Kiro, Qoder, Kimi, Cursor, OpenCode, Droid, Pi, Cline, Gemini, and others.
-
-**Winds lesson**
-
-Do not hard-code the product around today's top five agent names. Build capability discovery and compatibility tiers so new CLIs can enter without rewriting the user model.
-
-Primary sources:
-
 - https://kilo.ai/docs/code-with-ai/platforms/cli
-- https://kilo.ai/docs/code-with-ai/agents/session-history
-- https://herdr.dev/docs/agents/
 
 ---
 
-## 3. Protocol direction
+## 3. Direct orchestration/environment competitors that materially change the Winds strategy
 
-### 3.1 ACP is the preferred coding-agent interoperability layer
+### 3.1 Superset
 
-The 2026 ACP direction strengthens the existing recommendation from research 006:
+Superset is a first-class direct competitor to the future Winds environment.
 
-- standardized session discovery/listing;
-- session metadata/title updates;
-- session close;
-- session configuration options for model/mode/reasoning selectors;
-- active work on remote transports;
-- evolving multi-root lifecycle semantics.
+**Observed strengths**
 
-Winds should not invent a public agent protocol while ACP can carry the needed lifecycle/control semantics. Winds may still need private internal types for authority, evidence, and orchestration that ACP does not define.
+- runs many heterogeneous coding agents in parallel;
+- supports Claude Code, Codex, Gemini, OpenCode, Pi, Copilot, Mistral Vibe, Kimi, Cursor Agent, Droid, and others;
+- each task gets an isolated Git worktree/branch workspace;
+- built-in terminal, diff, commit, PR, port, and dev-server workflow;
+- scheduled automations;
+- local-first behavior with remote hosts/workspaces;
+- CLI and TypeScript SDK;
+- MCP server able to create/manage tasks, workspaces, agents, terminals, and automations;
+- remote host server/relay model.
+
+Primary sources:
+
+- https://superset.sh/
+- https://docs.superset.sh/overview
+- https://docs.superset.sh/agent-integration
+- https://docs.superset.sh/remote-workspaces
+- https://docs.superset.sh/mcp-server
+- https://docs.superset.sh/cli/getting-started
+
+**Strategic consequence:** parallel agents, worktrees, remote workspaces, automation, agent dashboards, and broad agent support cannot be claimed as a unique Winds moat. Winds must beat this category on continuity semantics, local authority truth, exact-candidate evidence, and independent review.
+
+### 3.2 cmux
+
+cmux is a strong adjacent/direct competitor for terminal organization, agent state, attention, and resumability.
+
+**Observed strengths**
+
+- terminal/workspace organization designed around coding agents;
+- agent hooks and state/notification integration across multiple runtimes;
+- workspace/tab auto-naming where safe agent conversation sources exist;
+- saved session restoration for supported agent sessions;
+- Agent Hibernation: idle, restorable background agents can be terminated and later resumed using the native saved session;
+- process-generation and workspace/surface revalidation before hibernation actions;
+- explicit limitations where arbitrary live process state cannot be restored.
+
+Primary source:
+
+- https://github.com/manaflow-ai/cmux
+- https://github.com/manaflow-ai/cmux/blob/main/docs/agent-hooks.md
+
+**Strategic consequence:** persistence/resume UX, attention indicators, notifications, and agent-oriented terminal organization are not sufficient differentiation. Winds must source-label state and bind it to task/evidence/authority truth.
+
+### 3.3 Conductor
+
+Conductor validates the “workspace around an agent task” model.
+
+**Observed strengths**
+
+- independent workspaces with separate branch/worktree, files, terminals, setup, diff, checks, and PR path;
+- parallel Claude Code, Codex, and Cursor sessions;
+- explicit guidance on when agents should share a workspace versus use separate workspaces;
+- built-in review/check/merge flow.
+
+Primary sources:
+
+- https://www.conductor.build/docs/concepts/parallel-agents
+- https://www.conductor.build/docs/guides/parallel-agents/run-multiple-claude-code-sessions
+- https://www.conductor.build/docs/guides/parallel-agents/run-multiple-codex-sessions
+
+**Strategic consequence:** “one worktree workspace per independent task” is validated product substrate, not the moat. Winds should retain exact workspace/candidate identity and stronger independent verification semantics.
+
+### 3.4 Claude Squad and similar terminal orchestrators
+
+Claude Squad and related projects combine tmux/session management, Git worktrees, multiple local coding agents, and diff/review UX.
+
+Primary source:
+
+- https://github.com/smtg-ai/claude-squad
+
+**Strategic consequence:** pane orchestration plus worktrees is already commoditized. Winds should avoid becoming a nicer tmux wrapper.
+
+### 3.5 ctx
+
+`ctx` is a particularly important memory/history donor and adjacent competitor.
+
+**Observed strengths**
+
+- open-source Rust CLI;
+- discovers/imports persisted coding-agent histories;
+- local SQLite index;
+- normalized sessions, events, metadata, and touched-file records;
+- searches prior work and returns cited session/event identities;
+- supports histories from many coding-agent harnesses;
+- local/private by default;
+- no background service or model API required for the core index/search path.
+
+Primary source:
+
+- https://github.com/ctxrs/ctx
+
+**Strategic consequence:** cross-agent transcript/history search is not itself a Winds moat and should not be rebuilt prematurely. A ctx-style retrieval layer can inform or complement Winds, but imported transcript/history remains **retrieved evidence about prior conversation**, not canonical Winds task/evidence truth.
+
+---
+
+## 4. ACP protocol state as of 2026-08-20
+
+ACP is now substantially richer than the earlier research snapshot. Winds should prefer it where it supplies stable semantics, while pinning an exact revision at implementation time.
+
+### Stable/completed ACP v1 surfaces relevant to Winds
+
+As of the research freeze, ACP primary sources show these as stabilized/completed:
+
+- Session Config Options — 2026-02-04;
+- Session List — 2026-03-09;
+- Session Info Update — 2026-03-09;
+- Session Resume — 2026-04-22;
+- Session Close — 2026-04-23;
+- Additional Workspace Roots / `additionalDirectories` — 2026-06-01;
+- Session Delete — 2026-06-05;
+- Session Usage Updates / `usage_update` — 2026-06-05;
+- Message IDs — 2026-06-05;
+- Model Config Category — 2026-06-24;
+- Rust and TypeScript ACP SDKs at 1.0 — 2026-06-25;
+- Request Cancellation / `$/cancel_request` — 2026-06-29;
+- Boolean Config Options — 2026-07-06;
+- Elicitation — 2026-07-22.
 
 Primary sources:
 
 - https://agentclientprotocol.com/updates
-- https://agentclientprotocol.com/announcements/session-list-stabilized
-- https://agentclientprotocol.com/announcements/session-info-update-stabilized
-- https://agentclientprotocol.com/announcements/session-close-stabilized
-- https://agentclientprotocol.com/announcements/session-config-options-stabilized
+- https://agentclientprotocol.com/rfds/additional-directories
+- https://agentclientprotocol.com/rfds/request-cancellation
+- https://agentclientprotocol.com/rfds/elicitation
 
-### 3.2 MCP is the tool/data interoperability layer, not Winds session truth
+Important details for Winds:
 
-The final MCP `2026-07-28` specification moved to a stateless core, formal extensions, Tasks, authorization hardening, and deprecations for roots/sampling/logging. This is a reminder that Winds must pin a concrete MCP revision when implementation is authorized rather than mirror old MCP assumptions into its persistent schema.
+- `additionalDirectories` expands declared workspace scope but is **not** a sandbox.
+- lifecycle-time additional roots are explicit and capability-gated;
+- Winds must still enforce local filesystem authority independently where it claims enforcement;
+- `usage_update` is agent-reported protocol telemetry and must not automatically become independent Winds accounting truth;
+- session resume does not eliminate the need for Winds canonical task continuity because native resume capability/state can still vary by runtime.
 
-MCP should expose tools/data; it should not become the source of truth for Winds sessions, authority, or candidate verification.
+### ACP work that remains evolving
+
+- ACP v2 documentation/schema was published as **Draft** on 2026-07-20.
+- Streamable HTTP/WebSocket remote transport work remains Active/evolving.
+- additional draft RFDs continue to move quickly.
+
+Primary sources:
+
+- https://agentclientprotocol.com/updates
+- https://agentclientprotocol.com/rfds
+
+**Winds rule:** never persist draft ACP semantics as permanent Winds product truth merely because a current SDK exposes them. Formal implementation must pin and audit the exact ACP protocol/SDK revision.
+
+---
+
+## 5. MCP direction
+
+MCP remains a tool/data interoperability layer, not Winds session truth, authority truth, or candidate-verification truth.
+
+The 2026-07-28 MCP generation materially changed prior assumptions around state, extensions, tasks, and authorization. Winds must pin the exact MCP revision used by a future implementation and must not mirror transient protocol structure into permanent internal persistence without a product reason.
 
 Primary source:
 
@@ -483,193 +506,201 @@ Primary source:
 
 ---
 
-## 4. Research findings that materially affect Winds
+## 6. Research findings that affect the architecture
 
-### 4.1 Agent-computer interface quality changes agent performance
+### 6.1 Agent-computer interface quality matters
 
-**SWE-agent: Agent-Computer Interfaces Enable Automated Software Engineering** shows that the interface/tool surface supplied to an agent materially affects software-engineering performance. This supports investing in agent-friendly navigation, precise tools, good error surfaces, and bounded context selection rather than treating Winds as a passive terminal wrapper.
+SWE-agent demonstrates that the tool/interface surface materially changes software-agent performance.
 
 - https://arxiv.org/abs/2405.15793
 
-### 4.2 Generalist coding agents need controlled environments and evaluation
+**Implication:** precise context navigation, deterministic tools, bounded outputs, and good error surfaces are product capabilities, not decoration.
 
-**OpenHands** frames software agents as generalist actors using code, CLI, and browser capabilities and emphasizes sandboxed execution, multi-agent coordination, and benchmark integration.
+### 6.2 Multi-agent quantity is not quality
 
-- https://arxiv.org/abs/2407.16741
-
-### 4.3 Naive multi-agent chaining can cascade hallucinations
-
-**MetaGPT** explicitly identifies cascading hallucinations in naively chained multi-agent systems and uses standardized operating procedures/roles to reduce inconsistency.
+MetaGPT, ChatDev, and related work support specialized roles and structured communication but also motivate caution around naive chains and coordination overhead.
 
 - https://arxiv.org/abs/2308.00352
-
-**ChatDev** similarly shows value in specialized roles and structured communication across design, coding, and testing.
-
 - https://aclanthology.org/2024.acl-long.810/
 
-**Winds implication:** multi-agent quantity is not a quality metric. Team contracts, role boundaries, structured handoffs, deterministic gates, and independent review matter more than spawning more workers.
+**Implication:** team contracts, bounded delegation, deterministic gates, and reviewer independence matter more than agent count.
 
-### 4.4 Parallel candidate exploration can improve quality, but must not auto-select
+### 6.3 Memory should be structured and selective
 
-**Cross-Team Collaboration** explores multiple decision paths with multiple teams rather than a single development chain.
-
-- https://arxiv.org/abs/2406.08979
-
-**Winds implication:** support alternate candidates and independent exploration, but retain the constitutional rule that Winds never invents a magic winner score and the human selects the candidate.
-
-### 4.5 Agent runtimes increasingly resemble operating systems
-
-**AIOS** studies scheduling, context switching, memory, storage, tool management, and access control as kernel-like services for agents.
-
-- https://arxiv.org/abs/2403.16971
-
-**Winds implication:** the layered runtime idea is valid, but Winds should not import a heavy generic agent OS prematurely. Build only concrete local developer primitives justified by the product.
-
-### 4.6 Memory must be structured and selective, not raw transcript stuffing
-
-Recent memory research treats memory as a first-class primitive for long-horizon agents:
-
-- **Memory in the Age of AI Agents** distinguishes factual, experiential, and working memory and analyzes formation/evolution/retrieval.
-- **Rethinking Memory Mechanisms of Foundation Agents in the Second Half** emphasizes long-horizon context explosion and selective reuse.
-- **Memori** reports that structured summaries/semantic representation can outperform raw full-context approaches with substantially fewer tokens on LoCoMo.
-
-Sources:
+Long-horizon agent memory research supports separating durable structured state from the bounded model view.
 
 - https://arxiv.org/abs/2512.13564
 - https://arxiv.org/abs/2602.06052
 - https://arxiv.org/abs/2603.19935
 
-**Winds implication:** preserve full local transcripts/artifacts where policy allows, but construct model context from a structured canonical work memory and evidence memory. Compaction may change the model view; it must never rewrite canonical task/evidence truth.
+**Implication:** model-context compaction may be lossy; canonical work/evidence truth must not be.
 
-### 4.7 Models should not be trusted to infer their own least privilege
+### 6.4 Models should not define their own least privilege
 
-**Do Coding Agents Understand Least-Privilege Authorization? (AuthBench, 2026)** finds that frontier models can simultaneously omit needed permissions and grant unnecessary/sensitive access, and more reasoning does not solve the basic mismatch.
+AuthBench reports persistent difficulty in deriving correct least-privilege authorization even for strong models.
 
 - https://arxiv.org/abs/2605.14859
 
-**Winds implication:** authority must be an external deterministic policy system. A planner may request authority; it must not authoritatively decide its own permissions or a child's permissions.
+**Implication:** agents may request authority; deterministic policy/human grants decide it.
 
-### 4.8 Prompt injection makes tool data a hostile boundary
+### 6.5 Tool data is a hostile boundary
 
-**AgentDojo (NeurIPS 2024)** demonstrates attacks in which untrusted tool-returned data hijacks tool-using agents.
+AgentDojo and security-principles work reinforce prompt-injection and confused-deputy risks.
 
 - https://proceedings.neurips.cc/paper_files/paper/2024/hash/97091a5177d8dc64b1da8bf3e1f6fb54-Abstract-Datasets_and_Benchmarks_Track.html
-
-**LLM Agents Should Employ Security Principles** argues for defense in depth, least privilege, complete mediation, and psychologically usable controls.
-
 - https://arxiv.org/abs/2505.24019
 
-**Winds implication:** project files, MCP output, web results, terminal output, and another agent's prose are inputs, not authority. Every consequential local action still passes Winds policy/approval boundaries.
+**Implication:** files, web, MCP, terminal output, and another agent's prose are inputs, never authority.
 
-### 4.9 Evaluation itself must be treated skeptically
+### 6.6 Evaluation must be candidate-bound and benchmark-skeptical
 
-SWE-bench Verified improved reproducibility through human validation and containerized evaluation, but OpenAI later documented material benchmark limitations for frontier capability measurement.
-
-Sources:
+Repository-native deterministic gates bound to the exact candidate remain stronger product evidence than an agent saying “tests passed” or a broad benchmark score.
 
 - https://openai.com/index/introducing-swe-bench-verified/
 - https://openai.com/index/why-we-no-longer-evaluate-swe-bench-verified/
 
-**Winds implication:** do not build the product around one leaderboard. The core verification primitive remains repo-native deterministic gates bound to the exact candidate, with benchmark suites used only as additional product evaluation.
+---
+
+## 7. Market convergence: what Winds should assume competitors can copy
+
+Winds should assume serious products can eventually provide:
+
+1. named workspaces/sessions;
+2. fuzzy history and resume;
+3. continue/fork/new semantics;
+4. `@` file/folder context;
+5. worktree-isolated tasks;
+6. plan/read-only and implementation modes;
+7. parallel workers/subagents;
+8. model/runtime selection;
+9. approvals/trust controls;
+10. headless structured output;
+11. skills/hooks/MCP/custom agents;
+12. context compaction/history search;
+13. background execution;
+14. notifications/attention routing;
+15. remote monitoring/continuation;
+16. IDE/LSP/symbol intelligence;
+17. time/token/cost visibility;
+18. persistent/resumable agent terminals.
+
+These are substrate. The moat must live above them.
 
 ---
 
-## 5. Market convergence: features that are now table stakes
+## 8. The gaps Winds should own
 
-A credible future Winds agentic environment should assume the following eventually become baseline expectations:
+### Gap A — runtime-neutral canonical continuity
 
-1. Named workspaces and named sessions.
-2. Searchable/fuzzy session history and resume.
-3. `continue`, `fork`, and `new` as distinct operations.
-4. Human-friendly file/folder context pickers and `@` references.
-5. Worktree-isolated parallel edit sessions.
-6. Plan/read-only versus implementation modes.
-7. Subagents/parallel workers.
-8. Model selection per session/role.
-9. Tool/command approval and trust controls.
-10. Headless structured output for automation.
-11. Skills/hooks/MCP/custom-agent extension points.
-12. Session compaction and context inspection.
-13. Background work and an attention/status surface.
-14. Remote monitoring/continuation.
-15. IDE/LSP/symbol intelligence where available.
-16. Cost/token/time budget visibility.
+The same developer task should survive Claude -> Codex -> Pi -> Goose -> another runtime without pretending vendor-private state transferred when it did not.
 
-Winds should implement these only when their prerequisite specs authorize them, but none is a durable moat by itself.
+Winds must be able to report:
 
----
+- canonical task/workstream identity;
+- exact state transferred;
+- state unavailable/not transferred;
+- native session identity and proof level;
+- reconstructed context sources.
 
-## 6. The gaps Winds should own
+### Gap B — external local authority
 
-### Gap A — connected continuity across different agent runtimes
+```text
+CHILD_AUTHORITY
+  ⊆ PARENT_AUTHORITY
+  ⊆ APPROVED_TEAM_AUTHORITY
+  ⊆ HUMAN_GRANTED_AUTHORITY
+```
 
-Most tools resume their own sessions well. Fewer can continue the **same developer task** across Claude -> Pi -> Goose -> Codex -> another runtime while retaining workspace/task/evidence truth and explicitly stating what vendor-private context did not transfer.
+Authority is external to model reasoning and host/domain scoped.
 
-### Gap B — a universal authority hierarchy
+### Gap C — evidence separated from claims
 
-Vendor tools have good permission systems, but policy semantics differ and child-agent inheritance is inconsistent. Winds can enforce:
+```text
+AGENT_REPORTED
+!=
+WINDS_OBSERVED
+!=
+HUMAN_DECIDED
+```
 
-`CHILD_AUTHORITY ⊆ PARENT_AUTHORITY ⊆ TEAM_AUTHORITY ⊆ HUMAN_GRANTED_AUTHORITY`
+Imported history, vendor telemetry, shell hooks, and agent prose retain provenance and never silently become independent Winds evidence.
 
-independently of model prose.
+### Gap D — exact-candidate verification
 
-### Gap C — evidence separated from agent claims
+Tests, static checks, security gates, and independent review must bind to the exact candidate identity. A changed candidate invalidates stale verification/review.
 
-Many systems show that an agent says tests passed. Winds can independently bind exact process/Git/test/review evidence to the exact candidate tree.
+### Gap E — independence-preserving review
 
-### Gap D — persistent agent terminal runtime plus verification
+A fresh reviewer should receive requirements and exact candidate evidence without automatically receiving builder persuasion/confidence or planner preference.
 
-Herdr and VS Code demonstrate persistence/background ownership. Winds can combine persistent sessions with exact identity, authority provenance, and verification rather than treating persistence as only a multiplexer concern.
+### Gap F — attention routing with authority/evidence semantics
 
-### Gap E — frictionless directory/context navigation across every CLI
+The inbox should prioritize authority requests, blockers, exact-candidate review readiness, stale evidence, and human decisions — not merely terminal notifications.
 
-Different CLIs require different path flags and session IDs. Winds can make the user remember only workspace/session names and goals, while fuzzy selectors resolve directories, files, symbols, changes, tests, prior sessions, and artifacts.
+### Gap G — truthful state semantics
 
-### Gap F — independent-review context isolation
+```text
+IDLE != DONE != VERIFIED != ACCEPTED
+```
 
-A reviewer should inherit requirements and exact candidate evidence without automatically inheriting builder persuasion, confidence, or hidden conversational bias.
-
-### Gap G — attention routing across many agents
-
-The human should manage decisions and authority requests, not panes. A single inbox can rank authority requests, blocked work, review readiness, and informational completions.
+Process state, agent-turn state, task state, evidence state, and decision state must remain separate.
 
 ---
 
-## 7. Final donor decisions
+## 9. Donor/strategy decisions
 
-### Adopt / integrate where mature
+### Adopt/integrate where mature
 
-- **ACP** for coding-agent lifecycle/interoperability.
-- **Agent-native structured interfaces** such as Codex app-server where stronger than terminal scraping.
-- **MCP** for external tools/data, version-pinned at implementation time.
-- Existing local CLIs and their existing authentication rather than a mandatory Winds model gateway.
-- System Git/worktrees and OS/runtime controls for real authority, not prompt-only safety.
+- ACP stable lifecycle/config/session features, version-pinned;
+- agent-native structured interfaces such as Codex app-server;
+- MCP for external tools/data, version-pinned;
+- system Git/worktrees;
+- OS/runtime controls for real enforcement;
+- existing local agent installations/authentication.
 
-### Deep-study UX/behavior
+### Deep-study/integrate selectively
 
-- Junie: named/history sessions, `@` file/folder/symbol UX, optional IDE bridge.
-- Droid: mode/autonomy separation, resumable subagents, worker/validator models.
-- Pi: session tree/fork/clone/compact semantics.
-- Goose: agent vs recipe vs skill separation and isolated delegation.
-- Herdr: persistent agent terminals and state provenance.
-- Warp: shared PTY takeover.
-- Zed/VS Code: project-grouped sessions, terminal/external agent coexistence, handoff.
-- Claude/Copilot: lead/team/fleet coordination patterns.
-- Gemini/Kiro/OpenCode: trust, sandbox expansion, capability policies.
-- Aider: bounded repository map.
+- Superset: workspace/parallel/remote orchestration UX;
+- cmux: attention, terminal/session restoration, hibernation semantics;
+- Conductor: task-workspace/review model;
+- ctx: local cross-agent history indexing and cited retrieval;
+- Junie/Zed/VS Code: session and navigation UX;
+- Herdr/Warp: persistent terminal/control ownership;
+- Kiro/Gemini/OpenCode: trust and capability policy;
+- Pi/Goose/Droid: continuation/delegation semantics.
 
-### Compatibility targets, not core architecture
+### Do not copy as architecture
 
-Cline, Kimi, Qoder, Cursor, Kilo, Mistral Vibe, Aider, Devin, Amp, Grok, Hermes, Kiro, Copilot CLI, and future CLIs should enter through capability-discovered adapters. They must not force agent-specific product branches throughout Winds core.
+- pane multiplexing as the core product;
+- agent-count/fleet breadth as a moat;
+- worktree-as-sandbox claims;
+- transcript-as-memory claims;
+- agent-provided “done/tests passed/safe” as acceptance evidence;
+- one giant arbitrary-code plugin runtime before product need;
+- automatic winner scoring.
 
 ---
 
-## 8. Research verdict
+## 10. Final research verdict
 
-The final landscape does **not** support building a generic "AI terminal" or a clone of Herdr/Zed/Claude Teams. Those categories are already competitive and converging.
+The final landscape does **not** support building a generic AI terminal, a worktree dashboard, a multiplexer with agent badges, or a fleet launcher as the central thesis. Those categories already have serious competitors.
 
-The strongest defensible direction is:
+The strongest direction is:
 
-> **Winds = workspace/session operating environment + universal agent runtime + persistent execution + local authority broker + connected cross-agent memory + exact-candidate evidence.**
+> **Winds = named workspace/session environment + runtime-neutral canonical continuity + heterogeneous agent compatibility + persistent execution + external local authority + exact candidate identity + independently observed evidence + independence-preserving review + explicit human landing decision.**
 
-The next document, `008-agentic-development-master-plan.md`, translates this research into the future product/architecture plan while preserving the current Spec 003 boundary.
+The durable distinction is not the provider list.
+
+The durable distinction is that Winds can truthfully answer:
+
+- **What task is this?**
+- **Which workspace/candidate is authoritative?**
+- **What context actually transferred?**
+- **What was lost or reconstructed?**
+- **What authority did each actor really hold?**
+- **What happened on the machine?**
+- **Which evidence belongs to this exact candidate?**
+- **Was the review genuinely independent and candidate-current?**
+- **What did the human decide?**
+
+That is the basis for the future master plan in `008-agentic-development-master-plan.md`.
