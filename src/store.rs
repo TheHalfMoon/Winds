@@ -67,6 +67,26 @@ pub struct NewWorkspace<'a> {
 
 #[allow(
     dead_code,
+    reason = "Spec 006 T070 persistence substrate; product session semantics land in T071"
+)]
+pub struct NewWorkstream<'a> {
+    pub workstream_id: &'a str,
+    pub workspace_id: &'a str,
+    pub display_name: &'a str,
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 006 T070 persistence substrate; product session semantics land in T071"
+)]
+pub struct NewWindsSession<'a> {
+    pub session_id: &'a str,
+    pub workstream_id: &'a str,
+    pub display_name: &'a str,
+}
+
+#[allow(
+    dead_code,
     reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
 )]
 pub struct NewExecution<'a> {
@@ -129,6 +149,7 @@ impl Store {
         connection.execute_batch(include_str!(
             "../migrations/0005_execution_git_observations.sql"
         ))?;
+        connection.execute_batch(include_str!("../migrations/0006_agentic_identity.sql"))?;
         Ok(Self {
             connection,
             home: home.to_path_buf(),
@@ -2540,4 +2561,203 @@ mod tests {
         fs::remove_file(&target).unwrap();
         fs::remove_dir(&root).unwrap();
     }
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 006 T070 persistence substrate; product session semantics land in T071"
+)]
+impl Store {
+    pub fn create_workstream(&self, workstream: NewWorkstream<'_>, now_ms: i64) -> Result<()> {
+        validate_agentic_identity_text(workstream.workstream_id, "workstream id")?;
+        validate_agentic_identity_text(workstream.display_name, "workstream display name")?;
+        validate_agentic_identity_timestamp(now_ms, "workstream creation time")?;
+        self.load_workspace(workstream.workspace_id)?;
+        self.connection.execute(
+            "INSERT INTO workstreams(
+                workstream_id, workspace_id, display_name, created_unix_ms, updated_unix_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?4)",
+            params![
+                workstream.workstream_id,
+                workstream.workspace_id,
+                workstream.display_name,
+                now_ms,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_workstream(&self, workstream_id: &str) -> Result<crate::domain::WorkstreamRecord> {
+        self.connection
+            .query_row(
+                "SELECT workstream_id, workspace_id, display_name,
+                        created_unix_ms, updated_unix_ms
+                 FROM workstreams WHERE workstream_id = ?1",
+                params![workstream_id],
+                |row| {
+                    Ok(crate::domain::WorkstreamRecord {
+                        workstream_id: row.get(0)?,
+                        workspace_id: row.get(1)?,
+                        display_name: row.get(2)?,
+                        created_unix_ms: row.get(3)?,
+                        updated_unix_ms: row.get(4)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or_else(|| format!("unknown Winds workstream: {workstream_id}").into())
+    }
+
+    pub fn list_workstreams(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Vec<crate::domain::WorkstreamRecord>> {
+        self.load_workspace(workspace_id)?;
+        let mut statement = self.connection.prepare(
+            "SELECT workstream_id, workspace_id, display_name,
+                    created_unix_ms, updated_unix_ms
+             FROM workstreams
+             WHERE workspace_id = ?1
+             ORDER BY created_unix_ms, workstream_id",
+        )?;
+        let rows = statement.query_map(params![workspace_id], |row| {
+            Ok(crate::domain::WorkstreamRecord {
+                workstream_id: row.get(0)?,
+                workspace_id: row.get(1)?,
+                display_name: row.get(2)?,
+                created_unix_ms: row.get(3)?,
+                updated_unix_ms: row.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn rename_workstream(
+        &self,
+        workstream_id: &str,
+        display_name: &str,
+        now_ms: i64,
+    ) -> Result<()> {
+        validate_agentic_identity_text(display_name, "workstream display name")?;
+        validate_agentic_identity_timestamp(now_ms, "workstream rename time")?;
+        let existing = self.load_workstream(workstream_id)?;
+        if now_ms < existing.created_unix_ms {
+            return Err("workstream rename time cannot precede creation time".into());
+        }
+        let updated = self.connection.execute(
+            "UPDATE workstreams
+             SET display_name = ?2, updated_unix_ms = ?3
+             WHERE workstream_id = ?1",
+            params![workstream_id, display_name, now_ms],
+        )?;
+        if updated != 1 {
+            return Err(format!("unknown Winds workstream: {workstream_id}").into());
+        }
+        Ok(())
+    }
+
+    pub fn create_winds_session(&self, session: NewWindsSession<'_>, now_ms: i64) -> Result<()> {
+        validate_agentic_identity_text(session.session_id, "Winds session id")?;
+        validate_agentic_identity_text(session.display_name, "Winds session display name")?;
+        validate_agentic_identity_timestamp(now_ms, "Winds session creation time")?;
+        self.load_workstream(session.workstream_id)?;
+        self.connection.execute(
+            "INSERT INTO winds_sessions(
+                session_id, workstream_id, display_name, created_unix_ms, updated_unix_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?4)",
+            params![
+                session.session_id,
+                session.workstream_id,
+                session.display_name,
+                now_ms,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_winds_session(
+        &self,
+        session_id: &str,
+    ) -> Result<crate::domain::WindsSessionRecord> {
+        self.connection
+            .query_row(
+                "SELECT session_id, workstream_id, display_name,
+                        created_unix_ms, updated_unix_ms
+                 FROM winds_sessions WHERE session_id = ?1",
+                params![session_id],
+                |row| {
+                    Ok(crate::domain::WindsSessionRecord {
+                        session_id: row.get(0)?,
+                        workstream_id: row.get(1)?,
+                        display_name: row.get(2)?,
+                        created_unix_ms: row.get(3)?,
+                        updated_unix_ms: row.get(4)?,
+                    })
+                },
+            )
+            .optional()?
+            .ok_or_else(|| format!("unknown Winds session: {session_id}").into())
+    }
+
+    pub fn list_winds_sessions(
+        &self,
+        workstream_id: &str,
+    ) -> Result<Vec<crate::domain::WindsSessionRecord>> {
+        self.load_workstream(workstream_id)?;
+        let mut statement = self.connection.prepare(
+            "SELECT session_id, workstream_id, display_name,
+                    created_unix_ms, updated_unix_ms
+             FROM winds_sessions
+             WHERE workstream_id = ?1
+             ORDER BY created_unix_ms, session_id",
+        )?;
+        let rows = statement.query_map(params![workstream_id], |row| {
+            Ok(crate::domain::WindsSessionRecord {
+                session_id: row.get(0)?,
+                workstream_id: row.get(1)?,
+                display_name: row.get(2)?,
+                created_unix_ms: row.get(3)?,
+                updated_unix_ms: row.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn rename_winds_session(
+        &self,
+        session_id: &str,
+        display_name: &str,
+        now_ms: i64,
+    ) -> Result<()> {
+        validate_agentic_identity_text(display_name, "Winds session display name")?;
+        validate_agentic_identity_timestamp(now_ms, "Winds session rename time")?;
+        let existing = self.load_winds_session(session_id)?;
+        if now_ms < existing.created_unix_ms {
+            return Err("Winds session rename time cannot precede creation time".into());
+        }
+        let updated = self.connection.execute(
+            "UPDATE winds_sessions
+             SET display_name = ?2, updated_unix_ms = ?3
+             WHERE session_id = ?1",
+            params![session_id, display_name, now_ms],
+        )?;
+        if updated != 1 {
+            return Err(format!("unknown Winds session: {session_id}").into());
+        }
+        Ok(())
+    }
+}
+
+fn validate_agentic_identity_text(value: &str, label: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        return Err(format!("{label} must not be empty").into());
+    }
+    Ok(())
+}
+
+fn validate_agentic_identity_timestamp(value: i64, label: &str) -> Result<()> {
+    if value < 0 {
+        return Err(format!("{label} must not be negative").into());
+    }
+    Ok(())
 }
