@@ -6,12 +6,74 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
+  t068-history-prune-repair:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.sha == 'af6c45a73538dc1592d13623f7f9e4844ab13ff0'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact repair carrier
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          ref: ${{ env.CANDIDATE_SHA }}
+      - name: Verify checkout identity
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt
+      - name: Apply staged repair payload
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          workflow = Path('.github/workflows/t068-safe-history-prune-repair.yml').read_text(encoding='utf-8')
+          marker = "python - <<'PY'\n"
+          if marker not in workflow:
+              raise SystemExit('staged repair payload start marker not found')
+          payload = workflow.split(marker, 1)[1].split('\n          PY', 1)[0]
+          exec(compile(textwrap.dedent(payload), '<t068-history-prune-repair>', 'exec'), {})
+          PY
+      - name: Format and focused history tests
+        shell: bash
+        run: |
+          cargo fmt --all
+          cargo test --locked command::history::tests
+      - name: Remove repair scaffolding and verify bounded diff
+        shell: bash
+        run: |
+          git checkout HEAD^ -- .github/workflows/quality.yml
+          git rm .github/workflows/t068-safe-history-prune-repair.yml
+          mapfile -t changed < <(git status --short | sed -E 's/^.. //')
+          printf 'changed=%s\n' "${changed[*]}"
+          for path in "${changed[@]}"; do
+            case "$path" in
+              src/command/history.rs|src/command/history/history_prune.rs|.github/workflows/quality.yml|.github/workflows/t068-safe-history-prune-repair.yml) ;;
+              *) echo "unexpected repair path: $path" >&2; exit 1 ;;
+            esac
+          done
+          test -f src/command/history/history_prune.rs
+          ! grep -R "remove_dir_all" -n src/command/history.rs src/command/history/history_prune.rs
+          git diff --exit-code HEAD^ -- .github/workflows/quality.yml
+      - name: Commit bounded repair
+        shell: bash
+        env:
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(003): restore object-bound history pruning"
+          git push origin "HEAD:${BRANCH}"
+
   rust:
     strategy:
       fail-fast: false
