@@ -53,25 +53,20 @@ jobs:
           assert old in workspace
           workspace = workspace.replace(old, new, 1)
 
-          old = '''    if let Err(error) = remove_empty_owned_clone_staging(&staging) {
-              return Err(format!(
-                  "atomically published clone staging shell could not be removed safely; destination was not registered and was retained for recovery: {error}"
-              )
-              .into());
-          }
-
-          let workspace = inspect_existing_workspace(&planned_destination, canonical_state_root)?;'''
+          start_marker = '    if let Err(error) = remove_empty_owned_clone_staging(&staging) {'
+          end_marker = '    let workspace = inspect_existing_workspace(&planned_destination, canonical_state_root)?;'
+          start = workspace.index(start_marker)
+          end = workspace.index(end_marker, start)
           new = '''    // Publication and filesystem identity are already proven. Failure to remove
-          // the now-empty private staging shell must not discard that proven publication
-          // or prevent workspace registration. Preserve the cleanup uncertainty in the
-          // returned record so callers can surface it without fabricating failure.
-          let staging_cleanup_warning = remove_empty_owned_clone_staging(&staging)
-              .err()
-              .map(|error| format!("empty private clone staging cleanup was not proven: {error}"));
+              // the now-empty private staging shell must not discard that proven publication
+              // or prevent workspace registration. Preserve the cleanup uncertainty in the
+              // returned record so callers can surface it without fabricating failure.
+              let staging_cleanup_warning = remove_empty_owned_clone_staging(&staging)
+                  .err()
+                  .map(|error| format!("empty private clone staging cleanup was not proven: {error}"));
 
-          let workspace = inspect_existing_workspace(&planned_destination, canonical_state_root)?;'''
-          assert old in workspace
-          workspace = workspace.replace(old, new, 1)
+          '''
+          workspace = workspace[:start] + new + workspace[end:]
 
           old = '''    Ok(ClonedWorkspace {
               workspace,
