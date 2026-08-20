@@ -443,10 +443,12 @@ fn sqlite_busy_or_locked(error: &rusqlite::Error) -> bool {
 fn require_execution_repo(store: &Store, execution_id: &str, repo: &Repo) -> Result<()> {
     let execution = store.load_execution(execution_id)?;
     let workspace = store.load_workspace(&execution.workspace_id)?;
-    let repo_root = utf8_path(repo.root(), "repository path")?;
-    if workspace.canonical_worktree_root != repo_root {
+    let repo_root = utf8_path(repo.root(), "repository worktree root")?;
+    let repo_common_dir = utf8_path(repo.common_dir(), "repository Git common directory")?;
+    if workspace.canonical_worktree_root != repo_root || workspace.git_common_dir != repo_common_dir
+    {
         return Err(format!(
-            "execution {execution_id} belongs to a different Winds workspace than --repo"
+            "execution {execution_id} belongs to a different Winds workspace Git identity than --repo"
         )
         .into());
     }
@@ -472,6 +474,29 @@ fn execution_snapshot(store: &Store, execution_id: &str) -> Result<Value> {
             })
         })
         .collect::<Vec<_>>();
+    let git_observations = if execution.kind == ExecutionKind::ShellCommand {
+        store
+            .load_execution_git_observations(execution_id)?
+            .into_iter()
+            .map(|observation| {
+                json!({
+                    "execution_id": observation.execution_id,
+                    "boundary": observation.boundary.as_str(),
+                    "availability": observation.availability.as_str(),
+                    "source": observation.source,
+                    "head_oid": observation.head_oid,
+                    "branch": observation.branch,
+                    "detached": observation.detached,
+                    "dirty": observation.dirty,
+                    "worktree_state_format": observation.worktree_state_format,
+                    "worktree_state_sha256": observation.worktree_state_sha256,
+                    "observed_unix_ms": observation.observed_unix_ms,
+                })
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
 
     let (terminal, shell_command) = match execution.kind {
         ExecutionKind::Terminal => {
@@ -523,6 +548,7 @@ fn execution_snapshot(store: &Store, execution_id: &str) -> Result<Value> {
         "duration_ms": execution.duration_ms,
         "terminal": terminal,
         "shell_command": shell_command,
+        "git_observations": git_observations,
         "events": events,
     }))
 }
@@ -663,8 +689,17 @@ fn print_json(value: &impl Serialize) -> Result<()> {
 mod tests {
     use super::{
         execution_lease_filename, parse_arguments, parse_history_policy, parse_terminal_size,
+        require_execution_repo,
     };
     use crate::command::history::SessionHistoryPolicy;
+    use crate::domain::{ExecutionKind, FactSource};
+    use crate::git::Repo;
+    use crate::store::{NewExecution, NewWorkspace, Store};
+    use std::fs;
+    use std::process::Command;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn arguments_default_to_empty_and_parse_string_arrays() {
@@ -707,5 +742,58 @@ mod tests {
         assert!(first.ends_with(".sqlite3"));
         assert!(!first.contains('/'));
         assert!(!first.contains(':'));
+    }
+
+    #[test]
+    fn execution_repo_requires_worktree_and_git_common_directory_identity() {
+        let sequence = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "winds-cli-workspace-identity-{}-{sequence}",
+            std::process::id()
+        ));
+        let repo_path = root.join("repo");
+        let home = root.join("home");
+        fs::create_dir_all(&repo_path).unwrap();
+        fs::create_dir(&home).unwrap();
+        let status = Command::new("git")
+            .args(["init", "--initial-branch=main"])
+            .current_dir(&repo_path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+
+        let repo = Repo::open(&repo_path).unwrap();
+        let repo_root = repo.root().to_str().unwrap().to_owned();
+        let wrong_common_dir = home.canonicalize().unwrap();
+        assert_ne!(wrong_common_dir, repo.common_dir());
+
+        let mut store = Store::open(&home).unwrap();
+        store
+            .create_workspace(
+                NewWorkspace {
+                    workspace_id: "workspace-cli-identity",
+                    canonical_worktree_root: &repo_root,
+                    git_common_dir: wrong_common_dir.to_str().unwrap(),
+                },
+                1,
+            )
+            .unwrap();
+        store
+            .create_execution(
+                NewExecution {
+                    execution_id: "execution-cli-identity",
+                    workspace_id: "workspace-cli-identity",
+                    kind: ExecutionKind::ShellCommand,
+                    request_source: FactSource::CallerRequested,
+                    execution_domain: "{}",
+                },
+                2,
+            )
+            .unwrap();
+
+        let error = require_execution_repo(&store, "execution-cli-identity", &repo).unwrap_err();
+        assert!(error.to_string().contains("workspace Git identity"));
+        drop(store);
+        fs::remove_dir_all(root).unwrap();
     }
 }

@@ -1,7 +1,10 @@
-use super::{TerminalSession, TerminalSize};
+use super::{TerminalSession, TerminalSize, terminal_spawn_cwd};
 use crate::git::shell_profiles::{ShellProfile, discover_native_shell_profiles};
 use crate::git::workspace_inventory::WorkspaceEnvironmentInventory;
-use crate::git::wsl_launch::{WslCwdResolution, launch_wsl_terminal, prepare_wsl_terminal_launch};
+use crate::git::wsl_launch::{
+    WslCwdResolution, launch_wsl_terminal, prepare_wsl_terminal_launch,
+    prove_wsl_exec_scope_cleanup_for_test,
+};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -151,6 +154,13 @@ fn output_contains_exact_marker(output: &[u8], marker: &str) -> bool {
     output.windows(marker.len()).any(|window| window == marker)
 }
 
+fn output_contains_exact_marker_ignore_ascii_case(output: &[u8], marker: &str) -> bool {
+    let marker = marker.as_bytes();
+    output
+        .windows(marker.len())
+        .any(|window| window.eq_ignore_ascii_case(marker))
+}
+
 fn default_size() -> TerminalSize {
     TerminalSize { rows: 24, cols: 80 }
 }
@@ -159,6 +169,11 @@ fn default_size() -> TerminalSize {
 fn conpty_streams_input_output_from_exact_start_cwd_and_observes_exit() {
     let root = TestRoot::new("stream");
     let canonical_root = root.path().canonicalize().unwrap();
+    let spawn_cwd = terminal_spawn_cwd(&canonical_root).unwrap();
+    let expected_cwd_marker = format!(
+        "WINDS_CWD_BEGIN:{}:WINDS_CWD_END",
+        spawn_cwd.to_string_lossy()
+    );
     let profile = native_cmd_profile();
     let mut session = TerminalSession::start(&profile, root.path(), default_size()).unwrap();
     let session_id = session.session_id();
@@ -169,14 +184,15 @@ fn conpty_streams_input_output_from_exact_start_cwd_and_observes_exit() {
     assert!(session.take_output_reader().is_err());
     complete_headless_terminal_startup(&mut session, &output);
     session
-        .send_input(b"cd\r\necho WINDS_READY\r\nexit\r\n")
+        .send_input(
+            b"set \"WINDS_CWD_PREFIX=WINDS_CWD_BEGIN:\"\r\nset \"WINDS_CWD_SUFFIX=:WINDS_CWD_END\"\r\necho %WINDS_CWD_PREFIX%%CD%%WINDS_CWD_SUFFIX%\r\nset \"WINDS_TEST_PREFIX=WINDS_\"\r\necho %WINDS_TEST_PREFIX%READY\r\nexit\r\n",
+        )
         .unwrap();
     let observed = wait_for_output(&output, b"WINDS_READY");
-    let cwd = canonical_root.to_string_lossy();
     assert!(
-        observed
-            .windows(cwd.len())
-            .any(|window| window.eq_ignore_ascii_case(cwd.as_bytes()))
+        output_contains_exact_marker_ignore_ascii_case(&observed, &expected_cwd_marker),
+        "ConPTY shell did not emit the exact effective start-cwd marker; expected {expected_cwd_marker:?}, observed {:?}",
+        String::from_utf8_lossy(&observed)
     );
 
     let exit = session.wait().unwrap();
@@ -208,7 +224,9 @@ fn conpty_interrupt_fails_closed_without_corrupting_the_session() {
     let output = start_output_reader(session.take_output_reader().unwrap());
 
     complete_headless_terminal_startup(&mut session, &output);
-    session.send_input(b"echo WINDS_READY\r\n").unwrap();
+    session
+        .send_input(b"set \"WINDS_TEST_PREFIX=WINDS_\"\r\necho %WINDS_TEST_PREFIX%READY\r\n")
+        .unwrap();
     wait_for_output(&output, b"WINDS_READY");
 
     let error = session.interrupt().unwrap_err();
@@ -218,7 +236,9 @@ fn conpty_interrupt_fails_closed_without_corrupting_the_session() {
             .contains("interrupt is unsupported on native Windows")
     );
 
-    session.send_input(b"echo WINDS_AFTER\r\nexit\r\n").unwrap();
+    session
+        .send_input(b"echo %WINDS_TEST_PREFIX%AFTER\r\nexit\r\n")
+        .unwrap();
     wait_for_output(&output, b"WINDS_AFTER");
     let exit = session.wait().unwrap();
     assert_eq!(exit.exit_code, 0);
@@ -233,7 +253,9 @@ fn conpty_terminate_reaps_the_exact_owned_child() {
 
     complete_headless_terminal_startup(&mut session, &output);
     session
-        .send_input(b"echo WINDS_READY\r\nset /p WINDS_BLOCK=\r\n")
+        .send_input(
+            b"set \"WINDS_TEST_PREFIX=WINDS_\"\r\necho %WINDS_TEST_PREFIX%READY\r\nset /p WINDS_BLOCK=\r\n",
+        )
         .unwrap();
     wait_for_output(&output, b"WINDS_READY");
     let exit = session.terminate().unwrap();
@@ -254,6 +276,11 @@ fn t062_real_wsl_backend_launch_is_opt_in_and_uses_production_path() {
         .expect("T062 backend proof must have a current directory")
         .canonicalize()
         .expect("T062 backend proof repository must canonicalize");
+
+    if expected == "MAPPED" {
+        prove_wsl_exec_scope_cleanup_for_test(&distro)
+            .expect("real WSL2 attestation helper must prove descendant and timeout cleanup");
+    }
 
     let plan = prepare_wsl_terminal_launch(&repo, &distro)
         .expect("production WSL launch preparation must succeed on the provisioned distribution");

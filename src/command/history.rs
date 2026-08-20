@@ -8,7 +8,9 @@ use std::io::{Read, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
+
+mod history_prune;
 
 pub(crate) const HARD_MAX_TRANSCRIPT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_EXECUTION_ID_BYTES: usize = 512;
@@ -310,28 +312,20 @@ impl SessionHistoryRecorder {
                 Ok(())
             })();
             if let Err(error) = write_result {
-                return match remove_owned_history_session(history_root, &session_dir) {
-                    Ok(()) => Err(error),
-                    Err(cleanup_error) => Err(format!(
-                        "terminal history write failed: {error}; owned-session cleanup also failed: {cleanup_error}"
-                    )
-                    .into()),
-                };
+                return Err(format!(
+                    "terminal history write failed: {error}; partial session was retained at {} because Winds does not recursively delete history through a mutable pathname",
+                    session_dir.display()
+                )
+                .into());
             }
             let usage = history_logical_bytes(history_root)?;
             if usage > self.policy.total_history_byte_quota {
-                return match remove_owned_history_session(history_root, &session_dir) {
-                    Ok(()) => Err(format!(
-                        "terminal history quota verification failed after write: {usage} > {}",
-                        self.policy.total_history_byte_quota
-                    )
-                    .into()),
-                    Err(cleanup_error) => Err(format!(
-                        "terminal history quota verification failed after write: {usage} > {}; owned-session cleanup also failed: {cleanup_error}",
-                        self.policy.total_history_byte_quota
-                    )
-                    .into()),
-                };
+                return Err(format!(
+                    "terminal history quota verification failed after write: {usage} > {}; session was retained at {} because Winds does not recursively delete history through a mutable pathname",
+                    self.policy.total_history_byte_quota,
+                    session_dir.display()
+                )
+                .into());
             }
             Ok(())
         })?;
@@ -648,7 +642,19 @@ fn ensure_private_directory(path: &Path) -> Result<()> {
             }
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            create_private_directory(path)?;
+            let mut builder = DirBuilder::new();
+            builder.recursive(false);
+            #[cfg(unix)]
+            builder.mode(0o700);
+            match builder.create(path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error.into()),
+            }
+            let metadata = fs::symlink_metadata(path)?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err("terminal history path must be a real directory".into());
+            }
         }
         Err(error) => return Err(error.into()),
     }
@@ -675,101 +681,39 @@ fn write_private_file(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug)]
-struct RetainedHistoryDir {
-    path: PathBuf,
-    logical_bytes: u64,
-    modified: SystemTime,
-}
-
 fn prune_for_write(
     history_root: &Path,
     new_storage_key: &str,
     required_bytes: u64,
     total_quota: u64,
 ) -> Result<()> {
-    if !is_history_storage_key(new_storage_key) {
-        return Err("terminal history storage key is invalid".into());
-    }
-    if history_root.join(new_storage_key).exists() {
-        return Err("terminal history for this execution already exists or is incomplete".into());
-    }
-    let mut entries = retained_history_dirs(history_root)?;
-    let mut existing = entries.iter().try_fold(0_u64, |sum, entry| {
-        sum.checked_add(entry.logical_bytes)
-            .ok_or("terminal history logical byte size overflowed")
-    })?;
-    let budget = total_quota
-        .checked_sub(required_bytes)
-        .ok_or("terminal history record exceeds total history quota")?;
-    entries.sort_by(|left, right| {
-        left.modified
-            .cmp(&right.modified)
-            .then_with(|| left.path.cmp(&right.path))
-    });
-    for entry in entries {
-        if existing <= budget {
-            break;
-        }
-        remove_owned_history_session(history_root, &entry.path)?;
-        existing = existing.saturating_sub(entry.logical_bytes);
-    }
-    if existing > budget {
-        return Err("terminal history quota could not be satisfied by retention pruning".into());
-    }
-    Ok(())
+    history_prune::prune_for_write(
+        history_root,
+        new_storage_key,
+        required_bytes,
+        total_quota,
+        || Ok(()),
+    )
 }
 
-fn remove_owned_history_session(history_root: &Path, target: &Path) -> Result<()> {
-    let history_metadata = fs::symlink_metadata(history_root)?;
-    if history_metadata.file_type().is_symlink() || !history_metadata.is_dir() {
-        return Err("terminal history root must be a real owned directory before deletion".into());
-    }
-    let target_metadata = fs::symlink_metadata(target)?;
-    if target_metadata.file_type().is_symlink() || !target_metadata.is_dir() {
-        return Err("terminal history deletion target must be a real directory".into());
-    }
-    let canonical_history_root = fs::canonicalize(history_root)?;
-    let canonical_target = fs::canonicalize(target)?;
-    if canonical_target == canonical_history_root
-        || canonical_target.parent() != Some(canonical_history_root.as_path())
-    {
-        return Err("terminal history deletion target is outside the owned history root".into());
-    }
-    let name = canonical_target
-        .file_name()
-        .and_then(|value| value.to_str())
-        .ok_or("terminal history deletion target name is not valid UTF-8")?;
-    if !is_history_storage_key(name) {
-        return Err("terminal history deletion target is not an owned session directory".into());
-    }
-    fs::remove_dir_all(&canonical_target)?;
-    Ok(())
-}
-
-fn retained_history_dirs(history_root: &Path) -> Result<Vec<RetainedHistoryDir>> {
-    let mut entries = Vec::new();
-    for entry in fs::read_dir(history_root)? {
-        let entry = entry?;
-        let metadata = fs::symlink_metadata(entry.path())?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err("terminal history root contains an unexpected non-directory entry".into());
-        }
-        let name = entry
-            .file_name()
-            .to_str()
-            .ok_or("terminal history directory name is not valid UTF-8")?
-            .to_owned();
-        if !is_history_storage_key(&name) {
-            return Err("terminal history root contains an unrecognized directory".into());
-        }
-        entries.push(RetainedHistoryDir {
-            logical_bytes: session_logical_bytes(&entry.path())?,
-            modified: metadata.modified()?,
-            path: entry.path(),
-        });
-    }
-    Ok(entries)
+#[cfg(test)]
+fn prune_for_write_impl<F>(
+    history_root: &Path,
+    new_storage_key: &str,
+    required_bytes: u64,
+    total_quota: u64,
+    after_identity_proven: F,
+) -> Result<()>
+where
+    F: FnOnce() -> Result<()>,
+{
+    history_prune::prune_for_write(
+        history_root,
+        new_storage_key,
+        required_bytes,
+        total_quota,
+        after_identity_proven,
+    )
 }
 
 fn is_history_storage_key(name: &str) -> bool {
@@ -782,28 +726,8 @@ fn is_history_storage_key(name: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-fn session_logical_bytes(session_dir: &Path) -> Result<u64> {
-    let mut total = 0_u64;
-    for entry in fs::read_dir(session_dir)? {
-        let entry = entry?;
-        let metadata = fs::symlink_metadata(entry.path())?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err("terminal history session contains an unexpected non-file entry".into());
-        }
-        total = total
-            .checked_add(metadata.len())
-            .ok_or("terminal history logical byte size overflowed")?;
-    }
-    Ok(total)
-}
-
 fn history_logical_bytes(history_root: &Path) -> Result<u64> {
-    retained_history_dirs(history_root)?
-        .into_iter()
-        .try_fold(0_u64, |sum, entry| {
-            sum.checked_add(entry.logical_bytes)
-                .ok_or_else(|| "terminal history logical byte size overflowed".into())
-        })
+    history_prune::history_logical_bytes(history_root)
 }
 
 fn minimum_manifest_bytes(execution_id: &str, policy: SessionHistoryPolicy) -> Result<usize> {
@@ -895,9 +819,9 @@ fn utf8_relative(path: &Path) -> Result<String> {
 mod tests {
     use super::{
         HARD_MAX_TRANSCRIPT_BYTES, HISTORY_DISABLED, REDACTED, SessionHistoryPolicy,
-        SessionHistoryRecorder, history_logical_bytes, history_storage_key, lower_sha256,
-        persisted_arguments, prune_for_write, remove_owned_history_session,
-        sanitize_persisted_arguments, with_history_write_lock,
+        SessionHistoryRecorder, ensure_private_directory, history_logical_bytes,
+        history_storage_key, lower_sha256, persisted_arguments, prune_for_write,
+        prune_for_write_impl, sanitize_persisted_arguments, with_history_write_lock,
     };
     use crate::domain::{ExecutionKind, FactSource};
     use crate::store::{NewExecution, NewTerminalSession, NewWorkspace, Store};
@@ -906,6 +830,8 @@ mod tests {
     use std::io::{Cursor, Read};
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Barrier};
+    use std::thread;
 
     static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
@@ -1052,6 +978,29 @@ mod tests {
         assert!(!joined.contains("token=abc"));
         assert!(!joined.contains("Bearer abc"));
         assert!(!joined.contains("opaque=value"));
+    }
+
+    #[test]
+    fn concurrent_history_root_initialization_is_idempotent_and_fail_closed() {
+        let root = TestRoot::new("history-root-race");
+        let history = Arc::new(root.path().join("history"));
+        let barrier = Arc::new(Barrier::new(8));
+        let handles = (0..8)
+            .map(|_| {
+                let history = Arc::clone(&history);
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    ensure_private_directory(&history)
+                })
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            handle.join().unwrap().unwrap();
+        }
+        let metadata = fs::symlink_metadata(history.as_path()).unwrap();
+        assert!(!metadata.file_type().is_symlink());
+        assert!(metadata.is_dir());
     }
 
     #[test]
@@ -1235,74 +1184,73 @@ mod tests {
     }
 
     #[test]
-    fn total_quota_prunes_old_sessions_across_repeated_terminal_history() {
+    fn total_quota_prunes_oldest_history_and_allows_new_session() {
         let root = TestRoot::new("retention");
-        let state_root = state_with_terminal_executions(
-            &root,
-            &["retention-one", "retention-two", "retention-three"],
-        );
+        let state_root = state_with_terminal_executions(&root, &["retention-one", "retention-two"]);
         let policy = SessionHistoryPolicy::local_bounded(false, 4, 1_024).unwrap();
-        for execution_id in ["retention-one", "retention-two", "retention-three"] {
-            let recorder =
-                SessionHistoryRecorder::new_local(execution_id, policy, &state_root).unwrap();
-            capture_all(&recorder, b"abcdefgh");
-            recorder.persist().unwrap().unwrap();
-            assert!(history_logical_bytes(&state_root.join("history")).unwrap() <= 1_024);
-        }
-        let retained_count = fs::read_dir(state_root.join("history")).unwrap().count();
-        assert!(retained_count < 3);
+
+        let first =
+            SessionHistoryRecorder::new_local("retention-one", policy, &state_root).unwrap();
+        capture_all(&first, b"abcdefgh");
+        first.persist().unwrap().unwrap();
+
+        let history = state_root.join("history");
+        let first_dir = history.join(history_storage_key("retention-one"));
+        assert!(first_dir.is_dir());
+        assert!(history_logical_bytes(&history).unwrap() <= 1_024);
+
+        let second =
+            SessionHistoryRecorder::new_local("retention-two", policy, &state_root).unwrap();
+        capture_all(&second, b"abcdefgh");
+        second.persist().unwrap().unwrap();
+
+        let second_dir = history.join(history_storage_key("retention-two"));
+        assert!(!first_dir.exists());
+        assert!(second_dir.is_dir());
+        assert!(history_logical_bytes(&history).unwrap() <= 1_024);
     }
 
     #[test]
-    fn quota_helper_prunes_existing_sessions_before_new_write() {
+    fn quota_helper_prunes_owned_flat_session_without_recursive_delete() {
         let root = TestRoot::new("retention-helper");
         let history = root.path().join("history");
         fs::create_dir(&history).unwrap();
-        for execution_id in ["a", "b"] {
-            let dir = history.join(history_storage_key(execution_id));
-            fs::create_dir(&dir).unwrap();
-            fs::write(dir.join("blob"), b"1234").unwrap();
-        }
+        let dir = history.join(history_storage_key("owned"));
+        fs::create_dir(&dir).unwrap();
+        let transcript_name = format!("transcript.{}.bin", lower_sha256(b"1234"));
+        let manifest_name = format!("manifest.{}.json", lower_sha256(b"5678"));
+        fs::write(dir.join(transcript_name), b"1234").unwrap();
+        fs::write(dir.join(manifest_name), b"5678").unwrap();
+
         assert_eq!(history_logical_bytes(&history).unwrap(), 8);
         prune_for_write(&history, &history_storage_key("new"), 8, 8).unwrap();
+        assert!(!dir.exists());
         assert_eq!(history_logical_bytes(&history).unwrap(), 0);
     }
 
     #[test]
-    fn recursive_history_delete_rejects_root_outside_and_unrecognized_targets() {
-        let root = TestRoot::new("delete-ownership");
+    fn quota_pruning_preserves_foreign_replacement_after_final_identity_proof() {
+        let root = TestRoot::new("retention-replacement");
         let history = root.path().join("history");
         fs::create_dir(&history).unwrap();
-        let owned = history.join(history_storage_key("owned"));
-        fs::create_dir(&owned).unwrap();
-        fs::write(owned.join("blob"), b"safe").unwrap();
-        remove_owned_history_session(&history, &owned).unwrap();
-        assert!(!owned.exists());
+        let session = history.join(history_storage_key("owned"));
+        let moved_owned = root.path().join("moved-owned-session");
+        fs::create_dir(&session).unwrap();
+        let owned_name = format!("transcript.{}.bin", lower_sha256(b"owned"));
+        fs::write(session.join(&owned_name), b"owned\n").unwrap();
+        let foreign_marker = session.join("foreign-marker");
 
-        assert!(remove_owned_history_session(&history, &history).is_err());
+        let error = prune_for_write_impl(&history, &history_storage_key("new"), 8, 8, || {
+            fs::rename(&session, &moved_owned)?;
+            fs::create_dir(&session)?;
+            fs::write(&foreign_marker, b"foreign\n")?;
+            Ok(())
+        })
+        .unwrap_err()
+        .to_string();
 
-        let outside = root.path().join(history_storage_key("outside"));
-        fs::create_dir(&outside).unwrap();
-        assert!(remove_owned_history_session(&history, &outside).is_err());
-
-        let unexpected = history.join("session-not-a-sha256");
-        fs::create_dir(&unexpected).unwrap();
-        assert!(remove_owned_history_session(&history, &unexpected).is_err());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn recursive_history_delete_rejects_symlink_target() {
-        use std::os::unix::fs::symlink;
-
-        let root = TestRoot::new("delete-symlink");
-        let history = root.path().join("history");
-        fs::create_dir(&history).unwrap();
-        let outside = root.path().join("outside");
-        fs::create_dir(&outside).unwrap();
-        let link = history.join(history_storage_key("linked"));
-        symlink(&outside, &link).unwrap();
-        assert!(remove_owned_history_session(&history, &link).is_err());
-        assert!(outside.exists());
+        assert!(error.contains("filesystem identity changed"));
+        assert_eq!(fs::read(&foreign_marker).unwrap(), b"foreign\n");
+        assert_eq!(fs::read(moved_owned.join(owned_name)).unwrap(), b"owned\n");
     }
 }

@@ -27,6 +27,12 @@ pub struct ExplicitCommandResult {
     pub duration_ms: Option<u64>,
 }
 
+struct ValidatedWorkspaceCwd {
+    requested: String,
+    canonical: PathBuf,
+    workspace: WorkspaceRecord,
+}
+
 pub fn run_explicit_command(
     store: &mut Store,
     request: ExplicitCommandRequest<'_>,
@@ -55,7 +61,6 @@ pub fn run_explicit_command_with_history_policy(
         return Err("explicit command arguments may not contain NUL bytes".into());
     }
     let cwd = validate_workspace_cwd(store, request.workspace_id, request.cwd)?;
-    let workspace = store.load_workspace(request.workspace_id)?;
     let execution_domain = serde_json::to_string(&ShellExecutionDomain::NativeHost {
         os: std::env::consts::OS.to_owned(),
         arch: std::env::consts::ARCH.to_owned(),
@@ -75,7 +80,7 @@ pub fn run_explicit_command_with_history_policy(
             executable: &executable,
             arguments: &persisted_arguments,
             command_source: FactSource::CallerRequested,
-            requested_cwd: &cwd,
+            requested_cwd: &cwd.requested,
             cwd_source: FactSource::CallerRequested,
         },
         requested_unix_ms,
@@ -84,7 +89,7 @@ pub fn run_explicit_command_with_history_policy(
     if let Err(observation_error) = record_git_boundary_observation(
         store,
         request.execution_id,
-        &workspace,
+        &cwd.workspace,
         GitObservationBoundary::Before,
     ) {
         let failed_unix_ms = trustworthy_wall_time_after(requested_unix_ms, None);
@@ -103,7 +108,7 @@ pub fn run_explicit_command_with_history_policy(
 
     let mut child = match Command::new(&executable)
         .args(request.arguments)
-        .current_dir(&cwd)
+        .current_dir(&cwd.canonical)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -187,7 +192,7 @@ pub fn run_explicit_command_with_history_policy(
     record_git_boundary_observation(
         store,
         request.execution_id,
-        &workspace,
+        &cwd.workspace,
         GitObservationBoundary::After,
     )
     .map_err(|error| {
@@ -213,7 +218,12 @@ fn record_git_boundary_observation(
 ) -> Result<()> {
     let root = Path::new(&workspace.canonical_worktree_root);
     let common_dir = Path::new(&workspace.git_common_dir);
-    let observed_unix_ms = unix_ms().ok();
+    let execution = store.load_execution(execution_id)?;
+    let observed_unix_ms = non_regressing_wall_time(
+        unix_ms().ok(),
+        execution.requested_unix_ms,
+        execution.started_unix_ms,
+    );
     match observe_worktree_state(root, common_dir) {
         Ok(observation) => store.record_execution_git_observation(NewExecutionGitObservation {
             execution_id,
@@ -255,23 +265,32 @@ fn validate_executable(path: &Path) -> Result<String> {
 
 // This validates caller-requested cwd against the current filesystem view. It is not an
 // OS sandbox or a hostile concurrent-rename containment primitive.
-fn validate_workspace_cwd(store: &Store, workspace_id: &str, cwd: &Path) -> Result<String> {
+fn validate_workspace_cwd(
+    store: &Store,
+    workspace_id: &str,
+    cwd: &Path,
+) -> Result<ValidatedWorkspaceCwd> {
     if !cwd.is_absolute() {
         return Err("explicit command cwd must be an absolute path".into());
     }
-    let canonical_cwd = fs::canonicalize(cwd)?;
-    if !canonical_cwd.is_dir() {
+    let requested = cwd
+        .to_str()
+        .map(str::to_owned)
+        .ok_or("explicit command cwd is not valid UTF-8")?;
+    let canonical = fs::canonicalize(cwd)?;
+    if !canonical.is_dir() {
         return Err("explicit command cwd must be a directory".into());
     }
     let workspace = store.load_workspace(workspace_id)?;
     let workspace_root = PathBuf::from(&workspace.canonical_worktree_root);
-    if !canonical_cwd.starts_with(&workspace_root) {
+    if !canonical.starts_with(&workspace_root) {
         return Err("explicit command cwd must remain inside the registered workspace".into());
     }
-    canonical_cwd
-        .to_str()
-        .map(str::to_owned)
-        .ok_or_else(|| "explicit command cwd is not valid UTF-8".into())
+    Ok(ValidatedWorkspaceCwd {
+        requested,
+        canonical,
+        workspace,
+    })
 }
 
 fn cleanup_owned_child(child: &mut Child) -> bool {
@@ -433,7 +452,7 @@ mod tests {
     }
 
     fn workspace_path(root: &TestRoot) -> PathBuf {
-        fs::canonicalize(root.path().join("workspace")).unwrap()
+        root.path().join("workspace")
     }
 
     #[cfg(unix)]
@@ -636,6 +655,34 @@ mod tests {
         assert!(git_observations.iter().all(|observation| {
             observation.availability == GitObservationAvailability::Unavailable
         }));
+    }
+
+    #[test]
+    fn explicit_command_preserves_requested_cwd_while_executing_canonical_location() {
+        let root = TestRoot::new("requested-cwd");
+        let mut store = store_with_workspace(&root);
+        let workspace = workspace_path(&root);
+        let nested = workspace.join("nested");
+        fs::create_dir(&nested).unwrap();
+        let requested = nested.join("..");
+        assert_ne!(requested, fs::canonicalize(&requested).unwrap());
+        let (executable, arguments) = command_parts(0, false);
+
+        run_explicit_command(
+            &mut store,
+            ExplicitCommandRequest {
+                execution_id: "command-requested-cwd",
+                workspace_id: "workspace-1",
+                executable: &executable,
+                arguments: &arguments,
+                cwd: &requested,
+            },
+        )
+        .unwrap();
+
+        let command = store.load_shell_command("command-requested-cwd").unwrap();
+        assert_eq!(command.requested_cwd, requested.to_str().unwrap());
+        assert_eq!(command.cwd_source, FactSource::CallerRequested);
     }
 
     #[test]

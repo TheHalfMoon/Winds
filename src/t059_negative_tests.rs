@@ -241,7 +241,7 @@ fn t059_clone_failure_never_registers_a_workspace() {
         clone_and_register_workspace(not_a_repo.to_str().unwrap(), &destination, &state_root, 30)
             .unwrap_err();
     assert!(error.to_string().contains("system Git clone failed"));
-    assert!(destination.is_dir());
+    assert!(!destination.exists());
     assert!(!state_root.join("winds.db").exists());
 }
 

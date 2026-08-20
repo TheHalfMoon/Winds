@@ -26,14 +26,14 @@ pub struct Store {
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum TerminalFinalization {
     Exited {
-        ended_unix_ms: i64,
+        ended_unix_ms: Option<i64>,
     },
     Interrupted {
-        ended_unix_ms: i64,
+        ended_unix_ms: Option<i64>,
         reason: TerminalCloseReason,
     },
     OwnershipLost {
-        observed_unix_ms: i64,
+        observed_unix_ms: Option<i64>,
     },
 }
 
@@ -583,7 +583,7 @@ impl Store {
         observed_unix_ms: Option<i64>,
     ) -> Result<()> {
         let tx = self.connection.transaction()?;
-        let (status, requested_unix_ms, _started_unix_ms) =
+        let (status, requested_unix_ms, started_unix_ms) =
             shell_command_execution_state(&tx, execution_id)?;
         if !matches!(
             status,
@@ -595,9 +595,13 @@ impl Store {
             )
             .into());
         }
-        if observed_unix_ms.is_some_and(|value| value < requested_unix_ms) {
+        let observation_floor = started_unix_ms
+            .unwrap_or(requested_unix_ms)
+            .max(requested_unix_ms);
+        if observed_unix_ms.is_some_and(|value| value < observation_floor) {
             return Err(
-                "shell-command ownership-loss observation cannot precede its request time".into(),
+                "shell-command ownership-loss observation cannot precede its observed start/request time"
+                    .into(),
             );
         }
         let updated = tx.execute(
@@ -642,6 +646,11 @@ impl Store {
                 status.as_str()
             )
             .into());
+        }
+        if exit_code.is_none() && observed_end_unix_ms.is_none() {
+            return Err(
+                "shell-command exit observation requires an exit code or observed end time".into(),
+            );
         }
         validate_optional_command_times(requested_unix_ms, started_unix_ms, observed_end_unix_ms)?;
         let updated = tx.execute(
@@ -696,7 +705,9 @@ impl Store {
             )
             .into());
         }
-        if row.4.as_deref() != Some(FactSource::WindsObserved.as_str()) {
+        if row.4.as_deref() != Some(FactSource::WindsObserved.as_str())
+            || (row.3.is_none() && row.5.is_none())
+        {
             return Err(
                 "shell-command completion requires a durable WINDS_OBSERVED exit fact".into(),
             );
@@ -737,6 +748,7 @@ impl Store {
                  FROM executions e
                  INNER JOIN shell_commands c ON c.execution_id = e.execution_id
                  WHERE e.kind = ?1 AND e.status = ?2 AND c.exit_source = ?3
+                   AND (c.exit_code IS NOT NULL OR c.observed_end_unix_ms IS NOT NULL)
                  ORDER BY e.requested_unix_ms, e.execution_id",
             )?;
             statement
@@ -759,9 +771,9 @@ impl Store {
     pub fn reconcile_unowned_shell_commands_after_restart(&mut self, now_ms: i64) -> Result<usize> {
         self.finalize_observed_shell_commands()?;
         let tx = self.connection.transaction()?;
-        let execution_ids = {
+        let executions = {
             let mut statement = tx.prepare(
-                "SELECT e.execution_id
+                "SELECT e.execution_id, e.requested_unix_ms, e.started_unix_ms
                  FROM executions e
                  INNER JOIN shell_commands c ON c.execution_id = e.execution_id
                  WHERE e.kind = ?1 AND e.status IN (?2, ?3)
@@ -774,11 +786,17 @@ impl Store {
                         ExecutionStatus::Requested.as_str(),
                         ExecutionStatus::Running.as_str(),
                     ],
-                    |row| row.get::<_, String>(0),
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, Option<i64>>(2)?,
+                        ))
+                    },
                 )?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         };
-        for execution_id in &execution_ids {
+        for (execution_id, requested_unix_ms, started_unix_ms) in &executions {
             let updated = tx.execute(
                 "UPDATE executions
                  SET status = ?2, status_source = ?3,
@@ -798,16 +816,19 @@ impl Store {
                 )
                 .into());
             }
+            let observation_floor = started_unix_ms
+                .unwrap_or(*requested_unix_ms)
+                .max(*requested_unix_ms);
             insert_execution_event(
                 &tx,
                 execution_id,
                 "ShellCommandOwnershipLostAfterRestart",
                 FactSource::WindsObserved,
-                now_ms,
+                now_ms.max(observation_floor),
             )?;
         }
         tx.commit()?;
-        Ok(execution_ids.len())
+        Ok(executions.len())
     }
 
     pub fn mark_terminal_running(&mut self, execution_id: &str, now_ms: i64) -> Result<()> {
@@ -896,7 +917,7 @@ impl Store {
         &mut self,
         execution_id: &str,
         started_unix_ms: i64,
-        ended_unix_ms: i64,
+        ended_unix_ms: Option<i64>,
     ) -> Result<()> {
         let tx = self.connection.transaction()?;
         let (status, requested_unix_ms, persisted_started_unix_ms) =
@@ -908,10 +929,12 @@ impl Store {
         )
         .into());
         }
-        if started_unix_ms < requested_unix_ms || ended_unix_ms < started_unix_ms {
+        if started_unix_ms < requested_unix_ms
+            || ended_unix_ms.is_some_and(|value| value < started_unix_ms)
+        {
             return Err("terminal start-persistence recovery timestamps are inconsistent".into());
         }
-        let duration_ms = ended_unix_ms - started_unix_ms;
+        let duration_ms = ended_unix_ms.map(|value| value - started_unix_ms);
         let updated = tx.execute(
             "UPDATE executions
          SET status = ?2, status_source = ?3, started_unix_ms = ?4,
@@ -935,7 +958,7 @@ impl Store {
             execution_id,
             TerminalCloseReason::StartPersistenceFailed,
         )?;
-        insert_execution_event(
+        insert_execution_event_if_time(
             &tx,
             execution_id,
             "TerminalStartPersistenceFailed",
@@ -946,7 +969,11 @@ impl Store {
         Ok(())
     }
 
-    pub fn mark_terminal_exited(&mut self, execution_id: &str, ended_unix_ms: i64) -> Result<()> {
+    pub fn mark_terminal_exited(
+        &mut self,
+        execution_id: &str,
+        ended_unix_ms: Option<i64>,
+    ) -> Result<()> {
         finalize_running_terminal(
             &mut self.connection,
             execution_id,
@@ -961,7 +988,7 @@ impl Store {
         &mut self,
         execution_id: &str,
         reason: TerminalCloseReason,
-        ended_unix_ms: i64,
+        ended_unix_ms: Option<i64>,
     ) -> Result<()> {
         if !matches!(
             reason,
@@ -1058,10 +1085,10 @@ impl Store {
         &mut self,
         execution_id: &str,
         event_kind: &str,
-        observed_unix_ms: i64,
+        observed_unix_ms: Option<i64>,
     ) -> Result<()> {
         let tx = self.connection.transaction()?;
-        let (status, requested_unix_ms, _started_unix_ms) =
+        let (status, requested_unix_ms, started_unix_ms) =
             terminal_execution_state(&tx, execution_id)?;
         if !matches!(
             status,
@@ -1073,9 +1100,13 @@ impl Store {
             )
             .into());
         }
-        if observed_unix_ms < requested_unix_ms {
+        let observation_floor = started_unix_ms
+            .unwrap_or(requested_unix_ms)
+            .max(requested_unix_ms);
+        if observed_unix_ms.is_some_and(|value| value < observation_floor) {
             return Err(
-                "terminal ownership-loss observation cannot precede its request time".into(),
+                "terminal ownership-loss observation cannot precede its observed start/request time"
+                    .into(),
             );
         }
         let updated = tx.execute(
@@ -1101,7 +1132,7 @@ impl Store {
             execution_id,
             TerminalCloseReason::OwnershipLostProcessStateUnknown,
         )?;
-        insert_execution_event(
+        insert_execution_event_if_time(
             &tx,
             execution_id,
             event_kind,
@@ -1120,7 +1151,7 @@ impl Store {
         let tx = self.connection.transaction()?;
         let executions = {
             let mut statement = tx.prepare(
-                "SELECT e.execution_id, t.execution_id
+                "SELECT e.execution_id, t.execution_id, e.requested_unix_ms, e.started_unix_ms
              FROM executions e
              LEFT JOIN terminal_sessions t ON t.execution_id = e.execution_id
              WHERE e.kind = ?1 AND e.status IN (?2, ?3)
@@ -1133,12 +1164,19 @@ impl Store {
                         ExecutionStatus::Requested.as_str(),
                         ExecutionStatus::Running.as_str(),
                     ],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, i64>(2)?,
+                            row.get::<_, Option<i64>>(3)?,
+                        ))
+                    },
                 )?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         };
 
-        for (execution_id, terminal_session_id) in &executions {
+        for (execution_id, terminal_session_id, requested_unix_ms, started_unix_ms) in &executions {
             let updated = tx.execute(
                 "UPDATE executions
              SET status = ?2, status_source = ?3,
@@ -1165,12 +1203,15 @@ impl Store {
                     TerminalCloseReason::OwnershipLostProcessStateUnknown,
                 )?;
             }
+            let observation_floor = started_unix_ms
+                .unwrap_or(*requested_unix_ms)
+                .max(*requested_unix_ms);
             insert_execution_event(
                 &tx,
                 execution_id,
                 "TerminalOwnershipLostAfterRestart",
                 FactSource::WindsObserved,
-                now_ms,
+                now_ms.max(observation_floor),
             )?;
         }
         tx.commit()?;
@@ -1276,6 +1317,23 @@ impl Store {
     }
 
     pub fn create_terminal_session(&self, session: NewTerminalSession<'_>) -> Result<()> {
+        let kind = self
+            .connection
+            .query_row(
+                "SELECT kind FROM executions WHERE execution_id = ?1",
+                params![session.execution_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or_else(|| {
+                format!(
+                    "unknown Winds execution for terminal session: {}",
+                    session.execution_id
+                )
+            })?;
+        if kind != ExecutionKind::Terminal.as_str() {
+            return Err("terminal session persistence requires TERMINAL execution kind".into());
+        }
         let shell_arguments_json = serde_json::to_string(session.shell_arguments)?;
         self.connection.execute(
             "INSERT INTO terminal_sessions(
@@ -1746,7 +1804,7 @@ fn finalize_running_terminal(
     status: ExecutionStatus,
     close_reason: TerminalCloseReason,
     event_kind: &str,
-    ended_unix_ms: i64,
+    ended_unix_ms: Option<i64>,
 ) -> Result<()> {
     if !matches!(
         status,
@@ -1766,10 +1824,10 @@ fn finalize_running_terminal(
     }
     let started_unix_ms =
         started_unix_ms.ok_or("RUNNING terminal execution is missing its observed start time")?;
-    if ended_unix_ms < started_unix_ms {
+    if ended_unix_ms.is_some_and(|value| value < started_unix_ms) {
         return Err("terminal end time cannot precede its observed start time".into());
     }
-    let duration_ms = ended_unix_ms - started_unix_ms;
+    let duration_ms = ended_unix_ms.map(|value| value - started_unix_ms);
     let updated = tx.execute(
         "UPDATE executions
          SET status = ?2, status_source = ?3,
@@ -1788,7 +1846,7 @@ fn finalize_running_terminal(
         return Err("terminal finalization lost its expected RUNNING row".into());
     }
     set_terminal_close_reason(&tx, execution_id, close_reason)?;
-    insert_execution_event(
+    insert_execution_event_if_time(
         &tx,
         execution_id,
         event_kind,
@@ -2135,7 +2193,9 @@ mod persistence_tests {
             )
             .unwrap();
         store.mark_terminal_running("execution-1", 120).unwrap();
-        store.mark_terminal_exited("execution-1", 155).unwrap();
+        store
+            .mark_terminal_exited("execution-1", Some(155))
+            .unwrap();
 
         let execution = store.load_execution("execution-1").unwrap();
         assert_eq!(execution.status, ExecutionStatus::Exited);
@@ -2162,7 +2222,11 @@ mod persistence_tests {
                 .iter()
                 .all(|event| event.source == FactSource::WindsObserved)
         );
-        assert!(store.mark_terminal_exited("execution-1", 160).is_err());
+        assert!(
+            store
+                .mark_terminal_exited("execution-1", Some(160))
+                .is_err()
+        );
 
         drop(store);
         cleanup_test_home(&home);
@@ -2209,7 +2273,11 @@ mod persistence_tests {
         store.mark_terminal_failed_to_start("failed", 115).unwrap();
         store.mark_terminal_running("interrupted", 120).unwrap();
         store
-            .mark_terminal_interrupted("interrupted", TerminalCloseReason::TerminatedByWinds, 150)
+            .mark_terminal_interrupted(
+                "interrupted",
+                TerminalCloseReason::TerminatedByWinds,
+                Some(150),
+            )
             .unwrap();
 
         let failed = store.load_execution("failed").unwrap();
@@ -2420,7 +2488,7 @@ mod persistence_tests {
         store.defer_terminal_finalization(
             "execution-deferred",
             TerminalFinalization::Interrupted {
-                ended_unix_ms: 150,
+                ended_unix_ms: Some(150),
                 reason: TerminalCloseReason::ClosedByWinds,
             },
         );

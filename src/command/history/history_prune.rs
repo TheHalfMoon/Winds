@@ -1,0 +1,700 @@
+use crate::store::Result;
+use std::ffi::OsString;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
+#[cfg(unix)]
+use std::ffi::CString;
+#[cfg(unix)]
+use std::os::fd::{AsRawFd, FromRawFd};
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
+
+#[cfg(windows)]
+use std::ffi::c_void;
+#[cfg(windows)]
+use std::mem::MaybeUninit;
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
+
+#[cfg(unix)]
+type HistoryPathIdentity = (u64, u64);
+#[cfg(windows)]
+type HistoryPathIdentity = (u64, [u8; 16]);
+#[cfg(not(any(unix, windows)))]
+type HistoryPathIdentity = ();
+
+#[derive(Debug)]
+struct RetainedHistoryFile {
+    name: OsString,
+    identity: HistoryPathIdentity,
+}
+
+#[derive(Debug)]
+struct RetainedHistoryDir {
+    path: PathBuf,
+    logical_bytes: u64,
+    modified: SystemTime,
+    identity: HistoryPathIdentity,
+    files: Vec<RetainedHistoryFile>,
+}
+
+pub(super) fn prune_for_write<F>(
+    history_root: &Path,
+    new_storage_key: &str,
+    required_bytes: u64,
+    total_quota: u64,
+    after_identity_proven: F,
+) -> Result<()>
+where
+    F: FnOnce() -> Result<()>,
+{
+    if !super::is_history_storage_key(new_storage_key) {
+        return Err("terminal history storage key is invalid".into());
+    }
+    if history_root.join(new_storage_key).exists() {
+        return Err("terminal history for this execution already exists or is incomplete".into());
+    }
+
+    let root_identity = history_directory_identity(history_root, "terminal history root")?;
+    let mut entries = retained_history_dirs(history_root)?;
+    let mut existing = entries.iter().try_fold(0_u64, |sum, entry| {
+        sum.checked_add(entry.logical_bytes)
+            .ok_or("terminal history logical byte size overflowed")
+    })?;
+    let budget = total_quota
+        .checked_sub(required_bytes)
+        .ok_or("terminal history record exceeds total history quota")?;
+
+    entries.sort_by(|left, right| {
+        left.modified
+            .cmp(&right.modified)
+            .then_with(|| left.path.cmp(&right.path))
+    });
+
+    let mut hook = Some(after_identity_proven);
+    for entry in entries {
+        if existing <= budget {
+            break;
+        }
+        let this_hook = hook.take();
+        remove_owned_history_session(
+            history_root,
+            &root_identity,
+            &entry,
+            move || match this_hook {
+                Some(callback) => callback(),
+                None => Ok(()),
+            },
+        )?;
+        existing = existing.saturating_sub(entry.logical_bytes);
+    }
+
+    if existing > budget {
+        return Err(
+            "terminal history quota could not be satisfied by object-bound retention pruning"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+pub(super) fn history_logical_bytes(history_root: &Path) -> Result<u64> {
+    retained_history_dirs(history_root)?
+        .into_iter()
+        .try_fold(0_u64, |sum, entry| {
+            sum.checked_add(entry.logical_bytes)
+                .ok_or_else(|| "terminal history logical byte size overflowed".into())
+        })
+}
+
+fn retained_history_dirs(history_root: &Path) -> Result<Vec<RetainedHistoryDir>> {
+    let root_identity = history_directory_identity(history_root, "terminal history root")?;
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(history_root)? {
+        let entry = entry?;
+        let name = entry
+            .file_name()
+            .to_str()
+            .ok_or("terminal history directory name is not valid UTF-8")?
+            .to_owned();
+        if !super::is_history_storage_key(&name) {
+            return Err("terminal history root contains an unrecognized directory".into());
+        }
+        entries.push(snapshot_history_session(&entry.path())?);
+    }
+    require_history_directory_identity(history_root, &root_identity, "terminal history root")?;
+    Ok(entries)
+}
+
+fn snapshot_history_session(path: &Path) -> Result<RetainedHistoryDir> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("terminal history root contains an unexpected non-directory entry".into());
+    }
+    let identity = history_directory_identity(path, "retained terminal history session")?;
+    let modified = metadata.modified()?;
+    let mut logical_bytes = 0_u64;
+    let mut files = Vec::new();
+    let mut transcript_seen = false;
+    let mut manifest_seen = false;
+
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name_str = name
+            .to_str()
+            .ok_or("terminal history file name is not valid UTF-8")?;
+        let kind = history_file_kind(name_str)
+            .ok_or("terminal history session contains an unrecognized file")?;
+        match kind {
+            HistoryFileKind::Transcript if transcript_seen => {
+                return Err("terminal history session contains multiple transcript blobs".into());
+            }
+            HistoryFileKind::Manifest if manifest_seen => {
+                return Err("terminal history session contains multiple manifest blobs".into());
+            }
+            HistoryFileKind::Transcript => transcript_seen = true,
+            HistoryFileKind::Manifest => manifest_seen = true,
+        }
+
+        let file_metadata = fs::symlink_metadata(entry.path())?;
+        if file_metadata.file_type().is_symlink() || !file_metadata.is_file() {
+            return Err("terminal history session contains an unexpected non-file entry".into());
+        }
+        logical_bytes = logical_bytes
+            .checked_add(file_metadata.len())
+            .ok_or("terminal history logical byte size overflowed")?;
+        files.push(RetainedHistoryFile {
+            identity: history_file_identity(&entry.path(), "retained terminal history file")?,
+            name,
+        });
+    }
+
+    require_history_directory_identity(path, &identity, "retained terminal history session")?;
+    Ok(RetainedHistoryDir {
+        path: path.to_path_buf(),
+        logical_bytes,
+        modified,
+        identity,
+        files,
+    })
+}
+
+#[derive(Clone, Copy)]
+enum HistoryFileKind {
+    Transcript,
+    Manifest,
+}
+
+fn history_file_kind(name: &str) -> Option<HistoryFileKind> {
+    if valid_content_addressed_name(name, "transcript.", ".bin") {
+        Some(HistoryFileKind::Transcript)
+    } else if valid_content_addressed_name(name, "manifest.", ".json") {
+        Some(HistoryFileKind::Manifest)
+    } else {
+        None
+    }
+}
+
+fn valid_content_addressed_name(name: &str, prefix: &str, suffix: &str) -> bool {
+    let Some(digest) = name
+        .strip_prefix(prefix)
+        .and_then(|value| value.strip_suffix(suffix))
+    else {
+        return false;
+    };
+    digest.len() == 64
+        && digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn remove_owned_history_session<F>(
+    history_root: &Path,
+    expected_root: &HistoryPathIdentity,
+    entry: &RetainedHistoryDir,
+    after_identity_proven: F,
+) -> Result<()>
+where
+    F: FnOnce() -> Result<()>,
+{
+    require_history_directory_identity(history_root, expected_root, "terminal history root")?;
+    if entry.path.parent() != Some(history_root) {
+        return Err("terminal history deletion target is outside the owned history root".into());
+    }
+    let name = entry
+        .path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .ok_or("terminal history deletion target name is not valid UTF-8")?;
+    if !super::is_history_storage_key(name) {
+        return Err("terminal history deletion target is not an owned session directory".into());
+    }
+    require_history_directory_identity(
+        &entry.path,
+        &entry.identity,
+        "terminal history deletion target",
+    )?;
+
+    // The regression hook runs after the last pathname-based identity proof.
+    // The destructive implementation must bind to the filesystem objects again
+    // and refuse mutation if the pathname was replaced in this window.
+    after_identity_proven()?;
+    remove_session_object_bound(history_root, expected_root, entry)
+}
+
+#[cfg(all(unix, target_os = "linux"))]
+fn unix_stat_identity(stat: &libc::stat) -> HistoryPathIdentity {
+    (stat.st_dev, stat.st_ino)
+}
+
+#[cfg(all(unix, target_os = "macos"))]
+fn unix_stat_identity(stat: &libc::stat) -> HistoryPathIdentity {
+    (stat.st_dev as u64, stat.st_ino)
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn unix_stat_identity(stat: &libc::stat) -> HistoryPathIdentity {
+    (stat.st_dev as u64, stat.st_ino as u64)
+}
+
+#[cfg(unix)]
+fn remove_session_object_bound(
+    history_root: &Path,
+    expected_root: &HistoryPathIdentity,
+    entry: &RetainedHistoryDir,
+) -> Result<()> {
+    let root = open_unix_directory(history_root, "terminal history root")?;
+    require_unix_handle_identity(&root, expected_root, "terminal history root")?;
+
+    let target_name = entry
+        .path
+        .file_name()
+        .ok_or("terminal history deletion target has no file name")?;
+    let target = open_unix_directory_at(
+        root.as_raw_fd(),
+        target_name,
+        "terminal history deletion target",
+    )?;
+    require_unix_handle_identity(&target, &entry.identity, "terminal history deletion target")?;
+
+    for file in &entry.files {
+        let name = unix_name_cstring(&file.name, "terminal history file")?;
+        let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+        let stat_result = unsafe {
+            libc::fstatat(
+                target.as_raw_fd(),
+                name.as_ptr(),
+                stat.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        };
+        if stat_result != 0 {
+            return Err(format!(
+                "terminal history file could not be inspected through its owned directory handle: {}",
+                std::io::Error::last_os_error()
+            )
+            .into());
+        }
+        let stat = unsafe { stat.assume_init() };
+        if (stat.st_mode as libc::mode_t) & libc::S_IFMT != libc::S_IFREG {
+            return Err("terminal history file became a non-regular object before deletion".into());
+        }
+        let identity = unix_stat_identity(&stat);
+        if identity != file.identity {
+            return Err(
+                "terminal history file filesystem identity changed before object-bound deletion"
+                    .into(),
+            );
+        }
+        let unlink_result = unsafe { libc::unlinkat(target.as_raw_fd(), name.as_ptr(), 0) };
+        if unlink_result != 0 {
+            return Err(format!(
+                "terminal history file could not be deleted through its owned directory handle: {}",
+                std::io::Error::last_os_error()
+            )
+            .into());
+        }
+    }
+
+    require_unix_handle_identity(&target, &entry.identity, "terminal history deletion target")?;
+    let target_name = unix_name_cstring(target_name, "terminal history session")?;
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+    let stat_result = unsafe {
+        libc::fstatat(
+            root.as_raw_fd(),
+            target_name.as_ptr(),
+            stat.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if stat_result != 0 {
+        return Err(format!(
+            "terminal history session entry could not be revalidated before non-recursive removal: {}",
+            std::io::Error::last_os_error()
+        )
+        .into());
+    }
+    let stat = unsafe { stat.assume_init() };
+    let current = unix_stat_identity(&stat);
+    if current != entry.identity {
+        return Err(
+            "terminal history session filesystem identity changed before non-recursive removal"
+                .into(),
+        );
+    }
+    let remove_result =
+        unsafe { libc::unlinkat(root.as_raw_fd(), target_name.as_ptr(), libc::AT_REMOVEDIR) };
+    if remove_result != 0 {
+        return Err(format!(
+            "terminal history session could not be removed non-recursively: {}",
+            std::io::Error::last_os_error()
+        )
+        .into());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn open_unix_directory(path: &Path, label: &str) -> Result<fs::File> {
+    let path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| format!("{label} contains an embedded NUL byte"))?;
+    let fd = unsafe {
+        libc::open(
+            path.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(format!(
+            "{label} could not be opened without following links: {}",
+            std::io::Error::last_os_error()
+        )
+        .into());
+    }
+    Ok(unsafe { fs::File::from_raw_fd(fd) })
+}
+
+#[cfg(unix)]
+fn open_unix_directory_at(parent_fd: i32, name: &std::ffi::OsStr, label: &str) -> Result<fs::File> {
+    let name = unix_name_cstring(name, label)?;
+    let fd = unsafe {
+        libc::openat(
+            parent_fd,
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(format!(
+            "{label} could not be opened through its owned parent without following links: {}",
+            std::io::Error::last_os_error()
+        )
+        .into());
+    }
+    Ok(unsafe { fs::File::from_raw_fd(fd) })
+}
+
+#[cfg(unix)]
+fn unix_name_cstring(name: &std::ffi::OsStr, label: &str) -> Result<CString> {
+    CString::new(name.as_bytes())
+        .map_err(|_| format!("{label} contains an embedded NUL byte").into())
+}
+
+#[cfg(unix)]
+fn require_unix_handle_identity(
+    handle: &fs::File,
+    expected: &HistoryPathIdentity,
+    label: &str,
+) -> Result<()> {
+    let metadata = handle
+        .metadata()
+        .map_err(|error| format!("{label} handle cannot be inspected: {error}"))?;
+    if !metadata.is_dir() {
+        return Err(format!("{label} handle is not a directory").into());
+    }
+    let current = (metadata.dev(), metadata.ino());
+    if current != *expected {
+        return Err(
+            format!("{label} filesystem identity changed during object-bound deletion").into(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn history_directory_identity(path: &Path, label: &str) -> Result<HistoryPathIdentity> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("{label} cannot be inspected: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(format!("{label} is not a real directory").into());
+    }
+    Ok((metadata.dev(), metadata.ino()))
+}
+
+#[cfg(unix)]
+fn history_file_identity(path: &Path, label: &str) -> Result<HistoryPathIdentity> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("{label} cannot be inspected: {error}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!("{label} is not a real regular file").into());
+    }
+    Ok((metadata.dev(), metadata.ino()))
+}
+
+#[cfg(windows)]
+const WINDOWS_DELETE_ACCESS: u32 = 0x0001_0000;
+#[cfg(windows)]
+const WINDOWS_FILE_SHARE_READ: u32 = 0x0000_0001;
+#[cfg(windows)]
+const WINDOWS_FILE_SHARE_WRITE: u32 = 0x0000_0002;
+#[cfg(windows)]
+const WINDOWS_FILE_SHARE_DELETE: u32 = 0x0000_0004;
+#[cfg(windows)]
+const WINDOWS_FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
+#[cfg(windows)]
+const WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+#[cfg(windows)]
+const WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+#[cfg(windows)]
+const WINDOWS_FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+#[cfg(windows)]
+const WINDOWS_FILE_ATTRIBUTE_TAG_INFO_CLASS: i32 = 9;
+#[cfg(windows)]
+const WINDOWS_FILE_ID_INFO_CLASS: i32 = 18;
+#[cfg(windows)]
+const WINDOWS_FILE_DISPOSITION_INFO_CLASS: i32 = 4;
+
+#[cfg(windows)]
+#[repr(C)]
+struct WindowsFileAttributeTagInfo {
+    file_attributes: u32,
+    _reparse_tag: u32,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct WindowsFileIdInfo {
+    volume_serial_number: u64,
+    file_id: [u8; 16],
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct WindowsFileDispositionInfo {
+    delete_file: i32,
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GetFileInformationByHandleEx(
+        file_handle: *mut c_void,
+        file_information_class: i32,
+        file_information: *mut c_void,
+        buffer_size: u32,
+    ) -> i32;
+    fn SetFileInformationByHandle(
+        file_handle: *mut c_void,
+        file_information_class: i32,
+        file_information: *const c_void,
+        buffer_size: u32,
+    ) -> i32;
+}
+
+#[cfg(windows)]
+fn remove_session_object_bound(
+    _history_root: &Path,
+    _expected_root: &HistoryPathIdentity,
+    entry: &RetainedHistoryDir,
+) -> Result<()> {
+    let directory =
+        open_windows_object(&entry.path, true, true, "terminal history deletion target")?;
+    require_windows_handle_identity(
+        &directory,
+        &entry.identity,
+        true,
+        "terminal history deletion target",
+    )?;
+
+    for file in &entry.files {
+        let path = entry.path.join(&file.name);
+        let handle = open_windows_object(&path, false, true, "terminal history file")?;
+        require_windows_handle_identity(&handle, &file.identity, false, "terminal history file")?;
+        mark_windows_handle_for_deletion(&handle, "terminal history file")?;
+        drop(handle);
+    }
+
+    require_windows_handle_identity(
+        &directory,
+        &entry.identity,
+        true,
+        "terminal history deletion target",
+    )?;
+    mark_windows_handle_for_deletion(&directory, "terminal history session")?;
+    drop(directory);
+    Ok(())
+}
+
+#[cfg(windows)]
+fn open_windows_object(
+    path: &Path,
+    directory: bool,
+    delete_access: bool,
+    label: &str,
+) -> Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options
+        .access_mode(if delete_access {
+            WINDOWS_DELETE_ACCESS
+        } else {
+            0
+        })
+        .share_mode(WINDOWS_FILE_SHARE_READ | WINDOWS_FILE_SHARE_WRITE | WINDOWS_FILE_SHARE_DELETE)
+        .custom_flags(
+            WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT
+                | if directory {
+                    WINDOWS_FILE_FLAG_BACKUP_SEMANTICS
+                } else {
+                    0
+                },
+        );
+    options.open(path).map_err(|error| {
+        format!("{label} could not be opened without following reparse points: {error}").into()
+    })
+}
+
+#[cfg(windows)]
+fn windows_handle_identity(
+    handle: &fs::File,
+    expect_directory: bool,
+    label: &str,
+) -> Result<HistoryPathIdentity> {
+    let mut attribute_info = MaybeUninit::<WindowsFileAttributeTagInfo>::uninit();
+    let attribute_result = unsafe {
+        GetFileInformationByHandleEx(
+            handle.as_raw_handle(),
+            WINDOWS_FILE_ATTRIBUTE_TAG_INFO_CLASS,
+            attribute_info.as_mut_ptr().cast::<c_void>(),
+            std::mem::size_of::<WindowsFileAttributeTagInfo>() as u32,
+        )
+    };
+    if attribute_result == 0 {
+        return Err(format!(
+            "{label} handle attributes cannot be inspected: {}",
+            std::io::Error::last_os_error()
+        )
+        .into());
+    }
+    let attribute_info = unsafe { attribute_info.assume_init() };
+    let is_directory = attribute_info.file_attributes & WINDOWS_FILE_ATTRIBUTE_DIRECTORY != 0;
+    if attribute_info.file_attributes & WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT != 0
+        || is_directory != expect_directory
+    {
+        return Err(format!("{label} is a reparse point or has the wrong object type").into());
+    }
+
+    let mut identity_info = MaybeUninit::<WindowsFileIdInfo>::uninit();
+    let identity_result = unsafe {
+        GetFileInformationByHandleEx(
+            handle.as_raw_handle(),
+            WINDOWS_FILE_ID_INFO_CLASS,
+            identity_info.as_mut_ptr().cast::<c_void>(),
+            std::mem::size_of::<WindowsFileIdInfo>() as u32,
+        )
+    };
+    if identity_result == 0 {
+        return Err(format!(
+            "{label} filesystem identity cannot be inspected: {}",
+            std::io::Error::last_os_error()
+        )
+        .into());
+    }
+    let identity_info = unsafe { identity_info.assume_init() };
+    Ok((identity_info.volume_serial_number, identity_info.file_id))
+}
+
+#[cfg(windows)]
+fn require_windows_handle_identity(
+    handle: &fs::File,
+    expected: &HistoryPathIdentity,
+    expect_directory: bool,
+    label: &str,
+) -> Result<()> {
+    if windows_handle_identity(handle, expect_directory, label)? != *expected {
+        return Err(
+            format!("{label} filesystem identity changed during object-bound deletion").into(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn mark_windows_handle_for_deletion(handle: &fs::File, label: &str) -> Result<()> {
+    let disposition = WindowsFileDispositionInfo { delete_file: 1 };
+    let result = unsafe {
+        SetFileInformationByHandle(
+            handle.as_raw_handle(),
+            WINDOWS_FILE_DISPOSITION_INFO_CLASS,
+            (&disposition as *const WindowsFileDispositionInfo).cast::<c_void>(),
+            std::mem::size_of::<WindowsFileDispositionInfo>() as u32,
+        )
+    };
+    if result == 0 {
+        return Err(format!(
+            "{label} could not be marked for object-bound deletion: {}",
+            std::io::Error::last_os_error()
+        )
+        .into());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn history_directory_identity(path: &Path, label: &str) -> Result<HistoryPathIdentity> {
+    let handle = open_windows_object(path, true, false, label)?;
+    windows_handle_identity(&handle, true, label)
+}
+
+#[cfg(windows)]
+fn history_file_identity(path: &Path, label: &str) -> Result<HistoryPathIdentity> {
+    let handle = open_windows_object(path, false, false, label)?;
+    windows_handle_identity(&handle, false, label)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn remove_session_object_bound(
+    _history_root: &Path,
+    _expected_root: &HistoryPathIdentity,
+    _entry: &RetainedHistoryDir,
+) -> Result<()> {
+    Err("object-bound terminal history pruning is unsupported on this platform".into())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn history_directory_identity(_path: &Path, label: &str) -> Result<HistoryPathIdentity> {
+    Err(format!("{label} filesystem identity is unsupported on this platform").into())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn history_file_identity(_path: &Path, label: &str) -> Result<HistoryPathIdentity> {
+    Err(format!("{label} filesystem identity is unsupported on this platform").into())
+}
+
+fn require_history_directory_identity(
+    path: &Path,
+    expected: &HistoryPathIdentity,
+    label: &str,
+) -> Result<()> {
+    let current = history_directory_identity(path, label)?;
+    if current != *expected {
+        return Err(format!("{label} filesystem identity changed").into());
+    }
+    Ok(())
+}

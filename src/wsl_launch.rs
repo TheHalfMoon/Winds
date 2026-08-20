@@ -1,17 +1,88 @@
 use super::Result;
+#[cfg(windows)]
+use super::process_scope::{OwnedProcess, operation_deadlines, spawn_owned_process};
 use super::terminal::{TerminalSession, TerminalSize};
 use super::wsl::WslDistribution;
 #[cfg(windows)]
 use super::wsl::discover_wsl_distributions;
 #[cfg(windows)]
-use super::{GIT_CONTEXT_ENV_VARS, Repo, run_git_text, strip_git_line_ending};
+use super::{GIT_CONTEXT_ENV_VARS, Repo, run_read_only_git_text, strip_git_line_ending};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::path::Path;
 #[cfg(windows)]
 use std::path::PathBuf;
+#[cfg(windows)]
+use std::sync::atomic::{AtomicU64, Ordering};
 
 const WSL_SHELL_EXECUTABLE: &str = "/bin/sh";
+
+#[cfg(windows)]
+static NEXT_WSL_EXEC_SCOPE_ID: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(windows)]
+const WSL_OWNED_SCOPE_SCRIPT: &str = r#"
+token="$1"
+timeout_seconds="$2"
+shift 2
+
+for required in /usr/bin/setsid /bin/sh /bin/sleep /bin/kill; do
+    if [ ! -x "$required" ]; then
+        printf '__WINDS_WSL_SCOPE_UNSUPPORTED_%s__:%s\n' "$token" "$required" >&2
+        exit 125
+    fi
+done
+if ! /bin/sleep 0.01 2>/dev/null; then
+    printf '__WINDS_WSL_SCOPE_UNSUPPORTED_%s__:%s\n' "$token" '/bin/sleep:fractional-seconds' >&2
+    exit 125
+fi
+
+/usr/bin/setsid /bin/sh -c '
+    /bin/sleep 86400 &
+    sentinel=$!
+    if ! /bin/kill -0 "$sentinel" 2>/dev/null; then
+        exit 125
+    fi
+    exec "$@"
+' winds-wsl-target "$@" &
+target_leader=$!
+
+/usr/bin/setsid /bin/sh -c '
+    /bin/sleep "$1"
+    printf "__WINDS_WSL_SCOPE_TIMEOUT_%s__\n" "$2" >&2
+    /bin/kill -KILL -- "$3" 2>/dev/null || :
+' winds-wsl-watchdog "$timeout_seconds" "$token" "$target_leader" &
+watchdog=$!
+
+wait "$target_leader"
+target_status=$?
+
+/bin/kill -KILL -- "-$watchdog" 2>/dev/null || :
+wait "$watchdog" 2>/dev/null || :
+
+if /bin/kill -0 -- "-$target_leader" 2>/dev/null; then
+    if ! /bin/kill -KILL -- "-$target_leader" 2>/dev/null; then
+        printf '__WINDS_WSL_SCOPE_UNPROVEN_%s__:group-kill\n' "$token" >&2
+        exit 125
+    fi
+fi
+
+checks=0
+while /bin/kill -0 -- "-$target_leader" 2>/dev/null; do
+    checks=$((checks + 1))
+    if [ "$checks" -ge 100 ]; then
+        printf '__WINDS_WSL_SCOPE_UNPROVEN_%s__:quiescence\n' "$token" >&2
+        exit 125
+    fi
+    if ! /bin/sleep 0.01; then
+        printf '__WINDS_WSL_SCOPE_UNPROVEN_%s__:sleep-failed\n' "$token" >&2
+        exit 125
+    fi
+done
+
+printf '__WINDS_WSL_SCOPE_CLEAN_%s__:%s\n' "$token" "$target_status" >&2
+exit "$target_status"
+"#;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct WslExecutionDomain {
@@ -468,7 +539,11 @@ fn attest_workspace(
         &["rev-parse", "--verify", "HEAD^{commit}"],
         "WSL Git HEAD",
     )?;
-    let windows_head = run_git_text(repo.root(), ["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let windows_head = run_read_only_git_text(
+        repo.root(),
+        ["rev-parse", "--verify", "HEAD^{commit}"],
+        "Windows Git HEAD attestation",
+    )?;
     let windows_head_oid = strip_git_line_ending(&windows_head);
     if windows_head_oid.is_empty() {
         return Err("Windows Git returned an empty HEAD object id".into());
@@ -590,20 +665,71 @@ fn run_wsl_exec(
     command: &str,
     command_args: &[std::ffi::OsString],
 ) -> Result<Vec<u8>> {
+    run_wsl_exec_with_limits(
+        launcher,
+        distribution,
+        cwd,
+        command,
+        command_args,
+        20,
+        std::time::Duration::from_secs(30),
+    )
+}
+
+#[cfg(windows)]
+fn drain_until_idle_or_deadline<F>(
+    deadline: std::time::Instant,
+    mut drain_once: F,
+) -> std::io::Result<bool>
+where
+    F: FnMut() -> std::io::Result<bool>,
+{
+    loop {
+        if std::time::Instant::now() >= deadline {
+            return Ok(false);
+        }
+        if !drain_once()? {
+            return Ok(true);
+        }
+    }
+}
+
+#[cfg(windows)]
+fn run_wsl_exec_with_limits(
+    launcher: &Path,
+    distribution: &str,
+    cwd: Option<&str>,
+    command: &str,
+    command_args: &[std::ffi::OsString],
+    linux_scope_timeout_seconds: u64,
+    total_timeout: std::time::Duration,
+) -> Result<Vec<u8>> {
     use super::wsl::decode_wsl_text;
     use std::ffi::c_void;
     use std::io::{Read, Result as IoResult};
     use std::os::windows::io::AsRawHandle;
-    use std::process::{Child, ChildStderr, ChildStdout, Command, Stdio};
+    use std::process::{ChildStderr, ChildStdout, Command, Stdio};
     use std::ptr;
     use std::thread;
     use std::time::{Duration, Instant};
 
     const CAP: usize = 256 * 1024;
-    const TIMEOUT: Duration = Duration::from_secs(30);
+    const CONTROL_TAIL_CAP: usize = 16 * 1024;
     const ERROR_BROKEN_PIPE: i32 = 109;
     const ERROR_NO_DATA: i32 = 232;
     const ERROR_PIPE_NOT_CONNECTED: i32 = 233;
+    const OWNED_LABEL: &str = "WSL command launcher";
+
+    if linux_scope_timeout_seconds == 0 {
+        return Err("WSL-side command scope timeout must be positive".into());
+    }
+    let minimum_total = Duration::from_secs(linux_scope_timeout_seconds.saturating_add(3));
+    if total_timeout <= minimum_total {
+        return Err(
+            "host WSL timeout must leave a cleanup margin after the Linux-side scope timeout"
+                .into(),
+        );
+    }
 
     #[link(name = "kernel32")]
     unsafe extern "system" {
@@ -618,14 +744,29 @@ fn run_wsl_exec(
         ) -> i32;
     }
 
+    fn append_control_tail(tail: &mut Vec<u8>, bytes: &[u8]) {
+        if bytes.len() >= CONTROL_TAIL_CAP {
+            tail.clear();
+            tail.extend_from_slice(&bytes[bytes.len() - CONTROL_TAIL_CAP..]);
+            return;
+        }
+        let overflow = tail
+            .len()
+            .saturating_add(bytes.len())
+            .saturating_sub(CONTROL_TAIL_CAP);
+        if overflow > 0 {
+            tail.drain(..overflow);
+        }
+        tail.extend_from_slice(bytes);
+    }
+
     fn read_available<R: Read + AsRawHandle>(
         reader: &mut R,
         captured: &mut Vec<u8>,
         truncated: &mut bool,
+        control_tail: Option<&mut Vec<u8>>,
     ) -> IoResult<bool> {
         let mut available = 0_u32;
-        // SAFETY: `reader` owns a valid pipe handle for this call. No output buffer is
-        // supplied; PeekNamedPipe only reports the number of bytes immediately readable.
         let peeked = unsafe {
             peek_named_pipe(
                 reader.as_raw_handle(),
@@ -656,6 +797,9 @@ fn run_wsl_exec(
         if count == 0 {
             return Ok(false);
         }
+        if let Some(tail) = control_tail {
+            append_control_tail(tail, &buffer[..count]);
+        }
         let remaining = CAP.saturating_sub(captured.len());
         let keep = remaining.min(count);
         captured.extend_from_slice(&buffer[..keep]);
@@ -670,18 +814,42 @@ fn run_wsl_exec(
         stderr: &mut ChildStderr,
         stdout_bytes: &mut Vec<u8>,
         stderr_bytes: &mut Vec<u8>,
+        stderr_control_tail: &mut Vec<u8>,
         stdout_truncated: &mut bool,
         stderr_truncated: &mut bool,
     ) -> IoResult<bool> {
-        let stdout_progress = read_available(stdout, stdout_bytes, stdout_truncated)?;
-        let stderr_progress = read_available(stderr, stderr_bytes, stderr_truncated)?;
+        let stdout_progress = read_available(stdout, stdout_bytes, stdout_truncated, None)?;
+        let stderr_progress = read_available(
+            stderr,
+            stderr_bytes,
+            stderr_truncated,
+            Some(stderr_control_tail),
+        )?;
         Ok(stdout_progress || stderr_progress)
     }
 
-    fn diagnostic_text(bytes: &[u8]) -> String {
+    fn control_value(tail: &[u8], prefix: &str) -> Option<String> {
+        String::from_utf8_lossy(tail)
+            .lines()
+            .rev()
+            .find_map(|line| line.strip_prefix(prefix).map(str::to_owned))
+    }
+
+    fn has_control_line(tail: &[u8], expected: &str) -> bool {
+        String::from_utf8_lossy(tail)
+            .lines()
+            .any(|line| line == expected)
+    }
+
+    fn diagnostic_text(bytes: &[u8], token: &str) -> String {
         let decoded =
             decode_wsl_text(bytes).unwrap_or_else(|_| String::from_utf8_lossy(bytes).into_owned());
-        let trimmed = decoded.trim();
+        let filtered = decoded
+            .lines()
+            .filter(|line| !(line.starts_with("__WINDS_WSL_SCOPE_") && line.contains(token)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let trimmed = filtered.trim();
         let mut chars = trimmed.chars();
         let mut diagnostic: String = chars.by_ref().take(2048).collect();
         if chars.next().is_some() {
@@ -699,33 +867,30 @@ fn run_wsl_exec(
         }
     }
 
-    fn cleanup_owned_launcher(child: &mut Child) -> String {
-        match child.try_wait() {
-            Ok(Some(_)) => "Windows WSL launcher had already exited".to_owned(),
-            Ok(None) | Err(_) => match child.kill() {
-                Ok(()) => match child.wait() {
-                    Ok(_) => "Windows WSL launcher process terminated".to_owned(),
-                    Err(error) => format!(
-                        "Windows WSL launcher termination wait could not be proven: {error}"
-                    ),
-                },
-                Err(kill_error) => match child.try_wait() {
-                    Ok(Some(_)) => "Windows WSL launcher had already exited".to_owned(),
-                    Ok(None) => format!(
-                        "Windows WSL launcher termination could not be proven: {kill_error}"
-                    ),
-                    Err(wait_error) => format!(
-                        "Windows WSL launcher termination could not be proven: {kill_error}; status check failed: {wait_error}"
-                    ),
-                },
-            },
+    fn fail_without_linux_scope_proof(
+        child: &mut OwnedProcess,
+        cleanup_deadline: Instant,
+        reason: impl std::fmt::Display,
+    ) -> Result<Vec<u8>> {
+        let windows_cleanup = child.terminate_and_prove(cleanup_deadline, OWNED_LABEL);
+        match windows_cleanup {
+            Ok(()) => Err(format!(
+                "{reason}; WSL-side owned command scope cleanup is unproven because no Linux cleanup marker was observed; Windows launcher process-scope cleanup was proven"
+            )
+            .into()),
+            Err(cleanup_error) => Err(format!(
+                "{reason}; WSL-side owned command scope cleanup is unproven because no Linux cleanup marker was observed; Windows launcher process-scope cleanup was also not proven: {cleanup_error}"
+            )
+            .into()),
         }
     }
 
-    fn fail_owned_launcher(child: &mut Child, reason: impl std::fmt::Display) -> Result<Vec<u8>> {
-        let cleanup = cleanup_owned_launcher(child);
-        Err(format!("{reason}; {cleanup}").into())
-    }
+    let scope_sequence = NEXT_WSL_EXEC_SCOPE_ID.fetch_add(1, Ordering::Relaxed);
+    let scope_token = format!("{:08x}{scope_sequence:016x}", std::process::id());
+    let clean_prefix = format!("__WINDS_WSL_SCOPE_CLEAN_{scope_token}__:");
+    let timeout_line = format!("__WINDS_WSL_SCOPE_TIMEOUT_{scope_token}__");
+    let unproven_prefix = format!("__WINDS_WSL_SCOPE_UNPROVEN_{scope_token}__:");
+    let unsupported_prefix = format!("__WINDS_WSL_SCOPE_UNSUPPORTED_{scope_token}__:");
 
     let mut process = Command::new(launcher);
     for key in GIT_CONTEXT_ENV_VARS {
@@ -735,88 +900,205 @@ fn run_wsl_exec(
     if let Some(cwd) = cwd {
         process.arg("--cd").arg(cwd);
     }
-    process.arg("--exec").arg(command).args(command_args);
-    let mut child = process
+    process
+        .arg("--exec")
+        .arg("/bin/sh")
+        .arg("-c")
+        .arg(WSL_OWNED_SCOPE_SCRIPT)
+        .arg("winds-wsl-scope")
+        .arg(&scope_token)
+        .arg(linux_scope_timeout_seconds.to_string())
+        .arg(command)
+        .args(command_args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("failed to execute selected WSL distribution: {error}"))?;
+        .stderr(Stdio::piped());
 
-    let mut stdout = match child.stdout.take() {
+    let started = Instant::now();
+    let (command_deadline, cleanup_deadline) = operation_deadlines(started, total_timeout);
+    let mut child = spawn_owned_process(&mut process, OWNED_LABEL).map_err(|error| {
+        format!(
+            "failed to execute selected WSL distribution in an owned Windows process scope: {error}"
+        )
+    })?;
+
+    let mut stdout = match child.take_stdout() {
         Some(stdout) => stdout,
         None => {
-            return fail_owned_launcher(&mut child, "failed to capture WSL command stdout");
+            return fail_without_linux_scope_proof(
+                &mut child,
+                cleanup_deadline,
+                "failed to capture WSL command stdout",
+            );
         }
     };
-    let mut stderr = match child.stderr.take() {
+    let mut stderr = match child.take_stderr() {
         Some(stderr) => stderr,
         None => {
-            return fail_owned_launcher(&mut child, "failed to capture WSL command stderr");
+            return fail_without_linux_scope_proof(
+                &mut child,
+                cleanup_deadline,
+                "failed to capture WSL command stderr",
+            );
         }
     };
+
     let mut stdout_bytes = Vec::new();
     let mut stderr_bytes = Vec::new();
+    let mut stderr_control_tail = Vec::new();
     let mut stdout_truncated = false;
     let mut stderr_truncated = false;
 
-    let started = Instant::now();
     let status = loop {
         let progressed = match drain_pair(
             &mut stdout,
             &mut stderr,
             &mut stdout_bytes,
             &mut stderr_bytes,
+            &mut stderr_control_tail,
             &mut stdout_truncated,
             &mut stderr_truncated,
         ) {
             Ok(progressed) => progressed,
             Err(error) => {
-                return fail_owned_launcher(
+                return fail_without_linux_scope_proof(
                     &mut child,
+                    cleanup_deadline,
                     format!("failed reading selected WSL command output: {error}"),
                 );
             }
         };
-        let observed_exit = match child.try_wait() {
-            Ok(observed_exit) => observed_exit,
-            Err(error) => {
-                return fail_owned_launcher(
+
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() >= command_deadline => {
+                return fail_without_linux_scope_proof(
                     &mut child,
-                    format!("failed observing selected WSL command exit: {error}"),
+                    cleanup_deadline,
+                    format!(
+                        "selected WSL command exceeded the bounded host execution phase before its Linux-side cleanup proof (Linux scope deadline: {linux_scope_timeout_seconds}s)"
+                    ),
                 );
             }
-        };
-        if let Some(status) = observed_exit {
-            while drain_pair(
-                &mut stdout,
-                &mut stderr,
-                &mut stdout_bytes,
-                &mut stderr_bytes,
-                &mut stdout_truncated,
-                &mut stderr_truncated,
-            )
-            .map_err(|error| {
-                format!("failed draining selected WSL command output after observed exit: {error}")
-            })? {}
-            break status;
+            Ok(None) => {}
+            Err(error) => {
+                return fail_without_linux_scope_proof(
+                    &mut child,
+                    cleanup_deadline,
+                    format!("failed observing selected WSL command launcher exit: {error}"),
+                );
+            }
         }
-        if started.elapsed() >= TIMEOUT {
-            return fail_owned_launcher(
-                &mut child,
-                "selected WSL command exceeded the 30 second safety timeout",
-            );
-        }
+
         if !progressed {
-            thread::sleep(Duration::from_millis(10));
+            let now = Instant::now();
+            if now < command_deadline {
+                thread::sleep(
+                    Duration::from_millis(10).min(command_deadline.saturating_duration_since(now)),
+                );
+            }
         }
     };
 
-    let stderr_diagnostic = diagnostic_text(&stderr_bytes);
-    let suffix = truncation_suffix(stdout_truncated, stderr_truncated);
-    if !status.success() {
+    // Post-exit pipe draining is cleanup work, but it must not consume the
+    // entire reserved cleanup window. Give draining at most half of the
+    // remaining cleanup budget so process-scope termination still has time
+    // to run if a descendant keeps an inherited pipe continuously writable.
+    let post_exit_drain_deadline = {
+        let now = Instant::now();
+        now + cleanup_deadline.saturating_duration_since(now) / 2
+    };
+    match drain_until_idle_or_deadline(post_exit_drain_deadline, || {
+        drain_pair(
+            &mut stdout,
+            &mut stderr,
+            &mut stdout_bytes,
+            &mut stderr_bytes,
+            &mut stderr_control_tail,
+            &mut stdout_truncated,
+            &mut stderr_truncated,
+        )
+    }) {
+        Ok(true) => {}
+        Ok(false) => {
+            let cleanup = child.terminate_and_prove(cleanup_deadline, OWNED_LABEL);
+            return Err(format!(
+                "selected WSL command launcher exited, but post-exit output draining exceeded the reserved cleanup deadline; WSL-side cleanup proof cannot be trusted; bounded Windows launcher cleanup {}",
+                cleanup
+                    .map(|()| "was proven".to_owned())
+                    .unwrap_or_else(|error| format!("was not proven: {error}"))
+            )
+            .into());
+        }
+        Err(error) => {
+            let cleanup = child.terminate_and_prove(cleanup_deadline, OWNED_LABEL);
+            return Err(format!(
+                "selected WSL command launcher exited, but output draining failed and WSL-side cleanup proof cannot be trusted: {error}; bounded Windows launcher cleanup {}",
+                cleanup
+                    .map(|()| "was proven".to_owned())
+                    .unwrap_or_else(|cleanup_error| format!("was not proven: {cleanup_error}"))
+            )
+            .into());
+        }
+    }
+    // The launcher has exited and output has been drained. Scope quiescence is
+    // cleanup work and must consume only the reserved cleanup budget.
+    match child.wait_for_scope_quiescence(cleanup_deadline, OWNED_LABEL) {
+        Ok(true) => {}
+        Ok(false) => {
+            let cleanup = child.terminate_and_prove(cleanup_deadline, OWNED_LABEL);
+            return Err(format!(
+                "Windows WSL launcher direct child exited while its owned Windows process scope remained live; bounded cleanup {}",
+                cleanup
+                    .map(|()| "was proven".to_owned())
+                    .unwrap_or_else(|error| format!("was not proven: {error}"))
+            )
+            .into());
+        }
+        Err(error) => {
+            let cleanup = child.terminate_and_prove(cleanup_deadline, OWNED_LABEL);
+            return Err(format!(
+                "Windows WSL launcher process-scope quiescence could not be inspected: {error}; bounded cleanup {}",
+                cleanup
+                    .map(|()| "was proven".to_owned())
+                    .unwrap_or_else(|cleanup_error| format!("was not proven: {cleanup_error}"))
+            )
+            .into());
+        }
+    }
+
+    if let Some(required) = control_value(&stderr_control_tail, &unsupported_prefix) {
         return Err(format!(
-            "selected WSL command failed with status {status}: {stderr_diagnostic}{suffix}"
+            "selected WSL distribution lacks a required owned-scope primitive ({required}); command was not admitted"
+        )
+        .into());
+    }
+    if let Some(reason) = control_value(&stderr_control_tail, &unproven_prefix) {
+        return Err(
+            format!("WSL-side owned command scope cleanup could not be proven: {reason}").into(),
+        );
+    }
+
+    let target_status = control_value(&stderr_control_tail, &clean_prefix)
+        .ok_or(
+            "WSL-side owned command scope cleanup is unproven: the Linux supervisor exited without its cleanup marker",
+        )?
+        .parse::<i32>()
+        .map_err(|_| "WSL-side cleanup marker contained an invalid target exit status")?;
+
+    if status.code() != Some(target_status) {
+        return Err(format!(
+            "WSL-side cleanup marker/launcher exit mismatch: Linux target status {target_status}, Windows launcher status {status}; cleanup truth is ambiguous"
+        )
+        .into());
+    }
+
+    let stderr_diagnostic = diagnostic_text(&stderr_bytes, &scope_token);
+    let suffix = truncation_suffix(stdout_truncated, stderr_truncated);
+
+    if has_control_line(&stderr_control_tail, &timeout_line) {
+        return Err(format!(
+            "selected WSL command exceeded the {linux_scope_timeout_seconds} second WSL-side safety timeout; owned Linux process-group cleanup was proven{suffix}"
         )
         .into());
     }
@@ -827,11 +1109,82 @@ fn run_wsl_exec(
             format!("{suffix}; stderr: {stderr_diagnostic}")
         };
         return Err(format!(
-            "selected WSL command exceeded the 256 KiB per-stream safety bound{diagnostic}"
+            "selected WSL command exceeded the 256 KiB per-stream safety bound after WSL-side cleanup was proven{diagnostic}"
         )
         .into());
     }
+    if !status.success() {
+        return Err(format!(
+            "selected WSL command failed with status {status} after WSL-side cleanup was proven: {stderr_diagnostic}"
+        )
+        .into());
+    }
+
     Ok(stdout_bytes)
+}
+
+#[cfg(all(windows, test))]
+pub(crate) fn prove_wsl_exec_scope_cleanup_for_test(distribution: &str) -> Result<()> {
+    use super::wsl::system_wsl_executable;
+    use std::ffi::OsString;
+    use std::time::Duration;
+
+    let launcher = system_wsl_executable()?;
+    let descendant_script = "/bin/sleep 120 & child=$!; printf '%s\\n' \"$child\"; exit 0";
+    let output = run_wsl_exec_with_limits(
+        &launcher,
+        distribution,
+        None,
+        "/bin/sh",
+        &[OsString::from("-c"), OsString::from(descendant_script)],
+        2,
+        Duration::from_secs(8),
+    )?;
+    let descendant_pid = parse_single_text(&output, "WSL scope descendant pid")?;
+    if descendant_pid.is_empty() || !descendant_pid.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("WSL scope regression returned an invalid descendant pid".into());
+    }
+
+    let absence_script = "if /bin/kill -0 \"$1\" 2>/dev/null; then exit 91; else exit 0; fi";
+    run_wsl_exec_with_limits(
+        &launcher,
+        distribution,
+        None,
+        "/bin/sh",
+        &[
+            OsString::from("-c"),
+            OsString::from(absence_script),
+            OsString::from("winds-wsl-scope-check"),
+            OsString::from(&descendant_pid),
+        ],
+        2,
+        Duration::from_secs(8),
+    )
+    .map_err(|error| {
+        format!("WSL-side descendant survived the completed owned attestation scope: {error}")
+    })?;
+
+    let timeout_error = run_wsl_exec_with_limits(
+        &launcher,
+        distribution,
+        None,
+        "/bin/sleep",
+        &[OsString::from("120")],
+        1,
+        Duration::from_secs(6),
+    )
+    .unwrap_err()
+    .to_string();
+    if !timeout_error.contains("1 second WSL-side safety timeout")
+        || !timeout_error.contains("cleanup was proven")
+    {
+        return Err(format!(
+            "WSL-side timeout regression did not report proven scope cleanup: {timeout_error}"
+        )
+        .into());
+    }
+
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -886,10 +1239,39 @@ fn parse_single_linux_path(bytes: &[u8], label: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use super::drain_until_idle_or_deadline;
     use super::{
         WslCwdStrategy, WslExecutionDomain, WslTerminalProfile, build_launch_arguments,
         parse_single_linux_path, stable_profile_id, validate_profile_for_launch,
     };
+
+    #[cfg(windows)]
+    #[test]
+    fn post_exit_drain_stops_at_deadline_under_continuous_progress() {
+        use std::time::{Duration, Instant};
+
+        let started = Instant::now();
+        let mut drain_calls = 0_u64;
+        let drained = drain_until_idle_or_deadline(started + Duration::from_millis(20), || {
+            drain_calls += 1;
+            Ok(true)
+        })
+        .unwrap();
+
+        assert!(
+            !drained,
+            "continuous progress must stop at the drain deadline"
+        );
+        assert!(
+            drain_calls > 0,
+            "the regression must exercise the progress loop"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "deadline enforcement must remain bounded"
+        );
+    }
 
     #[test]
     fn launch_arguments_bind_distribution_cwd_and_exact_shell_without_shell_parsing() {

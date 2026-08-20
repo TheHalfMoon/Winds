@@ -1,4 +1,6 @@
 use super::Result;
+#[cfg(windows)]
+use super::process_scope::{OwnedProcess, operation_deadlines, spawn_owned_process};
 use serde::Serialize;
 #[cfg(any(windows, test))]
 use std::collections::{BTreeMap, BTreeSet};
@@ -15,10 +17,16 @@ use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::process::{Command, Stdio};
 #[cfg(windows)]
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+#[cfg(windows)]
 use std::thread;
+#[cfg(windows)]
+use std::time::{Duration, Instant};
 
 #[cfg(any(windows, test))]
 const WSL_OUTPUT_CAP_BYTES: usize = 1024 * 1024;
+#[cfg(windows)]
+const WSL_DISCOVERY_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[cfg(windows)]
 #[link(name = "kernel32")]
@@ -121,67 +129,228 @@ fn system_directory() -> Result<PathBuf> {
 
 #[cfg(windows)]
 fn run_wsl<const N: usize>(executable: &Path, args: [&str; N]) -> Result<Vec<u8>> {
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| {
-            format!(
-                "WSL discovery unavailable: failed to execute {}: {error}",
-                executable.display()
+        .stderr(Stdio::piped());
+
+    let started = Instant::now();
+    let (command_deadline, cleanup_deadline) = operation_deadlines(started, WSL_DISCOVERY_TIMEOUT);
+    let mut child = spawn_owned_process(&mut command, "WSL discovery").map_err(|error| {
+        format!(
+            "WSL discovery unavailable: failed to execute {} in an owned process scope: {error}",
+            executable.display()
+        )
+    })?;
+
+    let stdout = match child.take_stdout() {
+        Some(stdout) => stdout,
+        None => {
+            let cleanup = child.terminate_and_prove(cleanup_deadline, "WSL discovery");
+            return Err(format!(
+                "WSL discovery unavailable: failed to capture wsl.exe stdout; owned cleanup {}",
+                cleanup
+                    .map(|()| "succeeded".to_owned())
+                    .unwrap_or_else(|error| format!("was not proven: {error}"))
             )
-        })?;
+            .into());
+        }
+    };
+    let stderr = match child.take_stderr() {
+        Some(stderr) => stderr,
+        None => {
+            let cleanup = child.terminate_and_prove(cleanup_deadline, "WSL discovery");
+            return Err(format!(
+                "WSL discovery unavailable: failed to capture wsl.exe stderr; owned cleanup {}",
+                cleanup
+                    .map(|()| "succeeded".to_owned())
+                    .unwrap_or_else(|error| format!("was not proven: {error}"))
+            )
+            .into());
+        }
+    };
 
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or("WSL discovery unavailable: failed to capture wsl.exe stdout")?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or("WSL discovery unavailable: failed to capture wsl.exe stderr")?;
+    let stdout_reader = spawn_reader(stdout);
+    let stderr_reader = spawn_reader(stderr);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() >= command_deadline => {
+                return fail_wsl_observation(
+                    &mut child,
+                    &stdout_reader,
+                    &stderr_reader,
+                    cleanup_deadline,
+                    format!(
+                        "WSL discovery command exceeded the bounded execution phase of the {} second safety timeout",
+                        WSL_DISCOVERY_TIMEOUT.as_secs()
+                    ),
+                );
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(10)),
+            Err(error) => {
+                return fail_wsl_observation(
+                    &mut child,
+                    &stdout_reader,
+                    &stderr_reader,
+                    cleanup_deadline,
+                    format!("WSL discovery failed waiting for wsl.exe: {error}"),
+                );
+            }
+        }
+    };
 
-    let stdout_reader = thread::spawn(move || read_capped(stdout));
-    let stderr_reader = thread::spawn(move || read_capped(stderr));
-    let status = child
-        .wait()
-        .map_err(|error| format!("WSL discovery failed waiting for wsl.exe: {error}"))?;
-    let stdout = join_reader(stdout_reader, "stdout")?;
-    let stderr = join_reader(stderr_reader, "stderr")?;
+    // Once the direct child has exited, pipe drain and scope quiescence are
+    // cleanup work. They must use the reserved cleanup budget rather than the
+    // already-consumed command phase deadline.
+    let stdout = match receive_reader(&stdout_reader, "stdout", cleanup_deadline) {
+        Ok(output) => output,
+        Err(error) => {
+            return fail_wsl_observation(
+                &mut child,
+                &stdout_reader,
+                &stderr_reader,
+                cleanup_deadline,
+                error.to_string(),
+            );
+        }
+    };
+    let stderr = match receive_reader(&stderr_reader, "stderr", cleanup_deadline) {
+        Ok(output) => output,
+        Err(error) => {
+            return fail_wsl_observation(
+                &mut child,
+                &stdout_reader,
+                &stderr_reader,
+                cleanup_deadline,
+                error.to_string(),
+            );
+        }
+    };
 
+    match child.wait_for_scope_quiescence(cleanup_deadline, "WSL discovery") {
+        Ok(true) => {}
+        Ok(false) => {
+            return fail_wsl_observation(
+                &mut child,
+                &stdout_reader,
+                &stderr_reader,
+                cleanup_deadline,
+                "WSL discovery direct child exited while owned descendants remained live"
+                    .to_owned(),
+            );
+        }
+        Err(error) => {
+            return fail_wsl_observation(
+                &mut child,
+                &stdout_reader,
+                &stderr_reader,
+                cleanup_deadline,
+                format!("WSL discovery could not prove owned process-scope quiescence: {error}"),
+            );
+        }
+    }
+
+    if stdout.truncated || stderr.truncated {
+        return Err("WSL discovery output exceeded the 1 MiB per-stream safety bound".into());
+    }
     if !status.success() {
         let stderr_text = decode_wsl_text(&stderr.bytes)
             .unwrap_or_else(|_| String::from_utf8_lossy(&stderr.bytes).into_owned());
-        let suffix = if stderr.truncated { " [truncated]" } else { "" };
         return Err(format!(
-            "WSL discovery command failed with status {status}: {}{suffix}",
+            "WSL discovery command failed with status {status}: {}",
             stderr_text.trim()
         )
         .into());
-    }
-    if stdout.truncated || stderr.truncated {
-        return Err("WSL discovery output exceeded the 1 MiB per-stream safety bound".into());
     }
     Ok(stdout.bytes)
 }
 
 #[cfg(windows)]
-fn join_reader(
-    handle: thread::JoinHandle<io::Result<BoundedBytes>>,
+fn fail_wsl_observation(
+    child: &mut OwnedProcess,
+    stdout_reader: &Receiver<io::Result<BoundedBytes>>,
+    stderr_reader: &Receiver<io::Result<BoundedBytes>>,
+    cleanup_deadline: Instant,
+    primary_error: String,
+) -> Result<Vec<u8>> {
+    let mut cleanup_failures = Vec::new();
+    if let Err(error) = child.terminate_and_prove(cleanup_deadline, "WSL discovery") {
+        cleanup_failures.push(error.to_string());
+    }
+    if let Err(error) = wait_reader_shutdown(stdout_reader, "stdout", cleanup_deadline) {
+        cleanup_failures.push(error.to_string());
+    }
+    if let Err(error) = wait_reader_shutdown(stderr_reader, "stderr", cleanup_deadline) {
+        cleanup_failures.push(error.to_string());
+    }
+
+    if cleanup_failures.is_empty() {
+        Err(primary_error.into())
+    } else {
+        Err(format!(
+            "{primary_error}; WSL owned subprocess cleanup was not proven: {}",
+            cleanup_failures.join("; ")
+        )
+        .into())
+    }
+}
+
+#[cfg(windows)]
+fn spawn_reader<R>(reader: R) -> Receiver<io::Result<BoundedBytes>>
+where
+    R: Read + Send + 'static,
+{
+    let (sender, receiver) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let _ = sender.send(read_capped(reader));
+    });
+    receiver
+}
+
+#[cfg(windows)]
+fn receive_reader(
+    receiver: &Receiver<io::Result<BoundedBytes>>,
     name: &str,
+    deadline: Instant,
 ) -> Result<BoundedBytes> {
-    handle
-        .join()
-        .map_err(|_| format!("WSL discovery {name} reader thread panicked"))?
-        .map_err(|error| format!("WSL discovery failed reading {name}: {error}").into())
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    match receiver.recv_timeout(remaining) {
+        Ok(result) => {
+            result.map_err(|error| format!("WSL discovery failed reading {name}: {error}").into())
+        }
+        Err(RecvTimeoutError::Timeout) => Err(format!(
+            "WSL discovery {name} reader exceeded the bounded execution phase of the overall {} second safety timeout",
+            WSL_DISCOVERY_TIMEOUT.as_secs()
+        )
+        .into()),
+        Err(RecvTimeoutError::Disconnected) => {
+            Err(format!("WSL discovery {name} reader terminated without a result").into())
+        }
+    }
+}
+
+#[cfg(windows)]
+fn wait_reader_shutdown(
+    receiver: &Receiver<io::Result<BoundedBytes>>,
+    name: &str,
+    deadline: Instant,
+) -> Result<()> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    match receiver.recv_timeout(remaining) {
+        Ok(_) | Err(RecvTimeoutError::Disconnected) => Ok(()),
+        Err(RecvTimeoutError::Timeout) => Err(format!(
+            "WSL discovery {name} reader shutdown was not proven inside the bounded cleanup window"
+        )
+        .into()),
+    }
 }
 
 #[cfg(any(windows, test))]
 fn read_capped<R: Read>(mut reader: R) -> io::Result<BoundedBytes> {
     let mut captured = Vec::new();
-    let mut truncated = false;
     let mut buffer = [0_u8; 8192];
 
     loop {
@@ -189,17 +358,22 @@ fn read_capped<R: Read>(mut reader: R) -> io::Result<BoundedBytes> {
         if count == 0 {
             break;
         }
-        let remaining = WSL_OUTPUT_CAP_BYTES.saturating_sub(captured.len());
+        let probe_limit = WSL_OUTPUT_CAP_BYTES + 1;
+        let remaining = probe_limit.saturating_sub(captured.len());
         let keep = remaining.min(count);
         captured.extend_from_slice(&buffer[..keep]);
-        if keep < count {
-            truncated = true;
+        if captured.len() > WSL_OUTPUT_CAP_BYTES {
+            captured.truncate(WSL_OUTPUT_CAP_BYTES);
+            return Ok(BoundedBytes {
+                bytes: captured,
+                truncated: true,
+            });
         }
     }
 
     Ok(BoundedBytes {
         bytes: captured,
-        truncated,
+        truncated: false,
     })
 }
 

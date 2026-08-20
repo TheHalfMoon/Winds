@@ -1,4 +1,7 @@
-use super::{Repo, Result, git_command, run_git_text, strip_git_line_ending};
+use super::{
+    Repo, Result, git_command, run_bounded_read_only_git, run_read_only_git_output,
+    run_read_only_git_text, strip_git_line_ending,
+};
 use crate::store::{NewWorkspace, Store};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -70,7 +73,7 @@ fn open_worktree(path: &Path) -> Result<Repo> {
 
 fn inspect_worktree(repo: &Repo) -> Result<WorkspaceInspection> {
     let canonical_worktree_root = utf8_path(repo.root(), "canonical worktree root")?.to_owned();
-    let git_common_dir = utf8_path(&repo.common_dir, "Git common directory")?.to_owned();
+    let git_common_dir = utf8_path(repo.common_dir(), "Git common directory")?.to_owned();
     let branch = branch_name(repo)?;
     let head_oid = exact_head(repo, branch.as_deref())?;
     let detached = branch.is_none();
@@ -89,9 +92,11 @@ fn inspect_worktree(repo: &Repo) -> Result<WorkspaceInspection> {
 }
 
 fn exact_head(repo: &Repo, branch: Option<&str>) -> Result<Option<String>> {
-    let output = git_command(repo.root())
-        .args(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])
-        .output()?;
+    let output = run_read_only_git_output(
+        repo.root(),
+        ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"],
+        "workspace HEAD resolution",
+    )?;
     if output.status.success() {
         let head = String::from_utf8(output.stdout)?;
         let head = strip_git_line_ending(&head);
@@ -112,10 +117,12 @@ fn exact_head(repo: &Repo, branch: Option<&str>) -> Result<Option<String>> {
         return Err("detached workspace HEAD does not resolve to a commit".into());
     };
     let full_ref = format!("refs/heads/{branch}");
-    let ref_status = git_command(repo.root())
-        .args(["show-ref", "--verify", "--quiet", full_ref.as_str()])
-        .status()?;
-    match ref_status.code() {
+    let ref_status = run_read_only_git_output(
+        repo.root(),
+        ["show-ref", "--verify", "--quiet", full_ref.as_str()],
+        "workspace HEAD branch verification",
+    )?;
+    match ref_status.status.code() {
         Some(1) => Ok(None),
         Some(0) => Err(format!(
             "workspace HEAD branch exists but does not resolve to a commit: {full_ref}"
@@ -126,9 +133,11 @@ fn exact_head(repo: &Repo, branch: Option<&str>) -> Result<Option<String>> {
 }
 
 fn branch_name(repo: &Repo) -> Result<Option<String>> {
-    let output = git_command(repo.root())
-        .args(["symbolic-ref", "--quiet", "--short", "HEAD"])
-        .output()?;
+    let output = run_read_only_git_output(
+        repo.root(),
+        ["symbolic-ref", "--quiet", "--short", "HEAD"],
+        "workspace branch-state inspection",
+    )?;
     match output.status.code() {
         Some(0) => {
             let branch = String::from_utf8(output.stdout)?;
@@ -148,24 +157,15 @@ fn branch_name(repo: &Repo) -> Result<Option<String>> {
 }
 
 fn read_only_status(repo: &Repo) -> Result<Vec<u8>> {
-    let output = git_command(repo.root())
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .args([
-            "status",
-            "--porcelain=v1",
-            "-z",
-            "--untracked-files=all",
-            "--ignore-submodules=none",
-        ])
-        .output()?;
-    if output.status.success() {
-        return Ok(output.stdout);
-    }
-    Err(format!(
-        "failed to inspect workspace dirty state: {}",
-        String::from_utf8_lossy(&output.stderr).trim()
-    )
-    .into())
+    let mut command = git_command(repo.root());
+    command.env("GIT_OPTIONAL_LOCKS", "0").args([
+        "status",
+        "--porcelain=v1",
+        "-z",
+        "--untracked-files=all",
+        "--ignore-submodules=none",
+    ]);
+    run_bounded_read_only_git(command, "workspace dirty-state inspection")
 }
 
 fn require_canonical_external_state_root(repo: &Repo, state_root: &Path) -> Result<()> {
@@ -237,7 +237,7 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let value = run_git_text(cwd, args)?;
+    let value = run_read_only_git_text(cwd, args, "workspace Git boolean inspection")?;
     match strip_git_line_ending(&value) {
         "true" => Ok(true),
         "false" => Ok(false),

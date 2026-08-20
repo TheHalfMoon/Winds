@@ -13,6 +13,8 @@ mod domain;
 mod execution;
 mod git;
 mod store;
+#[cfg(test)]
+mod t068_store_regression_tests;
 
 use crate::check::run_check;
 use crate::domain::{CheckEvidence, CheckStatus, Eligibility, EvidenceReport, PromotionReport};
