@@ -165,6 +165,17 @@ impl Drop for OwnedProcess {
             // so its PID cannot have been recycled at this point.
             if matches!(self.child.try_wait(), Ok(None)) {
                 let _ = self.child.kill();
+                // SIGKILL cannot be caught. Reap only through nonblocking
+                // `try_wait` and a short deadline so Drop cannot introduce an
+                // unbounded wait while also avoiding a permanent zombie.
+                let reap_deadline = Instant::now() + POLL_INTERVAL * 20;
+                while matches!(self.child.try_wait(), Ok(None)) {
+                    let now = Instant::now();
+                    if now >= reap_deadline {
+                        break;
+                    }
+                    thread::sleep(POLL_INTERVAL.min(reap_deadline.saturating_duration_since(now)));
+                }
             }
         }
         #[cfg(not(any(unix, windows)))]
@@ -241,27 +252,14 @@ fn configure_unix_owned_scope() -> io::Result<()> {
     #[cfg(target_os = "linux")]
     install_linux_process_group_escape_filter()?;
 
-    #[cfg(target_os = "macos")]
-    constrain_macos_descendant_creation()?;
+    // macOS deliberately does not lower RLIMIT_NPROC here. That limit is
+    // accounted per real UID rather than per owned process tree, so using it as
+    // containment breaks legitimate Git subprocesses (including submodule
+    // status scans) based on unrelated processes owned by the same user. The
+    // macOS contract is the owned session/process-group boundary established by
+    // setsid above; normal Git descendants inherit that boundary and are
+    // terminated/reaped as one scope.
 
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn constrain_macos_descendant_creation() -> io::Result<()> {
-    let mut current = std::mem::MaybeUninit::<libc::rlimit>::uninit();
-    if unsafe { libc::getrlimit(libc::RLIMIT_NPROC, current.as_mut_ptr()) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    let current = unsafe { current.assume_init() };
-    let hard_limit = current.rlim_max.min(2 as libc::rlim_t);
-    let bounded = libc::rlimit {
-        rlim_cur: hard_limit,
-        rlim_max: hard_limit,
-    };
-    if unsafe { libc::setrlimit(libc::RLIMIT_NPROC, &bounded) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
     Ok(())
 }
 
@@ -1015,7 +1013,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn macos_owned_scope_denies_descendant_creation() {
+    fn macos_owned_scope_allows_and_terminates_same_group_descendants() {
         let mut command = Command::new("/bin/sh");
         command.args(["-c", "/bin/sleep 30 &"]);
         command
@@ -1030,13 +1028,28 @@ mod tests {
             Instant::now() + Duration::from_secs(5)
         ));
         assert!(
-            process
+            !process
                 .wait_for_scope_quiescence(
-                    Instant::now() + Duration::from_secs(2),
+                    Instant::now() + Duration::from_millis(100),
                     "process-scope macOS descendant fixture",
                 )
                 .unwrap(),
-            "macOS RLIMIT_NPROC containment must prevent an owned observation child from leaving a descendant"
+            "macOS owned process-group containment must observe a legitimate live descendant"
+        );
+        process
+            .terminate_and_prove(
+                Instant::now() + Duration::from_secs(2),
+                "process-scope macOS descendant fixture",
+            )
+            .unwrap();
+        assert!(
+            process
+                .wait_for_scope_quiescence(
+                    Instant::now() + Duration::from_millis(100),
+                    "process-scope macOS descendant fixture",
+                )
+                .unwrap(),
+            "macOS owned process-group cleanup must terminate and reap normal descendants"
         );
     }
 
