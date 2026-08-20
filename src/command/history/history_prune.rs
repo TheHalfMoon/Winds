@@ -249,6 +249,21 @@ where
     remove_session_object_bound(history_root, expected_root, entry)
 }
 
+#[cfg(all(unix, target_os = "linux"))]
+fn unix_stat_identity(stat: &libc::stat) -> HistoryPathIdentity {
+    (stat.st_dev, stat.st_ino)
+}
+
+#[cfg(all(unix, target_os = "macos"))]
+fn unix_stat_identity(stat: &libc::stat) -> HistoryPathIdentity {
+    (stat.st_dev as u64, stat.st_ino)
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn unix_stat_identity(stat: &libc::stat) -> HistoryPathIdentity {
+    (stat.st_dev as u64, stat.st_ino as u64)
+}
+
 #[cfg(unix)]
 fn remove_session_object_bound(
     history_root: &Path,
@@ -291,7 +306,7 @@ fn remove_session_object_bound(
         if (stat.st_mode as libc::mode_t) & libc::S_IFMT != libc::S_IFREG {
             return Err("terminal history file became a non-regular object before deletion".into());
         }
-        let identity = (stat.st_dev as u64, stat.st_ino as u64);
+        let identity = unix_stat_identity(&stat);
         if identity != file.identity {
             return Err(
                 "terminal history file filesystem identity changed before object-bound deletion"
@@ -327,7 +342,7 @@ fn remove_session_object_bound(
         .into());
     }
     let stat = unsafe { stat.assume_init() };
-    let current = (stat.st_dev as u64, stat.st_ino as u64);
+    let current = unix_stat_identity(&stat);
     if current != entry.identity {
         return Err(
             "terminal history session filesystem identity changed before non-recursive removal"
