@@ -109,6 +109,20 @@ New Git observation writes continue to require full lowercase 40- or 64-hex obje
 
 Deferred-finalization retry still preserves the affected historical execution in the in-memory retry queue when Store load or finalization persistence fails; it does not fabricate a terminal final state. The retry sweep now reports the residual failure but returns success to the unrelated terminal-start path, so one permanently unfinalizable historical row cannot block every subsequent terminal session. Obsolete/already-final rows continue to be discarded as completed.
 
+### A14. History pruning could recursively delete a foreign replacement after validation
+
+**Disposition: REPAIRED / RETENTION POLICY FAILS CLOSED.**
+
+A fresh independent exact-head review of candidate `5c3a646d196abd33b96468bb95b597fc5da6fdd8`, tree `428d0949647b75d626dc048382770f9740e7bce0`, found one new material P1: `remove_owned_history_session` validated a retained history directory and then called `fs::remove_dir_all` through that mutable pathname. A concurrent pathname replacement after the last validation could therefore redirect recursive deletion to a foreign replacement directory. The reviewer reported no additional material finding in the other inspected T068 surfaces.
+
+The repair removes production recursive history-directory deletion entirely. Before a new retained-history record is created, Winds computes the existing logical history usage under the existing cross-process history write lock. If `existing + required` cannot fit the explicit total-history quota, the new write fails before session-directory creation and retained history is left untouched. A failed partial write or an unexpected post-write quota verification failure is likewise retained with an explicit error rather than recursively cleaned through a pathname whose object identity cannot be bound portably within Spec 003.
+
+This preserves FR-028's bounded-storage invariant without introducing a filesystem broker or new runtime scope: Winds does not start a new history write when the already-retained logical bytes leave insufficient quota. It narrows the earlier T056 behavior from automatic oldest-session pruning to fail-closed retention at quota pressure; manual or future object-bound retention management requires separate authorization.
+
+Regression coverage replaces the old automatic-pruning expectations and includes a post-snapshot replacement test: the originally observed session directory is moved, a foreign replacement is created at the original pathname, quota admission fails, and both the foreign replacement and the moved owned directory remain unchanged. The one-shot formatting commit removed itself from the final tree; it changed only rustfmt output in the new regression.
+
+All deterministic CI and independent-review results for `5c3a646d196abd33b96468bb95b597fc5da6fdd8` are historical after this repair and MUST NOT satisfy the T068 final gate. A complete exact-head CI cycle and a new fresh independent review are required on the eventual unchanged final candidate.
+
 ## Historical evidence attribution clarifications
 
 ### H1. `SC-001 100-cycle soak` references in Spec 003 task evidence
