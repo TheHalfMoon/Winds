@@ -49,28 +49,16 @@ jobs:
           expected_blob = '081732211fb3e900c518136a8b3d4ef66e6a6236'
           assert actual_blob == expected_blob, (actual_blob, expected_blob)
 
-          old_loop = '''    loop {
-              match drain_pair(
-                  &mut stdout,
-                  &mut stderr,
-                  &mut stdout_bytes,
-                  &mut stderr_bytes,
-                  &mut stderr_control_tail,
-                  &mut stdout_truncated,
-                  &mut stderr_truncated,
-              ) {
-                  Ok(true) => continue,
-                  Ok(false) => break,
-                  Err(error) => {
-                      return Err(format!(
-                          "selected WSL command launcher exited, but output draining failed and WSL-side cleanup proof cannot be trusted: {error}"
-                      )
-                      .into());
-                  }
-              }
-          }
-          '''
-          assert text.count(old_loop) == 1
+          status_anchor = '    let status = loop {'
+          status_at = text.index(status_anchor)
+          post_exit_marker = '\n\n    loop {\n        match drain_pair('
+          loop_at = text.index(post_exit_marker, status_at) + 2
+          loop_end_marker = '\n\n    // The launcher has exited and output has been drained.'
+          loop_end = text.index(loop_end_marker, loop_at)
+          old_loop = text[loop_at:loop_end]
+          assert old_loop.startswith('    loop {\n')
+          assert 'output draining failed and WSL-side cleanup proof cannot be trusted' in old_loop
+
           new_loop = '''    // Post-exit pipe draining is cleanup work, but it must not consume the
               // entire reserved cleanup window. Give draining at most half of the
               // remaining cleanup budget so process-scope termination still has time
@@ -112,27 +100,21 @@ jobs:
                           .into());
                       }
                   }
-              }
-          '''
-          text = text.replace(old_loop, new_loop, 1)
+              }'''
+          text = text[:loop_at] + new_loop + text[loop_end:]
 
-          anchor = '''    if !timeout_error.contains("1 second WSL-side safety timeout")
-              || !timeout_error.contains("cleanup was proven")
-          {
-              return Err(format!(
-                  "WSL-side timeout regression did not report proven scope cleanup: {timeout_error}"
-              )
-              .into());
-          }
+          function_anchor = '#[cfg(all(windows, test))]\npub(crate) fn prove_wsl_exec_scope_cleanup_for_test'
+          function_at = text.index(function_anchor)
+          insert_marker = '\n    Ok(())\n}\n\n#[cfg(windows)]\nfn require_same_canonical_windows_path'
+          insert_at = text.index(insert_marker, function_at)
+          regression = '''
 
-          '''
-          assert text.count(anchor) == 1
-          regression = anchor + '''    // Regression for the post-exit drain bound. This test-only arbitrary
+              // Regression for the post-exit drain bound. This test-only arbitrary
               // command deliberately escapes the tracked Linux process group and keeps
               // stdout continuously writable after the supervised target exits. The
               // production call graph does not expose arbitrary commands through this
               // helper; the fixture exists only to prove host-side draining is bounded.
-              let post_exit_writer_script = r#"setsid /bin/sh -c '/bin/sleep 7 </dev/null >/dev/null 2>&1 & timer=$!; while /bin/kill -0 \"$timer\" 2>/dev/null; do printf x; done; wait \"$timer\" 2>/dev/null || :' & exit 0"#;
+              let post_exit_writer_script = r#"/usr/bin/setsid /bin/sh -c '/bin/sleep 7 </dev/null >/dev/null 2>&1 & timer=$!; while /bin/kill -0 \"$timer\" 2>/dev/null; do printf x; done; wait \"$timer\" 2>/dev/null || :' & exit 0"#;
               let drain_started = std::time::Instant::now();
               let drain_error = run_wsl_exec_with_limits(
                   &launcher,
@@ -155,10 +137,8 @@ jobs:
                       "WSL post-exit drain regression was not bounded as expected: elapsed={drain_elapsed:?}, error={drain_error}"
                   )
                   .into());
-              }
-
-          '''
-          text = text.replace(anchor, regression, 1)
+              }'''
+          text = text[:insert_at] + regression + text[insert_at:]
           path.write_text(text)
           PY
 
