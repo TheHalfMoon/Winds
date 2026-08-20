@@ -255,16 +255,21 @@ impl Store {
             }
         }
         self.deferred_terminal_finalizations = retryable;
-        if failures.is_empty() {
-            Ok(completed)
-        } else {
-            Err(format!(
-                "{} retryable deferred terminal finalization(s) remain pending: {}",
+
+        // A failed retry must remain fail-closed for the affected historical
+        // execution: keep it queued and never fabricate a final state. It must
+        // not, however, prevent an unrelated new terminal session from
+        // starting. Report the residual explicitly while returning success for
+        // the retry sweep itself so one permanently unfinalizable row cannot
+        // poison every future terminal start.
+        if !failures.is_empty() {
+            eprintln!(
+                "warning: {} retryable deferred terminal finalization(s) remain pending: {}",
                 failures.len(),
                 failures.join("; ")
-            )
-            .into())
+            );
         }
+        Ok(completed)
     }
 }
 
