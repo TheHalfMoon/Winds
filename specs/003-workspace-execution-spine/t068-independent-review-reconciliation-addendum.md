@@ -2,7 +2,7 @@
 
 Status: **T068 CLOSEOUT EVIDENCE RECORDED — PR #63 REMAINS UNMERGED; T069 NOT STARTED**
 
-This addendum records material dispositions discovered after the initial T068 reconciliation record was created. It does not check T068, start T069, authorize merge of PR #62 or PR #63, or change the Spec 003 runtime scope.
+This addendum records material dispositions discovered after the initial T068 reconciliation record was created. It records the T068 closeout evidence only; it does not start T069, authorize merge of PR #62 or PR #63, or change the Spec 003 runtime scope.
 
 ## Additional repaired supported-path findings
 
