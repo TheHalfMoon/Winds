@@ -58,27 +58,27 @@ fn twenty_named_sessions_keep_stable_identity_across_renames() {
     let workstream_names = ["Task", "task", "مهمة", "任务", "Task"];
     let session_names = ["Planner", "planner", "مخطط", "规划"];
 
-    for workstream_index in 0..5 {
+    for (workstream_index, &workstream_name) in workstream_names.iter().enumerate() {
         let workstream_id = format!("workstream-{workstream_index:02}");
         store
             .create_workstream(
                 NewWorkstream {
                     workstream_id: &workstream_id,
                     workspace_id: "workspace-main",
-                    display_name: workstream_names[workstream_index],
+                    display_name: workstream_name,
                 },
                 100 + i64::try_from(workstream_index).unwrap(),
             )
             .unwrap();
 
-        for session_index in 0..4 {
+        for (session_index, &session_name) in session_names.iter().enumerate() {
             let session_id = format!("session-{workstream_index:02}-{session_index:02}");
             store
                 .create_winds_session(
                     NewWindsSession {
                         session_id: &session_id,
                         workstream_id: &workstream_id,
-                        display_name: session_names[session_index],
+                        display_name: session_name,
                     },
                     200 + i64::try_from(workstream_index * 10 + session_index).unwrap(),
                 )
