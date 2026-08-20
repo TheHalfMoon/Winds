@@ -1,36 +1,55 @@
 use crate::store::{NewWindsSession, NewWorkspace, NewWorkstream, Store};
 use rusqlite::{Connection, params};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_HOME: AtomicU64 = AtomicU64::new(0);
 
-struct TestHome(PathBuf);
+struct TestHome {
+    path: PathBuf,
+    owned_base: PathBuf,
+}
 
 impl TestHome {
     fn new(name: &str) -> Self {
+        assert!(
+            Path::new(name).components().all(|component| matches!(component, Component::Normal(_))),
+            "test-home name must contain only normal path components"
+        );
         let sequence = NEXT_HOME.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "winds-t070-agentic-identity-{name}-{}-{sequence}",
+        let owned_base = std::env::temp_dir().join(format!(
+            "winds-t070-agentic-identity-owned-{}-{sequence}",
             std::process::id()
         ));
+        fs::create_dir(&owned_base).unwrap();
+        let path = owned_base.join(name);
         fs::create_dir(&path).unwrap();
-        Self(path)
+        Self { path, owned_base }
     }
 
     fn path(&self) -> &Path {
-        &self.0
+        &self.path
     }
 
     fn database(&self) -> PathBuf {
-        self.0.join("winds.db")
+        self.path.join("winds.db")
     }
 }
 
 impl Drop for TestHome {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+        let Ok(canonical_base) = fs::canonicalize(&self.owned_base) else {
+            return;
+        };
+        let Ok(canonical_path) = fs::canonicalize(&self.path) else {
+            return;
+        };
+        if canonical_path.parent() != Some(canonical_base.as_path()) {
+            return;
+        }
+        let _ = fs::remove_dir_all(&canonical_path);
+        let _ = fs::remove_dir(&canonical_base);
     }
 }
 
@@ -125,6 +144,29 @@ fn twenty_named_sessions_keep_stable_identity_across_renames() {
     );
     assert_eq!(after_session.updated_unix_ms, 510);
     assert_eq!(after_session.display_name, "Review 复核");
+
+    store
+        .rename_workstream("workstream-02", "Renamed again", 520)
+        .unwrap();
+    store
+        .rename_winds_session("session-02-03", "Review again", 530)
+        .unwrap();
+    assert!(
+        store
+            .rename_workstream("workstream-02", "stale rename", 519)
+            .is_err()
+    );
+    assert!(
+        store
+            .rename_winds_session("session-02-03", "stale rename", 529)
+            .is_err()
+    );
+    let after_stale_workstream = store.load_workstream("workstream-02").unwrap();
+    let after_stale_session = store.load_winds_session("session-02-03").unwrap();
+    assert_eq!(after_stale_workstream.display_name, "Renamed again");
+    assert_eq!(after_stale_workstream.updated_unix_ms, 520);
+    assert_eq!(after_stale_session.display_name, "Review again");
+    assert_eq!(after_stale_session.updated_unix_ms, 530);
 
     let mut session_count = 0_usize;
     for workstream in &workstreams {
