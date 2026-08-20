@@ -11,7 +11,7 @@ env:
 
 jobs:
   t068-closeout-docs:
-    if: github.event.pull_request.number == 63
+    if: github.event.pull_request.number == 63 && github.actor == 'TheHalfMoon'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout exact closeout carrier
@@ -101,15 +101,16 @@ jobs:
           grep -Fq 'Status: **T068 CLOSEOUT EVIDENCE RECORDED' specs/003-workspace-execution-spine/t068-independent-review-reconciliation-addendum.md
           grep -Fq -- '- [x] **T068**' specs/003-workspace-execution-spine/tasks.md
           grep -Fq -- '- [ ] **T069**' specs/003-workspace-execution-spine/tasks.md
-      - name: Commit closeout docs and restore workflow state
+      - name: Commit documentation-only closeout
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git rm -- .github/workflows/t068-closeout-docs-carrier.yml
-          git checkout badfa984d7aa5552478aaba5b7da5819290253df -- .github/workflows/quality.yml
-          git add -- .github/workflows/quality.yml specs/003-workspace-execution-spine/tasks.md specs/003-workspace-execution-spine/t068-independent-review-reconciliation-addendum.md
+          git add -- specs/003-workspace-execution-spine/tasks.md specs/003-workspace-execution-spine/t068-independent-review-reconciliation-addendum.md
+          changed="$(git diff --cached --name-only)"
+          expected="$(printf '%s\n' 'specs/003-workspace-execution-spine/t068-independent-review-reconciliation-addendum.md' 'specs/003-workspace-execution-spine/tasks.md')"
+          test "$changed" = "$expected"
           git diff --cached --check
           git commit -m 'docs(003): record T068 independent review closeout'
           git push origin 'HEAD:fix/003-t068-independent-review-findings'
