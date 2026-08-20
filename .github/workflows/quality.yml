@@ -41,136 +41,121 @@ jobs:
               print('repair already present')
               raise SystemExit(0)
 
-          old = '''pub struct ClonedWorkspace {
-              pub workspace: WorkspaceInspection,
-              pub remote_identity: String,
-          }'''
-          new = '''pub struct ClonedWorkspace {
-              pub workspace: WorkspaceInspection,
-              pub remote_identity: String,
-              pub staging_cleanup_warning: Option<String>,
-          }'''
-          assert old in workspace
-          workspace = workspace.replace(old, new, 1)
+          field_anchor = '    pub remote_identity: String,\n'
+          assert workspace.count(field_anchor) == 1
+          workspace = workspace.replace(
+              field_anchor,
+              field_anchor + '    pub staging_cleanup_warning: Option<String>,\n',
+              1,
+          )
 
           start_marker = '    if let Err(error) = remove_empty_owned_clone_staging(&staging) {'
           end_marker = '    let workspace = inspect_existing_workspace(&planned_destination, canonical_state_root)?;'
           start = workspace.index(start_marker)
           end = workspace.index(end_marker, start)
-          new = '''    // Publication and filesystem identity are already proven. Failure to remove
-              // the now-empty private staging shell must not discard that proven publication
-              // or prevent workspace registration. Preserve the cleanup uncertainty in the
-              // returned record so callers can surface it without fabricating failure.
-              let staging_cleanup_warning = remove_empty_owned_clone_staging(&staging)
-                  .err()
-                  .map(|error| format!("empty private clone staging cleanup was not proven: {error}"));
+          replacement = (
+              '    // Publication and filesystem identity are already proven. Failure to remove\n'
+              '    // the now-empty private staging shell must not discard that proven publication\n'
+              '    // or prevent workspace registration. Preserve cleanup uncertainty in the\n'
+              '    // returned record so callers can surface it without fabricating failure.\n'
+              '    let staging_cleanup_warning = remove_empty_owned_clone_staging(&staging)\n'
+              '        .err()\n'
+              '        .map(|error| format!("empty private clone staging cleanup was not proven: {error}"));\n\n'
+          )
+          workspace = workspace[:start] + replacement + workspace[end:]
 
-          '''
-          workspace = workspace[:start] + new + workspace[end:]
+          ok_start = workspace.index('    Ok(ClonedWorkspace {', end)
+          remote_line = '        remote_identity,\n'
+          remote_at = workspace.index(remote_line, ok_start)
+          workspace = (
+              workspace[: remote_at + len(remote_line)]
+              + '        staging_cleanup_warning,\n'
+              + workspace[remote_at + len(remote_line) :]
+          )
 
-          old = '''    Ok(ClonedWorkspace {
-              workspace,
-              remote_identity,
-          })'''
-          new = '''    Ok(ClonedWorkspace {
-              workspace,
-              remote_identity,
-              staging_cleanup_warning,
-          })'''
-          assert old in workspace
-          workspace = workspace.replace(old, new, 1)
+          fn_anchor = 'fn remove_empty_owned_clone_staging(staging: &OwnedCloneStaging) -> Result<()> {\n'
+          assert workspace.count(fn_anchor) == 1
+          fn_insert = (
+              '    match fs::symlink_metadata(&staging.path) {\n'
+              '        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),\n'
+              '        Err(error) => {\n'
+              '            return Err(format!(\n'
+              '                "empty private clone staging cannot be inspected before non-recursive removal: {error}"\n'
+              '            )\n'
+              '            .into());\n'
+              '        }\n'
+              '        Ok(_) => {}\n'
+              '    }\n'
+          )
+          workspace = workspace.replace(fn_anchor, fn_anchor + fn_insert, 1)
 
-          old = '''fn remove_empty_owned_clone_staging(staging: &OwnedCloneStaging) -> Result<()> {
-              require_clone_directory_identity('''
-          new = '''fn remove_empty_owned_clone_staging(staging: &OwnedCloneStaging) -> Result<()> {
-              match fs::symlink_metadata(&staging.path) {
-                  Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-                  Err(error) => {
-                      return Err(format!(
-                          "empty private clone staging cannot be inspected before non-recursive removal: {error}"
-                      )
-                      .into());
-                  }
-                  Ok(_) => {}
-              }
-              require_clone_directory_identity('''
-          assert old in workspace
-          workspace = workspace.replace(old, new, 1)
-
-          old = '''        assert_eq!(
-              cloned.remote_identity,
-              remote.canonicalize().unwrap().to_str().unwrap()
-          );'''
-          new = '''        assert_eq!(
-              cloned.remote_identity,
-              remote.canonicalize().unwrap().to_str().unwrap()
-          );
-          assert_eq!(cloned.staging_cleanup_warning, None);'''
-          assert old in workspace
-          workspace = workspace.replace(old, new, 1)
+          test_anchor = '            cloned.remote_identity,\n'
+          test_at = workspace.index(test_anchor)
+          test_end = workspace.index('        );', test_at) + len('        );')
+          workspace = (
+              workspace[:test_end]
+              + '\n        assert_eq!(cloned.staging_cleanup_warning, None);'
+              + workspace[test_end:]
+          )
           workspace_path.write_text(workspace)
 
           cli_path = Path('tests/t057_cli.rs')
           cli = cli_path.read_text()
-          old = '''    assert_eq!(cloned_json["remote_identity"], test_path(&canonical_source));'''
-          new = '''    assert_eq!(cloned_json["remote_identity"], test_path(&canonical_source));
-              assert!(cloned_json["staging_cleanup_warning"].is_null());'''
-          assert old in cli
-          cli_path.write_text(cli.replace(old, new, 1))
+          cli_anchor = '    assert_eq!(cloned_json["remote_identity"], test_path(&canonical_source));\n'
+          assert cli.count(cli_anchor) == 1
+          cli = cli.replace(
+              cli_anchor,
+              cli_anchor + '    assert!(cloned_json["staging_cleanup_warning"].is_null());\n',
+              1,
+          )
+          cli_path.write_text(cli)
 
           wsl_path = Path('src/wsl_launch.rs')
           wsl = wsl_path.read_text()
-          old = '''for required in /usr/bin/setsid /bin/sh /bin/sleep /bin/kill; do
-              if [ ! -x "$required" ]; then
-                  printf '__WINDS_WSL_SCOPE_UNSUPPORTED_%s__:%s\\n' "$token" "$required" >&2
-                  exit 125
-              fi
-          done
+          preflight_anchor = 'done\n\n/usr/bin/setsid /bin/sh -c'
+          assert wsl.count(preflight_anchor) >= 1
+          preflight = (
+              'done\n'
+              'if ! /bin/sleep 0.01 2>/dev/null; then\n'
+              '    printf \'__WINDS_WSL_SCOPE_UNSUPPORTED_%s__:%s\\n\' "$token" \'/bin/sleep:fractional-seconds\' >&2\n'
+              '    exit 125\n'
+              'fi\n\n'
+              '/usr/bin/setsid /bin/sh -c'
+          )
+          wsl = wsl.replace(preflight_anchor, preflight, 1)
 
-          /usr/bin/setsid'''
-          new = '''for required in /usr/bin/setsid /bin/sh /bin/sleep /bin/kill; do
-              if [ ! -x "$required" ]; then
-                  printf '__WINDS_WSL_SCOPE_UNSUPPORTED_%s__:%s\\n' "$token" "$required" >&2
-                  exit 125
-              fi
-          done
-          if ! /bin/sleep 0.01 2>/dev/null; then
-              printf '__WINDS_WSL_SCOPE_UNSUPPORTED_%s__:%s\\n' "$token" '/bin/sleep:fractional-seconds' >&2
-              exit 125
-          fi
+          sleep_anchor = '    /bin/sleep 0.01\n'
+          assert wsl.count(sleep_anchor) == 1
+          sleep_replacement = (
+              '    if ! /bin/sleep 0.01; then\n'
+              '        printf \'__WINDS_WSL_SCOPE_UNPROVEN_%s__:sleep-failed\\n\' "$token" >&2\n'
+              '        exit 125\n'
+              '    fi\n'
+          )
+          wsl = wsl.replace(sleep_anchor, sleep_replacement, 1)
 
-          /usr/bin/setsid'''
-          assert old in wsl
-          wsl = wsl.replace(old, new, 1)
-          old = '''    /bin/sleep 0.01
-          done'''
-          new = '''    if ! /bin/sleep 0.01; then
-              printf '__WINDS_WSL_SCOPE_UNPROVEN_%s__:sleep-failed\\n' "$token" >&2
-              exit 125
-          fi
-          done'''
-          assert old in wsl
-          wsl = wsl.replace(old, new, 1)
-          old = '''    match child.wait_for_scope_quiescence(command_deadline, OWNED_LABEL) {'''
-          new = '''    // The launcher has exited and output has been drained. Scope quiescence is
-              // cleanup work and must consume only the reserved cleanup budget.
-              match child.wait_for_scope_quiescence(cleanup_deadline, OWNED_LABEL) {'''
-          assert old in wsl
-          wsl = wsl.replace(old, new, 1)
+          deadline_anchor = '    match child.wait_for_scope_quiescence(command_deadline, OWNED_LABEL) {'
+          assert wsl.count(deadline_anchor) == 1
+          wsl = wsl.replace(
+              deadline_anchor,
+              '    // The launcher has exited and output has been drained. Scope quiescence is\n'
+              '    // cleanup work and must consume only the reserved cleanup budget.\n'
+              '    match child.wait_for_scope_quiescence(cleanup_deadline, OWNED_LABEL) {',
+              1,
+          )
           wsl_path.write_text(wsl)
 
           addendum_path = Path('specs/003-workspace-execution-spine/t068-independent-review-reconciliation-addendum.md')
           addendum = addendum_path.read_text()
-          old = '''On Unix, Winds opens the history root and selected retained session as no-follow directory handles, verifies their filesystem identities, validates each direct regular-file entry relative to the already-open session directory, unlinks only those direct entries through `unlinkat`, revalidates the session entry from the already-open root directory, and finally removes the now-empty session directory non-recursively with `unlinkat(..., AT_REMOVEDIR)`. The security claim is deliberately scoped to the session-directory object and direct flat children; Winds does not claim a generic recursive filesystem deletion primitive.'''
-          new = '''On Unix, Winds opens the history root and selected retained session as no-follow directory handles, verifies their filesystem identities, validates each direct regular-file entry relative to the already-open session directory, unlinks only direct names through `unlinkat`, revalidates the session entry from the already-open root directory, and finally removes the now-empty session directory non-recursively with `unlinkat(..., AT_REMOVEDIR)`. The security claim is deliberately scoped to containment inside the already-bound session-directory object and to the supported Winds writer path. POSIX `unlinkat` remains name-based: Winds does **not** claim protection when an external same-principal process concurrently replaces an individual direct child name inside that private session directory between validation and unlink. Such hostile same-principal filesystem mutation is outside the Spec 003 isolation claim. Winds still guarantees that pruning performs no recursive traversal and cannot redirect deletion into another directory tree through that child-name race.'''
-          assert old in addendum
-          addendum_path.write_text(addendum.replace(old, new, 1))
+          paragraph_start = addendum.index('On Unix, Winds opens the history root and selected retained session as no-follow directory handles')
+          paragraph_end = addendum.index('\n\nOn Windows,', paragraph_start)
+          paragraph = (
+              'On Unix, Winds opens the history root and selected retained session as no-follow directory handles, verifies their filesystem identities, validates each direct regular-file entry relative to the already-open session directory, unlinks only direct names through `unlinkat`, revalidates the session entry from the already-open root directory, and finally removes the now-empty session directory non-recursively with `unlinkat(..., AT_REMOVEDIR)`. The security claim is deliberately scoped to containment inside the already-bound session-directory object and to the supported Winds writer path. POSIX `unlinkat` remains name-based: Winds does **not** claim protection when an external same-principal process concurrently replaces an individual direct child name inside that private session directory between validation and unlink. Such hostile same-principal filesystem mutation is outside the Spec 003 isolation claim. Winds still guarantees that pruning performs no recursive traversal and cannot redirect deletion into another directory tree through that child-name race.'
+          )
+          addendum = addendum[:paragraph_start] + paragraph + addendum[paragraph_end:]
+          addendum_path.write_text(addendum)
           PY
 
-          if git diff --quiet; then
-            echo 'No source repair required on this head.'
-            exit 0
-          fi
           cargo fmt --all
           cargo clippy --locked --all-targets --all-features -- -D warnings
           cargo test --locked --all-targets --all-features
@@ -178,9 +163,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if git diff --quiet; then
-            exit 0
-          fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -- src/workspace_clone.rs src/wsl_launch.rs tests/t057_cli.rs specs/003-workspace-execution-spine/t068-independent-review-reconciliation-addendum.md
