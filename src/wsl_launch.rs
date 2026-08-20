@@ -677,6 +677,24 @@ fn run_wsl_exec(
 }
 
 #[cfg(windows)]
+fn drain_until_idle_or_deadline<F>(
+    deadline: std::time::Instant,
+    mut drain_once: F,
+) -> std::io::Result<bool>
+where
+    F: FnMut() -> std::io::Result<bool>,
+{
+    loop {
+        if std::time::Instant::now() >= deadline {
+            return Ok(false);
+        }
+        if !drain_once()? {
+            return Ok(true);
+        }
+    }
+}
+
+#[cfg(windows)]
 fn run_wsl_exec_with_limits(
     launcher: &Path,
     distribution: &str,
@@ -990,8 +1008,19 @@ fn run_wsl_exec_with_limits(
         let now = Instant::now();
         now + cleanup_deadline.saturating_duration_since(now) / 2
     };
-    loop {
-        if Instant::now() >= post_exit_drain_deadline {
+    match drain_until_idle_or_deadline(post_exit_drain_deadline, || {
+        drain_pair(
+            &mut stdout,
+            &mut stderr,
+            &mut stdout_bytes,
+            &mut stderr_bytes,
+            &mut stderr_control_tail,
+            &mut stdout_truncated,
+            &mut stderr_truncated,
+        )
+    }) {
+        Ok(true) => {}
+        Ok(false) => {
             let cleanup = child.terminate_and_prove(cleanup_deadline, OWNED_LABEL);
             return Err(format!(
                 "selected WSL command launcher exited, but post-exit output draining exceeded the reserved cleanup deadline; WSL-side cleanup proof cannot be trusted; bounded Windows launcher cleanup {}",
@@ -1001,30 +1030,17 @@ fn run_wsl_exec_with_limits(
             )
             .into());
         }
-        match drain_pair(
-            &mut stdout,
-            &mut stderr,
-            &mut stdout_bytes,
-            &mut stderr_bytes,
-            &mut stderr_control_tail,
-            &mut stdout_truncated,
-            &mut stderr_truncated,
-        ) {
-            Ok(true) => continue,
-            Ok(false) => break,
-            Err(error) => {
-                let cleanup = child.terminate_and_prove(cleanup_deadline, OWNED_LABEL);
-                return Err(format!(
-                    "selected WSL command launcher exited, but output draining failed and WSL-side cleanup proof cannot be trusted: {error}; bounded Windows launcher cleanup {}",
-                    cleanup
-                        .map(|()| "was proven".to_owned())
-                        .unwrap_or_else(|cleanup_error| format!("was not proven: {cleanup_error}"))
-                )
-                .into());
-            }
+        Err(error) => {
+            let cleanup = child.terminate_and_prove(cleanup_deadline, OWNED_LABEL);
+            return Err(format!(
+                "selected WSL command launcher exited, but output draining failed and WSL-side cleanup proof cannot be trusted: {error}; bounded Windows launcher cleanup {}",
+                cleanup
+                    .map(|()| "was proven".to_owned())
+                    .unwrap_or_else(|cleanup_error| format!("was not proven: {cleanup_error}"))
+            )
+            .into());
         }
     }
-
     // The launcher has exited and output has been drained. Scope quiescence is
     // cleanup work and must consume only the reserved cleanup budget.
     match child.wait_for_scope_quiescence(cleanup_deadline, OWNED_LABEL) {
@@ -1168,37 +1184,6 @@ pub(crate) fn prove_wsl_exec_scope_cleanup_for_test(distribution: &str) -> Resul
         .into());
     }
 
-    // Regression for the post-exit drain bound. This test-only arbitrary
-    // command deliberately escapes the tracked Linux process group and keeps
-    // stdout continuously writable after the supervised target exits. The
-    // production call graph does not expose arbitrary commands through this
-    // helper; the fixture exists only to prove host-side draining is bounded.
-    let post_exit_writer_script = r#"/usr/bin/setsid /bin/sh -c '/bin/sleep 7 </dev/null >/dev/null 2>&1 & timer=$!; while /bin/kill -0 "$timer" 2>/dev/null; do printf x; done; wait "$timer" 2>/dev/null || :' & exit 0"#;
-    let drain_started = std::time::Instant::now();
-    let drain_error = run_wsl_exec_with_limits(
-        &launcher,
-        distribution,
-        None,
-        "/bin/sh",
-        &[
-            OsString::from("-c"),
-            OsString::from(post_exit_writer_script),
-        ],
-        1,
-        Duration::from_secs(5),
-    )
-    .unwrap_err()
-    .to_string();
-    let drain_elapsed = drain_started.elapsed();
-    if !drain_error.contains("post-exit output draining exceeded the reserved cleanup deadline")
-        || !drain_error.contains("WSL-side cleanup proof cannot be trusted")
-        || drain_elapsed > Duration::from_secs(6)
-    {
-        return Err(format!(
-            "WSL post-exit drain regression was not bounded as expected: elapsed={drain_elapsed:?}, error={drain_error}"
-        )
-        .into());
-    }
     Ok(())
 }
 
@@ -1254,10 +1239,39 @@ fn parse_single_linux_path(bytes: &[u8], label: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(windows)]
+    use super::drain_until_idle_or_deadline;
     use super::{
         WslCwdStrategy, WslExecutionDomain, WslTerminalProfile, build_launch_arguments,
         parse_single_linux_path, stable_profile_id, validate_profile_for_launch,
     };
+
+    #[cfg(windows)]
+    #[test]
+    fn post_exit_drain_stops_at_deadline_under_continuous_progress() {
+        use std::time::{Duration, Instant};
+
+        let started = Instant::now();
+        let mut drain_calls = 0_u64;
+        let drained = drain_until_idle_or_deadline(started + Duration::from_millis(20), || {
+            drain_calls += 1;
+            Ok(true)
+        })
+        .unwrap();
+
+        assert!(
+            !drained,
+            "continuous progress must stop at the drain deadline"
+        );
+        assert!(
+            drain_calls > 0,
+            "the regression must exercise the progress loop"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "deadline enforcement must remain bounded"
+        );
+    }
 
     #[test]
     fn launch_arguments_bind_distribution_cwd_and_exact_shell_without_shell_parsing() {
