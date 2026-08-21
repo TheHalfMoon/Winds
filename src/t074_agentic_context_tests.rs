@@ -307,3 +307,12 @@ fn ambiguous_reference_identity_fails_closed() {
             .contains("ambiguous exact identity for context reference")
     );
 }
+
+#[test]
+fn nul_in_required_context_text_fails_closed() {
+    let mut input = base_input();
+    input.workspace_id = "workspace-1\0spoof".to_owned();
+
+    let error = build_context_capsule(input).unwrap_err();
+    assert!(error.to_string().contains("workspace id must not contain NUL"));
+}
