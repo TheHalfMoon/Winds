@@ -196,9 +196,7 @@ pub(crate) fn evaluate_delegation(
 
     let denied_by = source_decisions
         .iter()
-        .filter_map(|(source, decision)| {
-            (*decision == AuthorityDecision::Deny).then_some(*source)
-        })
+        .filter_map(|(source, decision)| (*decision == AuthorityDecision::Deny).then_some(*source))
         .collect::<Vec<_>>();
     if !denied_by.is_empty() {
         return make_evaluation(
@@ -211,9 +209,7 @@ pub(crate) fn evaluate_delegation(
 
     let asked_by = source_decisions
         .iter()
-        .filter_map(|(source, decision)| {
-            (*decision == AuthorityDecision::Ask).then_some(*source)
-        })
+        .filter_map(|(source, decision)| (*decision == AuthorityDecision::Ask).then_some(*source))
         .collect::<Vec<_>>();
     if !asked_by.is_empty() {
         return make_evaluation(
