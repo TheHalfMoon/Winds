@@ -508,7 +508,9 @@ fn hand_off_child_reap(mut child: Child) -> ProofResult<()> {
             let _ = child.wait();
         })
         .map(|_| ())
-        .map_err(|error| format!("T079 could not hand terminated child to background reaper: {error}"))
+        .map_err(|error| {
+            format!("T079 could not hand terminated child to background reaper: {error}")
+        })
 }
 
 fn finish_child(mut child: Child, cleanup_deadline: Instant) -> ProofResult<CleanupEvidence> {
@@ -554,8 +556,7 @@ fn finish_child(mut child: Child, cleanup_deadline: Instant) -> ProofResult<Clea
             Some(_) => return Ok(CleanupEvidence::DirectChildTerminatedAndReaped),
             None if Instant::now() < cleanup_deadline => thread::sleep(Duration::from_millis(10)),
             None => {
-                let message =
-                    "T079 terminated the owned Codex child but could not prove reap inside bounded cleanup";
+                let message = "T079 terminated the owned Codex child but could not prove reap inside bounded cleanup";
                 hand_off_child_reap(child)
                     .map_err(|reaper_error| format!("{message}; {reaper_error}"))?;
                 return Err(format!("{message}; direct-child reap handed off"));
