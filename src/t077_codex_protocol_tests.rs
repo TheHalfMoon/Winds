@@ -106,7 +106,7 @@ fn rejected_or_mismatched_initialize_response_fails_closed() {
     );
     assert_eq!(
         mismatch.thread_start().unwrap_err(),
-        CodexProtocolError::HandshakeIncomplete
+        CodexProtocolError::ClientFailed
     );
 
     let mut rejected = CodexProtocolClient::default();
@@ -118,6 +118,10 @@ fn rejected_or_mismatched_initialize_response_fails_closed() {
             .ingest_jsonl_frame(br#"{"id":0,"error":{"code":-1,"message":"no"}}"#)
             .unwrap_err(),
         CodexProtocolError::InitializeRejected
+    );
+    assert_eq!(
+        rejected.initialized_notification().unwrap_err(),
+        CodexProtocolError::ClientFailed
     );
 }
 
@@ -156,7 +160,7 @@ fn malformed_jsonl_fails_closed_and_cannot_later_authorize() {
     );
     assert_eq!(
         client.thread_start().unwrap_err(),
-        CodexProtocolError::HandshakeIncomplete
+        CodexProtocolError::ClientFailed
     );
     assert_eq!(
         client.ingest_jsonl_frame(br#"{"method":"turn/started","params":{}}"#)
@@ -260,6 +264,10 @@ fn fake_server_exit_during_handshake_is_truthful_failure() {
         CodexProtocolError::ServerExitedDuringHandshake
     );
     assert!(!client.is_ready());
+    assert_eq!(
+        client.initialize_request("winds", "Winds", "0.1.0").unwrap_err(),
+        CodexProtocolError::ClientFailed
+    );
 }
 
 #[test]
@@ -270,6 +278,10 @@ fn fake_server_exit_after_handshake_is_not_reported_as_success() {
         CodexProtocolError::ServerExited
     );
     assert!(!client.is_ready());
+    assert_eq!(
+        client.thread_start().unwrap_err(),
+        CodexProtocolError::ClientFailed
+    );
 }
 
 #[test]
