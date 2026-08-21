@@ -1,4 +1,6 @@
 #[cfg(test)]
+mod agentic_authority;
+#[cfg(test)]
 mod agentic_context;
 #[allow(
     dead_code,
@@ -26,6 +28,8 @@ mod t068_store_regression_tests;
 mod t072_agentic_runtime_discovery_tests;
 #[cfg(test)]
 mod t074_agentic_context_tests;
+#[cfg(test)]
+mod t075_agentic_authority_tests;
 
 use crate::check::run_check;
 use crate::domain::{CheckEvidence, CheckStatus, Eligibility, EvidenceReport, PromotionReport};
