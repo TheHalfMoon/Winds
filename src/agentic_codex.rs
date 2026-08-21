@@ -178,6 +178,7 @@ impl CodexProtocolClient {
         )
     }
 
+    #[cfg(test)]
     /// T079 opts into the experimental API only to send explicit empty environment/tool roots.
     pub(super) fn t079_initialize_request(
         &mut self,
@@ -273,6 +274,7 @@ impl CodexProtocolClient {
         )
     }
 
+    #[cfg(test)]
     /// Builds the read-only T079 effective-config preflight after the mandatory handshake.
     pub(super) fn t079_config_read(
         &mut self,
@@ -282,6 +284,7 @@ impl CodexProtocolClient {
         self.request("config/read", json!({ "cwd": cwd, "includeLayers": false }))
     }
 
+    #[cfg(test)]
     /// Builds the only fresh thread shape accepted by the bounded T079 connected proof.
     pub(super) fn t079_thread_start(
         &mut self,
@@ -303,6 +306,7 @@ impl CodexProtocolClient {
         )
     }
 
+    #[cfg(test)]
     /// Builds the single fixed T079 turn. The caller cannot inject a model, prompt, tool, or policy.
     pub(super) fn t079_turn_start(
         &mut self,
@@ -335,6 +339,7 @@ impl CodexProtocolClient {
         )
     }
 
+    #[cfg(test)]
     /// Produces a denial response for command/file approval requests. It never grants authority.
     pub(super) fn t079_decline(&self, id: &RpcId) -> Result<String, CodexProtocolError> {
         encode_jsonl(&json!({
