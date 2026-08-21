@@ -610,7 +610,9 @@ fn validate_runtime_binding_sha256(value: &str) -> StoreResult<()> {
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte));
     if !valid {
-        return Err("runtime executable SHA-256 must be 64 lowercase hexadecimal characters".into());
+        return Err(
+            "runtime executable SHA-256 must be 64 lowercase hexadecimal characters".into(),
+        );
     }
     Ok(())
 }

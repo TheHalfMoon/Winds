@@ -113,11 +113,7 @@ fn seed_store(home: &Path) -> Store {
 fn exact_runtime_binding_persists_provenance_and_survives_reopen() {
     let root = test_root("persist-reopen");
     let executable = create_fake_executable(&root, "fixture-codex", b"fixture-codex-v1\n");
-    let discovery = discover_present(
-        RuntimeKind::Codex,
-        &executable,
-        "codex-cli 1.2.3-fixture",
-    );
+    let discovery = discover_present(RuntimeKind::Codex, &executable, "codex-cli 1.2.3-fixture");
     let expected_executable = discovery.executable.clone().unwrap();
     let expected_version = discovery.version.clone();
 
@@ -140,7 +136,10 @@ fn exact_runtime_binding_persists_provenance_and_survives_reopen() {
     assert_eq!(binding.runtime, RuntimeKind::Codex);
     assert_eq!(binding.executable, expected_executable);
     assert_eq!(binding.version, expected_version);
-    assert_eq!(binding.native_session_id.as_deref(), Some("native-thread-1"));
+    assert_eq!(
+        binding.native_session_id.as_deref(),
+        Some("native-thread-1")
+    );
     assert_eq!(binding.ownership, RuntimeBindingOwnership::Unproven);
     assert_eq!(binding.ownership_observed_unix_ms, None);
     assert_eq!(binding.bound_unix_ms, 40);
@@ -167,11 +166,7 @@ fn executable_or_version_drift_makes_persisted_mapping_stale() {
     let replacement = b"fixture-codex-x1\n";
     assert_eq!(original.len(), replacement.len());
     let executable = create_fake_executable(&root, "fixture-codex", original);
-    let discovery_v1 = discover_present(
-        RuntimeKind::Codex,
-        &executable,
-        "codex-cli 1.2.3-fixture",
-    );
+    let discovery_v1 = discover_present(RuntimeKind::Codex, &executable, "codex-cli 1.2.3-fixture");
 
     let store = seed_store(&root);
     store
@@ -185,11 +180,8 @@ fn executable_or_version_drift_makes_persisted_mapping_stale() {
         .unwrap();
 
     fs::write(&executable, replacement).unwrap();
-    let replaced_discovery = discover_present(
-        RuntimeKind::Codex,
-        &executable,
-        "codex-cli 1.2.3-fixture",
-    );
+    let replaced_discovery =
+        discover_present(RuntimeKind::Codex, &executable, "codex-cli 1.2.3-fixture");
     assert_eq!(
         store
             .resolve_runtime_resume_candidate("session-1", &replaced_discovery)
@@ -198,11 +190,8 @@ fn executable_or_version_drift_makes_persisted_mapping_stale() {
     );
 
     fs::write(&executable, original).unwrap();
-    let changed_version = discover_present(
-        RuntimeKind::Codex,
-        &executable,
-        "codex-cli 1.2.4-fixture",
-    );
+    let changed_version =
+        discover_present(RuntimeKind::Codex, &executable, "codex-cli 1.2.4-fixture");
     assert_eq!(
         store
             .resolve_runtime_resume_candidate("session-1", &changed_version)
@@ -218,11 +207,7 @@ fn executable_or_version_drift_makes_persisted_mapping_stale() {
 fn missing_mapping_or_missing_native_id_is_unavailable_not_resumed() {
     let root = test_root("missing-native");
     let executable = create_fake_executable(&root, "fixture-claude", b"fixture-claude-v1\n");
-    let discovery = discover_present(
-        RuntimeKind::Claude,
-        &executable,
-        "claude-code 1.0-fixture",
-    );
+    let discovery = discover_present(RuntimeKind::Claude, &executable, "claude-code 1.0-fixture");
     let store = seed_store(&root);
 
     assert_eq!(
@@ -233,13 +218,7 @@ fn missing_mapping_or_missing_native_id_is_unavailable_not_resumed() {
     );
 
     store
-        .create_runtime_session_binding(
-            "binding-no-native",
-            "session-1",
-            &discovery,
-            None,
-            40,
-        )
+        .create_runtime_session_binding("binding-no-native", "session-1", &discovery, None, 40)
         .unwrap();
     assert_eq!(
         store
@@ -256,11 +235,7 @@ fn missing_mapping_or_missing_native_id_is_unavailable_not_resumed() {
 fn multiple_exact_native_mappings_are_deterministically_ambiguous() {
     let root = test_root("ambiguous");
     let executable = create_fake_executable(&root, "fixture-codex", b"fixture-codex-v1\n");
-    let discovery = discover_present(
-        RuntimeKind::Codex,
-        &executable,
-        "codex-cli 1.2.3-fixture",
-    );
+    let discovery = discover_present(RuntimeKind::Codex, &executable, "codex-cli 1.2.3-fixture");
     let store = seed_store(&root);
 
     for (binding_id, native_session_id) in [
@@ -298,11 +273,7 @@ fn multiple_exact_native_mappings_are_deterministically_ambiguous() {
 fn ownership_loss_is_durable_and_native_id_never_recreates_live_truth() {
     let root = test_root("ownership-lost");
     let executable = create_fake_executable(&root, "fixture-codex", b"fixture-codex-v1\n");
-    let discovery = discover_present(
-        RuntimeKind::Codex,
-        &executable,
-        "codex-cli 1.2.3-fixture",
-    );
+    let discovery = discover_present(RuntimeKind::Codex, &executable, "codex-cli 1.2.3-fixture");
     let store = seed_store(&root);
     store
         .create_runtime_session_binding(
@@ -320,12 +291,12 @@ fn ownership_loss_is_durable_and_native_id_never_recreates_live_truth() {
 
     let reopened = Store::open(&root).unwrap();
     let binding = reopened.load_runtime_session_binding("binding-1").unwrap();
-    assert_eq!(
-        binding.ownership,
-        RuntimeBindingOwnership::OwnershipLost
-    );
+    assert_eq!(binding.ownership, RuntimeBindingOwnership::OwnershipLost);
     assert_eq!(binding.ownership_observed_unix_ms, Some(60));
-    assert_eq!(binding.native_session_id.as_deref(), Some("native-thread-1"));
+    assert_eq!(
+        binding.native_session_id.as_deref(),
+        Some("native-thread-1")
+    );
 
     match reopened
         .resolve_runtime_resume_candidate("session-1", &discovery)
@@ -333,7 +304,10 @@ fn ownership_loss_is_durable_and_native_id_never_recreates_live_truth() {
     {
         RuntimeResumeResolution::Candidate(candidate) => {
             assert_eq!(candidate.ownership, RuntimeBindingOwnership::OwnershipLost);
-            assert_eq!(candidate.native_session_id.as_deref(), Some("native-thread-1"));
+            assert_eq!(
+                candidate.native_session_id.as_deref(),
+                Some("native-thread-1")
+            );
         }
         other => panic!("durable native ID should remain only a resume candidate, got {other:?}"),
     }
@@ -346,11 +320,7 @@ fn ownership_loss_is_durable_and_native_id_never_recreates_live_truth() {
 fn exact_native_identity_cannot_alias_multiple_winds_sessions() {
     let root = test_root("native-alias");
     let executable = create_fake_executable(&root, "fixture-codex", b"fixture-codex-v1\n");
-    let discovery = discover_present(
-        RuntimeKind::Codex,
-        &executable,
-        "codex-cli 1.2.3-fixture",
-    );
+    let discovery = discover_present(RuntimeKind::Codex, &executable, "codex-cli 1.2.3-fixture");
     let store = seed_store(&root);
     store
         .create_winds_session(
@@ -389,11 +359,7 @@ fn exact_native_identity_cannot_alias_multiple_winds_sessions() {
 fn invalid_binding_facts_and_schema_identity_expansion_fail_closed() {
     let root = test_root("fail-closed");
     let executable = create_fake_executable(&root, "fixture-codex", b"fixture-codex-v1\n");
-    let supported = discover_present(
-        RuntimeKind::Codex,
-        &executable,
-        "codex-cli 1.2.3-fixture",
-    );
+    let supported = discover_present(RuntimeKind::Codex, &executable, "codex-cli 1.2.3-fixture");
     let unsupported = discover_runtime_from_safe_observations(
         RuntimeKind::Codex,
         &executable,
@@ -451,7 +417,14 @@ fn invalid_binding_facts_and_schema_identity_expansion_fail_closed() {
             .collect::<rusqlite::Result<Vec<_>>>()
             .unwrap()
     };
-    for forbidden in ["workspace_id", "workstream_id", "pid", "model", "provider", "live"] {
+    for forbidden in [
+        "workspace_id",
+        "workstream_id",
+        "pid",
+        "model",
+        "provider",
+        "live",
+    ] {
         assert!(
             !columns
                 .iter()
