@@ -550,9 +550,9 @@ fn cleanup_setup_failure(child: &mut Child, root: &Path, message: &str) -> Strin
     let root_check = ensure_disposable_root_unchanged(root);
     match (cleanup, root_check) {
         (Ok(_), Ok(())) => message.to_owned(),
-        (cleanup, root_check) => format!(
-            "{message}; setup cleanup evidence: child={cleanup:?}; root={root_check:?}"
-        ),
+        (cleanup, root_check) => {
+            format!("{message}; setup cleanup evidence: child={cleanup:?}; root={root_check:?}")
+        }
     }
 }
 
@@ -593,11 +593,8 @@ fn run_connected_proof(
     let mut stdin = match child.stdin.take() {
         Some(stdin) => stdin,
         None => {
-            let message = cleanup_setup_failure(
-                &mut child,
-                &root,
-                "T079 Codex child stdin unavailable",
-            );
+            let message =
+                cleanup_setup_failure(&mut child, &root, "T079 Codex child stdin unavailable");
             return Err(message);
         }
     };
@@ -605,11 +602,8 @@ fn run_connected_proof(
         Some(stdout) => stdout,
         None => {
             drop(stdin);
-            let message = cleanup_setup_failure(
-                &mut child,
-                &root,
-                "T079 Codex child stdout unavailable",
-            );
+            let message =
+                cleanup_setup_failure(&mut child, &root, "T079 Codex child stdout unavailable");
             return Err(message);
         }
     };
