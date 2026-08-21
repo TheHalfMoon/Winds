@@ -462,14 +462,7 @@ fn has_platform_launch_permission(path: &Path, _metadata: &fs::Metadata) -> bool
     // SAFETY: `path` is a NUL-terminated CString whose pointer remains valid for the duration
     // of this call; `faccessat` does not retain the pointer. `AT_EACCESS` makes the check use
     // the process effective credentials and platform ACL/access rules without launching code.
-    unsafe {
-        libc::faccessat(
-            libc::AT_FDCWD,
-            path.as_ptr(),
-            libc::X_OK,
-            libc::AT_EACCESS,
-        ) == 0
-    }
+    unsafe { libc::faccessat(libc::AT_FDCWD, path.as_ptr(), libc::X_OK, libc::AT_EACCESS) == 0 }
 }
 
 #[cfg(windows)]
