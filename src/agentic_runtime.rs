@@ -7,6 +7,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 const HASH_BUFFER_BYTES: usize = 64 * 1024;
+pub(crate) const MAX_EXECUTABLE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_VERSION_BYTES: usize = 256;
 
 pub(crate) type RuntimeDiscoveryResult<T> = std::result::Result<T, String>;
@@ -311,7 +312,7 @@ fn inspect_runtime_executable(
 
     let canonical_path = match fs::canonicalize(observed_path) {
         Ok(path) => path,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) if expected_unavailable_path_error(&error) => return Ok(None),
         Err(error) => {
             return Err(format!(
                 "runtime executable cannot be canonicalized ({}): {error}",
@@ -325,7 +326,7 @@ fn inspect_runtime_executable(
     };
     let canonical_after = match fs::canonicalize(observed_path) {
         Ok(path) => path,
-        Err(error) if error.kind() == ErrorKind::NotFound => {
+        Err(error) if expected_unavailable_path_error(&error) => {
             return Err("runtime executable changed during discovery".to_owned());
         }
         Err(error) => {
@@ -360,9 +361,30 @@ struct ExecutableSnapshot {
 }
 
 fn snapshot_executable(path: &Path) -> RuntimeDiscoveryResult<Option<ExecutableSnapshot>> {
+    let initial_metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if expected_unavailable_path_error(&error) => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "runtime executable metadata cannot be read ({}): {error}",
+                path.display()
+            ));
+        }
+    };
+    if !initial_metadata.is_file()
+        || !has_platform_launch_permission(path, &initial_metadata)
+    {
+        return Ok(None);
+    }
+    if initial_metadata.len() > MAX_EXECUTABLE_BYTES {
+        return Err(format!(
+            "runtime executable exceeds bounded discovery size of {MAX_EXECUTABLE_BYTES} bytes"
+        ));
+    }
+
     let mut file = match File::open(path) {
         Ok(file) => file,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(error) if expected_unavailable_path_error(&error) => return Ok(None),
         Err(error) => {
             return Err(format!(
                 "runtime executable cannot be opened ({}): {error}",
@@ -372,16 +394,22 @@ fn snapshot_executable(path: &Path) -> RuntimeDiscoveryResult<Option<ExecutableS
     };
     let metadata = file.metadata().map_err(|error| {
         format!(
-            "runtime executable metadata cannot be read ({}): {error}",
+            "runtime executable metadata cannot be read after open ({}): {error}",
             path.display()
         )
     })?;
-    if !metadata.is_file() || !has_platform_launch_permission(&metadata) {
+    if !metadata.is_file() || !has_platform_launch_permission(path, &metadata) {
         return Ok(None);
+    }
+    if metadata.len() > MAX_EXECUTABLE_BYTES {
+        return Err(format!(
+            "runtime executable exceeds bounded discovery size of {MAX_EXECUTABLE_BYTES} bytes"
+        ));
     }
 
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; HASH_BUFFER_BYTES];
+    let mut total_read = 0_u64;
     loop {
         let read = file.read(&mut buffer).map_err(|error| {
             format!(
@@ -392,8 +420,20 @@ fn snapshot_executable(path: &Path) -> RuntimeDiscoveryResult<Option<ExecutableS
         if read == 0 {
             break;
         }
+        total_read = total_read
+            .checked_add(read as u64)
+            .ok_or_else(|| "runtime executable byte count overflowed".to_owned())?;
+        if total_read > MAX_EXECUTABLE_BYTES {
+            return Err(format!(
+                "runtime executable exceeded bounded discovery size of {MAX_EXECUTABLE_BYTES} bytes while reading"
+            ));
+        }
         digest.update(&buffer[..read]);
     }
+    if total_read != metadata.len() {
+        return Err("runtime executable size changed during snapshot".to_owned());
+    }
+
     let sha256: String = digest
         .finalize()
         .iter()
@@ -406,12 +446,31 @@ fn snapshot_executable(path: &Path) -> RuntimeDiscoveryResult<Option<ExecutableS
     }))
 }
 
+fn expected_unavailable_path_error(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        ErrorKind::NotFound | ErrorKind::PermissionDenied
+    )
+}
+
 #[cfg(unix)]
-fn has_platform_launch_permission(metadata: &fs::Metadata) -> bool {
+fn has_platform_launch_permission(_path: &Path, metadata: &fs::Metadata) -> bool {
     metadata.permissions().mode() & 0o111 != 0
 }
 
-#[cfg(not(unix))]
-fn has_platform_launch_permission(_metadata: &fs::Metadata) -> bool {
-    true
+#[cfg(windows)]
+fn has_platform_launch_permission(path: &Path, _metadata: &fs::Metadata) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "exe" | "com" | "cmd" | "bat"
+            )
+        })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn has_platform_launch_permission(_path: &Path, _metadata: &fs::Metadata) -> bool {
+    false
 }
