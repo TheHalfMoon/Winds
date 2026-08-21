@@ -51,15 +51,61 @@ fn identical_logical_input_has_stable_serialization_and_sha256() {
     second.facts.reverse();
     second.candidate_references.reverse();
     second.evidence_references.reverse();
-    second.facts[0].value = second.facts[0].value.replace('\n', "\r\n");
 
     let first = build_context_capsule(first).unwrap();
     let second = build_context_capsule(second).unwrap();
 
     assert_eq!(first.payload, second.payload);
+    assert_eq!(first.payload.policy_version, "winds.context.policy.v1");
     assert_eq!(first.canonical_json, second.canonical_json);
+    assert!(
+        first
+            .canonical_json
+            .contains("\"policy_version\":\"winds.context.policy.v1\"")
+    );
     assert_eq!(first.sha256, second.sha256);
     assert_eq!(first.sha256.len(), 64);
+}
+
+#[test]
+fn canonical_normalization_proves_crlf_trim_and_duplicate_omission() {
+    let mut normalized = base_input();
+    normalized.workspace_id = "  workspace-1  ".to_owned();
+    normalized.facts.push(ContextFactInput {
+        kind: ContextFactKind::Decision,
+        key: "  decision.multiline  ".to_owned(),
+        value: "  line one\r\nline two  ".to_owned(),
+        provenance: ContextProvenance::ImportedHistory,
+    });
+    normalized.facts.push(ContextFactInput {
+        kind: ContextFactKind::Decision,
+        key: "decision.multiline".to_owned(),
+        value: "line one\nline two".to_owned(),
+        provenance: ContextProvenance::ImportedHistory,
+    });
+
+    let capsule = build_context_capsule(normalized).unwrap();
+    assert_eq!(capsule.payload.workspace_id, "workspace-1");
+    let fact = capsule
+        .payload
+        .facts
+        .iter()
+        .find(|fact| fact.key == "decision.multiline")
+        .unwrap();
+    assert_eq!(fact.value, "line one\nline two");
+    assert_eq!(
+        capsule
+            .payload
+            .facts
+            .iter()
+            .filter(|fact| fact.key == "decision.multiline")
+            .count(),
+        1
+    );
+    assert!(capsule.transfer_report.entries.iter().any(|entry| {
+        entry.disposition == TransferDisposition::Omitted
+            && entry.detail.contains("Duplicate fact omitted")
+    }));
 }
 
 #[test]
