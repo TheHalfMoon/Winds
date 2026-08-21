@@ -460,6 +460,36 @@ impl Store {
             observed_unix_ms,
             "runtime binding ownership-loss observation time",
         )?;
+        validate_runtime_binding_text(binding_id, "runtime binding id")?;
+
+        let updated = self.connection.execute(
+            "UPDATE runtime_session_bindings
+             SET ownership_state = ?2,
+                 ownership_observed_unix_ms = CASE
+                     WHEN ownership_state = ?4 THEN ?3
+                     ELSE ownership_observed_unix_ms
+                 END
+             WHERE binding_id = ?1
+               AND bound_unix_ms <= ?3
+               AND (
+                   ownership_state = ?4
+                   OR (
+                       ownership_state = ?2
+                       AND ownership_observed_unix_ms IS NOT NULL
+                       AND ownership_observed_unix_ms <= ?3
+                   )
+               )",
+            params![
+                binding_id,
+                RuntimeBindingOwnership::OwnershipLost.as_str(),
+                observed_unix_ms,
+                RuntimeBindingOwnership::Unproven.as_str(),
+            ],
+        )?;
+        if updated == 1 {
+            return Ok(());
+        }
+
         let binding = self.load_runtime_session_binding(binding_id)?;
         if observed_unix_ms < binding.bound_unix_ms {
             return Err("runtime ownership loss cannot precede binding observation".into());
@@ -473,21 +503,7 @@ impl Store {
             }
             return Ok(());
         }
-        let updated = self.connection.execute(
-            "UPDATE runtime_session_bindings
-             SET ownership_state = ?2, ownership_observed_unix_ms = ?3
-             WHERE binding_id = ?1 AND ownership_state = ?4",
-            params![
-                binding_id,
-                RuntimeBindingOwnership::OwnershipLost.as_str(),
-                observed_unix_ms,
-                RuntimeBindingOwnership::Unproven.as_str(),
-            ],
-        )?;
-        if updated != 1 {
-            return Err("runtime ownership-loss transition lost its unproven binding row".into());
-        }
-        Ok(())
+        Err("runtime ownership-loss transition could not establish durable ownership loss".into())
     }
 
     /// Resolves only a future exact native-resume candidate; it never claims `LIVE` or `RESUMED`.
@@ -497,6 +513,10 @@ impl Store {
         discovery: &RuntimeDiscovery,
     ) -> StoreResult<RuntimeResumeResolution> {
         self.load_winds_session(session_id)?;
+        if discovery.state != RuntimeDiscoveryState::Present {
+            return Ok(RuntimeResumeResolution::Unavailable);
+        }
+
         let bindings = self.list_runtime_session_bindings(session_id, discovery.runtime)?;
         if bindings.is_empty() {
             return Ok(RuntimeResumeResolution::Unavailable);
