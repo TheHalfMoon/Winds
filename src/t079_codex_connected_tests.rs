@@ -245,7 +245,7 @@ fn observe_version_bounded(executable: &Path) -> ProofResult<String> {
         .map_err(|_| "T079 Codex --version output is not UTF-8".to_owned())?;
     let version = text.trim_end_matches(['\r', '\n']);
     validate_exact_text(version, "Codex version")?;
-    if version.contains(['\r', '\n']) {
+    if version.contains('\r') || version.contains('\n') {
         return Err("T079 Codex --version must be exactly one line".to_owned());
     }
     Ok(version.to_owned())
@@ -265,11 +265,6 @@ fn disposable_root() -> ProofResult<PathBuf> {
         .map_err(|error| format!("T079 could not create disposable root: {error}"))?;
     root.canonicalize()
         .map_err(|error| format!("T079 could not canonicalize disposable root: {error}"))
-}
-
-fn spawn_frame_reader(stdout: std::process::ChildStdout) -> thread::JoinHandle<()> {
-    let _ = stdout;
-    unreachable!("use spawn_frame_reader_with_sender")
 }
 
 fn spawn_frame_reader_with_sender(
