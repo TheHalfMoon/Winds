@@ -235,6 +235,13 @@ fn fork_origin_is_durable_same_workstream_and_survives_rename_and_reopen() {
         .unwrap();
     assert_eq!(origin.session_id, "session-origin");
     assert_eq!(origin.workstream_id, "workstream-a");
+    assert!(
+        reopened
+            .load_winds_session_origin("session-origin")
+            .unwrap()
+            .is_none()
+    );
+    assert!(reopened.load_winds_session_origin("missing").is_err());
 
     let connection = Connection::open(home.database()).unwrap();
     connection
@@ -261,7 +268,7 @@ fn fork_origin_is_durable_same_workstream_and_survives_rename_and_reopen() {
     let cross_workstream = connection.execute(
         "INSERT INTO winds_session_origins(session_id, workstream_id, origin_session_id)
          VALUES (?1, ?2, ?3)",
-        params!["session-fork", "workstream-a", "session-other"],
+        params!["session-origin", "workstream-a", "session-other"],
     );
     assert!(cross_workstream.is_err());
 }
