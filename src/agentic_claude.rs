@@ -223,13 +223,17 @@ fn parse_stream_json_output(
     let terminal = events
         .last()
         .ok_or(ClaudeStructuredError::TruncatedOutput)?;
-    if event_type(terminal) != Some("result") {
-        return Err(ClaudeStructuredError::TruncatedOutput);
-    }
-    if events[..events.len() - 1]
+    let earlier_result = events[..events.len() - 1]
         .iter()
-        .any(|event| event_type(event) == Some("result"))
-    {
+        .any(|event| event_type(event) == Some("result"));
+    if event_type(terminal) != Some("result") {
+        return Err(if earlier_result {
+            ClaudeStructuredError::MalformedOutput
+        } else {
+            ClaudeStructuredError::TruncatedOutput
+        });
+    }
+    if earlier_result {
         return Err(ClaudeStructuredError::MalformedOutput);
     }
 
