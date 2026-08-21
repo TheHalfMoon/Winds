@@ -2,6 +2,11 @@
 mod agentic_authority;
 #[allow(
     dead_code,
+    reason = "Spec 006 T078 fake Claude structured CLI; real Claude and prompts remain blocked until T080"
+)]
+mod agentic_claude;
+#[allow(
+    dead_code,
     reason = "Spec 006 T077 fake Codex protocol client; real Codex and prompts remain blocked until T079"
 )]
 mod agentic_codex;
@@ -37,6 +42,8 @@ mod t074_agentic_context_tests;
 mod t075_agentic_authority_tests;
 #[cfg(test)]
 mod t077_codex_protocol_tests;
+#[cfg(test)]
+mod t078_claude_structured_tests;
 
 use crate::check::run_check;
 use crate::domain::{CheckEvidence, CheckStatus, Eligibility, EvidenceReport, PromotionReport};
