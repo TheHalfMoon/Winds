@@ -2,6 +2,11 @@ mod check;
 mod cli_workspace;
 #[allow(
     dead_code,
+    reason = "Spec 006 T072 fixture-only runtime discovery; real Agent work remains blocked"
+)]
+mod agentic_runtime;
+#[allow(
+    dead_code,
     reason = "Spec 003 command backend includes lifecycle surfaces beyond the minimal T057 CLI caller"
 )]
 mod command;
@@ -15,6 +20,8 @@ mod git;
 mod store;
 #[cfg(test)]
 mod t068_store_regression_tests;
+#[cfg(test)]
+mod t072_agentic_runtime_discovery_tests;
 
 use crate::check::run_check;
 use crate::domain::{CheckEvidence, CheckStatus, Eligibility, EvidenceReport, PromotionReport};
@@ -101,7 +108,7 @@ fn verify(flags: HashMap<String, String>) -> Result<()> {
             base_oid: &base_oid,
             candidate_ref,
             candidate_oid: &candidate_oid,
-            candidate_tree: &candidate_tree,
+            candidate_tree,
             worktree_path: &worktree_path,
             check_command,
             timeout_secs,
