@@ -314,5 +314,9 @@ fn nul_in_required_context_text_fails_closed() {
     input.workspace_id = "workspace-1\0spoof".to_owned();
 
     let error = build_context_capsule(input).unwrap_err();
-    assert!(error.to_string().contains("workspace id must not contain NUL"));
+    assert!(
+        error
+            .to_string()
+            .contains("workspace id must not contain NUL")
+    );
 }

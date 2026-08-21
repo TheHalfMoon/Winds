@@ -258,7 +258,11 @@ pub(crate) fn compact_context_view(
             .provenance
             .authority_rank()
             .cmp(&left.provenance.authority_rank())
-            .then_with(|| left.provenance.deterministic_rank().cmp(&right.provenance.deterministic_rank()))
+            .then_with(|| {
+                left.provenance
+                    .deterministic_rank()
+                    .cmp(&right.provenance.deterministic_rank())
+            })
             .then_with(|| left.kind.cmp(&right.kind))
             .then_with(|| left.key.cmp(&right.key))
             .then_with(|| left.value.cmp(&right.value))
