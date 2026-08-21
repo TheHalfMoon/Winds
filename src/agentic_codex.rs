@@ -386,7 +386,7 @@ fn parse_rpc_id(value: &Value) -> Result<RpcId, CodexProtocolError> {
             .map(RpcId::Number)
             .ok_or(CodexProtocolError::MalformedFrame),
         Value::String(text)
-            if !text.is_empty()
+            if !text.trim().is_empty()
                 && text.len() <= MAX_PROTOCOL_TEXT_BYTES
                 && !text.chars().any(char::is_control) =>
         {
@@ -425,7 +425,7 @@ fn validate_nonempty_exact(value: &str) -> Result<(), CodexProtocolError> {
 }
 
 fn validate_method(method: &str) -> Result<(), CodexProtocolError> {
-    if method.is_empty()
+    if method.trim().is_empty()
         || method.len() > MAX_PROTOCOL_TEXT_BYTES
         || method.chars().any(char::is_control)
     {
