@@ -381,11 +381,7 @@ struct CanonicalApprovalContent {
 pub(crate) fn approval_json_and_digest(content: &ApprovalContent) -> StoreResult<(String, String)> {
     let canonical = canonicalize_approval(content)?;
     let json = serde_json::to_string(&canonical)?;
-    let digest = Sha256::digest(json.as_bytes());
-    let digest = digest
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let digest = sha256_hex(json.as_bytes());
     Ok((json, digest))
 }
 
@@ -401,11 +397,7 @@ pub(crate) fn record_human_approval(
     }
     let canonical = canonicalize_approval(content)?;
     let canonical_json = serde_json::to_string(&canonical)?;
-    let digest = Sha256::digest(canonical_json.as_bytes());
-    let content_digest = digest
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let content_digest = sha256_hex(canonical_json.as_bytes());
 
     let identity = store
         .connection
@@ -468,7 +460,7 @@ pub(crate) fn record_human_approval(
 pub(crate) fn load_human_approval(store: &Store, approval_id: &str) -> StoreResult<StoredApproval> {
     let approval_id = normalize_label(approval_id, "approval id")?;
     ensure_approval_schema(store)?;
-    store
+    let stored = store
         .connection
         .query_row(
             "SELECT approval_id, workstream_id, session_id, workspace_id,
@@ -489,7 +481,9 @@ pub(crate) fn load_human_approval(store: &Store, approval_id: &str) -> StoreResu
             },
         )
         .optional()?
-        .ok_or_else(|| format!("unknown human approval: {approval_id}").into())
+        .ok_or_else(|| format!("unknown human approval: {approval_id}"))?;
+    validate_stored_approval(&stored)?;
+    Ok(stored)
 }
 
 pub(crate) fn revalidate_human_approval(
@@ -522,6 +516,34 @@ fn ensure_approval_schema(store: &Store) -> StoreResult<()> {
     store.connection.execute_batch(include_str!(
         "../migrations/0009_agentic_delegation_audit.sql"
     ))?;
+    Ok(())
+}
+
+fn validate_stored_approval(stored: &StoredApproval) -> StoreResult<()> {
+    let observed_digest = sha256_hex(stored.canonical_content_json.as_bytes());
+    if observed_digest != stored.content_digest {
+        return Err("stored human approval digest does not match canonical content".into());
+    }
+
+    let value: serde_json::Value = serde_json::from_str(&stored.canonical_content_json)?;
+    let object = value
+        .as_object()
+        .ok_or("stored human approval canonical content must be a JSON object")?;
+    if object.get("schema_version").and_then(serde_json::Value::as_u64) != Some(1) {
+        return Err("stored human approval has unsupported canonical schema version".into());
+    }
+    for (field, expected) in [
+        ("workstream_id", stored.workstream_id.as_str()),
+        ("session_id", stored.session_id.as_str()),
+        ("workspace_id", stored.workspace_id.as_str()),
+    ] {
+        if object.get(field).and_then(serde_json::Value::as_str) != Some(expected) {
+            return Err(format!(
+                "stored human approval {field} does not match its audit identity"
+            )
+            .into());
+        }
+    }
     Ok(())
 }
 
@@ -565,7 +587,7 @@ fn canonicalize_approval(content: &ApprovalContent) -> StoreResult<CanonicalAppr
     let candidate_oid = normalize_hex(&content.candidate_oid, 40, "candidate oid")?;
     let candidate_tree = normalize_hex(&content.candidate_tree, 40, "candidate tree")?;
 
-    let budgets = content
+    let mut budgets = content
         .budgets
         .iter()
         .map(|(name, limit)| {
@@ -577,6 +599,13 @@ fn canonicalize_approval(content: &ApprovalContent) -> StoreResult<CanonicalAppr
         .collect::<StoreResult<Vec<_>>>()?;
     if budgets.is_empty() {
         return Err("approval requires at least one explicit budget".into());
+    }
+    budgets.sort_by(|left, right| left.name.cmp(&right.name));
+    if budgets
+        .windows(2)
+        .any(|pair| pair[0].name == pair[1].name)
+    {
+        return Err("approval budget names collide after normalization".into());
     }
 
     Ok(CanonicalApprovalContent {
@@ -609,7 +638,7 @@ fn canonicalize_approval(content: &ApprovalContent) -> StoreResult<CanonicalAppr
 }
 
 fn canonicalize_plane(plane: &AuthorityPlane) -> StoreResult<CanonicalAuthorityPlane> {
-    let rules = plane
+    let mut rules = plane
         .rules
         .iter()
         .map(|(target, decision)| {
@@ -620,10 +649,25 @@ fn canonicalize_plane(plane: &AuthorityPlane) -> StoreResult<CanonicalAuthorityP
             })
         })
         .collect::<StoreResult<Vec<_>>>()?;
+    rules.sort_by(|left, right| {
+        (&left.capability, &left.resource).cmp(&(&right.capability, &right.resource))
+    });
+    if rules.windows(2).any(|pair| {
+        pair[0].capability == pair[1].capability && pair[0].resource == pair[1].resource
+    }) {
+        return Err("authority rules collide after normalization".into());
+    }
     Ok(CanonicalAuthorityPlane {
         default_decision: plane.default_decision.as_str(),
         rules,
     })
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn normalize_label(value: &str, label: &str) -> StoreResult<String> {
