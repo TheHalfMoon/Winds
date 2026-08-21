@@ -235,10 +235,7 @@ impl CodexProtocolClient {
         cwd: &str,
     ) -> Result<(u64, String), CodexProtocolError> {
         validate_nonempty_exact(cwd)?;
-        self.request(
-            "config/read",
-            json!({ "cwd": cwd, "includeLayers": false }),
-        )
+        self.request("config/read", json!({ "cwd": cwd, "includeLayers": false }))
     }
 
     /// Builds the only fresh thread shape accepted by the bounded T079 connected proof.
