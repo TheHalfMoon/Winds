@@ -143,7 +143,9 @@ fn validate_thread_start_result(result: &Value) -> ProofResult<NativeThreadId> {
     let runtime_workspace_roots = result
         .get("runtimeWorkspaceRoots")
         .and_then(Value::as_array)
-        .ok_or_else(|| "T079 thread/start response is missing runtime workspace roots".to_owned())?;
+        .ok_or_else(|| {
+            "T079 thread/start response is missing runtime workspace roots".to_owned()
+        })?;
     if !runtime_workspace_roots.is_empty() {
         return Err("T079 Codex thread retained runtime workspace roots".to_owned());
     }
@@ -152,7 +154,9 @@ fn validate_thread_start_result(result: &Value) -> ProofResult<NativeThreadId> {
         .and_then(Value::as_array)
         .ok_or_else(|| "T079 thread/start response is missing instruction sources".to_owned())?;
     if !instruction_sources.is_empty() {
-        return Err("T079 Codex thread loaded instruction sources into the bounded proof".to_owned());
+        return Err(
+            "T079 Codex thread loaded instruction sources into the bounded proof".to_owned(),
+        );
     }
     NativeThreadId::from_thread_result(result).map_err(|error| error.to_string())
 }
@@ -676,7 +680,10 @@ fn t079_requests_are_fixed_ephemeral_read_only_and_non_authorizing() {
         .expect("T079 initialize request");
     let initialize = parse_outbound(&initialize);
     assert_eq!(initialize["method"], "initialize");
-    assert_eq!(initialize["params"]["capabilities"]["experimentalApi"], true);
+    assert_eq!(
+        initialize["params"]["capabilities"]["experimentalApi"],
+        true
+    );
     assert_eq!(
         initialize["params"]["capabilities"]
             .as_object()
@@ -857,14 +864,8 @@ fn forbidden_runtime_activity_is_detected_fail_closed() {
             "item/started",
             json!({"item": {"type": "collabAgentToolCall"}}),
         ),
-        (
-            "item/started",
-            json!({"item": {"type": "webSearch"}}),
-        ),
-        (
-            "item/started",
-            json!({"item": {"type": "hookPrompt"}}),
-        ),
+        ("item/started", json!({"item": {"type": "webSearch"}})),
+        ("item/started", json!({"item": {"type": "hookPrompt"}})),
         (
             "item/started",
             json!({"item": {"type": "futureUnknownToolSurface"}}),
@@ -872,7 +873,13 @@ fn forbidden_runtime_activity_is_detected_fail_closed() {
     ] {
         assert!(is_forbidden_activity(method, &params), "{method}");
     }
-    for kind in ["userMessage", "agentMessage", "plan", "reasoning", "contextCompaction"] {
+    for kind in [
+        "userMessage",
+        "agentMessage",
+        "plan",
+        "reasoning",
+        "contextCompaction",
+    ] {
         assert!(!is_forbidden_activity(
             "item/completed",
             &json!({"item": {"type": kind, "text": "{}"}})
