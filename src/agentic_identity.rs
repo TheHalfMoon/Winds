@@ -6,12 +6,20 @@ use rusqlite::{OptionalExtension, params};
 #[path = "t071_agentic_continuity_tests.rs"]
 mod t071_agentic_continuity_tests;
 
+#[allow(
+    dead_code,
+    reason = "Spec 006 T071 fixture-first continuity API; product/runtime callers land in later tasks"
+)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ContinuationResolution {
     Selected(WindsSessionRecord),
     Candidates(Vec<WindsSessionRecord>),
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 006 T071 fixture-first continuity API; product/runtime callers land in later tasks"
+)]
 impl Store {
     pub(crate) fn start_new_winds_session(
         &self,
