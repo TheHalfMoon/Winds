@@ -1,7 +1,7 @@
 use crate::agentic_codex::{
     CleanupDecision, CodexInbound, CodexProtocolClient, CodexProtocolError, EvidenceClass,
-    MAX_CODEX_JSONL_FRAME_BYTES, NativeThreadId, ProcessOwnership, RpcId,
-    ServerRequestDisposition, cleanup_decision,
+    MAX_CODEX_JSONL_FRAME_BYTES, NativeThreadId, ProcessOwnership, RpcId, ServerRequestDisposition,
+    cleanup_decision,
 };
 use serde_json::{Value, json};
 
@@ -31,7 +31,10 @@ fn initialized_client() -> CodexProtocolClient {
             .initialized_notification()
             .expect("initialized notification"),
     );
-    assert_eq!(initialized, json!({ "method": "initialized", "params": {} }));
+    assert_eq!(
+        initialized,
+        json!({ "method": "initialized", "params": {} })
+    );
     assert!(client.is_ready());
     client
 }
@@ -134,7 +137,10 @@ fn thread_start_resume_and_fork_use_bounded_protocol_requests_only() {
     let resume = parse_outbound(&client.thread_resume(&native).expect("thread resume"));
     let fork = parse_outbound(&client.thread_fork(&native).expect("thread fork"));
 
-    assert_eq!(start, json!({ "method": "thread/start", "id": 1, "params": {} }));
+    assert_eq!(
+        start,
+        json!({ "method": "thread/start", "id": 1, "params": {} })
+    );
     assert_eq!(
         resume,
         json!({ "method": "thread/resume", "id": 2, "params": { "threadId": "thr_native_exact" } })
@@ -163,7 +169,8 @@ fn malformed_jsonl_fails_closed_and_cannot_later_authorize() {
         CodexProtocolError::ClientFailed
     );
     assert_eq!(
-        client.ingest_jsonl_frame(br#"{"method":"turn/started","params":{}}"#)
+        client
+            .ingest_jsonl_frame(br#"{"method":"turn/started","params":{}}"#)
             .unwrap_err(),
         CodexProtocolError::ClientFailed
     );
@@ -265,7 +272,9 @@ fn fake_server_exit_during_handshake_is_truthful_failure() {
     );
     assert!(!client.is_ready());
     assert_eq!(
-        client.initialize_request("winds", "Winds", "0.1.0").unwrap_err(),
+        client
+            .initialize_request("winds", "Winds", "0.1.0")
+            .unwrap_err(),
         CodexProtocolError::ClientFailed
     );
 }
