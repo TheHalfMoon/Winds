@@ -513,9 +513,24 @@ pub(crate) fn revalidate_human_approval(
 }
 
 fn ensure_approval_schema(store: &Store) -> StoreResult<()> {
-    store.connection.execute_batch(include_str!(
-        "../migrations/0009_agentic_delegation_audit.sql"
-    ))?;
+    let complete_objects = store.connection.query_row(
+        "SELECT COUNT(*)
+         FROM sqlite_master
+         WHERE name IN (
+             'agentic_delegation_approvals',
+             'idx_agentic_delegation_approvals_session_time',
+             'trg_agentic_delegation_approval_identity_insert',
+             'trg_agentic_delegation_approval_no_update',
+             'trg_agentic_delegation_approval_no_delete'
+         )",
+        [],
+        |row| row.get::<_, i64>(0),
+    )?;
+    if complete_objects != 5 {
+        store.connection.execute_batch(include_str!(
+            "../migrations/0009_agentic_delegation_audit.sql"
+        ))?;
+    }
     Ok(())
 }
 
@@ -551,14 +566,12 @@ fn validate_stored_approval(stored: &StoredApproval) -> StoreResult<()> {
 }
 
 fn canonicalize_approval(content: &ApprovalContent) -> StoreResult<CanonicalApprovalContent> {
-    let workstream_id = normalize_label(&content.workstream_id, "workstream id")?;
-    let session_id = normalize_label(&content.session_id, "session id")?;
-    let planner_id = normalize_label(&content.planner_id, "planner id")?;
-    let worker_id = normalize_label(&content.worker_id, "worker id")?;
-    let worker_parent_planner_id = normalize_label(
-        &content.worker_parent_planner_id,
-        "worker parent planner id",
-    )?;
+    let workstream_id = validate_exact_text(&content.workstream_id, "workstream id")?;
+    let session_id = validate_exact_text(&content.session_id, "session id")?;
+    let planner_id = validate_exact_text(&content.planner_id, "planner id")?;
+    let worker_id = validate_exact_text(&content.worker_id, "worker id")?;
+    let worker_parent_planner_id =
+        validate_exact_text(&content.worker_parent_planner_id, "worker parent planner id")?;
     if worker_parent_planner_id != planner_id || worker_id == planner_id {
         return Err("approval requires one Worker directly delegated by a distinct Planner".into());
     }
@@ -567,11 +580,12 @@ fn canonicalize_approval(content: &ApprovalContent) -> StoreResult<CanonicalAppr
     if !matches!(runtime_kind.as_str(), "CODEX" | "CLAUDE") {
         return Err("approval runtime kind must be CODEX or CLAUDE".into());
     }
-    let workspace_id = normalize_label(&content.workspace_id, "workspace id")?;
+    let workspace_id = validate_exact_text(&content.workspace_id, "workspace id")?;
     let canonical_worktree_root =
         validate_exact_text(&content.canonical_worktree_root, "canonical worktree root")?;
     let authority_root = validate_exact_text(&content.authority_root, "authority root")?;
-    let target_capability = normalize_label(&content.target.capability, "target capability")?;
+    let target_capability =
+        validate_exact_text(&content.target.capability, "target capability")?;
     let target_resource = validate_exact_text(&content.target.resource, "target resource")?;
 
     let mut path_scopes = content
@@ -643,7 +657,7 @@ fn canonicalize_plane(plane: &AuthorityPlane) -> StoreResult<CanonicalAuthorityP
         .iter()
         .map(|(target, decision)| {
             Ok(CanonicalAuthorityRule {
-                capability: normalize_label(&target.capability, "authority capability")?,
+                capability: validate_exact_text(&target.capability, "authority capability")?,
                 resource: validate_exact_text(&target.resource, "authority resource")?,
                 decision: decision.as_str(),
             })
@@ -652,11 +666,6 @@ fn canonicalize_plane(plane: &AuthorityPlane) -> StoreResult<CanonicalAuthorityP
     rules.sort_by(|left, right| {
         (&left.capability, &left.resource).cmp(&(&right.capability, &right.resource))
     });
-    if rules.windows(2).any(|pair| {
-        pair[0].capability == pair[1].capability && pair[0].resource == pair[1].resource
-    }) {
-        return Err("authority rules collide after normalization".into());
-    }
     Ok(CanonicalAuthorityPlane {
         default_decision: plane.default_decision.as_str(),
         rules,
@@ -682,8 +691,8 @@ fn normalize_label(value: &str, label: &str) -> StoreResult<String> {
 }
 
 fn validate_exact_text(value: &str, label: &str) -> StoreResult<String> {
-    if value.is_empty() {
-        return Err(format!("{label} must not be empty").into());
+    if value.trim().is_empty() {
+        return Err(format!("{label} must not be blank").into());
     }
     if value.contains('\0') {
         return Err(format!("{label} must not contain NUL").into());
