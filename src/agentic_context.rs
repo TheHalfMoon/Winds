@@ -56,6 +56,15 @@ impl ContextProvenance {
         }
     }
 
+    fn deterministic_rank(self) -> u8 {
+        match self {
+            Self::WindsObserved => 0,
+            Self::HumanDecided => 1,
+            Self::ImportedHistory => 2,
+            Self::DerivedReconstructed => 3,
+        }
+    }
+
     fn is_protected(self) -> bool {
         matches!(self, Self::WindsObserved | Self::HumanDecided)
     }
@@ -249,6 +258,7 @@ pub(crate) fn compact_context_view(
             .provenance
             .authority_rank()
             .cmp(&left.provenance.authority_rank())
+            .then_with(|| left.provenance.deterministic_rank().cmp(&right.provenance.deterministic_rank()))
             .then_with(|| left.kind.cmp(&right.kind))
             .then_with(|| left.key.cmp(&right.key))
             .then_with(|| left.value.cmp(&right.value))
@@ -305,6 +315,11 @@ fn canonicalize_facts(
                     .provenance
                     .authority_rank()
                     .cmp(&left.provenance.authority_rank())
+            })
+            .then_with(|| {
+                left.provenance
+                    .deterministic_rank()
+                    .cmp(&right.provenance.deterministic_rank())
             })
             .then_with(|| left.value.cmp(&right.value))
     });
