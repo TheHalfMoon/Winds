@@ -28,6 +28,16 @@ pub(crate) enum ContextFactKind {
     Decision,
 }
 
+impl ContextFactKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Objective => "OBJECTIVE",
+            Self::Constraint => "CONSTRAINT",
+            Self::Decision => "DECISION",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub(crate) enum ContextProvenance {
@@ -252,7 +262,7 @@ pub(crate) fn compact_context_view(
     for omitted in &ranked[retained_count..] {
         report_entries.push(TransferReportEntry {
             item_type: "fact".to_owned(),
-            item_id: format!("{:?}:{}", omitted.kind, omitted.key),
+            item_id: context_fact_report_id(omitted.kind, &omitted.key),
             disposition: TransferDisposition::Omitted,
             detail: "Omitted from compacted view only; canonical capsule truth is unchanged."
                 .to_owned(),
@@ -310,7 +320,7 @@ fn canonicalize_facts(
         if existing.value == fact.value {
             report_entries.push(TransferReportEntry {
                 item_type: "fact".to_owned(),
-                item_id: fact.key.clone(),
+                item_id: context_fact_report_id(fact.kind, &fact.key),
                 disposition: TransferDisposition::Omitted,
                 detail: "Duplicate fact omitted after deterministic normalization.".to_owned(),
             });
@@ -332,7 +342,7 @@ fn canonicalize_facts(
 
         report_entries.push(TransferReportEntry {
             item_type: "fact".to_owned(),
-            item_id: fact.key.clone(),
+            item_id: context_fact_report_id(fact.kind, &fact.key),
             disposition: TransferDisposition::Omitted,
             detail: format!(
                 "Lower-authority {:?} fact cannot overwrite selected {:?} fact.",
@@ -346,7 +356,7 @@ fn canonicalize_facts(
     for fact in &canonical {
         report_entries.push(TransferReportEntry {
             item_type: "fact".to_owned(),
-            item_id: fact.key.clone(),
+            item_id: context_fact_report_id(fact.kind, &fact.key),
             disposition: if fact.provenance == ContextProvenance::DerivedReconstructed {
                 TransferDisposition::DerivedReconstructed
             } else {
@@ -415,6 +425,10 @@ fn canonical_fact_order(
         .then_with(|| left.key.cmp(&right.key))
         .then_with(|| left.provenance.cmp(&right.provenance))
         .then_with(|| left.value.cmp(&right.value))
+}
+
+fn context_fact_report_id(kind: ContextFactKind, key: &str) -> String {
+    format!("{}:{key}", kind.as_str())
 }
 
 fn sort_transfer_entries(entries: &mut [TransferReportEntry]) {
