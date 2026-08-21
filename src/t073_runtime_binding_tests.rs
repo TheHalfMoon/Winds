@@ -204,7 +204,7 @@ fn executable_or_version_drift_makes_persisted_mapping_stale() {
 }
 
 #[test]
-fn missing_mapping_or_missing_native_id_is_unavailable_not_resumed() {
+fn missing_or_non_present_mapping_is_unavailable_not_resumed() {
     let root = test_root("missing-native");
     let executable = create_fake_executable(&root, "fixture-claude", b"fixture-claude-v1\n");
     let discovery = discover_present(RuntimeKind::Claude, &executable, "claude-code 1.0-fixture");
@@ -223,6 +223,52 @@ fn missing_mapping_or_missing_native_id_is_unavailable_not_resumed() {
     assert_eq!(
         store
             .resolve_runtime_resume_candidate("session-1", &discovery)
+            .unwrap(),
+        RuntimeResumeResolution::Unavailable
+    );
+
+    let unsupported = discover_runtime_from_safe_observations(
+        RuntimeKind::Claude,
+        &executable,
+        SafeVersionObservation::Unsupported("claude-code unsupported-fixture".to_owned()),
+        &[],
+        &[],
+    )
+    .unwrap();
+    assert_eq!(
+        store
+            .resolve_runtime_resume_candidate("session-1", &unsupported)
+            .unwrap(),
+        RuntimeResumeResolution::Unavailable
+    );
+
+    let version_unavailable = discover_runtime_from_safe_observations(
+        RuntimeKind::Claude,
+        &executable,
+        SafeVersionObservation::Unavailable,
+        &[],
+        &[],
+    )
+    .unwrap();
+    assert_eq!(
+        store
+            .resolve_runtime_resume_candidate("session-1", &version_unavailable)
+            .unwrap(),
+        RuntimeResumeResolution::Unavailable
+    );
+
+    let absent_executable = fake_executable_path(&root, "missing-claude");
+    let unavailable = discover_runtime_from_safe_observations(
+        RuntimeKind::Claude,
+        &absent_executable,
+        SafeVersionObservation::Unavailable,
+        &[],
+        &[],
+    )
+    .unwrap();
+    assert_eq!(
+        store
+            .resolve_runtime_resume_candidate("session-1", &unavailable)
             .unwrap(),
         RuntimeResumeResolution::Unavailable
     );
@@ -287,6 +333,20 @@ fn ownership_loss_is_durable_and_native_id_never_recreates_live_truth() {
     store
         .mark_runtime_binding_ownership_lost("binding-1", 60)
         .unwrap();
+    store
+        .mark_runtime_binding_ownership_lost("binding-1", 60)
+        .unwrap();
+    store
+        .mark_runtime_binding_ownership_lost("binding-1", 70)
+        .unwrap();
+    assert!(
+        store
+            .mark_runtime_binding_ownership_lost("binding-1", 59)
+            .is_err()
+    );
+    let before_reopen = store.load_runtime_session_binding("binding-1").unwrap();
+    assert_eq!(before_reopen.ownership, RuntimeBindingOwnership::OwnershipLost);
+    assert_eq!(before_reopen.ownership_observed_unix_ms, Some(60));
     drop(store);
 
     let reopened = Store::open(&root).unwrap();
