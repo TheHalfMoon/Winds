@@ -26,11 +26,8 @@ const MAX_CONNECTED_BYTES: usize = 1024 * 1024;
 const MAX_CONNECTED_FRAMES: usize = 256;
 const MAX_QUEUED_FRAMES: usize = 8;
 const MAX_VERSION_BYTES: usize = 4096;
-const BLOCKED_CODEX_CONFIG_FILES: &[&str] = &[
-    "config.toml",
-    "managed_config.toml",
-    "requirements.toml",
-];
+const BLOCKED_CODEX_CONFIG_FILES: &[&str] =
+    &["config.toml", "managed_config.toml", "requirements.toml"];
 #[cfg(windows)]
 const SAFE_CODEX_CHILD_ENV_KEYS: &[&str] = &["SystemRoot", "WINDIR", "TEMP", "TMP"];
 #[cfg(not(windows))]
@@ -1308,10 +1305,10 @@ fn t079_real_codex_one_bounded_prompt() {
         env::var("WINDS_T079_CODEX_PATH")
             .expect("set WINDS_T079_CODEX_PATH to an existing Codex executable"),
     );
-    let codex_home = PathBuf::from(
-        env::var_os("WINDS_T079_CODEX_HOME")
-            .expect("set WINDS_T079_CODEX_HOME to a pre-existing isolated authenticated Codex home"),
-    );
+    let codex_home =
+        PathBuf::from(env::var_os("WINDS_T079_CODEX_HOME").expect(
+            "set WINDS_T079_CODEX_HOME to a pre-existing isolated authenticated Codex home",
+        ));
     let winds_session_id = env::var("WINDS_T079_WINDS_SESSION_ID")
         .expect("set WINDS_T079_WINDS_SESSION_ID to the exact canonical Winds session id");
     let codex_home = validate_preexisting_isolated_codex_home(&codex_home)
