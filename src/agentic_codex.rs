@@ -164,8 +164,10 @@ impl CodexProtocolClient {
         client_title: &str,
         client_version: &str,
     ) -> Result<String, CodexProtocolError> {
-        if self.state != HandshakeState::Fresh {
-            return Err(CodexProtocolError::AlreadyStarted);
+        match self.state {
+            HandshakeState::Fresh => {}
+            HandshakeState::Failed => return Err(CodexProtocolError::ClientFailed),
+            _ => return Err(CodexProtocolError::AlreadyStarted),
         }
         validate_nonempty_exact(client_name)?;
         validate_nonempty_exact(client_title)?;
@@ -187,8 +189,10 @@ impl CodexProtocolClient {
     }
 
     pub(super) fn initialized_notification(&mut self) -> Result<String, CodexProtocolError> {
-        if self.state != HandshakeState::InitializeAccepted {
-            return Err(CodexProtocolError::InitializedOutOfOrder);
+        match self.state {
+            HandshakeState::InitializeAccepted => {}
+            HandshakeState::Failed => return Err(CodexProtocolError::ClientFailed),
+            _ => return Err(CodexProtocolError::InitializedOutOfOrder),
         }
         let line = encode_jsonl(&json!({ "method": "initialized", "params": {} }))?;
         self.state = HandshakeState::Ready;
@@ -261,6 +265,9 @@ impl CodexProtocolClient {
     }
 
     pub(super) fn on_server_eof(&mut self) -> Result<(), CodexProtocolError> {
+        if self.state == HandshakeState::Failed {
+            return Err(CodexProtocolError::ClientFailed);
+        }
         let error = if self.state == HandshakeState::Ready {
             CodexProtocolError::ServerExited
         } else {
@@ -278,8 +285,10 @@ impl CodexProtocolClient {
         method: &str,
         params: Value,
     ) -> Result<String, CodexProtocolError> {
-        if self.state != HandshakeState::Ready {
-            return Err(CodexProtocolError::HandshakeIncomplete);
+        match self.state {
+            HandshakeState::Ready => {}
+            HandshakeState::Failed => return Err(CodexProtocolError::ClientFailed),
+            _ => return Err(CodexProtocolError::HandshakeIncomplete),
         }
         let id = self.next_request_id;
         self.next_request_id = self
