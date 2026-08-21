@@ -330,7 +330,7 @@ fn stream_result_must_be_terminal() {
             b"{\"type\":\"result\",\"session_id\":\"session\"}\n{\"type\":\"assistant\",\"session_id\":\"session\"}\n",
         )
         .unwrap_err(),
-        ClaudeStructuredError::TruncatedOutput
+        ClaudeStructuredError::MalformedOutput
     );
 }
 
