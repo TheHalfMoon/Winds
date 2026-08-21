@@ -26,6 +26,15 @@ const MAX_CONNECTED_BYTES: usize = 1024 * 1024;
 const MAX_CONNECTED_FRAMES: usize = 256;
 const MAX_QUEUED_FRAMES: usize = 8;
 const MAX_VERSION_BYTES: usize = 4096;
+const BLOCKED_CODEX_CONFIG_FILES: &[&str] = &[
+    "config.toml",
+    "managed_config.toml",
+    "requirements.toml",
+];
+#[cfg(windows)]
+const SAFE_CODEX_CHILD_ENV_KEYS: &[&str] = &["SystemRoot", "WINDIR", "TEMP", "TMP"];
+#[cfg(not(windows))]
+const SAFE_CODEX_CHILD_ENV_KEYS: &[&str] = &["TMPDIR"];
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
 type ProofResult<T> = Result<T, String>;
@@ -161,7 +170,19 @@ fn validate_effective_config(result: &Value) -> ProofResult<()> {
         .ok_or_else(|| "T079 config/read response is missing effective config".to_owned())?;
 
     for (key, value) in config {
-        if meaningful(value) && !ALLOWED_EFFECTIVE_CONFIG_KEYS.contains(&key.as_str()) {
+        if !meaningful(value) {
+            continue;
+        }
+        if key == "model_provider" {
+            if value.as_str() != Some("openai") {
+                return Err(
+                    "T079 refuses a non-OpenAI effective model_provider for the connected proof"
+                        .to_owned(),
+                );
+            }
+            continue;
+        }
+        if !ALLOWED_EFFECTIVE_CONFIG_KEYS.contains(&key.as_str()) {
             return Err(format!(
                 "T079 refuses connected proof with active or ambiguous effective config: {key}"
             ));
@@ -270,8 +291,81 @@ fn validate_discovery(discovery: &RuntimeDiscovery) -> ProofResult<()> {
     }
 }
 
+fn reject_config_surface(path: &Path, label: &str) -> ProofResult<()> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Err(format!(
+            "T079 refuses {label} before Codex launch: {}",
+            path.display()
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "T079 could not prove {label} absent at {}: {error}",
+            path.display()
+        )),
+    }
+}
+
+fn validate_preexisting_isolated_codex_home(path: &Path) -> ProofResult<PathBuf> {
+    if !path.is_absolute() {
+        return Err("T079 requires WINDS_T079_CODEX_HOME to be an absolute path".to_owned());
+    }
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("T079 could not inspect pre-existing CODEX_HOME: {error}"))?;
+    if !metadata.is_dir() {
+        return Err("T079 requires WINDS_T079_CODEX_HOME to name an existing directory".to_owned());
+    }
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| format!("T079 could not canonicalize pre-existing CODEX_HOME: {error}"))?;
+    for name in BLOCKED_CODEX_CONFIG_FILES {
+        reject_config_surface(
+            &canonical.join(name),
+            "a local CODEX_HOME configuration surface",
+        )?;
+    }
+    Ok(canonical)
+}
+
+fn validate_no_system_codex_config() -> ProofResult<()> {
+    #[cfg(unix)]
+    {
+        let base = Path::new("/etc/codex");
+        for name in BLOCKED_CODEX_CONFIG_FILES {
+            reject_config_surface(&base.join(name), "a system Codex configuration surface")?;
+        }
+    }
+    #[cfg(windows)]
+    {
+        let program_data = env::var_os("ProgramData")
+            .ok_or_else(|| "T079 cannot prove Windows system Codex config location".to_owned())?;
+        let program_data = PathBuf::from(program_data);
+        if !program_data.is_absolute() {
+            return Err("T079 Windows ProgramData path is not absolute".to_owned());
+        }
+        let base = program_data.join("OpenAI").join("Codex");
+        for name in BLOCKED_CODEX_CONFIG_FILES {
+            reject_config_surface(&base.join(name), "a system Codex configuration surface")?;
+        }
+    }
+    Ok(())
+}
+
+fn configure_isolated_codex_environment(command: &mut Command, codex_home: Option<&Path>) {
+    command.env_clear();
+    if let Some(codex_home) = codex_home {
+        command.env("CODEX_HOME", codex_home);
+    }
+    for key in SAFE_CODEX_CHILD_ENV_KEYS {
+        if let Some(value) = env::var_os(key) {
+            command.env(key, value);
+        }
+    }
+}
+
 fn observe_version_bounded(executable: &Path) -> ProofResult<String> {
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    configure_isolated_codex_environment(&mut command, None);
+    let mut child = command
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -628,8 +722,11 @@ fn cleanup_setup_failure(child: Child, root: &Path, message: &str) -> String {
 fn run_connected_proof(
     discovery: &RuntimeDiscovery,
     winds_session_id: &str,
+    codex_home: &Path,
 ) -> ProofResult<T079Receipt> {
     validate_exact_text(winds_session_id, "Winds session id")?;
+    let codex_home = validate_preexisting_isolated_codex_home(codex_home)?;
+    validate_no_system_codex_config()?;
     validate_discovery(discovery)?;
     let executable = discovery
         .executable
@@ -644,6 +741,11 @@ fn run_connected_proof(
     {
         return Err("T079 Codex executable changed immediately before launch".to_owned());
     }
+    let revalidated_codex_home = validate_preexisting_isolated_codex_home(&codex_home)?;
+    if revalidated_codex_home != codex_home {
+        return Err("T079 CODEX_HOME identity changed before launch".to_owned());
+    }
+    validate_no_system_codex_config()?;
 
     let root = disposable_root()?;
     let _root_guard = EmptyDisposableRootGuard { root: root.clone() };
@@ -651,7 +753,9 @@ fn run_connected_proof(
         .to_str()
         .ok_or_else(|| "T079 disposable root is not UTF-8".to_owned())?
         .to_owned();
-    let mut child = Command::new(&executable.observed_path)
+    let mut command = Command::new(&executable.observed_path);
+    configure_isolated_codex_environment(&mut command, Some(&codex_home));
+    let mut child = command
         .args(["app-server", "--stdio"])
         .current_dir(&root)
         .stdin(Stdio::piped())
@@ -919,6 +1023,7 @@ fn effective_config_preflight_rejects_side_channel_surfaces() {
     validate_effective_config(&json!({
         "config": {
             "model": "gpt-fixture",
+            "model_provider": "openai",
             "mcp_servers": null,
             "hooks": [],
             "apps": null,
@@ -928,7 +1033,15 @@ fn effective_config_preflight_rejects_side_channel_surfaces() {
             "web_search": "disabled"
         }
     }))
-    .expect("allowed model fields plus empty/disabled surfaces are acceptable");
+    .expect("allowed OpenAI model fields plus empty/disabled surfaces are acceptable");
+
+    for provider in ["ollama", "azure"] {
+        let error = validate_effective_config(&json!({
+            "config": { "model_provider": provider }
+        }))
+        .unwrap_err();
+        assert!(error.contains("model_provider"));
+    }
 
     for (key, value) in [
         ("mcp_servers", json!({"server": {"command": "x"}})),
@@ -946,6 +1059,57 @@ fn effective_config_preflight_rejects_side_channel_surfaces() {
         let error = validate_effective_config(&json!({ "config": config })).unwrap_err();
         assert!(error.contains(key));
     }
+}
+
+#[test]
+fn isolated_codex_home_rejects_local_config_without_reading_credentials() {
+    let root = disposable_root().expect("isolated home fixture");
+    let config = root.join("config.toml");
+    fs::write(&config, b"model_provider = 'ollama'\n").expect("write config fixture");
+    let error = validate_preexisting_isolated_codex_home(&root).unwrap_err();
+    fs::remove_file(&config).expect("remove config fixture");
+    let canonical = validate_preexisting_isolated_codex_home(&root).expect("clean isolated home");
+    fs::remove_dir(&root).expect("remove isolated home fixture");
+    assert!(error.contains("config.toml"));
+    assert_eq!(canonical, root);
+}
+
+#[test]
+fn codex_launch_environment_is_explicit_allowlist_only() {
+    let root = disposable_root().expect("isolated home fixture");
+    let mut command = Command::new("codex");
+    configure_isolated_codex_environment(&mut command, Some(&root));
+    let explicit: Vec<_> = command
+        .get_envs()
+        .filter_map(|(key, value)| {
+            value.map(|value| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.to_string_lossy().into_owned(),
+                )
+            })
+        })
+        .collect();
+    let codex_home = explicit
+        .iter()
+        .find(|(key, _)| key == "CODEX_HOME")
+        .expect("CODEX_HOME must be explicit");
+    assert_eq!(PathBuf::from(&codex_home.1), root);
+    for (key, _) in &explicit {
+        assert!(key == "CODEX_HOME" || SAFE_CODEX_CHILD_ENV_KEYS.contains(&key.as_str()));
+    }
+    for forbidden in [
+        "HOME",
+        "PATH",
+        "OPENAI_API_KEY",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+    ] {
+        assert!(!explicit.iter().any(|(key, _)| key == forbidden));
+    }
+    fs::remove_dir(root).expect("remove isolated home fixture");
 }
 
 #[test]
@@ -1138,14 +1302,21 @@ fn native_thread_identity_never_aliases_winds_session_identity_in_receipt_contra
 }
 
 #[test]
-#[ignore = "T079 live proof: requires a pre-existing locally authenticated Codex executable; no install/auth/terms automation"]
+#[ignore = "T079 live proof: requires a pre-existing locally authenticated Codex executable and isolated CODEX_HOME; no install/auth/terms/credential automation"]
 fn t079_real_codex_one_bounded_prompt() {
     let executable = PathBuf::from(
         env::var("WINDS_T079_CODEX_PATH")
             .expect("set WINDS_T079_CODEX_PATH to an existing Codex executable"),
     );
+    let codex_home = PathBuf::from(
+        env::var_os("WINDS_T079_CODEX_HOME")
+            .expect("set WINDS_T079_CODEX_HOME to a pre-existing isolated authenticated Codex home"),
+    );
     let winds_session_id = env::var("WINDS_T079_WINDS_SESSION_ID")
         .expect("set WINDS_T079_WINDS_SESSION_ID to the exact canonical Winds session id");
+    let codex_home = validate_preexisting_isolated_codex_home(&codex_home)
+        .expect("pre-existing isolated CODEX_HOME without local config surfaces");
+    validate_no_system_codex_config().expect("no system Codex config surfaces");
     let version = observe_version_bounded(&executable).expect("bounded Codex version observation");
     let discovery = discover_runtime_from_safe_observations(
         RuntimeKind::Codex,
@@ -1155,7 +1326,8 @@ fn t079_real_codex_one_bounded_prompt() {
         &[],
     )
     .expect("exact Codex discovery");
-    let receipt = run_connected_proof(&discovery, &winds_session_id).expect("bounded T079 proof");
+    let receipt = run_connected_proof(&discovery, &winds_session_id, &codex_home)
+        .expect("bounded T079 proof");
 
     println!(
         "{}",
@@ -1170,6 +1342,8 @@ fn t079_real_codex_one_bounded_prompt() {
             "restrictions": "AGENT_NATIVE_ENFORCED",
             "cleanup": format!("{:?}", receipt.cleanup),
             "experimental_api_opt_in": true,
+            "launch_environment": "ENV_CLEAR_EXPLICIT_ALLOWLIST",
+            "codex_home": "PREEXISTING_ISOLATED_NOT_READ_OR_COPIED_BY_WINDS",
             "environment_access": "disabled",
             "runtime_workspace_roots": 0,
             "instruction_sources": 0,
