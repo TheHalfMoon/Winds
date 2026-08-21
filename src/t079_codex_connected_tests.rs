@@ -586,16 +586,14 @@ fn run_connected_proof(
                             "T079 observed forbidden runtime activity: {method}"
                         ));
                     }
-                    if method == "item/completed" {
-                        if let Some(item) = params.get("item") {
-                            if item.get("type").and_then(Value::as_str) == Some("agentMessage") {
-                                let text =
-                                    item.get("text").and_then(Value::as_str).ok_or_else(|| {
-                                        "T079 completed agent message is missing text".to_owned()
-                                    })?;
-                                final_agent_message = Some(text.to_owned());
-                            }
-                        }
+                    if method == "item/completed"
+                        && let Some(item) = params.get("item")
+                        && item.get("type").and_then(Value::as_str) == Some("agentMessage")
+                    {
+                        let text = item.get("text").and_then(Value::as_str).ok_or_else(|| {
+                            "T079 completed agent message is missing text".to_owned()
+                        })?;
+                        final_agent_message = Some(text.to_owned());
                     }
                     if method == "turn/completed" {
                         let turn = params
