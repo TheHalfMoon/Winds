@@ -161,6 +161,10 @@ fn identical_normalized_content_has_stable_json_and_digest() {
     second.session_id = " session-1 ".to_owned();
     second.worker_role = " BUILDER ".to_owned();
     second.path_scopes = vec!["tests".to_owned(), "src".to_owned(), "tests".to_owned()];
+    second.budgets = BTreeMap::from([
+        (" max_wall_seconds ".to_owned(), 60),
+        ("max_operations".to_owned(), 10),
+    ]);
     second.context_digest = "A".repeat(64);
     second.base_oid = "B".repeat(40);
     second.candidate_oid = "C".repeat(40);
@@ -171,6 +175,37 @@ fn identical_normalized_content_has_stable_json_and_digest() {
 
     assert_eq!(first, second);
     assert_eq!(first.1.len(), 64);
+}
+
+#[test]
+fn normalized_map_key_collisions_fail_closed() {
+    let environment = TestEnvironment::new("normalized-collisions");
+    let repo_root = environment.canonical_repo_root();
+
+    let mut budget_collision = base_content(&repo_root);
+    budget_collision
+        .budgets
+        .insert(" max_operations ".to_owned(), 10);
+    assert!(approval_json_and_digest(&budget_collision).is_err());
+
+    let mut authority_collision = base_content(&repo_root);
+    authority_collision.worker_grant.rules = BTreeMap::from([
+        (
+            AuthorityTarget {
+                capability: "edit".to_owned(),
+                resource: "workspace:repo/src".to_owned(),
+            },
+            AuthorityDecision::Allow,
+        ),
+        (
+            AuthorityTarget {
+                capability: " edit ".to_owned(),
+                resource: "workspace:repo/src".to_owned(),
+            },
+            AuthorityDecision::Allow,
+        ),
+    ]);
+    assert!(approval_json_and_digest(&authority_collision).is_err());
 }
 
 #[test]
@@ -267,6 +302,57 @@ fn approval_audit_is_durable_append_only_and_outside_repo_content() {
     let reopened = Store::open(environment.state_root()).unwrap();
     let loaded = load_human_approval(&reopened, "approval-1").unwrap();
     assert_eq!(loaded, stored);
+}
+
+#[test]
+fn stored_audit_digest_and_identity_must_self_validate() {
+    let (_environment, store, content) = seeded_store("stored-integrity");
+    ensure_approval_schema(&store).unwrap();
+    let (canonical_json, _digest) = approval_json_and_digest(&content).unwrap();
+
+    store
+        .connection
+        .execute(
+            "INSERT INTO agentic_delegation_approvals(
+                approval_id, workstream_id, session_id, workspace_id,
+                content_digest, canonical_content_json, approved_unix_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                "approval-bad-digest",
+                content.workstream_id,
+                content.session_id,
+                content.workspace_id,
+                "f".repeat(64),
+                canonical_json,
+                40_i64,
+            ],
+        )
+        .unwrap();
+    assert!(load_human_approval(&store, "approval-bad-digest").is_err());
+
+    let mut mismatched_content = content.clone();
+    mismatched_content.session_id = "session-json-other".to_owned();
+    let (mismatched_json, mismatched_digest) =
+        approval_json_and_digest(&mismatched_content).unwrap();
+    store
+        .connection
+        .execute(
+            "INSERT INTO agentic_delegation_approvals(
+                approval_id, workstream_id, session_id, workspace_id,
+                content_digest, canonical_content_json, approved_unix_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                "approval-bad-identity",
+                content.workstream_id,
+                content.session_id,
+                content.workspace_id,
+                mismatched_digest,
+                mismatched_json,
+                40_i64,
+            ],
+        )
+        .unwrap();
+    assert!(load_human_approval(&store, "approval-bad-identity").is_err());
 }
 
 #[test]
