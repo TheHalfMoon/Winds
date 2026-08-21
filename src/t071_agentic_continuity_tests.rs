@@ -250,7 +250,10 @@ fn fork_origin_is_durable_same_workstream_and_survives_rename_and_reopen() {
             .collect::<rusqlite::Result<Vec<_>>>()
             .unwrap()
     };
-    assert_eq!(columns, ["session_id", "workstream_id", "origin_session_id"]);
+    assert_eq!(
+        columns,
+        ["session_id", "workstream_id", "origin_session_id"]
+    );
     assert!(!columns.iter().any(|column| {
         column.contains("workspace") || column.contains("runtime") || column.contains("native")
     }));
@@ -320,7 +323,9 @@ fn ambiguous_continuation_returns_deterministic_candidates_instead_of_recency_gu
                 ["session-old", "session-unique", "session-new"]
             );
         }
-        ContinuationResolution::Selected(_) => panic!("multiple sessions must not select by recency"),
+        ContinuationResolution::Selected(_) => {
+            panic!("multiple sessions must not select by recency")
+        }
     }
 
     match store
