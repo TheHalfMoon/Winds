@@ -92,11 +92,28 @@ impl Drop for EmptyDisposableRootGuard {
     }
 }
 
-struct RemoveTreeGuard(PathBuf);
+struct FixtureRootGuard(PathBuf);
 
-impl Drop for RemoveTreeGuard {
+impl Drop for FixtureRootGuard {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
+        let expected_prefix = format!("winds-t079-discovery-{}-", std::process::id());
+        let Ok(temp_root) = env::temp_dir().canonicalize() else {
+            return;
+        };
+        let Ok(root) = self.0.canonicalize() else {
+            return;
+        };
+        if root.parent() != Some(temp_root.as_path())
+            || !root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(&expected_prefix))
+        {
+            return;
+        }
+        let executable = root.join(if cfg!(windows) { "codex.exe" } else { "codex" });
+        let _ = fs::remove_file(executable);
+        let _ = fs::remove_dir(root);
     }
 }
 
@@ -484,7 +501,17 @@ fn wait_for_response(
     }
 }
 
-fn finish_child(child: &mut Child, cleanup_deadline: Instant) -> ProofResult<CleanupEvidence> {
+fn hand_off_child_reap(mut child: Child) -> ProofResult<()> {
+    thread::Builder::new()
+        .name("winds-t079-child-reaper".to_owned())
+        .spawn(move || {
+            let _ = child.wait();
+        })
+        .map(|_| ())
+        .map_err(|error| format!("T079 could not hand terminated child to background reaper: {error}"))
+}
+
+fn finish_child(mut child: Child, cleanup_deadline: Instant) -> ProofResult<CleanupEvidence> {
     let graceful_deadline = std::cmp::min(Instant::now() + GRACEFUL_CHILD_EXIT, cleanup_deadline);
     loop {
         match child
@@ -500,12 +527,22 @@ fn finish_child(child: &mut Child, cleanup_deadline: Instant) -> ProofResult<Cle
     if let Err(kill_error) = child.kill() {
         return match child.try_wait() {
             Ok(Some(_)) => Ok(CleanupEvidence::DirectChildReaped),
-            Ok(None) => Err(format!(
-                "T079 could not terminate owned Codex child: {kill_error}; direct-child cleanup remains unproven"
-            )),
-            Err(wait_error) => Err(format!(
-                "T079 could not terminate owned Codex child: {kill_error}; reap state is also unproven: {wait_error}"
-            )),
+            Ok(None) => {
+                let message = format!(
+                    "T079 could not terminate owned Codex child: {kill_error}; direct-child cleanup remains unproven"
+                );
+                hand_off_child_reap(child)
+                    .map_err(|reaper_error| format!("{message}; {reaper_error}"))?;
+                Err(format!("{message}; direct-child reap handed off"))
+            }
+            Err(wait_error) => {
+                let message = format!(
+                    "T079 could not terminate owned Codex child: {kill_error}; reap state is also unproven: {wait_error}"
+                );
+                hand_off_child_reap(child)
+                    .map_err(|reaper_error| format!("{message}; {reaper_error}"))?;
+                Err(format!("{message}; direct-child reap handed off"))
+            }
         };
     }
 
@@ -517,10 +554,11 @@ fn finish_child(child: &mut Child, cleanup_deadline: Instant) -> ProofResult<Cle
             Some(_) => return Ok(CleanupEvidence::DirectChildTerminatedAndReaped),
             None if Instant::now() < cleanup_deadline => thread::sleep(Duration::from_millis(10)),
             None => {
-                return Err(
-                    "T079 terminated the owned Codex child but could not prove reap inside bounded cleanup"
-                        .to_owned(),
-                );
+                let message =
+                    "T079 terminated the owned Codex child but could not prove reap inside bounded cleanup";
+                hand_off_child_reap(child)
+                    .map_err(|reaper_error| format!("{message}; {reaper_error}"))?;
+                return Err(format!("{message}; direct-child reap handed off"));
             }
         }
     }
@@ -544,7 +582,37 @@ fn ensure_disposable_root_unchanged(root: &Path) -> ProofResult<()> {
         .map_err(|error| format!("T079 could not remove unchanged disposable root: {error}"))
 }
 
-fn cleanup_setup_failure(child: &mut Child, root: &Path, message: &str) -> String {
+fn reconcile_proof_cleanup<T>(
+    proof: ProofResult<T>,
+    cleanup: ProofResult<CleanupEvidence>,
+    reader_result: ProofResult<()>,
+    root_check: ProofResult<()>,
+) -> ProofResult<(T, CleanupEvidence)> {
+    match (proof, cleanup, reader_result, root_check) {
+        (Ok(value), Ok(cleanup), Ok(()), Ok(())) => Ok((value, cleanup)),
+        (proof, cleanup, reader_result, root_check) => {
+            let mut failures = Vec::new();
+            if let Err(error) = proof {
+                failures.push(format!("proof={error}"));
+            }
+            if let Err(error) = cleanup {
+                failures.push(format!("child_cleanup={error}"));
+            }
+            if let Err(error) = reader_result {
+                failures.push(format!("reader_cleanup={error}"));
+            }
+            if let Err(error) = root_check {
+                failures.push(format!("root_cleanup={error}"));
+            }
+            Err(format!(
+                "T079 proof/cleanup failure: {}",
+                failures.join("; ")
+            ))
+        }
+    }
+}
+
+fn cleanup_setup_failure(child: Child, root: &Path, message: &str) -> String {
     let cleanup_deadline = Instant::now() + CLEANUP_TIMEOUT;
     let cleanup = finish_child(child, cleanup_deadline);
     let root_check = ensure_disposable_root_unchanged(root);
@@ -593,8 +661,7 @@ fn run_connected_proof(
     let mut stdin = match child.stdin.take() {
         Some(stdin) => stdin,
         None => {
-            let message =
-                cleanup_setup_failure(&mut child, &root, "T079 Codex child stdin unavailable");
+            let message = cleanup_setup_failure(child, &root, "T079 Codex child stdin unavailable");
             return Err(message);
         }
     };
@@ -603,7 +670,7 @@ fn run_connected_proof(
         None => {
             drop(stdin);
             let message =
-                cleanup_setup_failure(&mut child, &root, "T079 Codex child stdout unavailable");
+                cleanup_setup_failure(child, &root, "T079 Codex child stdout unavailable");
             return Err(message);
         }
     };
@@ -745,7 +812,7 @@ fn run_connected_proof(
     drop(stdin);
     drop(receiver);
     let cleanup_deadline = Instant::now() + CLEANUP_TIMEOUT;
-    let cleanup = finish_child(&mut child, cleanup_deadline);
+    let cleanup = finish_child(child, cleanup_deadline);
     let reader_result = match wait_for_reader_completion(&done_receiver, cleanup_deadline) {
         Ok(()) => reader
             .join()
@@ -754,10 +821,8 @@ fn run_connected_proof(
     };
     let root_check = ensure_disposable_root_unchanged(&root);
 
-    let (native_thread_id, turn_id, status) = proof?;
-    let cleanup = cleanup?;
-    reader_result?;
-    root_check?;
+    let ((native_thread_id, turn_id, status), cleanup) =
+        reconcile_proof_cleanup(proof, cleanup, reader_result, root_check)?;
     Ok(T079Receipt {
         winds_session_id: winds_session_id.to_owned(),
         native_thread_id,
@@ -997,6 +1062,25 @@ fn reader_completion_wait_is_bounded_and_fail_closed() {
 }
 
 #[test]
+fn proof_error_preserves_cleanup_failures() {
+    let error = reconcile_proof_cleanup::<()>(
+        Err("primary proof failure".to_owned()),
+        Err("child cleanup failure".to_owned()),
+        Err("reader cleanup failure".to_owned()),
+        Err("root cleanup failure".to_owned()),
+    )
+    .unwrap_err();
+    for expected in [
+        "primary proof failure",
+        "child cleanup failure",
+        "reader cleanup failure",
+        "root cleanup failure",
+    ] {
+        assert!(error.contains(expected));
+    }
+}
+
+#[test]
 fn runtime_identity_must_match_exact_codex_discovery_before_launch() {
     let root = env::temp_dir().join(format!(
         "winds-t079-discovery-{}-{}",
@@ -1004,7 +1088,7 @@ fn runtime_identity_must_match_exact_codex_discovery_before_launch() {
         NEXT_ROOT.fetch_add(1, Ordering::Relaxed)
     ));
     fs::create_dir(&root).unwrap();
-    let _root_guard = RemoveTreeGuard(root.clone());
+    let _root_guard = FixtureRootGuard(root.clone());
     let executable = root.join(if cfg!(windows) { "codex.exe" } else { "codex" });
     fs::write(&executable, b"fixture-codex-v1\n").unwrap();
     #[cfg(unix)]
