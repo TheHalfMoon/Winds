@@ -1,8 +1,9 @@
 use crate::agentic_runtime::{
     AgentExecutionObservation, AuthReadiness, CapabilitySupport, DeclarationSource,
-    DeclaredCapability, EvidenceSource, LocalCapabilityObservation, RuntimeCapability,
-    RuntimeDiscoveryState, RuntimeIdentityRevalidation, RuntimeKind, RuntimeVersionState,
-    SafeVersionObservation, discover_runtime_from_safe_observations, revalidate_runtime_identity,
+    DeclaredCapability, EvidenceSource, LocalCapabilityObservation, MAX_EXECUTABLE_BYTES,
+    RuntimeCapability, RuntimeDiscoveryState, RuntimeIdentityRevalidation, RuntimeKind,
+    RuntimeVersionState, SafeVersionObservation, discover_runtime_from_safe_observations,
+    revalidate_runtime_identity,
 };
 use std::ffi::OsStr;
 use std::fs;
@@ -35,14 +36,27 @@ fn cleanup_owned_root(root: &Path) {
     fs::remove_dir_all(&canonical_root).unwrap();
 }
 
-fn create_fake_executable(path: &Path, bytes: &[u8]) {
-    fs::write(path, bytes).unwrap();
+fn fake_executable_path(root: &Path, stem: &str) -> PathBuf {
+    #[cfg(windows)]
+    {
+        root.join(format!("{stem}.exe"))
+    }
+    #[cfg(not(windows))]
+    {
+        root.join(stem)
+    }
+}
+
+fn create_fake_executable(root: &Path, stem: &str, bytes: &[u8]) -> PathBuf {
+    let path = fake_executable_path(root, stem);
+    fs::write(&path, bytes).unwrap();
     #[cfg(unix)]
     {
-        let mut permissions = fs::metadata(path).unwrap().permissions();
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
         permissions.set_mode(0o755);
-        fs::set_permissions(path, permissions).unwrap();
+        fs::set_permissions(&path, permissions).unwrap();
     }
+    path
 }
 
 #[test]
@@ -78,10 +92,80 @@ fn absent_runtime_is_unavailable_without_agent_execution() {
 }
 
 #[test]
+fn non_file_runtime_path_is_unavailable_instead_of_aborting_discovery() {
+    let root = test_root("non-file");
+    let runtime_dir = root.join("runtime-dir");
+    fs::create_dir(&runtime_dir).unwrap();
+
+    let discovery = discover_runtime_from_safe_observations(
+        RuntimeKind::Codex,
+        &runtime_dir,
+        SafeVersionObservation::Unavailable,
+        &[],
+        &[],
+    )
+    .unwrap();
+
+    assert_eq!(discovery.state, RuntimeDiscoveryState::Unavailable);
+    assert!(discovery.executable.is_none());
+    assert_eq!(
+        discovery.agent_execution,
+        AgentExecutionObservation::NotPerformed
+    );
+
+    cleanup_owned_root(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn oversized_runtime_fails_closed_before_unbounded_hashing() {
+    let root = test_root("oversized");
+    let executable = fake_executable_path(&root, "fixture-codex");
+    let file = fs::File::create(&executable).unwrap();
+    file.set_len(MAX_EXECUTABLE_BYTES + 1).unwrap();
+    drop(file);
+    let mut permissions = fs::metadata(&executable).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&executable, permissions).unwrap();
+
+    let error = discover_runtime_from_safe_observations(
+        RuntimeKind::Codex,
+        &executable,
+        SafeVersionObservation::Unavailable,
+        &[],
+        &[],
+    )
+    .unwrap_err();
+
+    assert!(error.contains("bounded discovery size"));
+    cleanup_owned_root(&root);
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_regular_file_without_launch_extension_is_unavailable() {
+    let root = test_root("windows-extension");
+    let non_executable = root.join("fixture-codex.txt");
+    fs::write(&non_executable, b"not-a-windows-launch-file\n").unwrap();
+
+    let discovery = discover_runtime_from_safe_observations(
+        RuntimeKind::Codex,
+        &non_executable,
+        SafeVersionObservation::Unavailable,
+        &[],
+        &[],
+    )
+    .unwrap();
+
+    assert_eq!(discovery.state, RuntimeDiscoveryState::Unavailable);
+    assert!(discovery.executable.is_none());
+    cleanup_owned_root(&root);
+}
+
+#[test]
 fn present_runtime_keeps_declared_and_locally_observed_capabilities_distinct() {
     let root = test_root("present");
-    let executable = root.join("fixture-codex");
-    create_fake_executable(&executable, b"fixture-codex-v1\n");
+    let executable = create_fake_executable(&root, "fixture-codex", b"fixture-codex-v1\n");
 
     let declarations = [
         DeclaredCapability {
@@ -154,8 +238,7 @@ fn present_runtime_keeps_declared_and_locally_observed_capabilities_distinct() {
 #[test]
 fn unsupported_version_is_explicit_and_does_not_invent_auth_readiness() {
     let root = test_root("unsupported-version");
-    let executable = root.join("fixture-claude");
-    create_fake_executable(&executable, b"fixture-claude-old\n");
+    let executable = create_fake_executable(&root, "fixture-claude", b"fixture-claude-old\n");
 
     let discovery = discover_runtime_from_safe_observations(
         RuntimeKind::Claude,
@@ -186,8 +269,7 @@ fn unsupported_version_is_explicit_and_does_not_invent_auth_readiness() {
 #[test]
 fn unobservable_capability_stays_unavailable_instead_of_becoming_observed() {
     let root = test_root("unobservable-capability");
-    let executable = root.join("fixture-claude");
-    create_fake_executable(&executable, b"fixture-claude-v1\n");
+    let executable = create_fake_executable(&root, "fixture-claude", b"fixture-claude-v1\n");
 
     let declarations = [DeclaredCapability {
         capability: RuntimeCapability::StructuredControl,
@@ -226,8 +308,7 @@ fn unobservable_capability_stays_unavailable_instead_of_becoming_observed() {
 #[test]
 fn revalidation_detects_replaced_executable_before_use() {
     let root = test_root("replacement");
-    let executable = root.join("fixture-codex");
-    create_fake_executable(&executable, b"fixture-codex-v1\n");
+    let executable = create_fake_executable(&root, "fixture-codex", b"fixture-codex-v1\n");
 
     let discovery = discover_runtime_from_safe_observations(
         RuntimeKind::Codex,
@@ -244,7 +325,7 @@ fn revalidation_detects_replaced_executable_before_use() {
         RuntimeIdentityRevalidation::Match
     );
 
-    create_fake_executable(&executable, b"fixture-codex-v2-replaced\n");
+    fs::write(&executable, b"fixture-codex-v2-replaced\n").unwrap();
     assert_eq!(
         revalidate_runtime_identity(identity).unwrap(),
         RuntimeIdentityRevalidation::Changed
@@ -284,8 +365,7 @@ fn unavailable_runtime_rejects_fabricated_local_observation() {
 #[test]
 fn runtime_identity_is_explicit_and_not_inferred_from_version_text() {
     let root = test_root("runtime-model-separation");
-    let executable = root.join("fixture-codex");
-    create_fake_executable(&executable, b"fixture-codex-model-text\n");
+    let executable = create_fake_executable(&root, "fixture-codex", b"fixture-codex-model-text\n");
 
     let discovery = discover_runtime_from_safe_observations(
         RuntimeKind::Codex,
