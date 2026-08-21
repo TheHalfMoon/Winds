@@ -255,12 +255,13 @@ impl CodexProtocolClient {
             Some(_) => return self.fail(CodexProtocolError::MalformedFrame),
             None => None,
         };
+        let has_response_payload = object.contains_key("result") || object.contains_key("error");
 
-        match (id, method) {
-            (Some(id), None) => self.ingest_response(id, object),
-            (Some(id), Some(method)) => self.ingest_server_request(id, method, object),
-            (None, Some(method)) => self.ingest_notification(method, object),
-            (None, None) => self.fail(CodexProtocolError::MalformedFrame),
+        match (id, method, has_response_payload) {
+            (Some(id), None, _) => self.ingest_response(id, object),
+            (Some(id), Some(method), false) => self.ingest_server_request(id, method, object),
+            (None, Some(method), false) => self.ingest_notification(method, object),
+            _ => self.fail(CodexProtocolError::MalformedFrame),
         }
     }
 
@@ -434,8 +435,10 @@ fn validate_method(method: &str) -> Result<(), CodexProtocolError> {
 }
 
 fn strip_jsonl_terminator(frame: &[u8]) -> &[u8] {
-    let without_lf = frame.strip_suffix(b"\n").unwrap_or(frame);
-    without_lf.strip_suffix(b"\r").unwrap_or(without_lf)
+    frame
+        .strip_suffix(b"\r\n")
+        .or_else(|| frame.strip_suffix(b"\n"))
+        .unwrap_or(frame)
 }
 
 fn encode_jsonl(value: &Value) -> Result<String, CodexProtocolError> {
