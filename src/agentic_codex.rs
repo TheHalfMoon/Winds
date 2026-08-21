@@ -3,7 +3,7 @@ use std::error::Error;
 use std::fmt;
 
 pub(super) const MAX_CODEX_JSONL_FRAME_BYTES: usize = 64 * 1024;
-const MAX_NATIVE_ID_BYTES: usize = 1024;
+const MAX_PROTOCOL_TEXT_BYTES: usize = 1024;
 const INITIALIZE_REQUEST_ID: u64 = 0;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,6 +79,11 @@ pub(super) enum CodexInbound {
     Response {
         id: RpcId,
         result: Value,
+        evidence: EvidenceClass,
+    },
+    ErrorResponse {
+        id: RpcId,
+        error: Value,
         evidence: EvidenceClass,
     },
     Notification {
@@ -166,8 +171,7 @@ impl CodexProtocolClient {
         validate_nonempty_exact(client_title)?;
         validate_nonempty_exact(client_version)?;
 
-        self.state = HandshakeState::InitializeSent;
-        encode_jsonl(&json!({
+        let line = encode_jsonl(&json!({
             "method": "initialize",
             "id": INITIALIZE_REQUEST_ID,
             "params": {
@@ -177,7 +181,9 @@ impl CodexProtocolClient {
                     "version": client_version
                 }
             }
-        }))
+        }))?;
+        self.state = HandshakeState::InitializeSent;
+        Ok(line)
     }
 
     pub(super) fn initialized_notification(&mut self) -> Result<String, CodexProtocolError> {
@@ -228,16 +234,23 @@ impl CodexProtocolClient {
         if frame.is_empty() || frame.iter().any(|byte| matches!(byte, b'\n' | b'\r')) {
             return self.fail(CodexProtocolError::MalformedFrame);
         }
-        let value: Value = serde_json::from_slice(frame)
-            .map_err(|_| CodexProtocolError::MalformedFrame)
-            .or_else(|error| self.fail(error))?;
-        let object = value
-            .as_object()
-            .ok_or(CodexProtocolError::MalformedFrame)
-            .or_else(|error| self.fail(error))?;
 
-        let id = object.get("id").map(parse_rpc_id).transpose().or_else(|error| self.fail(error))?;
-        let method = object.get("method").map(Value::as_str).transpose().ok_or(CodexProtocolError::MalformedFrame).or_else(|error| self.fail(error))?;
+        let value: Value = match serde_json::from_slice(frame) {
+            Ok(value) => value,
+            Err(_) => return self.fail(CodexProtocolError::MalformedFrame),
+        };
+        let Some(object) = value.as_object() else {
+            return self.fail(CodexProtocolError::MalformedFrame);
+        };
+        let id = match object.get("id") {
+            Some(value) => Some(parse_rpc_id(value).or_else(|error| self.fail(error))?),
+            None => None,
+        };
+        let method = match object.get("method") {
+            Some(Value::String(method)) => Some(method.as_str()),
+            Some(_) => return self.fail(CodexProtocolError::MalformedFrame),
+            None => None,
+        };
 
         match (id, method) {
             (Some(id), None) => self.ingest_response(id, object),
@@ -298,20 +311,19 @@ impl CodexProtocolClient {
                 self.state = HandshakeState::InitializeAccepted;
                 Ok(CodexInbound::InitializeAccepted)
             }
-            HandshakeState::Ready => {
-                if error.is_some() {
-                    return Ok(CodexInbound::Response {
-                        id,
-                        result: json!({ "error": error.cloned().unwrap_or(Value::Null) }),
-                        evidence: EvidenceClass::AgentRuntimeEvidence,
-                    });
-                }
-                Ok(CodexInbound::Response {
+            HandshakeState::Ready => match (result, error) {
+                (Some(result), None) => Ok(CodexInbound::Response {
                     id,
-                    result: result.cloned().unwrap_or(Value::Null),
+                    result: result.clone(),
                     evidence: EvidenceClass::AgentRuntimeEvidence,
-                })
-            }
+                }),
+                (None, Some(error)) => Ok(CodexInbound::ErrorResponse {
+                    id,
+                    error: error.clone(),
+                    evidence: EvidenceClass::AgentRuntimeEvidence,
+                }),
+                _ => self.fail(CodexProtocolError::MalformedFrame),
+            },
             _ => self.fail(CodexProtocolError::MalformedFrame),
         }
     }
@@ -327,7 +339,7 @@ impl CodexProtocolClient {
         validate_method(method).or_else(|error| self.fail(error))?;
         Ok(CodexInbound::Notification {
             method: method.to_owned(),
-            params: object.get("params").cloned().unwrap_or_else(|| json!({})),
+            params: protocol_params(object).or_else(|error| self.fail(error))?,
             evidence: EvidenceClass::AgentRuntimeEvidence,
         })
     }
@@ -345,7 +357,7 @@ impl CodexProtocolClient {
         Ok(CodexInbound::ServerRequest {
             id,
             method: method.to_owned(),
-            params: object.get("params").cloned().unwrap_or_else(|| json!({})),
+            params: protocol_params(object).or_else(|error| self.fail(error))?,
             disposition: ServerRequestDisposition::RequiresExternalDecision,
             evidence: EvidenceClass::AgentRuntimeEvidence,
         })
@@ -363,16 +375,28 @@ fn parse_rpc_id(value: &Value) -> Result<RpcId, CodexProtocolError> {
             .as_u64()
             .map(RpcId::Number)
             .ok_or(CodexProtocolError::MalformedFrame),
-        Value::String(text) if !text.is_empty() && text.len() <= MAX_NATIVE_ID_BYTES => {
+        Value::String(text)
+            if !text.is_empty()
+                && text.len() <= MAX_PROTOCOL_TEXT_BYTES
+                && !text.chars().any(char::is_control) =>
+        {
             Ok(RpcId::Text(text.clone()))
         }
         _ => Err(CodexProtocolError::MalformedFrame),
     }
 }
 
+fn protocol_params(object: &Map<String, Value>) -> Result<Value, CodexProtocolError> {
+    match object.get("params") {
+        None => Ok(json!({})),
+        Some(value @ Value::Object(_)) => Ok(value.clone()),
+        Some(_) => Err(CodexProtocolError::MalformedFrame),
+    }
+}
+
 fn validate_native_thread_id(value: &str) -> Result<(), CodexProtocolError> {
-    if value.is_empty()
-        || value.len() > MAX_NATIVE_ID_BYTES
+    if value.trim().is_empty()
+        || value.len() > MAX_PROTOCOL_TEXT_BYTES
         || value.chars().any(char::is_control)
     {
         return Err(CodexProtocolError::InvalidNativeThreadId);
@@ -381,14 +405,19 @@ fn validate_native_thread_id(value: &str) -> Result<(), CodexProtocolError> {
 }
 
 fn validate_nonempty_exact(value: &str) -> Result<(), CodexProtocolError> {
-    if value.is_empty() || value.len() > MAX_NATIVE_ID_BYTES || value.chars().any(char::is_control) {
+    if value.trim().is_empty()
+        || value.len() > MAX_PROTOCOL_TEXT_BYTES
+        || value.chars().any(char::is_control)
+    {
         return Err(CodexProtocolError::MalformedFrame);
     }
     Ok(())
 }
 
 fn validate_method(method: &str) -> Result<(), CodexProtocolError> {
-    if method.is_empty() || method.len() > MAX_NATIVE_ID_BYTES || method.chars().any(char::is_control)
+    if method.is_empty()
+        || method.len() > MAX_PROTOCOL_TEXT_BYTES
+        || method.chars().any(char::is_control)
     {
         return Err(CodexProtocolError::MalformedFrame);
     }
