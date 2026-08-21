@@ -93,16 +93,19 @@ workspaces(workspace_id)
 ### [ ] T071 — Continue / fork / new-session / new-task semantics
 
 **Authorized paths**:
+- `migrations/0007_agentic_session_origins.sql`
 - `src/agentic_identity.rs`
 - `src/cli_workspace.rs` and/or `src/main.rs` only for the smallest proof/module-registration surface
 - minimal `src/store.rs` / `src/domain.rs` extensions
 - `src/t071_agentic_continuity_tests.rs`
 
+T071 may add only the minimum forward-only persistence needed to make fork origin canonical across Store reopen: a nullable `origin_session_id` self-reference for `winds_sessions` (or an equivalently minimal normalized relation if SQLite ALTER constraints require it). The relation MUST refer to an existing Winds session, MUST NOT duplicate workspace identity, MUST NOT contain runtime/native IDs, and MUST preserve the existing `workstream_id -> workstreams -> workspace` ownership chain. Migration `0007` is reserved exclusively for this T071 continuity relation.
+
 **Acceptance**:
 - deterministic create/list/rename/select;
 - new session can continue same workstream without creating a task;
 - explicit new task creates a distinct workstream even with identical display text;
-- fork records origin with a distinct Winds session ID;
+- fork persists its origin/reference with a distinct Winds session ID and survives Store reopen;
 - ambiguous continuation returns explicit candidates, not recency guessing;
 - focused tests registered/executed;
 - no native runtime ID or Agent process/prompt.
@@ -136,7 +139,7 @@ workspaces(workspace_id)
 ### [ ] T073 — Runtime-session binding persistence and continuity truth
 
 **Authorized paths**:
-- `migrations/0007_runtime_session_bindings.sql`
+- `migrations/0008_runtime_session_bindings.sql`
 - minimal `src/domain.rs` / `src/store.rs`
 - `src/agentic_runtime.rs`
 - `src/t073_runtime_binding_tests.rs`
@@ -166,7 +169,7 @@ workspaces(workspace_id)
 - `src/t074_agentic_context_tests.rs`
 - `src/main.rs` only under Global Rule 10
 
-T074 must first prove the canonical capsule using existing workstream/session fields plus in-memory typed fixture facts/references. If a new persistent context-fact table is demonstrably required, **STOP T074 and amend/review Tasks before adding a migration**. Do not opportunistically consume migration `0008`.
+T074 must first prove the canonical capsule using existing workstream/session fields plus in-memory typed fixture facts/references. If a new persistent context-fact table is demonstrably required, **STOP T074 and amend/review Tasks before adding a migration**. Do not opportunistically consume migration `0009`.
 
 **Acceptance**:
 - deterministic versioned serialization + SHA-256 for identical canonical input/policy;
@@ -212,7 +215,7 @@ T074 must first prove the canonical capsule using existing workstream/session fi
 ### [ ] T076 — Content-bound human approval digest / audit substrate
 
 **Authorized paths**:
-- `migrations/0008_agentic_delegation_audit.sql`
+- `migrations/0009_agentic_delegation_audit.sql`
 - `src/agentic_authority.rs`
 - minimal `src/store.rs` / `src/domain.rs`
 - `src/t076_agentic_approval_tests.rs`
