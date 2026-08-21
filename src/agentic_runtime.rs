@@ -1,9 +1,11 @@
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
+#[cfg(unix)]
+use std::ffi::CString;
 use std::fs::{self, File};
 use std::io::{ErrorKind, Read};
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 const HASH_BUFFER_BYTES: usize = 64 * 1024;
@@ -371,9 +373,7 @@ fn snapshot_executable(path: &Path) -> RuntimeDiscoveryResult<Option<ExecutableS
             ));
         }
     };
-    if !initial_metadata.is_file()
-        || !has_platform_launch_permission(path, &initial_metadata)
-    {
+    if !initial_metadata.is_file() || !has_platform_launch_permission(path, &initial_metadata) {
         return Ok(None);
     }
     if initial_metadata.len() > MAX_EXECUTABLE_BYTES {
@@ -454,8 +454,22 @@ fn expected_unavailable_path_error(error: &std::io::Error) -> bool {
 }
 
 #[cfg(unix)]
-fn has_platform_launch_permission(_path: &Path, metadata: &fs::Metadata) -> bool {
-    metadata.permissions().mode() & 0o111 != 0
+fn has_platform_launch_permission(path: &Path, _metadata: &fs::Metadata) -> bool {
+    let Ok(path) = CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+
+    // SAFETY: `path` is a NUL-terminated CString whose pointer remains valid for the duration
+    // of this call; `faccessat` does not retain the pointer. `AT_EACCESS` makes the check use
+    // the process effective credentials and platform ACL/access rules without launching code.
+    unsafe {
+        libc::faccessat(
+            libc::AT_FDCWD,
+            path.as_ptr(),
+            libc::X_OK,
+            libc::AT_EACCESS,
+        ) == 0
+    }
 }
 
 #[cfg(windows)]
