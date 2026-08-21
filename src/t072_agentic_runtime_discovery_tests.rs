@@ -2,8 +2,7 @@ use crate::agentic_runtime::{
     AgentExecutionObservation, AuthReadiness, CapabilitySupport, DeclarationSource,
     DeclaredCapability, EvidenceSource, LocalCapabilityObservation, RuntimeCapability,
     RuntimeDiscoveryState, RuntimeIdentityRevalidation, RuntimeKind, RuntimeVersionState,
-    SafeVersionObservation, discover_runtime_from_safe_observations,
-    revalidate_runtime_identity,
+    SafeVersionObservation, discover_runtime_from_safe_observations, revalidate_runtime_identity,
 };
 use std::ffi::OsStr;
 use std::fs;
@@ -66,10 +65,7 @@ fn absent_runtime_is_unavailable_without_agent_execution() {
     assert_eq!(discovery.version.state, RuntimeVersionState::Unavailable);
     assert_eq!(discovery.version.source, EvidenceSource::Unavailable);
     assert_eq!(discovery.auth_readiness.readiness, AuthReadiness::Unknown);
-    assert_eq!(
-        discovery.auth_readiness.source,
-        EvidenceSource::Unavailable
-    );
+    assert_eq!(discovery.auth_readiness.source, EvidenceSource::Unavailable);
     assert_eq!(
         discovery.agent_execution,
         AgentExecutionObservation::NotPerformed
@@ -178,10 +174,7 @@ fn unsupported_version_is_explicit_and_does_not_invent_auth_readiness() {
         EvidenceSource::WindsLocallyObserved
     );
     assert_eq!(discovery.auth_readiness.readiness, AuthReadiness::Unknown);
-    assert_eq!(
-        discovery.auth_readiness.source,
-        EvidenceSource::Unavailable
-    );
+    assert_eq!(discovery.auth_readiness.source, EvidenceSource::Unavailable);
     assert_eq!(
         discovery.agent_execution,
         AgentExecutionObservation::NotPerformed
