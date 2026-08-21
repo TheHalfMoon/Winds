@@ -112,7 +112,10 @@ fn base_content(repo_root: &str) -> ApprovalContent {
 fn seeded_store(name: &str) -> (TestEnvironment, Store, ApprovalContent) {
     let environment = TestEnvironment::new(name);
     let repo_root = environment.canonical_repo_root();
-    let git_dir = Path::new(&repo_root).join(".git").to_string_lossy().into_owned();
+    let git_dir = Path::new(&repo_root)
+        .join(".git")
+        .to_string_lossy()
+        .into_owned();
     let store = Store::open(environment.state_root()).unwrap();
     store
         .create_workspace(
@@ -157,11 +160,7 @@ fn identical_normalized_content_has_stable_json_and_digest() {
     second.workstream_id = "  workstream-1  ".to_owned();
     second.session_id = " session-1 ".to_owned();
     second.worker_role = " BUILDER ".to_owned();
-    second.path_scopes = vec![
-        "tests".to_owned(),
-        "src".to_owned(),
-        "tests".to_owned(),
-    ];
+    second.path_scopes = vec!["tests".to_owned(), "src".to_owned(), "tests".to_owned()];
     second.context_digest = "A".repeat(64);
     second.base_oid = "B".repeat(40);
     second.candidate_oid = "C".repeat(40);
@@ -198,7 +197,9 @@ fn every_material_approval_identity_change_requires_reapproval() {
             11 => changed.worker_grant = plane(AuthorityDecision::Ask),
             12 => changed.team_policy = plane(AuthorityDecision::Ask),
             13 => changed.human_ceiling = plane(AuthorityDecision::Allow),
-            14 => changed.budgets.insert("max_operations".to_owned(), 11).map(drop).unwrap_or(()),
+            14 => {
+                changed.budgets.insert("max_operations".to_owned(), 11);
+            }
             15 => changed.base_oid = "e".repeat(40),
             16 => changed.candidate_oid = "e".repeat(40),
             17 => changed.candidate_tree = "e".repeat(40),
@@ -309,7 +310,10 @@ fn canonical_approval_schema_has_no_auth_secret_environment_or_signing_fields() 
         "private_key",
         "public_key",
     ] {
-        assert!(!object.contains_key(forbidden), "forbidden field={forbidden}");
+        assert!(
+            !object.contains_key(forbidden),
+            "forbidden field={forbidden}"
+        );
     }
     assert!(object.contains_key("context_digest"));
     assert!(object.contains_key("budgets"));
