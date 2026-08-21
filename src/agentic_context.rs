@@ -188,8 +188,9 @@ pub(crate) fn build_context_capsule(input: ContextCapsuleInput) -> ContextResult
         item_type: "private_hidden_state".to_owned(),
         item_id: "private_hidden_state_reasoning".to_owned(),
         disposition: TransferDisposition::Unavailable,
-        detail: "Private hidden state/reasoning is not transferred or reconstructed as canonical truth."
-            .to_owned(),
+        detail:
+            "Private hidden state/reasoning is not transferred or reconstructed as canonical truth."
+                .to_owned(),
     });
     sort_transfer_entries(&mut report_entries);
 
@@ -210,9 +211,10 @@ pub(crate) fn build_context_capsule(input: ContextCapsuleInput) -> ContextResult
     };
     let canonical_bytes = serde_json::to_vec(&payload)
         .map_err(|error| ContextCapsuleError(format!("context serialization failed: {error}")))?;
-    let canonical_json = String::from_utf8(canonical_bytes.clone())
-        .map_err(|error| ContextCapsuleError(format!("context serialization was not UTF-8: {error}")))?;
     let sha256 = format!("{:x}", Sha256::digest(&canonical_bytes));
+    let canonical_json = String::from_utf8(canonical_bytes).map_err(|error| {
+        ContextCapsuleError(format!("context serialization was not UTF-8: {error}"))
+    })?;
 
     Ok(ContextCapsule {
         payload,
@@ -347,7 +349,10 @@ fn canonicalize_facts(
             } else {
                 TransferDisposition::Transferred
             },
-            detail: format!("Canonical fact retained with {:?} provenance.", fact.provenance),
+            detail: format!(
+                "Canonical fact retained with {:?} provenance.",
+                fact.provenance
+            ),
         });
     }
     Ok(canonical)
@@ -361,7 +366,8 @@ fn canonicalize_references(
     let mut by_id = BTreeMap::<String, String>::new();
     for reference in references {
         let reference_id = normalize_required(&reference.reference_id, "context reference id")?;
-        let exact_identity = normalize_required(&reference.exact_identity, "context reference identity")?;
+        let exact_identity =
+            normalize_required(&reference.exact_identity, "context reference identity")?;
         if let Some(existing) = by_id.get(&reference_id) {
             if existing != &exact_identity {
                 return Err(ContextCapsuleError(format!(
