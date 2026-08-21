@@ -197,6 +197,33 @@ fn structural_unknown_frame_fails_closed() {
 }
 
 #[test]
+fn whitespace_only_method_and_text_rpc_id_fail_closed() {
+    let mut notification = initialized_client();
+    assert_eq!(
+        notification
+            .ingest_jsonl_frame(br#"{"method":"   ","params":{}}"#)
+            .unwrap_err(),
+        CodexProtocolError::MalformedFrame
+    );
+    assert_eq!(
+        notification.thread_start().unwrap_err(),
+        CodexProtocolError::ClientFailed
+    );
+
+    let mut request = initialized_client();
+    assert_eq!(
+        request
+            .ingest_jsonl_frame(br#"{"id":"   ","method":"future/request","params":{}}"#)
+            .unwrap_err(),
+        CodexProtocolError::MalformedFrame
+    );
+    assert_eq!(
+        request.thread_start().unwrap_err(),
+        CodexProtocolError::ClientFailed
+    );
+}
+
+#[test]
 fn mixed_request_response_envelopes_fail_closed() {
     let mut request_with_result = initialized_client();
     assert_eq!(
