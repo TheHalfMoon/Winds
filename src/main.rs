@@ -1,5 +1,10 @@
 #[allow(
     dead_code,
+    reason = "Spec 006 T074 fixture-only canonical context capsule; no Agent process or prompt"
+)]
+mod agentic_context;
+#[allow(
+    dead_code,
     reason = "Spec 006 T072 fixture-only runtime discovery; real Agent work remains blocked"
 )]
 mod agentic_runtime;
@@ -22,6 +27,8 @@ mod store;
 mod t068_store_regression_tests;
 #[cfg(test)]
 mod t072_agentic_runtime_discovery_tests;
+#[cfg(test)]
+mod t074_agentic_context_tests;
 
 use crate::check::run_check;
 use crate::domain::{CheckEvidence, CheckStatus, Eligibility, EvidenceReport, PromotionReport};
