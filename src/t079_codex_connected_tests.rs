@@ -3,9 +3,9 @@ use crate::agentic_codex::{
     RpcId, ServerRequestDisposition, T079_PROOF_PROMPT,
 };
 use crate::agentic_runtime::{
-    EvidenceSource, RuntimeDiscovery, RuntimeDiscoveryState, RuntimeIdentityRevalidation, RuntimeKind,
-    RuntimeVersionState, SafeVersionObservation, discover_runtime_from_safe_observations,
-    revalidate_runtime_identity,
+    EvidenceSource, RuntimeDiscovery, RuntimeDiscoveryState, RuntimeIdentityRevalidation,
+    RuntimeKind, RuntimeVersionState, SafeVersionObservation,
+    discover_runtime_from_safe_observations, revalidate_runtime_identity,
 };
 use serde_json::{Value, json};
 use std::env;
@@ -393,7 +393,9 @@ fn wait_for_response(
             }
             CodexInbound::Notification { method, params, .. } => {
                 if is_forbidden_activity(&method, &params) {
-                    return Err(format!("T079 observed forbidden runtime activity: {method}"));
+                    return Err(format!(
+                        "T079 observed forbidden runtime activity: {method}"
+                    ));
                 }
             }
             CodexInbound::ServerRequest {
@@ -436,7 +438,12 @@ fn finish_child(child: &mut Child) -> ProofResult<CleanupEvidence> {
 fn ensure_disposable_root_unchanged(root: &Path) -> ProofResult<()> {
     let mut entries = fs::read_dir(root)
         .map_err(|error| format!("T079 could not inspect disposable root: {error}"))?;
-    if entries.next().transpose().map_err(|error| error.to_string())?.is_some() {
+    if entries
+        .next()
+        .transpose()
+        .map_err(|error| error.to_string())?
+        .is_some()
+    {
         return Err(format!(
             "T079 disposable proof context was mutated; preserved for inspection at {}",
             root.display()
@@ -499,12 +506,7 @@ fn run_connected_proof(
             .initialize_request("winds", "Winds", "0.1.0")
             .map_err(|error| error.to_string())?;
         send_line(&mut stdin, &initialize)?;
-        let frame = receive_frame(
-            &receiver,
-            deadline,
-            &mut total_bytes,
-            &mut frame_count,
-        )?;
+        let frame = receive_frame(&receiver, deadline, &mut total_bytes, &mut frame_count)?;
         if client
             .ingest_jsonl_frame(&frame)
             .map_err(|error| error.to_string())?
@@ -547,7 +549,9 @@ fn run_connected_proof(
         )?;
         let native_thread_id = validate_thread_start_result(&thread_result)?;
         if native_thread_id.as_str() == winds_session_id {
-            return Err("T079 native thread id must not alias canonical Winds session id".to_owned());
+            return Err(
+                "T079 native thread id must not alias canonical Winds session id".to_owned(),
+            );
         }
 
         let (turn_request_id, turn_request) = client
@@ -567,12 +571,7 @@ fn run_connected_proof(
         let mut final_agent_message: Option<String> = None;
 
         loop {
-            let frame = receive_frame(
-                &receiver,
-                deadline,
-                &mut total_bytes,
-                &mut frame_count,
-            )?;
+            let frame = receive_frame(&receiver, deadline, &mut total_bytes, &mut frame_count)?;
             match client
                 .ingest_jsonl_frame(&frame)
                 .map_err(|error| format!("T079 Codex protocol failure: {error}"))?
@@ -583,15 +582,15 @@ fn run_connected_proof(
                     evidence: EvidenceClass::AgentRuntimeEvidence,
                 } => {
                     if is_forbidden_activity(&method, &params) {
-                        return Err(format!("T079 observed forbidden runtime activity: {method}"));
+                        return Err(format!(
+                            "T079 observed forbidden runtime activity: {method}"
+                        ));
                     }
                     if method == "item/completed" {
                         if let Some(item) = params.get("item") {
                             if item.get("type").and_then(Value::as_str) == Some("agentMessage") {
-                                let text = item
-                                    .get("text")
-                                    .and_then(Value::as_str)
-                                    .ok_or_else(|| {
+                                let text =
+                                    item.get("text").and_then(Value::as_str).ok_or_else(|| {
                                         "T079 completed agent message is missing text".to_owned()
                                     })?;
                                 final_agent_message = Some(text.to_owned());
@@ -612,11 +611,7 @@ fn run_connected_proof(
                             "T079 completed without a bounded final agent message".to_owned()
                         })?;
                         let status = parse_structured_agent_message(text)?;
-                        return Ok((
-                            native_thread_id.as_str().to_owned(),
-                            turn_id,
-                            status,
-                        ));
+                        return Ok((native_thread_id.as_str().to_owned(), turn_id, status));
                     }
                 }
                 CodexInbound::ServerRequest {
@@ -688,9 +683,7 @@ fn t079_requests_are_fixed_ephemeral_read_only_and_non_authorizing() {
     );
 
     let native = NativeThreadId::parse("thr_t079_fixture").expect("native id");
-    let (turn_id, turn) = client
-        .t079_turn_start(&native, cwd)
-        .expect("turn request");
+    let (turn_id, turn) = client.t079_turn_start(&native, cwd).expect("turn request");
     assert_eq!(turn_id, 3);
     let turn = parse_outbound(&turn);
     assert_eq!(turn["method"], "turn/start");
@@ -751,17 +744,21 @@ fn thread_and_result_validation_preserve_exact_provenance_and_non_authority() {
     }))
     .expect("exact T079 thread evidence");
     assert_eq!(native.as_str(), "thr_exact");
-    assert!(validate_thread_start_result(&json!({
-        "thread": { "id": "thr_exact", "ephemeral": false, "path": "/persisted" },
-        "approvalPolicy": "never",
-        "sandbox": { "type": "readOnly", "networkAccess": false }
-    }))
-    .is_err());
+    assert!(
+        validate_thread_start_result(&json!({
+            "thread": { "id": "thr_exact", "ephemeral": false, "path": "/persisted" },
+            "approvalPolicy": "never",
+            "sandbox": { "type": "readOnly", "networkAccess": false }
+        }))
+        .is_err()
+    );
     assert_eq!(
         parse_structured_agent_message(r#"{"status":"WINDS_T079_OK"}"#).unwrap(),
         "WINDS_T079_OK"
     );
-    assert!(parse_structured_agent_message(r#"{"status":"WINDS_T079_OK","verified":true}"#).is_err());
+    assert!(
+        parse_structured_agent_message(r#"{"status":"WINDS_T079_OK","verified":true}"#).is_err()
+    );
     assert!(parse_structured_agent_message(r#"{"status":"OTHER"}"#).is_err());
 }
 
@@ -788,7 +785,10 @@ fn forbidden_runtime_activity_is_detected_fail_closed() {
         ("item/fileChange/outputDelta", json!({})),
         ("mcp/tool/call", json!({})),
         ("turn/diff/updated", json!({})),
-        ("item/completed", json!({"item": {"type": "dynamicToolCall"}})),
+        (
+            "item/completed",
+            json!({"item": {"type": "dynamicToolCall"}}),
+        ),
     ] {
         assert!(is_forbidden_activity(method, &params), "{method}");
     }
@@ -848,7 +848,10 @@ fn native_thread_identity_never_aliases_winds_session_identity_in_receipt_contra
         receipt.authority,
         ResultAuthority::AgentRuntimeEvidenceNotVerifiedOrAccepted
     );
-    assert_eq!(receipt.restrictions, RestrictionEvidence::AgentNativeEnforced);
+    assert_eq!(
+        receipt.restrictions,
+        RestrictionEvidence::AgentNativeEnforced
+    );
 }
 
 #[test]
