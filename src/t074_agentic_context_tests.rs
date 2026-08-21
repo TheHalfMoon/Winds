@@ -228,6 +228,47 @@ fn compaction_never_mutates_canonical_truth_or_reference_identity() {
 }
 
 #[test]
+fn fact_report_ids_bind_stable_kind_and_key_across_transfer_and_compaction() {
+    let mut input = base_input();
+    input.facts.push(ContextFactInput {
+        kind: ContextFactKind::Objective,
+        key: "shared-key".to_owned(),
+        value: "objective value".to_owned(),
+        provenance: ContextProvenance::ImportedHistory,
+    });
+    input.facts.push(ContextFactInput {
+        kind: ContextFactKind::Decision,
+        key: "shared-key".to_owned(),
+        value: "decision value".to_owned(),
+        provenance: ContextProvenance::ImportedHistory,
+    });
+
+    let capsule = build_context_capsule(input).unwrap();
+    let transfer_ids = capsule
+        .transfer_report
+        .entries
+        .iter()
+        .filter(|entry| entry.item_type == "fact" && entry.item_id.ends_with(":shared-key"))
+        .map(|entry| entry.item_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(transfer_ids, vec!["DECISION:shared-key", "OBJECTIVE:shared-key"]);
+
+    let compacted = compact_context_view(&capsule, 0);
+    let compacted_ids = compacted
+        .transfer_report
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.item_type == "fact"
+                && entry.item_id.ends_with(":shared-key")
+                && entry.detail.contains("compacted view")
+        })
+        .map(|entry| entry.item_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(compacted_ids, vec!["DECISION:shared-key", "OBJECTIVE:shared-key"]);
+}
+
+#[test]
 fn conflicting_protected_truth_fails_closed() {
     let mut input = base_input();
     input.facts.push(ContextFactInput {
