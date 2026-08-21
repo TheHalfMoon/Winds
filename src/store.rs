@@ -20,7 +20,7 @@ pub(crate) mod git_observation;
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
 pub struct Store {
-    connection: Connection,
+    pub(crate) connection: Connection,
     home: PathBuf,
     deferred_terminal_finalizations: Vec<DeferredTerminalFinalization>,
 }
@@ -154,6 +154,9 @@ impl Store {
         connection.execute_batch(include_str!("../migrations/0006_agentic_identity.sql"))?;
         connection.execute_batch(include_str!(
             "../migrations/0007_agentic_session_origins.sql"
+        ))?;
+        connection.execute_batch(include_str!(
+            "../migrations/0008_runtime_session_bindings.sql"
         ))?;
         Ok(Self {
             connection,
