@@ -65,8 +65,8 @@ fn parse_outbound(line: &str) -> Value {
 fn initialized_client() -> CodexProtocolClient {
     let mut client = CodexProtocolClient::default();
     client
-        .initialize_request("winds", "Winds", "0.1.0")
-        .expect("initialize request");
+        .t079_initialize_request("winds", "Winds", "0.1.0")
+        .expect("T079 initialize request");
     assert_eq!(
         client
             .ingest_jsonl_frame(br#"{"id":0,"result":{"userAgent":"fixture"}}"#)
@@ -139,6 +139,20 @@ fn validate_thread_start_result(result: &Value) -> ProofResult<NativeThreadId> {
         || sandbox.get("networkAccess").and_then(Value::as_bool) != Some(false)
     {
         return Err("T079 Codex thread did not confirm read-only/no-network sandbox".to_owned());
+    }
+    let runtime_workspace_roots = result
+        .get("runtimeWorkspaceRoots")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "T079 thread/start response is missing runtime workspace roots".to_owned())?;
+    if !runtime_workspace_roots.is_empty() {
+        return Err("T079 Codex thread retained runtime workspace roots".to_owned());
+    }
+    let instruction_sources = result
+        .get("instructionSources")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "T079 thread/start response is missing instruction sources".to_owned())?;
+    if !instruction_sources.is_empty() {
+        return Err("T079 Codex thread loaded instruction sources into the bounded proof".to_owned());
     }
     NativeThreadId::from_thread_result(result).map_err(|error| error.to_string())
 }
@@ -331,18 +345,24 @@ fn is_forbidden_activity(method: &str, params: &Value) -> bool {
         || method_lower.contains("filechange")
         || method_lower.contains("mcp")
         || method_lower.contains("tool")
+        || method_lower.contains("hook")
+        || method_lower.contains("websearch")
+        || method_lower.contains("imagegeneration")
+        || method_lower.contains("collabagent")
+        || method_lower.contains("subagent")
         || method_lower.contains("turn/diff")
     {
         return true;
     }
+
     params
         .get("item")
         .and_then(|item| item.get("type"))
         .and_then(Value::as_str)
         .is_some_and(|kind| {
-            matches!(
+            !matches!(
                 kind,
-                "commandExecution" | "fileChange" | "mcpToolCall" | "dynamicToolCall"
+                "userMessage" | "agentMessage" | "plan" | "reasoning" | "contextCompaction"
             )
         })
 }
@@ -503,7 +523,7 @@ fn run_connected_proof(
     let proof = (|| -> ProofResult<(String, String, String)> {
         let mut client = CodexProtocolClient::default();
         let initialize = client
-            .initialize_request("winds", "Winds", "0.1.0")
+            .t079_initialize_request("winds", "Winds", "0.1.0")
             .map_err(|error| error.to_string())?;
         send_line(&mut stdin, &initialize)?;
         let frame = receive_frame(&receiver, deadline, &mut total_bytes, &mut frame_count)?;
@@ -650,6 +670,21 @@ fn run_connected_proof(
 
 #[test]
 fn t079_requests_are_fixed_ephemeral_read_only_and_non_authorizing() {
+    let mut handshake = CodexProtocolClient::default();
+    let initialize = handshake
+        .t079_initialize_request("winds", "Winds", "0.1.0")
+        .expect("T079 initialize request");
+    let initialize = parse_outbound(&initialize);
+    assert_eq!(initialize["method"], "initialize");
+    assert_eq!(initialize["params"]["capabilities"]["experimentalApi"], true);
+    assert_eq!(
+        initialize["params"]["capabilities"]
+            .as_object()
+            .expect("capabilities object")
+            .len(),
+        1
+    );
+
     let mut client = initialized_client();
     let cwd = "/tmp/winds-t079-fixture";
 
@@ -673,9 +708,13 @@ fn t079_requests_are_fixed_ephemeral_read_only_and_non_authorizing() {
             "id": 2,
             "params": {
                 "cwd": cwd,
+                "runtimeWorkspaceRoots": [],
                 "approvalPolicy": "never",
                 "sandbox": "readOnly",
-                "ephemeral": true
+                "ephemeral": true,
+                "environments": [],
+                "dynamicTools": [],
+                "selectedCapabilityRoots": []
             }
         })
     );
@@ -688,6 +727,8 @@ fn t079_requests_are_fixed_ephemeral_read_only_and_non_authorizing() {
     assert_eq!(turn["id"], 3);
     assert_eq!(turn["params"]["threadId"], "thr_t079_fixture");
     assert_eq!(turn["params"]["input"][0]["text"], T079_PROOF_PROMPT);
+    assert_eq!(turn["params"]["runtimeWorkspaceRoots"], json!([]));
+    assert_eq!(turn["params"]["environments"], json!([]));
     assert_eq!(turn["params"]["approvalPolicy"], "never");
     assert_eq!(turn["params"]["sandboxPolicy"]["type"], "readOnly");
     assert_eq!(turn["params"]["sandboxPolicy"]["networkAccess"], false);
@@ -738,7 +779,9 @@ fn thread_and_result_validation_preserve_exact_provenance_and_non_authority() {
     let native = validate_thread_start_result(&json!({
         "thread": { "id": "thr_exact", "ephemeral": true, "path": null },
         "approvalPolicy": "never",
-        "sandbox": { "type": "readOnly", "networkAccess": false }
+        "sandbox": { "type": "readOnly", "networkAccess": false },
+        "runtimeWorkspaceRoots": [],
+        "instructionSources": []
     }))
     .expect("exact T079 thread evidence");
     assert_eq!(native.as_str(), "thr_exact");
@@ -746,7 +789,29 @@ fn thread_and_result_validation_preserve_exact_provenance_and_non_authority() {
         validate_thread_start_result(&json!({
             "thread": { "id": "thr_exact", "ephemeral": false, "path": "/persisted" },
             "approvalPolicy": "never",
-            "sandbox": { "type": "readOnly", "networkAccess": false }
+            "sandbox": { "type": "readOnly", "networkAccess": false },
+            "runtimeWorkspaceRoots": [],
+            "instructionSources": []
+        }))
+        .is_err()
+    );
+    assert!(
+        validate_thread_start_result(&json!({
+            "thread": { "id": "thr_exact", "ephemeral": true, "path": null },
+            "approvalPolicy": "never",
+            "sandbox": { "type": "readOnly", "networkAccess": false },
+            "runtimeWorkspaceRoots": [],
+            "instructionSources": ["/home/user/AGENTS.md"]
+        }))
+        .is_err()
+    );
+    assert!(
+        validate_thread_start_result(&json!({
+            "thread": { "id": "thr_exact", "ephemeral": true, "path": null },
+            "approvalPolicy": "never",
+            "sandbox": { "type": "readOnly", "networkAccess": false },
+            "runtimeWorkspaceRoots": ["/tmp/winds-t079-fixture"],
+            "instructionSources": []
         }))
         .is_err()
     );
@@ -783,17 +848,36 @@ fn forbidden_runtime_activity_is_detected_fail_closed() {
         ("item/fileChange/outputDelta", json!({})),
         ("mcp/tool/call", json!({})),
         ("turn/diff/updated", json!({})),
+        ("hook/started", json!({})),
         (
             "item/completed",
             json!({"item": {"type": "dynamicToolCall"}}),
         ),
+        (
+            "item/started",
+            json!({"item": {"type": "collabAgentToolCall"}}),
+        ),
+        (
+            "item/started",
+            json!({"item": {"type": "webSearch"}}),
+        ),
+        (
+            "item/started",
+            json!({"item": {"type": "hookPrompt"}}),
+        ),
+        (
+            "item/started",
+            json!({"item": {"type": "futureUnknownToolSurface"}}),
+        ),
     ] {
         assert!(is_forbidden_activity(method, &params), "{method}");
     }
-    assert!(!is_forbidden_activity(
-        "item/completed",
-        &json!({"item": {"type": "agentMessage", "text": "{}"}})
-    ));
+    for kind in ["userMessage", "agentMessage", "plan", "reasoning", "contextCompaction"] {
+        assert!(!is_forbidden_activity(
+            "item/completed",
+            &json!({"item": {"type": kind, "text": "{}"}})
+        ));
+    }
 }
 
 #[test]
@@ -884,6 +968,10 @@ fn t079_real_codex_one_bounded_prompt() {
             "authority": "AGENT_RUNTIME_EVIDENCE_NOT_VERIFIED_OR_ACCEPTED",
             "restrictions": "AGENT_NATIVE_ENFORCED",
             "cleanup": format!("{:?}", receipt.cleanup),
+            "experimental_api_opt_in": true,
+            "environment_access": "disabled",
+            "runtime_workspace_roots": 0,
+            "instruction_sources": 0,
             "prompt_sent": true,
             "turns": 1,
             "primary_checkout_mutation": false,
