@@ -1,10 +1,10 @@
-mod check;
-mod cli_workspace;
 #[allow(
     dead_code,
     reason = "Spec 006 T072 fixture-only runtime discovery; real Agent work remains blocked"
 )]
 mod agentic_runtime;
+mod check;
+mod cli_workspace;
 #[allow(
     dead_code,
     reason = "Spec 003 command backend includes lifecycle surfaces beyond the minimal T057 CLI caller"
