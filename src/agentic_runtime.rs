@@ -214,7 +214,7 @@ pub(crate) struct RuntimeSessionBinding {
 pub(crate) enum RuntimeResumeResolution {
     Unavailable,
     Stale,
-    Candidate(RuntimeSessionBinding),
+    Candidate(Box<RuntimeSessionBinding>),
     Ambiguous(Vec<RuntimeSessionBinding>),
 }
 
@@ -516,9 +516,9 @@ impl Store {
             .collect::<Vec<_>>();
         match resumable.len() {
             0 => Ok(RuntimeResumeResolution::Unavailable),
-            1 => Ok(RuntimeResumeResolution::Candidate(
+            1 => Ok(RuntimeResumeResolution::Candidate(Box::new(
                 resumable.pop().expect("one exact runtime resume candidate"),
-            )),
+            ))),
             _ => Ok(RuntimeResumeResolution::Ambiguous(resumable)),
         }
     }
