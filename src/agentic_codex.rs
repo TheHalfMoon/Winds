@@ -170,6 +170,36 @@ impl CodexProtocolClient {
         client_title: &str,
         client_version: &str,
     ) -> Result<String, CodexProtocolError> {
+        self.initialize_request_with_experimental_api(
+            client_name,
+            client_title,
+            client_version,
+            false,
+        )
+    }
+
+    /// T079 opts into the experimental API only to send explicit empty environment/tool roots.
+    pub(super) fn t079_initialize_request(
+        &mut self,
+        client_name: &str,
+        client_title: &str,
+        client_version: &str,
+    ) -> Result<String, CodexProtocolError> {
+        self.initialize_request_with_experimental_api(
+            client_name,
+            client_title,
+            client_version,
+            true,
+        )
+    }
+
+    fn initialize_request_with_experimental_api(
+        &mut self,
+        client_name: &str,
+        client_title: &str,
+        client_version: &str,
+        experimental_api: bool,
+    ) -> Result<String, CodexProtocolError> {
         match self.state {
             HandshakeState::Fresh => {}
             HandshakeState::Failed => return Err(CodexProtocolError::ClientFailed),
@@ -179,16 +209,30 @@ impl CodexProtocolClient {
         validate_nonempty_exact(client_title)?;
         validate_nonempty_exact(client_version)?;
 
-        let line = encode_jsonl(&json!({
-            "method": "initialize",
-            "id": INITIALIZE_REQUEST_ID,
-            "params": {
+        let params = if experimental_api {
+            json!({
+                "clientInfo": {
+                    "name": client_name,
+                    "title": client_title,
+                    "version": client_version
+                },
+                "capabilities": {
+                    "experimentalApi": true
+                }
+            })
+        } else {
+            json!({
                 "clientInfo": {
                     "name": client_name,
                     "title": client_title,
                     "version": client_version
                 }
-            }
+            })
+        };
+        let line = encode_jsonl(&json!({
+            "method": "initialize",
+            "id": INITIALIZE_REQUEST_ID,
+            "params": params
         }))?;
         self.state = HandshakeState::InitializeSent;
         Ok(line)
@@ -248,9 +292,13 @@ impl CodexProtocolClient {
             "thread/start",
             json!({
                 "cwd": cwd,
+                "runtimeWorkspaceRoots": [],
                 "approvalPolicy": "never",
                 "sandbox": "readOnly",
-                "ephemeral": true
+                "ephemeral": true,
+                "environments": [],
+                "dynamicTools": [],
+                "selectedCapabilityRoots": []
             }),
         )
     }
@@ -268,6 +316,8 @@ impl CodexProtocolClient {
                 "threadId": native_thread_id.as_str(),
                 "input": [{ "type": "text", "text": T079_PROOF_PROMPT }],
                 "cwd": cwd,
+                "runtimeWorkspaceRoots": [],
+                "environments": [],
                 "approvalPolicy": "never",
                 "sandboxPolicy": {
                     "type": "readOnly",
