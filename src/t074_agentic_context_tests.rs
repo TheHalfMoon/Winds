@@ -251,7 +251,10 @@ fn fact_report_ids_bind_stable_kind_and_key_across_transfer_and_compaction() {
         .filter(|entry| entry.item_type == "fact" && entry.item_id.ends_with(":shared-key"))
         .map(|entry| entry.item_id.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(transfer_ids, vec!["DECISION:shared-key", "OBJECTIVE:shared-key"]);
+    assert_eq!(
+        transfer_ids,
+        vec!["DECISION:shared-key", "OBJECTIVE:shared-key"]
+    );
 
     let compacted = compact_context_view(&capsule, 0);
     let compacted_ids = compacted
@@ -265,7 +268,10 @@ fn fact_report_ids_bind_stable_kind_and_key_across_transfer_and_compaction() {
         })
         .map(|entry| entry.item_id.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(compacted_ids, vec!["DECISION:shared-key", "OBJECTIVE:shared-key"]);
+    assert_eq!(
+        compacted_ids,
+        vec!["DECISION:shared-key", "OBJECTIVE:shared-key"]
+    );
 }
 
 #[test]
