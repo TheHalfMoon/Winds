@@ -42,16 +42,11 @@ fn claude_resume(native_session_id: &str) -> RuntimeResumeResolution {
 
 #[test]
 fn new_json_construction_is_structured_and_permission_safe() {
-    let invocation = build_claude_structured_invocation(
-        ClaudeOutputFormat::Json,
-        ClaudeSessionSelection::New,
-    )
-    .expect("new structured invocation");
+    let invocation =
+        build_claude_structured_invocation(ClaudeOutputFormat::Json, ClaudeSessionSelection::New)
+            .expect("new structured invocation");
 
-    assert_eq!(
-        invocation.args,
-        vec!["--print", "--output-format", "json"]
-    );
+    assert_eq!(invocation.args, vec!["--print", "--output-format", "json"]);
     assert_eq!(invocation.continuity, ClaudeContinuity::Reconstructed);
     assert_eq!(invocation.expected_native_session_id, None);
     assert_eq!(
@@ -59,7 +54,12 @@ fn new_json_construction_is_structured_and_permission_safe() {
         ClaudeRestrictionEnforcement::Unavailable
     );
     assert_eq!(invocation.restriction_enforcement.as_str(), "UNAVAILABLE");
-    assert!(!invocation.args.iter().any(|arg| arg.contains("dangerously")));
+    assert!(
+        !invocation
+            .args
+            .iter()
+            .any(|arg| arg.contains("dangerously"))
+    );
     assert!(!invocation.args.iter().any(|arg| arg == "--continue"));
     assert!(!invocation.args.iter().any(|arg| arg == "-c"));
 }
@@ -177,11 +177,9 @@ fn unsafe_native_resume_identifier_is_rejected_without_option_injection() {
 
 #[test]
 fn json_output_is_agent_reported_and_new_session_is_reconstructed() {
-    let invocation = build_claude_structured_invocation(
-        ClaudeOutputFormat::Json,
-        ClaudeSessionSelection::New,
-    )
-    .expect("new json invocation");
+    let invocation =
+        build_claude_structured_invocation(ClaudeOutputFormat::Json, ClaudeSessionSelection::New)
+            .expect("new json invocation");
     let parsed = parse_claude_structured_output(
         &invocation,
         br#"{"type":"result","subtype":"success","session_id":"session-new","result":"fixture"}"#,
@@ -226,11 +224,9 @@ fn resume_output_must_match_the_exact_bound_native_session() {
 
 #[test]
 fn malformed_truncated_and_oversized_json_fail_truthfully() {
-    let invocation = build_claude_structured_invocation(
-        ClaudeOutputFormat::Json,
-        ClaudeSessionSelection::New,
-    )
-    .expect("new json invocation");
+    let invocation =
+        build_claude_structured_invocation(ClaudeOutputFormat::Json, ClaudeSessionSelection::New)
+            .expect("new json invocation");
 
     assert_eq!(
         parse_claude_structured_output(&invocation, b"{").unwrap_err(),
@@ -351,7 +347,12 @@ fn t078_surface_contains_no_real_process_launch_or_prompt_execution() {
         assert_eq!(invocation.args[0], "--print");
         assert!(!invocation.args.iter().any(|arg| arg == "--continue"));
         assert!(!invocation.args.iter().any(|arg| arg == "-c"));
-        assert!(!invocation.args.iter().any(|arg| arg.contains("dangerously")));
+        assert!(
+            !invocation
+                .args
+                .iter()
+                .any(|arg| arg.contains("dangerously"))
+        );
         assert!(!invocation.args.iter().any(|arg| arg == "bypassPermissions"));
         assert!(!invocation.args.iter().any(|arg| arg.contains("mcp")));
         assert!(!invocation.args.iter().any(|arg| arg.contains("remote")));
