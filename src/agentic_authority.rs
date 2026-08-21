@@ -628,7 +628,7 @@ fn canonicalize_approval(content: &ApprovalContent) -> StoreResult<CanonicalAppr
         worker_grant: canonicalize_plane(&content.worker_grant)?,
         team_policy: canonicalize_plane(&content.team_policy)?,
         human_ceiling: canonicalize_plane(&content.human_ceiling)?,
-        enforcement_quality: content.enforcement.claimed_quality.as_str(),
+        enforcement_quality: truthful_enforcement(content.enforcement).as_str(),
         winds_mediation_complete: content.enforcement.winds_mediation_complete,
         budgets,
         base_oid,
