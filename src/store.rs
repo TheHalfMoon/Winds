@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 
 #[path = "store_git_observation.rs"]
 pub(crate) mod git_observation;
+#[path = "agentic_identity.rs"]
+pub(crate) mod agentic_identity;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -150,6 +152,7 @@ impl Store {
             "../migrations/0005_execution_git_observations.sql"
         ))?;
         connection.execute_batch(include_str!("../migrations/0006_agentic_identity.sql"))?;
+        connection.execute_batch(include_str!("../migrations/0007_agentic_session_origins.sql"))?;
         Ok(Self {
             connection,
             home: home.to_path_buf(),
