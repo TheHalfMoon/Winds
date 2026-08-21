@@ -638,6 +638,9 @@ fn validate_runtime_binding_sha256(value: &str) -> StoreResult<()> {
 }
 
 fn runtime_binding_path_text<'a>(path: &'a Path, label: &str) -> StoreResult<&'a str> {
+    if !path.is_absolute() {
+        return Err(format!("{label} runtime executable path must be absolute").into());
+    }
     path.to_str()
         .ok_or_else(|| format!("{label} runtime executable path is not valid UTF-8").into())
 }
