@@ -1,7 +1,4 @@
-#[allow(
-    dead_code,
-    reason = "Spec 006 T074 fixture-only canonical context capsule; no Agent process or prompt"
-)]
+#[cfg(test)]
 mod agentic_context;
 #[allow(
     dead_code,
