@@ -120,6 +120,11 @@ fn non_file_runtime_path_is_unavailable_instead_of_aborting_discovery() {
 #[cfg(unix)]
 #[test]
 fn unix_execute_bits_do_not_override_effective_user_access() {
+    // SAFETY: `geteuid` has no preconditions and only reads the process effective UID.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+
     let root = test_root("unix-effective-exec");
     let executable = fake_executable_path(&root, "fixture-codex");
     fs::write(&executable, b"readable-but-not-owner-executable\n").unwrap();
