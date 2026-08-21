@@ -5,6 +5,7 @@ use std::fmt;
 pub(super) const MAX_CODEX_JSONL_FRAME_BYTES: usize = 64 * 1024;
 const MAX_PROTOCOL_TEXT_BYTES: usize = 1024;
 const INITIALIZE_REQUEST_ID: u64 = 0;
+pub(super) const T079_PROOF_PROMPT: &str = "Return only JSON matching the supplied schema with status WINDS_T079_OK. Do not run commands, use tools, modify files, request permissions, or access workspace contents.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum CodexProtocolError {
@@ -223,6 +224,73 @@ impl CodexProtocolClient {
         )
     }
 
+    /// Builds the read-only T079 effective-config preflight after the mandatory handshake.
+    pub(super) fn t079_config_read(
+        &mut self,
+        cwd: &str,
+    ) -> Result<(u64, String), CodexProtocolError> {
+        validate_nonempty_exact(cwd)?;
+        self.request(
+            "config/read",
+            json!({ "cwd": cwd, "includeLayers": false }),
+        )
+    }
+
+    /// Builds the only fresh thread shape accepted by the bounded T079 connected proof.
+    pub(super) fn t079_thread_start(
+        &mut self,
+        cwd: &str,
+    ) -> Result<(u64, String), CodexProtocolError> {
+        validate_nonempty_exact(cwd)?;
+        self.request(
+            "thread/start",
+            json!({
+                "cwd": cwd,
+                "approvalPolicy": "never",
+                "sandbox": "readOnly",
+                "ephemeral": true
+            }),
+        )
+    }
+
+    /// Builds the single fixed T079 turn. The caller cannot inject a model, prompt, tool, or policy.
+    pub(super) fn t079_turn_start(
+        &mut self,
+        native_thread_id: &NativeThreadId,
+        cwd: &str,
+    ) -> Result<(u64, String), CodexProtocolError> {
+        validate_nonempty_exact(cwd)?;
+        self.request(
+            "turn/start",
+            json!({
+                "threadId": native_thread_id.as_str(),
+                "input": [{ "type": "text", "text": T079_PROOF_PROMPT }],
+                "cwd": cwd,
+                "approvalPolicy": "never",
+                "sandboxPolicy": {
+                    "type": "readOnly",
+                    "networkAccess": false
+                },
+                "outputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "status": { "type": "string", "const": "WINDS_T079_OK" }
+                    },
+                    "required": ["status"],
+                    "additionalProperties": false
+                }
+            }),
+        )
+    }
+
+    /// Produces a denial response for command/file approval requests. It never grants authority.
+    pub(super) fn t079_decline(&self, id: &RpcId) -> Result<String, CodexProtocolError> {
+        encode_jsonl(&json!({
+            "id": rpc_id_value(id),
+            "result": { "decision": "decline" }
+        }))
+    }
+
     pub(super) fn ingest_jsonl_frame(
         &mut self,
         frame: &[u8],
@@ -286,17 +354,27 @@ impl CodexProtocolClient {
         method: &str,
         params: Value,
     ) -> Result<String, CodexProtocolError> {
+        self.request(method, params).map(|(_, line)| line)
+    }
+
+    fn request(
+        &mut self,
+        method: &str,
+        params: Value,
+    ) -> Result<(u64, String), CodexProtocolError> {
         match self.state {
             HandshakeState::Ready => {}
             HandshakeState::Failed => return Err(CodexProtocolError::ClientFailed),
             _ => return Err(CodexProtocolError::HandshakeIncomplete),
         }
+        validate_method(method)?;
         let id = self.next_request_id;
         self.next_request_id = self
             .next_request_id
             .checked_add(1)
             .ok_or(CodexProtocolError::MalformedFrame)?;
-        encode_jsonl(&json!({ "method": method, "id": id, "params": params }))
+        let line = encode_jsonl(&json!({ "method": method, "id": id, "params": params }))?;
+        Ok((id, line))
     }
 
     fn ingest_response(
@@ -376,6 +454,13 @@ impl CodexProtocolClient {
     fn fail<T>(&mut self, error: CodexProtocolError) -> Result<T, CodexProtocolError> {
         self.state = HandshakeState::Failed;
         Err(error)
+    }
+}
+
+fn rpc_id_value(id: &RpcId) -> Value {
+    match id {
+        RpcId::Number(value) => json!(value),
+        RpcId::Text(value) => json!(value),
     }
 }
 
