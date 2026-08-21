@@ -439,7 +439,8 @@ fn strip_jsonl_terminator(frame: &[u8]) -> &[u8] {
 }
 
 fn encode_jsonl(value: &Value) -> Result<String, CodexProtocolError> {
-    let mut encoded = serde_json::to_string(value).map_err(|_| CodexProtocolError::MalformedFrame)?;
+    let mut encoded =
+        serde_json::to_string(value).map_err(|_| CodexProtocolError::MalformedFrame)?;
     if encoded.len() + 1 > MAX_CODEX_JSONL_FRAME_BYTES {
         return Err(CodexProtocolError::OversizedFrame);
     }
