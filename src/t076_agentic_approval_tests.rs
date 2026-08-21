@@ -209,6 +209,26 @@ fn normalized_map_key_collisions_fail_closed() {
 }
 
 #[test]
+fn unproven_winds_enforcement_canonicalizes_to_unavailable() {
+    let environment = TestEnvironment::new("truthful-enforcement");
+    let repo_root = environment.canonical_repo_root();
+    let mut overclaimed = base_content(&repo_root);
+    overclaimed.enforcement = EnforcementEvidence {
+        claimed_quality: EnforcementQuality::WindsEnforced,
+        winds_mediation_complete: false,
+    };
+    let mut unavailable = overclaimed.clone();
+    unavailable.enforcement.claimed_quality = EnforcementQuality::Unavailable;
+
+    let overclaimed = approval_json_and_digest(&overclaimed).unwrap();
+    let unavailable = approval_json_and_digest(&unavailable).unwrap();
+
+    assert_eq!(overclaimed, unavailable);
+    assert!(overclaimed.0.contains("UNAVAILABLE"));
+    assert!(!overclaimed.0.contains("WINDS_ENFORCED"));
+}
+
+#[test]
 fn every_material_approval_identity_change_requires_reapproval() {
     let (_environment, store, content) = seeded_store("material-change");
     let stored = record_human_approval(&store, "approval-1", &content, 40).unwrap();
