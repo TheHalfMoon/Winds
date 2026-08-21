@@ -1,11 +1,11 @@
+#[cfg(unix)]
+use crate::agentic_runtime::MAX_EXECUTABLE_BYTES;
 use crate::agentic_runtime::{
     AgentExecutionObservation, AuthReadiness, CapabilitySupport, DeclarationSource,
     DeclaredCapability, EvidenceSource, LocalCapabilityObservation, RuntimeCapability,
     RuntimeDiscoveryState, RuntimeIdentityRevalidation, RuntimeKind, RuntimeVersionState,
     SafeVersionObservation, discover_runtime_from_safe_observations, revalidate_runtime_identity,
 };
-#[cfg(unix)]
-use crate::agentic_runtime::MAX_EXECUTABLE_BYTES;
 use std::ffi::OsStr;
 use std::fs;
 #[cfg(unix)]
