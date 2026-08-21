@@ -1,3 +1,8 @@
+#[cfg(test)]
+#[path = "t079_codex_connected_tests.rs"]
+#[allow(dead_code)]
+mod t079_codex_connected_tests;
+
 use serde_json::{Map, Value, json};
 use std::error::Error;
 use std::fmt;
