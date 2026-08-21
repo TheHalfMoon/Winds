@@ -531,7 +531,136 @@ fn ensure_approval_schema(store: &Store) -> StoreResult<()> {
             "../migrations/0009_agentic_delegation_audit.sql"
         ))?;
     }
+    validate_approval_schema(store)
+}
+
+fn validate_approval_schema(store: &Store) -> StoreResult<()> {
+    const APPROVAL_TABLE_SQL: &str = r#"
+        CREATE TABLE agentic_delegation_approvals (
+            approval_id TEXT PRIMARY KEY,
+            workstream_id TEXT NOT NULL REFERENCES workstreams(workstream_id),
+            session_id TEXT NOT NULL REFERENCES winds_sessions(session_id),
+            workspace_id TEXT NOT NULL REFERENCES workspaces(workspace_id),
+            content_digest TEXT NOT NULL,
+            canonical_content_json TEXT NOT NULL,
+            approved_unix_ms INTEGER NOT NULL,
+            CHECK (length(trim(approval_id)) > 0),
+            CHECK (length(content_digest) = 64),
+            CHECK (length(canonical_content_json) > 0),
+            CHECK (approved_unix_ms >= 0)
+        )
+    "#;
+    const APPROVAL_INDEX_SQL: &str = r#"
+        CREATE INDEX idx_agentic_delegation_approvals_session_time
+        ON agentic_delegation_approvals(session_id, approved_unix_ms, approval_id)
+    "#;
+    const IDENTITY_TRIGGER_SQL: &str = r#"
+        CREATE TRIGGER trg_agentic_delegation_approval_identity_insert
+        BEFORE INSERT ON agentic_delegation_approvals
+        FOR EACH ROW
+        WHEN NOT EXISTS (
+            SELECT 1
+            FROM winds_sessions session
+            INNER JOIN workstreams workstream
+                ON workstream.workstream_id = session.workstream_id
+            WHERE session.session_id = NEW.session_id
+              AND session.workstream_id = NEW.workstream_id
+              AND workstream.workspace_id = NEW.workspace_id
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'approval identity does not match canonical Winds hierarchy');
+        END
+    "#;
+    const NO_UPDATE_TRIGGER_SQL: &str = r#"
+        CREATE TRIGGER trg_agentic_delegation_approval_no_update
+        BEFORE UPDATE ON agentic_delegation_approvals
+        BEGIN
+            SELECT RAISE(ABORT, 'human approval audit rows are immutable');
+        END
+    "#;
+    const NO_DELETE_TRIGGER_SQL: &str = r#"
+        CREATE TRIGGER trg_agentic_delegation_approval_no_delete
+        BEFORE DELETE ON agentic_delegation_approvals
+        BEGIN
+            SELECT RAISE(ABORT, 'human approval audit rows are immutable');
+        END
+    "#;
+
+    let expected = [
+        (
+            "agentic_delegation_approvals",
+            "table",
+            "agentic_delegation_approvals",
+            APPROVAL_TABLE_SQL,
+        ),
+        (
+            "idx_agentic_delegation_approvals_session_time",
+            "index",
+            "agentic_delegation_approvals",
+            APPROVAL_INDEX_SQL,
+        ),
+        (
+            "trg_agentic_delegation_approval_identity_insert",
+            "trigger",
+            "agentic_delegation_approvals",
+            IDENTITY_TRIGGER_SQL,
+        ),
+        (
+            "trg_agentic_delegation_approval_no_update",
+            "trigger",
+            "agentic_delegation_approvals",
+            NO_UPDATE_TRIGGER_SQL,
+        ),
+        (
+            "trg_agentic_delegation_approval_no_delete",
+            "trigger",
+            "agentic_delegation_approvals",
+            NO_DELETE_TRIGGER_SQL,
+        ),
+    ];
+
+    for (name, expected_type, expected_table, expected_sql) in expected {
+        let observed = store
+            .connection
+            .query_row(
+                "SELECT type, tbl_name, sql FROM sqlite_master WHERE name = ?1",
+                params![name],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| format!("approval schema object missing: {name}"))?;
+
+        if observed.0 != expected_type || observed.1 != expected_table {
+            return Err(format!(
+                "approval schema object identity mismatch: {name} expected {expected_type}/{expected_table}, observed {}/{}",
+                observed.0, observed.1
+            )
+            .into());
+        }
+
+        let observed_sql = observed
+            .2
+            .ok_or_else(|| format!("approval schema object has no SQL definition: {name}"))?;
+        if normalize_schema_sql(&observed_sql) != normalize_schema_sql(expected_sql) {
+            return Err(format!("approval schema object definition mismatch: {name}").into());
+        }
+    }
+
     Ok(())
+}
+
+fn normalize_schema_sql(sql: &str) -> String {
+    sql.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+        .replace(" if not exists", "")
 }
 
 fn validate_stored_approval(stored: &StoredApproval) -> StoreResult<()> {
@@ -709,4 +838,46 @@ fn normalize_hex(value: &str, expected_len: usize, label: &str) -> StoreResult<S
         );
     }
     Ok(value.to_ascii_lowercase())
+}
+
+#[cfg(test)]
+mod approval_schema_integrity_tests {
+    use super::{Store, ensure_approval_schema};
+    use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_SCHEMA_TEST: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn same_name_noop_immutability_trigger_fails_closed() {
+        let sequence = NEXT_SCHEMA_TEST.fetch_add(1, Ordering::Relaxed);
+        let state_root = std::env::temp_dir().join(format!(
+            "winds-t076-schema-integrity-{}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&state_root).unwrap();
+        let store = Store::open(&state_root).unwrap();
+        ensure_approval_schema(&store).unwrap();
+
+        store
+            .connection
+            .execute_batch(
+                "DROP TRIGGER trg_agentic_delegation_approval_no_update;
+                 CREATE TRIGGER trg_agentic_delegation_approval_no_update
+                 BEFORE UPDATE ON agentic_delegation_approvals
+                 BEGIN
+                     SELECT 1;
+                 END;",
+            )
+            .unwrap();
+
+        let error = ensure_approval_schema(&store).unwrap_err().to_string();
+        assert!(
+            error.contains("approval schema object definition mismatch: trg_agentic_delegation_approval_no_update"),
+            "unexpected error: {error}"
+        );
+
+        drop(store);
+        let _ = fs::remove_dir_all(state_root);
+    }
 }
