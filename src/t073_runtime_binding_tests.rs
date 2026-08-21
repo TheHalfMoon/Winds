@@ -344,6 +344,11 @@ fn ownership_loss_is_durable_and_native_id_never_recreates_live_truth() {
             .mark_runtime_binding_ownership_lost("binding-1", 59)
             .is_err()
     );
+    assert!(
+        store
+            .mark_runtime_binding_ownership_lost("binding-1", 39)
+            .is_err()
+    );
     let before_reopen = store.load_runtime_session_binding("binding-1").unwrap();
     assert_eq!(
         before_reopen.ownership,
@@ -465,6 +470,29 @@ fn invalid_binding_facts_and_schema_identity_expansion_fail_closed() {
                 Some("native-thread-1"),
                 -1,
             )
+            .is_err()
+    );
+    let mut relative = supported.clone();
+    let relative_executable = relative
+        .executable
+        .as_mut()
+        .expect("present discovery has executable identity");
+    relative_executable.observed_path = PathBuf::from("relative-codex");
+    relative_executable.canonical_path = PathBuf::from("relative-codex");
+    assert!(
+        store
+            .create_runtime_session_binding(
+                "binding-relative-path",
+                "session-1",
+                &relative,
+                Some("native-thread-relative"),
+                40,
+            )
+            .is_err()
+    );
+    assert!(
+        store
+            .load_runtime_session_binding("binding-relative-path")
             .is_err()
     );
     drop(store);
