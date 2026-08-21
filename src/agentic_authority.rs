@@ -570,8 +570,10 @@ fn canonicalize_approval(content: &ApprovalContent) -> StoreResult<CanonicalAppr
     let session_id = validate_exact_text(&content.session_id, "session id")?;
     let planner_id = validate_exact_text(&content.planner_id, "planner id")?;
     let worker_id = validate_exact_text(&content.worker_id, "worker id")?;
-    let worker_parent_planner_id =
-        validate_exact_text(&content.worker_parent_planner_id, "worker parent planner id")?;
+    let worker_parent_planner_id = validate_exact_text(
+        &content.worker_parent_planner_id,
+        "worker parent planner id",
+    )?;
     if worker_parent_planner_id != planner_id || worker_id == planner_id {
         return Err("approval requires one Worker directly delegated by a distinct Planner".into());
     }
@@ -584,8 +586,7 @@ fn canonicalize_approval(content: &ApprovalContent) -> StoreResult<CanonicalAppr
     let canonical_worktree_root =
         validate_exact_text(&content.canonical_worktree_root, "canonical worktree root")?;
     let authority_root = validate_exact_text(&content.authority_root, "authority root")?;
-    let target_capability =
-        validate_exact_text(&content.target.capability, "target capability")?;
+    let target_capability = validate_exact_text(&content.target.capability, "target capability")?;
     let target_resource = validate_exact_text(&content.target.resource, "target resource")?;
 
     let mut path_scopes = content
