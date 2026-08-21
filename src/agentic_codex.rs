@@ -1,6 +1,5 @@
 #[cfg(test)]
 #[path = "t079_codex_connected_tests.rs"]
-#[allow(dead_code)]
 mod t079_codex_connected_tests;
 
 use serde_json::{Map, Value, json};
@@ -10,6 +9,7 @@ use std::fmt;
 pub(super) const MAX_CODEX_JSONL_FRAME_BYTES: usize = 64 * 1024;
 const MAX_PROTOCOL_TEXT_BYTES: usize = 1024;
 const INITIALIZE_REQUEST_ID: u64 = 0;
+#[cfg(test)]
 pub(super) const T079_PROOF_PROMPT: &str = "Return only JSON matching the supplied schema with status WINDS_T079_OK. Do not run commands, use tools, modify files, request permissions, or access workspace contents.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -294,7 +294,7 @@ impl CodexProtocolClient {
                 "cwd": cwd,
                 "runtimeWorkspaceRoots": [],
                 "approvalPolicy": "never",
-                "sandbox": "readOnly",
+                "sandbox": "read-only",
                 "ephemeral": true,
                 "environments": [],
                 "dynamicTools": [],

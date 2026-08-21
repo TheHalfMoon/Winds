@@ -14,20 +14,40 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const LIVE_PROOF_TIMEOUT: Duration = Duration::from_secs(120);
 const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 const CLEANUP_TIMEOUT: Duration = Duration::from_secs(3);
+const GRACEFUL_CHILD_EXIT: Duration = Duration::from_millis(250);
 const MAX_CONNECTED_BYTES: usize = 1024 * 1024;
 const MAX_CONNECTED_FRAMES: usize = 256;
+const MAX_QUEUED_FRAMES: usize = 8;
 const MAX_VERSION_BYTES: usize = 4096;
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
 type ProofResult<T> = Result<T, String>;
 type FrameResult = Result<Vec<u8>, String>;
+
+const ALLOWED_EFFECTIVE_CONFIG_KEYS: &[&str] = &[
+    "model",
+    "review_model",
+    "model_context_window",
+    "model_auto_compact_token_limit",
+    "model_auto_compact_token_limit_scope",
+    "model_provider",
+    "approval_policy",
+    "approvals_reviewer",
+    "sandbox_mode",
+    "forced_chatgpt_workspace_id",
+    "forced_login_method",
+    "model_reasoning_effort",
+    "model_reasoning_summary",
+    "model_verbosity",
+    "service_tier",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ResultAuthority {
@@ -55,6 +75,29 @@ struct T079Receipt {
     authority: ResultAuthority,
     restrictions: RestrictionEvidence,
     cleanup: CleanupEvidence,
+}
+
+struct EmptyDisposableRootGuard {
+    root: PathBuf,
+}
+
+impl Drop for EmptyDisposableRootGuard {
+    fn drop(&mut self) {
+        let Ok(mut entries) = fs::read_dir(&self.root) else {
+            return;
+        };
+        if entries.next().is_none() {
+            let _ = fs::remove_dir(&self.root);
+        }
+    }
+}
+
+struct RemoveTreeGuard(PathBuf);
+
+impl Drop for RemoveTreeGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
 }
 
 fn parse_outbound(line: &str) -> Value {
@@ -100,16 +143,8 @@ fn validate_effective_config(result: &Value) -> ProofResult<()> {
         .and_then(Value::as_object)
         .ok_or_else(|| "T079 config/read response is missing effective config".to_owned())?;
 
-    for key in [
-        "mcp_servers",
-        "hooks",
-        "apps",
-        "instructions",
-        "developer_instructions",
-        "tools",
-        "web_search",
-    ] {
-        if config.get(key).is_some_and(meaningful) {
+    for (key, value) in config {
+        if meaningful(value) && !ALLOWED_EFFECTIVE_CONFIG_KEYS.contains(&key.as_str()) {
             return Err(format!(
                 "T079 refuses connected proof with active or ambiguous effective config: {key}"
             ));
@@ -287,7 +322,8 @@ fn disposable_root() -> ProofResult<PathBuf> {
 
 fn spawn_frame_reader_with_sender(
     stdout: std::process::ChildStdout,
-    sender: mpsc::Sender<FrameResult>,
+    sender: SyncSender<FrameResult>,
+    done: SyncSender<()>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
@@ -310,6 +346,7 @@ fn spawn_frame_reader_with_sender(
                 }
             }
         }
+        let _ = done.send(());
     })
 }
 
@@ -334,6 +371,16 @@ fn receive_frame(
         return Err("T079 connected output exceeded bounded transcript limits".to_owned());
     }
     Ok(frame)
+}
+
+fn wait_for_reader_completion(receiver: &Receiver<()>, deadline: Instant) -> ProofResult<()> {
+    let now = Instant::now();
+    if now >= deadline {
+        return Err("T079 stdout reader did not terminate inside bounded cleanup".to_owned());
+    }
+    receiver
+        .recv_timeout(deadline.saturating_duration_since(now))
+        .map_err(|_| "T079 stdout reader did not terminate inside bounded cleanup".to_owned())
 }
 
 fn send_line(stdin: &mut std::process::ChildStdin, line: &str) -> ProofResult<()> {
@@ -437,8 +484,8 @@ fn wait_for_response(
     }
 }
 
-fn finish_child(child: &mut Child) -> ProofResult<CleanupEvidence> {
-    let graceful_deadline = Instant::now() + CLEANUP_TIMEOUT;
+fn finish_child(child: &mut Child, cleanup_deadline: Instant) -> ProofResult<CleanupEvidence> {
+    let graceful_deadline = std::cmp::min(Instant::now() + GRACEFUL_CHILD_EXIT, cleanup_deadline);
     loop {
         match child
             .try_wait()
@@ -450,13 +497,33 @@ fn finish_child(child: &mut Child) -> ProofResult<CleanupEvidence> {
         }
     }
 
-    child
-        .kill()
-        .map_err(|error| format!("T079 could not terminate owned Codex child: {error}"))?;
-    child
-        .wait()
-        .map_err(|error| format!("T079 could not reap terminated Codex child: {error}"))?;
-    Ok(CleanupEvidence::DirectChildTerminatedAndReaped)
+    if let Err(kill_error) = child.kill() {
+        return match child.try_wait() {
+            Ok(Some(_)) => Ok(CleanupEvidence::DirectChildReaped),
+            Ok(None) => Err(format!(
+                "T079 could not terminate owned Codex child: {kill_error}; direct-child cleanup remains unproven"
+            )),
+            Err(wait_error) => Err(format!(
+                "T079 could not terminate owned Codex child: {kill_error}; reap state is also unproven: {wait_error}"
+            )),
+        };
+    }
+
+    loop {
+        match child
+            .try_wait()
+            .map_err(|error| format!("T079 could not reap terminated Codex child: {error}"))?
+        {
+            Some(_) => return Ok(CleanupEvidence::DirectChildTerminatedAndReaped),
+            None if Instant::now() < cleanup_deadline => thread::sleep(Duration::from_millis(10)),
+            None => {
+                return Err(
+                    "T079 terminated the owned Codex child but could not prove reap inside bounded cleanup"
+                        .to_owned(),
+                );
+            }
+        }
+    }
 }
 
 fn ensure_disposable_root_unchanged(root: &Path) -> ProofResult<()> {
@@ -475,6 +542,18 @@ fn ensure_disposable_root_unchanged(root: &Path) -> ProofResult<()> {
     }
     fs::remove_dir(root)
         .map_err(|error| format!("T079 could not remove unchanged disposable root: {error}"))
+}
+
+fn cleanup_setup_failure(child: &mut Child, root: &Path, message: &str) -> String {
+    let cleanup_deadline = Instant::now() + CLEANUP_TIMEOUT;
+    let cleanup = finish_child(child, cleanup_deadline);
+    let root_check = ensure_disposable_root_unchanged(root);
+    match (cleanup, root_check) {
+        (Ok(_), Ok(())) => message.to_owned(),
+        (cleanup, root_check) => format!(
+            "{message}; setup cleanup evidence: child={cleanup:?}; root={root_check:?}"
+        ),
+    }
 }
 
 fn run_connected_proof(
@@ -498,6 +577,7 @@ fn run_connected_proof(
     }
 
     let root = disposable_root()?;
+    let _root_guard = EmptyDisposableRootGuard { root: root.clone() };
     let cwd = root
         .to_str()
         .ok_or_else(|| "T079 disposable root is not UTF-8".to_owned())?
@@ -510,16 +590,32 @@ fn run_connected_proof(
         .stderr(Stdio::null())
         .spawn()
         .map_err(|error| format!("T079 could not start owned Codex App Server: {error}"))?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "T079 Codex child stdin unavailable".to_owned())?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "T079 Codex child stdout unavailable".to_owned())?;
-    let (sender, receiver) = mpsc::channel();
-    let reader = spawn_frame_reader_with_sender(stdout, sender);
+    let mut stdin = match child.stdin.take() {
+        Some(stdin) => stdin,
+        None => {
+            let message = cleanup_setup_failure(
+                &mut child,
+                &root,
+                "T079 Codex child stdin unavailable",
+            );
+            return Err(message);
+        }
+    };
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            drop(stdin);
+            let message = cleanup_setup_failure(
+                &mut child,
+                &root,
+                "T079 Codex child stdout unavailable",
+            );
+            return Err(message);
+        }
+    };
+    let (sender, receiver) = mpsc::sync_channel(MAX_QUEUED_FRAMES);
+    let (done_sender, done_receiver) = mpsc::sync_channel(1);
+    let reader = spawn_frame_reader_with_sender(stdout, sender, done_sender);
     let deadline = Instant::now() + LIVE_PROOF_TIMEOUT;
     let mut total_bytes = 0usize;
     let mut frame_count = 0usize;
@@ -653,12 +749,20 @@ fn run_connected_proof(
     })();
 
     drop(stdin);
-    let cleanup = finish_child(&mut child);
-    let _ = reader.join();
+    drop(receiver);
+    let cleanup_deadline = Instant::now() + CLEANUP_TIMEOUT;
+    let cleanup = finish_child(&mut child, cleanup_deadline);
+    let reader_result = match wait_for_reader_completion(&done_receiver, cleanup_deadline) {
+        Ok(()) => reader
+            .join()
+            .map_err(|_| "T079 stdout reader panicked during bounded cleanup".to_owned()),
+        Err(error) => Err(error),
+    };
     let root_check = ensure_disposable_root_unchanged(&root);
 
     let (native_thread_id, turn_id, status) = proof?;
     let cleanup = cleanup?;
+    reader_result?;
     root_check?;
     Ok(T079Receipt {
         winds_session_id: winds_session_id.to_owned(),
@@ -717,7 +821,7 @@ fn t079_requests_are_fixed_ephemeral_read_only_and_non_authorizing() {
                 "cwd": cwd,
                 "runtimeWorkspaceRoots": [],
                 "approvalPolicy": "never",
-                "sandbox": "readOnly",
+                "sandbox": "read-only",
                 "ephemeral": true,
                 "environments": [],
                 "dynamicTools": [],
@@ -754,6 +858,7 @@ fn t079_requests_are_fixed_ephemeral_read_only_and_non_authorizing() {
 fn effective_config_preflight_rejects_side_channel_surfaces() {
     validate_effective_config(&json!({
         "config": {
+            "model": "gpt-fixture",
             "mcp_servers": null,
             "hooks": [],
             "apps": null,
@@ -763,16 +868,18 @@ fn effective_config_preflight_rejects_side_channel_surfaces() {
             "web_search": "disabled"
         }
     }))
-    .expect("empty/disabled config is acceptable");
+    .expect("allowed model fields plus empty/disabled surfaces are acceptable");
 
     for (key, value) in [
         ("mcp_servers", json!({"server": {"command": "x"}})),
+        ("mcpServers", json!({"server": {"command": "x"}})),
         ("hooks", json!([{"event": "SessionStart"}])),
         ("apps", json!({"demo": {"enabled": true}})),
         ("instructions", json!("use tools")),
         ("developer_instructions", json!("run a command")),
         ("tools", json!({"web_search": {"enabled": true}})),
         ("web_search", json!("live")),
+        ("future_side_channel", json!({"enabled": true})),
     ] {
         let mut config = serde_json::Map::new();
         config.insert(key.to_owned(), value);
@@ -888,6 +995,14 @@ fn forbidden_runtime_activity_is_detected_fail_closed() {
 }
 
 #[test]
+fn reader_completion_wait_is_bounded_and_fail_closed() {
+    let (_sender, receiver) = mpsc::sync_channel::<()>(1);
+    let deadline = Instant::now() + Duration::from_millis(20);
+    let error = wait_for_reader_completion(&receiver, deadline).unwrap_err();
+    assert!(error.contains("stdout reader"));
+}
+
+#[test]
 fn runtime_identity_must_match_exact_codex_discovery_before_launch() {
     let root = env::temp_dir().join(format!(
         "winds-t079-discovery-{}-{}",
@@ -895,6 +1010,7 @@ fn runtime_identity_must_match_exact_codex_discovery_before_launch() {
         NEXT_ROOT.fetch_add(1, Ordering::Relaxed)
     ));
     fs::create_dir(&root).unwrap();
+    let _root_guard = RemoveTreeGuard(root.clone());
     let executable = root.join(if cfg!(windows) { "codex.exe" } else { "codex" });
     fs::write(&executable, b"fixture-codex-v1\n").unwrap();
     #[cfg(unix)]
@@ -917,7 +1033,6 @@ fn runtime_identity_must_match_exact_codex_discovery_before_launch() {
 
     fs::write(&executable, b"fixture-codex-x1\n").unwrap();
     assert!(validate_discovery(&discovery).is_err());
-    fs::remove_dir_all(&root).unwrap();
 }
 
 #[test]
