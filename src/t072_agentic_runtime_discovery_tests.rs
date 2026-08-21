@@ -265,6 +265,32 @@ fn present_runtime_keeps_declared_and_locally_observed_capabilities_distinct() {
 }
 
 #[test]
+fn present_runtime_with_unavailable_version_is_explicitly_version_unavailable() {
+    let root = test_root("version-unavailable");
+    let executable = create_fake_executable(&root, "fixture-codex", b"fixture-codex-v1\n");
+
+    let discovery = discover_runtime_from_safe_observations(
+        RuntimeKind::Codex,
+        &executable,
+        SafeVersionObservation::Unavailable,
+        &[],
+        &[],
+    )
+    .unwrap();
+
+    assert_eq!(discovery.state, RuntimeDiscoveryState::VersionUnavailable);
+    assert!(discovery.executable.is_some());
+    assert_eq!(discovery.version.state, RuntimeVersionState::Unavailable);
+    assert_eq!(discovery.version.source, EvidenceSource::Unavailable);
+    assert_eq!(
+        discovery.agent_execution,
+        AgentExecutionObservation::NotPerformed
+    );
+
+    cleanup_owned_root(&root);
+}
+
+#[test]
 fn unsupported_version_is_explicit_and_does_not_invent_auth_readiness() {
     let root = test_root("unsupported-version");
     let executable = create_fake_executable(&root, "fixture-claude", b"fixture-claude-old\n");
@@ -335,7 +361,7 @@ fn unobservable_capability_stays_unavailable_instead_of_becoming_observed() {
 }
 
 #[test]
-fn revalidation_detects_replaced_executable_before_use() {
+fn revalidation_detects_same_length_replacement_before_use() {
     let root = test_root("replacement");
     let executable = create_fake_executable(&root, "fixture-codex", b"fixture-codex-v1\n");
 
@@ -354,7 +380,9 @@ fn revalidation_detects_replaced_executable_before_use() {
         RuntimeIdentityRevalidation::Match
     );
 
-    fs::write(&executable, b"fixture-codex-v2-replaced\n").unwrap();
+    let replacement = b"fixture-codex-x1\n";
+    assert_eq!(replacement.len() as u64, identity.byte_len);
+    fs::write(&executable, replacement).unwrap();
     assert_eq!(
         revalidate_runtime_identity(identity).unwrap(),
         RuntimeIdentityRevalidation::Changed
