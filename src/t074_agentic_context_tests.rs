@@ -175,7 +175,9 @@ fn compaction_never_mutates_canonical_truth_or_reference_identity() {
     );
     assert!(compacted.transfer_report.entries.iter().any(|entry| {
         entry.disposition == TransferDisposition::Omitted
-            && entry.detail.contains("canonical capsule truth is unchanged")
+            && entry
+                .detail
+                .contains("canonical capsule truth is unchanged")
     }));
 }
 
@@ -190,7 +192,11 @@ fn conflicting_protected_truth_fails_closed() {
     });
 
     let error = build_context_capsule(input).unwrap_err();
-    assert!(error.to_string().contains("conflicting protected context fact"));
+    assert!(
+        error
+            .to_string()
+            .contains("conflicting protected context fact")
+    );
 }
 
 #[test]
