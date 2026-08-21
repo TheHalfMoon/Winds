@@ -5,6 +5,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 const CONTEXT_CAPSULE_VERSION: &str = "winds.context.v1";
+const CONTEXT_POLICY_VERSION: &str = "winds.context.policy.v1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ContextCapsuleError(String);
@@ -110,6 +111,7 @@ pub(crate) struct HiddenStateBoundary {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct ContextCapsulePayload {
     pub version: String,
+    pub policy_version: String,
     pub workspace_id: String,
     pub workstream_id: String,
     pub session_id: String,
@@ -196,6 +198,7 @@ pub(crate) fn build_context_capsule(input: ContextCapsuleInput) -> ContextResult
 
     let payload = ContextCapsulePayload {
         version: CONTEXT_CAPSULE_VERSION.to_owned(),
+        policy_version: CONTEXT_POLICY_VERSION.to_owned(),
         workspace_id,
         workstream_id,
         session_id,
