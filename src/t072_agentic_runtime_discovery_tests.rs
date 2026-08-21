@@ -118,6 +118,35 @@ fn non_file_runtime_path_is_unavailable_instead_of_aborting_discovery() {
 
 #[cfg(unix)]
 #[test]
+fn unix_execute_bits_do_not_override_effective_user_access() {
+    let root = test_root("unix-effective-exec");
+    let executable = fake_executable_path(&root, "fixture-codex");
+    fs::write(&executable, b"readable-but-not-owner-executable\n").unwrap();
+    let mut permissions = fs::metadata(&executable).unwrap().permissions();
+    permissions.set_mode(0o401);
+    fs::set_permissions(&executable, permissions).unwrap();
+
+    let discovery = discover_runtime_from_safe_observations(
+        RuntimeKind::Codex,
+        &executable,
+        SafeVersionObservation::Unavailable,
+        &[],
+        &[],
+    )
+    .unwrap();
+
+    assert_eq!(discovery.state, RuntimeDiscoveryState::Unavailable);
+    assert!(discovery.executable.is_none());
+    assert_eq!(
+        discovery.agent_execution,
+        AgentExecutionObservation::NotPerformed
+    );
+
+    cleanup_owned_root(&root);
+}
+
+#[cfg(unix)]
+#[test]
 fn oversized_runtime_fails_closed_before_unbounded_hashing() {
     let root = test_root("oversized");
     let executable = fake_executable_path(&root, "fixture-codex");
