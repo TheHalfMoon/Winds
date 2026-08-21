@@ -108,7 +108,7 @@ fn verify(flags: HashMap<String, String>) -> Result<()> {
             base_oid: &base_oid,
             candidate_ref,
             candidate_oid: &candidate_oid,
-            candidate_tree,
+            candidate_tree: &candidate_tree,
             worktree_path: &worktree_path,
             check_command,
             timeout_secs,
