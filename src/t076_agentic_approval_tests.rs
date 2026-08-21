@@ -279,8 +279,7 @@ fn exact_winds_identity_strings_record_without_aliasing() {
     aliased.workspace_id = workspace_id.trim().to_owned();
     aliased.workstream_id = workstream_id.trim().to_owned();
     aliased.session_id = session_id.trim().to_owned();
-    let evaluation =
-        revalidate_human_approval(&store, "approval-exact-id", &aliased).unwrap();
+    let evaluation = revalidate_human_approval(&store, "approval-exact-id", &aliased).unwrap();
     assert_eq!(evaluation.decision, AuthorityDecision::Ask);
     assert_eq!(evaluation.reason, ApprovalReason::MaterialContentChanged);
     assert_ne!(evaluation.current_digest, evaluation.approved_digest);
