@@ -345,7 +345,10 @@ fn ownership_loss_is_durable_and_native_id_never_recreates_live_truth() {
             .is_err()
     );
     let before_reopen = store.load_runtime_session_binding("binding-1").unwrap();
-    assert_eq!(before_reopen.ownership, RuntimeBindingOwnership::OwnershipLost);
+    assert_eq!(
+        before_reopen.ownership,
+        RuntimeBindingOwnership::OwnershipLost
+    );
     assert_eq!(before_reopen.ownership_observed_unix_ms, Some(60));
     drop(store);
 
