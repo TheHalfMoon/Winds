@@ -529,7 +529,11 @@ fn validate_stored_approval(stored: &StoredApproval) -> StoreResult<()> {
     let object = value
         .as_object()
         .ok_or("stored human approval canonical content must be a JSON object")?;
-    if object.get("schema_version").and_then(serde_json::Value::as_u64) != Some(1) {
+    if object
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        != Some(1)
+    {
         return Err("stored human approval has unsupported canonical schema version".into());
     }
     for (field, expected) in [
@@ -538,10 +542,9 @@ fn validate_stored_approval(stored: &StoredApproval) -> StoreResult<()> {
         ("workspace_id", stored.workspace_id.as_str()),
     ] {
         if object.get(field).and_then(serde_json::Value::as_str) != Some(expected) {
-            return Err(format!(
-                "stored human approval {field} does not match its audit identity"
-            )
-            .into());
+            return Err(
+                format!("stored human approval {field} does not match its audit identity").into(),
+            );
         }
     }
     Ok(())
@@ -601,10 +604,7 @@ fn canonicalize_approval(content: &ApprovalContent) -> StoreResult<CanonicalAppr
         return Err("approval requires at least one explicit budget".into());
     }
     budgets.sort_by(|left, right| left.name.cmp(&right.name));
-    if budgets
-        .windows(2)
-        .any(|pair| pair[0].name == pair[1].name)
-    {
+    if budgets.windows(2).any(|pair| pair[0].name == pair[1].name) {
         return Err("approval budget names collide after normalization".into());
     }
 
