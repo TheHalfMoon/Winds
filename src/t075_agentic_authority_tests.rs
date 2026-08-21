@@ -63,6 +63,30 @@ fn planner_direct_authority_is_independent_from_delegation_ceiling() {
 }
 
 #[test]
+fn planner_cannot_use_worker_path_to_self_escalate_or_mutate_policy() {
+    let contract = base_contract();
+    let before = contract.clone();
+    let planner_request = AuthorityRequest {
+        worker_id: contract.planner_id.clone(),
+        target: target(),
+        resource_visible_to_runtime: true,
+    };
+
+    let result = evaluate_delegation(&contract, &planner_request);
+
+    assert_eq!(result.decision, AuthorityDecision::Deny);
+    assert_eq!(result.reason, AuthorityReason::UnknownWorker);
+    assert_eq!(result.human_action, HumanAction::SelectAuthorizedWorker);
+    assert_eq!(result.planner_direct_decision, AuthorityDecision::Deny);
+    assert_eq!(result.planner_delegation_decision, AuthorityDecision::Allow);
+    assert_eq!(
+        result.visibility,
+        VisibilityAssessment::VisibleNotAuthorization
+    );
+    assert_eq!(contract, before);
+}
+
+#[test]
 fn worker_effective_authority_is_the_intersection_of_all_four_planes() {
     let cases = [
         AuthoritySource::WorkerGrant,
