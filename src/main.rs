@@ -1,5 +1,10 @@
 #[cfg(test)]
 mod agentic_authority;
+#[allow(
+    dead_code,
+    reason = "Spec 006 T077 fake Codex protocol client; real Codex and prompts remain blocked until T079"
+)]
+mod agentic_codex;
 #[cfg(test)]
 mod agentic_context;
 #[allow(
@@ -30,6 +35,8 @@ mod t072_agentic_runtime_discovery_tests;
 mod t074_agentic_context_tests;
 #[cfg(test)]
 mod t075_agentic_authority_tests;
+#[cfg(test)]
+mod t077_codex_protocol_tests;
 
 use crate::check::run_check;
 use crate::domain::{CheckEvidence, CheckStatus, Eligibility, EvidenceReport, PromotionReport};
