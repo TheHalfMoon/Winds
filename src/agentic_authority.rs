@@ -378,9 +378,7 @@ struct CanonicalApprovalContent {
     candidate_tree: String,
 }
 
-pub(crate) fn approval_json_and_digest(
-    content: &ApprovalContent,
-) -> StoreResult<(String, String)> {
+pub(crate) fn approval_json_and_digest(content: &ApprovalContent) -> StoreResult<(String, String)> {
     let canonical = canonicalize_approval(content)?;
     let json = serde_json::to_string(&canonical)?;
     let digest = Sha256::digest(json.as_bytes());
@@ -429,7 +427,9 @@ pub(crate) fn record_human_approval(
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
         )
         .optional()?
-        .ok_or("approval identity does not match canonical Winds session/workstream/workspace truth")?;
+        .ok_or(
+            "approval identity does not match canonical Winds session/workstream/workspace truth",
+        )?;
     if identity.0 != canonical.canonical_worktree_root {
         return Err("approval worktree root does not match canonical Winds workspace truth".into());
     }
@@ -543,10 +543,8 @@ fn canonicalize_approval(content: &ApprovalContent) -> StoreResult<CanonicalAppr
         return Err("approval runtime kind must be CODEX or CLAUDE".into());
     }
     let workspace_id = normalize_label(&content.workspace_id, "workspace id")?;
-    let canonical_worktree_root = validate_exact_text(
-        &content.canonical_worktree_root,
-        "canonical worktree root",
-    )?;
+    let canonical_worktree_root =
+        validate_exact_text(&content.canonical_worktree_root, "canonical worktree root")?;
     let authority_root = validate_exact_text(&content.authority_root, "authority root")?;
     let target_capability = normalize_label(&content.target.capability, "target capability")?;
     let target_resource = validate_exact_text(&content.target.resource, "target resource")?;
@@ -652,7 +650,9 @@ fn validate_exact_text(value: &str, label: &str) -> StoreResult<String> {
 fn normalize_hex(value: &str, expected_len: usize, label: &str) -> StoreResult<String> {
     let value = value.trim();
     if value.len() != expected_len || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(format!("{label} must be exactly {expected_len} hexadecimal characters").into());
+        return Err(
+            format!("{label} must be exactly {expected_len} hexadecimal characters").into(),
+        );
     }
     Ok(value.to_ascii_lowercase())
 }
