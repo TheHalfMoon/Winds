@@ -119,6 +119,7 @@ impl Store {
         &self,
         session_id: &str,
     ) -> Result<Option<WindsSessionRecord>> {
+        self.load_winds_session(session_id)?;
         Ok(self
             .connection
             .query_row(
