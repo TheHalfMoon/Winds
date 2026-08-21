@@ -1,7 +1,7 @@
 use crate::agentic_authority::{
-    evaluate_delegation, AuthorityDecision, AuthorityPlane, AuthorityReason, AuthorityRequest,
-    AuthoritySource, AuthorityTarget, DelegationContract, EnforcementEvidence, EnforcementQuality,
-    HumanAction, VisibilityAssessment, WorkerGrant,
+    AuthorityDecision, AuthorityPlane, AuthorityReason, AuthorityRequest, AuthoritySource,
+    AuthorityTarget, DelegationContract, EnforcementEvidence, EnforcementQuality, HumanAction,
+    VisibilityAssessment, WorkerGrant, evaluate_delegation,
 };
 use std::collections::BTreeMap;
 
@@ -58,10 +58,7 @@ fn planner_direct_authority_is_independent_from_delegation_ceiling() {
 
     assert_eq!(result.decision, AuthorityDecision::Allow);
     assert_eq!(result.planner_direct_decision, AuthorityDecision::Deny);
-    assert_eq!(
-        result.planner_delegation_decision,
-        AuthorityDecision::Allow
-    );
+    assert_eq!(result.planner_delegation_decision, AuthorityDecision::Allow);
     assert_eq!(result.reason, AuthorityReason::AllCeilingsAllow);
 }
 
@@ -78,10 +75,7 @@ fn worker_effective_authority_is_the_intersection_of_all_four_planes() {
         let mut contract = base_contract();
         match source {
             AuthoritySource::WorkerGrant => {
-                set_target_decision(
-                    &mut contract.workers[0].authority,
-                    AuthorityDecision::Deny,
-                );
+                set_target_decision(&mut contract.workers[0].authority, AuthorityDecision::Deny);
             }
             AuthoritySource::PlannerDelegationCeiling => {
                 set_target_decision(
@@ -108,10 +102,7 @@ fn worker_effective_authority_is_the_intersection_of_all_four_planes() {
 #[test]
 fn explicit_deny_precedes_ask_and_allow() {
     let mut contract = base_contract();
-    set_target_decision(
-        &mut contract.workers[0].authority,
-        AuthorityDecision::Ask,
-    );
+    set_target_decision(&mut contract.workers[0].authority, AuthorityDecision::Ask);
     set_target_decision(&mut contract.team_policy, AuthorityDecision::Deny);
 
     let result = evaluate_delegation(&contract, &request());
@@ -124,10 +115,7 @@ fn explicit_deny_precedes_ask_and_allow() {
 #[test]
 fn ask_requires_explicit_human_action_when_no_plane_denies() {
     let mut contract = base_contract();
-    set_target_decision(
-        &mut contract.workers[0].authority,
-        AuthorityDecision::Ask,
-    );
+    set_target_decision(&mut contract.workers[0].authority, AuthorityDecision::Ask);
 
     let result = evaluate_delegation(&contract, &request());
 
@@ -200,7 +188,10 @@ fn winds_enforced_label_requires_complete_winds_mediation() {
         result.human_action,
         HumanAction::EstablishEnforcementEvidence
     );
-    assert_eq!(result.effective_enforcement, EnforcementQuality::Unavailable);
+    assert_eq!(
+        result.effective_enforcement,
+        EnforcementQuality::Unavailable
+    );
 }
 
 #[test]
@@ -225,7 +216,10 @@ fn truthful_non_winds_enforcement_labels_are_preserved_without_upgrade() {
     unavailable.enforcement.winds_mediation_complete = false;
     let result = evaluate_delegation(&unavailable, &request());
     assert_eq!(result.decision, AuthorityDecision::Ask);
-    assert_eq!(result.effective_enforcement, EnforcementQuality::Unavailable);
+    assert_eq!(
+        result.effective_enforcement,
+        EnforcementQuality::Unavailable
+    );
 }
 
 #[test]
