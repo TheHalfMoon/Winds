@@ -197,6 +197,27 @@ fn structural_unknown_frame_fails_closed() {
 }
 
 #[test]
+fn mixed_request_response_envelopes_fail_closed() {
+    let mut request_with_result = initialized_client();
+    assert_eq!(
+        request_with_result
+            .ingest_jsonl_frame(br#"{"id":44,"method":"future/request","result":{}}"#)
+            .unwrap_err(),
+        CodexProtocolError::MalformedFrame
+    );
+
+    let mut notification_with_error = initialized_client();
+    assert_eq!(
+        notification_with_error
+            .ingest_jsonl_frame(
+                br#"{"method":"future/event","error":{"code":1,"message":"mixed"}}"#,
+            )
+            .unwrap_err(),
+        CodexProtocolError::MalformedFrame
+    );
+}
+
+#[test]
 fn unknown_notification_remains_runtime_evidence_not_verification() {
     let mut client = initialized_client();
     let event = client
@@ -351,7 +372,7 @@ fn cleanup_can_target_only_proven_owned_child() {
 }
 
 #[test]
-fn jsonl_crlf_terminator_is_accepted_but_embedded_newline_is_not() {
+fn jsonl_crlf_terminator_is_accepted_but_invalid_line_endings_are_not() {
     let mut client = CodexProtocolClient::default();
     client
         .initialize_request("winds", "Winds", "0.1.0")
@@ -363,10 +384,21 @@ fn jsonl_crlf_terminator_is_accepted_but_embedded_newline_is_not() {
         CodexInbound::InitializeAccepted
     );
 
-    let mut ready = initialized_client();
+    let mut embedded_newline = initialized_client();
     assert_eq!(
-        ready
+        embedded_newline
             .ingest_jsonl_frame(b"{\"method\":\"a\"}\n{\"method\":\"b\"}\n")
+            .unwrap_err(),
+        CodexProtocolError::MalformedFrame
+    );
+
+    let mut lone_carriage_return = CodexProtocolClient::default();
+    lone_carriage_return
+        .initialize_request("winds", "Winds", "0.1.0")
+        .expect("initialize request");
+    assert_eq!(
+        lone_carriage_return
+            .ingest_jsonl_frame(b"{\"id\":0,\"result\":{}}\r")
             .unwrap_err(),
         CodexProtocolError::MalformedFrame
     );
