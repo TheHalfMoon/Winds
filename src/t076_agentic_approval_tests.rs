@@ -157,8 +157,6 @@ fn identical_normalized_content_has_stable_json_and_digest() {
     let repo_root = environment.canonical_repo_root();
     let first = base_content(&repo_root);
     let mut second = first.clone();
-    second.workstream_id = "  workstream-1  ".to_owned();
-    second.session_id = " session-1 ".to_owned();
     second.worker_role = " BUILDER ".to_owned();
     second.path_scopes = vec!["tests".to_owned(), "src".to_owned(), "tests".to_owned()];
     second.budgets = BTreeMap::from([
@@ -178,7 +176,7 @@ fn identical_normalized_content_has_stable_json_and_digest() {
 }
 
 #[test]
-fn normalized_map_key_collisions_fail_closed() {
+fn normalized_budget_key_collisions_fail_closed() {
     let environment = TestEnvironment::new("normalized-collisions");
     let repo_root = environment.canonical_repo_root();
 
@@ -187,25 +185,105 @@ fn normalized_map_key_collisions_fail_closed() {
         .budgets
         .insert(" max_operations ".to_owned(), 10);
     assert!(approval_json_and_digest(&budget_collision).is_err());
+}
 
-    let mut authority_collision = base_content(&repo_root);
-    authority_collision.worker_grant.rules = BTreeMap::from([
-        (
-            AuthorityTarget {
-                capability: "edit".to_owned(),
-                resource: "workspace:repo/src".to_owned(),
+#[test]
+fn exact_authority_match_strings_are_content_bound() {
+    let environment = TestEnvironment::new("exact-authority-strings");
+    let repo_root = environment.canonical_repo_root();
+    let first = base_content(&repo_root);
+    let mut changed_target = first.clone();
+    changed_target.target.capability = " edit ".to_owned();
+
+    let first_digest = approval_json_and_digest(&first).unwrap().1;
+    let changed_digest = approval_json_and_digest(&changed_target).unwrap().1;
+    assert_ne!(first_digest, changed_digest);
+
+    let spaced_target = AuthorityTarget {
+        capability: " edit ".to_owned(),
+        resource: "workspace:repo/src".to_owned(),
+    };
+    let mut exact_plane = plane(AuthorityDecision::Allow);
+    exact_plane
+        .rules
+        .insert(spaced_target.clone(), AuthorityDecision::Deny);
+    assert_eq!(
+        exact_plane.decision_for(&target()),
+        AuthorityDecision::Allow
+    );
+    assert_eq!(
+        exact_plane.decision_for(&spaced_target),
+        AuthorityDecision::Deny
+    );
+
+    let mut changed_plane = first.clone();
+    changed_plane.worker_grant = exact_plane;
+    let canonical = approval_json_and_digest(&changed_plane).unwrap().0;
+    assert!(canonical.contains(r#""capability":" edit ""#));
+}
+
+#[test]
+fn exact_winds_identity_strings_record_without_aliasing() {
+    let environment = TestEnvironment::new("exact-identity-strings");
+    let repo_root = environment.canonical_repo_root();
+    let git_dir = Path::new(&repo_root)
+        .join(".git")
+        .to_string_lossy()
+        .into_owned();
+    let store = Store::open(environment.state_root()).unwrap();
+    let workspace_id = " workspace-1 ";
+    let workstream_id = " workstream-1 ";
+    let session_id = " session-1 ";
+
+    store
+        .create_workspace(
+            NewWorkspace {
+                workspace_id,
+                canonical_worktree_root: &repo_root,
+                git_common_dir: &git_dir,
             },
-            AuthorityDecision::Allow,
-        ),
-        (
-            AuthorityTarget {
-                capability: " edit ".to_owned(),
-                resource: "workspace:repo/src".to_owned(),
+            10,
+        )
+        .unwrap();
+    store
+        .create_workstream(
+            NewWorkstream {
+                workstream_id,
+                workspace_id,
+                display_name: "Task",
             },
-            AuthorityDecision::Allow,
-        ),
-    ]);
-    assert!(approval_json_and_digest(&authority_collision).is_err());
+            20,
+        )
+        .unwrap();
+    store
+        .create_winds_session(
+            NewWindsSession {
+                session_id,
+                workstream_id,
+                display_name: "Planner",
+            },
+            30,
+        )
+        .unwrap();
+
+    let mut content = base_content(&repo_root);
+    content.workspace_id = workspace_id.to_owned();
+    content.workstream_id = workstream_id.to_owned();
+    content.session_id = session_id.to_owned();
+    let stored = record_human_approval(&store, "approval-exact-id", &content, 40).unwrap();
+    assert_eq!(stored.workspace_id, workspace_id);
+    assert_eq!(stored.workstream_id, workstream_id);
+    assert_eq!(stored.session_id, session_id);
+
+    let mut aliased = content.clone();
+    aliased.workspace_id = workspace_id.trim().to_owned();
+    aliased.workstream_id = workstream_id.trim().to_owned();
+    aliased.session_id = session_id.trim().to_owned();
+    let evaluation =
+        revalidate_human_approval(&store, "approval-exact-id", &aliased).unwrap();
+    assert_eq!(evaluation.decision, AuthorityDecision::Ask);
+    assert_eq!(evaluation.reason, ApprovalReason::MaterialContentChanged);
+    assert_ne!(evaluation.current_digest, evaluation.approved_digest);
 }
 
 #[test]
@@ -450,6 +528,10 @@ fn malformed_or_ambiguous_content_fails_closed_before_approval() {
     let mut nul_scope = base_content(&repo_root);
     nul_scope.path_scopes = vec!["src\0outside".to_owned()];
     assert!(approval_json_and_digest(&nul_scope).is_err());
+
+    let mut blank_identity = base_content(&repo_root);
+    blank_identity.session_id = "   ".to_owned();
+    assert!(approval_json_and_digest(&blank_identity).is_err());
 }
 
 #[test]
