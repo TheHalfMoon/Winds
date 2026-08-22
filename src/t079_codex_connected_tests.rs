@@ -480,11 +480,11 @@ fn bind_verified_native_codex_executable(
             std::io::Error::last_os_error()
         ));
     }
-    if unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } < 0 {
-        return Err(format!(
-            "T079 could not bind Codex executable descriptor across spawn: {}",
-            std::io::Error::last_os_error()
-        ));
+    if flags & libc::FD_CLOEXEC == 0 {
+        return Err(
+            "T079 requires the bound Codex executable descriptor to remain close-on-exec in the parent process"
+                .to_owned(),
+        );
     }
 
     let launch_path = PathBuf::from(format!("/proc/self/fd/{fd}"));
@@ -744,18 +744,6 @@ fn wait_for_response(
     }
 }
 
-fn hand_off_child_reap(mut child: Child) -> ProofResult<()> {
-    thread::Builder::new()
-        .name("winds-t079-child-reaper".to_owned())
-        .spawn(move || {
-            let _ = child.wait();
-        })
-        .map(|_| ())
-        .map_err(|error| {
-            format!("T079 could not hand terminated child to background reaper: {error}")
-        })
-}
-
 fn finish_child(mut child: Child, cleanup_deadline: Instant) -> ProofResult<CleanupEvidence> {
     let graceful_deadline = std::cmp::min(Instant::now() + GRACEFUL_CHILD_EXIT, cleanup_deadline);
     loop {
@@ -772,22 +760,12 @@ fn finish_child(mut child: Child, cleanup_deadline: Instant) -> ProofResult<Clea
     if let Err(kill_error) = child.kill() {
         return match child.try_wait() {
             Ok(Some(_)) => Ok(CleanupEvidence::DirectChildReaped),
-            Ok(None) => {
-                let message = format!(
-                    "T079 could not terminate owned Codex child: {kill_error}; direct-child cleanup remains unproven"
-                );
-                hand_off_child_reap(child)
-                    .map_err(|reaper_error| format!("{message}; {reaper_error}"))?;
-                Err(format!("{message}; direct-child reap handed off"))
-            }
-            Err(wait_error) => {
-                let message = format!(
-                    "T079 could not terminate owned Codex child: {kill_error}; reap state is also unproven: {wait_error}"
-                );
-                hand_off_child_reap(child)
-                    .map_err(|reaper_error| format!("{message}; {reaper_error}"))?;
-                Err(format!("{message}; direct-child reap handed off"))
-            }
+            Ok(None) => Err(format!(
+                "T079 could not terminate owned Codex child: {kill_error}; direct-child cleanup remains unproven; no unbounded background reaper is spawned"
+            )),
+            Err(wait_error) => Err(format!(
+                "T079 could not terminate owned Codex child: {kill_error}; reap state is also unproven: {wait_error}; no unbounded background reaper is spawned"
+            )),
         };
     }
 
@@ -799,10 +777,10 @@ fn finish_child(mut child: Child, cleanup_deadline: Instant) -> ProofResult<Clea
             Some(_) => return Ok(CleanupEvidence::DirectChildTerminatedAndReaped),
             None if Instant::now() < cleanup_deadline => thread::sleep(Duration::from_millis(10)),
             None => {
-                let message = "T079 terminated the owned Codex child but could not prove reap inside bounded cleanup";
-                hand_off_child_reap(child)
-                    .map_err(|reaper_error| format!("{message}; {reaper_error}"))?;
-                return Err(format!("{message}; direct-child reap handed off"));
+                return Err(
+                    "T079 terminated the owned Codex child but could not prove reap inside bounded cleanup; no unbounded background reaper is spawned"
+                        .to_owned(),
+                );
             }
         }
     }
@@ -1283,6 +1261,7 @@ fn codex_launch_environment_is_explicit_allowlist_only() {
 #[cfg(target_os = "linux")]
 #[test]
 fn t079_linux_launch_binding_rejects_wrappers_and_holds_verified_descriptor() {
+    use std::os::fd::AsRawFd;
     use std::os::unix::fs::PermissionsExt;
 
     let root = disposable_root().expect("launch binding fixture");
@@ -1311,6 +1290,9 @@ fn t079_linux_launch_binding_rejects_wrappers_and_holds_verified_descriptor() {
             .to_string_lossy()
             .starts_with("/proc/self/fd/")
     );
+    let flags = unsafe { libc::fcntl(bound._file.as_raw_fd(), libc::F_GETFD) };
+    assert!(flags >= 0);
+    assert_ne!(flags & libc::FD_CLOEXEC, 0);
 
     drop(bound);
     fs::remove_file(executable).expect("remove launch fixture");
