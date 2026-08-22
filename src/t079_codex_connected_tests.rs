@@ -915,8 +915,8 @@ fn canonical_directory_outside_primary_checkout(path: &Path, label: &str) -> Pro
     if !path.is_absolute() {
         return Err(format!("T079 requires {label} to be an absolute path"));
     }
-    let metadata = fs::metadata(path)
-        .map_err(|error| format!("T079 could not inspect {label}: {error}"))?;
+    let metadata =
+        fs::metadata(path).map_err(|error| format!("T079 could not inspect {label}: {error}"))?;
     if !metadata.is_dir() {
         return Err(format!("T079 requires {label} to be an existing directory"));
     }
@@ -929,7 +929,8 @@ fn canonical_directory_outside_primary_checkout(path: &Path, label: &str) -> Pro
 }
 
 fn disposable_root() -> ProofResult<PathBuf> {
-    let parent = canonical_directory_outside_primary_checkout(&env::temp_dir(), "temporary parent")?;
+    let parent =
+        canonical_directory_outside_primary_checkout(&env::temp_dir(), "temporary parent")?;
     let sequence = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1583,9 +1584,7 @@ fn isolated_codex_home_rejects_local_config_without_reading_credentials() {
 #[test]
 fn t079_checkout_containment_rejects_primary_checkout_and_descendants() {
     let checkout = canonical_primary_checkout_root().expect("canonical primary checkout");
-    assert!(
-        ensure_path_outside_primary_checkout(&checkout, &checkout, "fixture root").is_err()
-    );
+    assert!(ensure_path_outside_primary_checkout(&checkout, &checkout, "fixture root").is_err());
     assert!(
         ensure_path_outside_primary_checkout(&checkout.join("tmp"), &checkout, "fixture root")
             .is_err()
@@ -1695,8 +1694,7 @@ fn t079_version_observation_uses_disposable_working_directory() {
 
     let fixture_root = disposable_root().expect("version fixture root");
     let executable = fixture_root.join("codex-version-fixture");
-    fs::write(&executable, b"#!/bin/sh\nprintf '%s\\n' \"$PWD\"\n")
-        .expect("write version fixture");
+    fs::write(&executable, b"#!/bin/sh\nprintf '%s\\n' \"$PWD\"\n").expect("write version fixture");
     let mut permissions = fs::metadata(&executable).unwrap().permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(&executable, permissions).unwrap();
