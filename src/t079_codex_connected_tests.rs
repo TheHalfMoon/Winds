@@ -33,6 +33,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[cfg(target_os = "linux")]
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 #[cfg(target_os = "linux")]
+#[allow(clippy::items_after_test_module)]
 mod process_scope {
     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/process_scope.rs"));
 
