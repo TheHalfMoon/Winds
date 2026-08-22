@@ -24,7 +24,9 @@ use std::os::fd::{AsRawFd, OwnedFd};
 #[cfg(target_os = "linux")]
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
+#[cfg(target_os = "linux")]
+use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
