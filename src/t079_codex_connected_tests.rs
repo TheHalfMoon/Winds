@@ -238,20 +238,6 @@ fn initialized_client() -> CodexProtocolClient {
     client
 }
 
-fn meaningful(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(false) => false,
-        Value::String(text) => {
-            let normalized = text.trim().to_ascii_lowercase();
-            !normalized.is_empty() && normalized != "disabled" && normalized != "off"
-        }
-        Value::Array(values) => !values.is_empty(),
-        Value::Object(values) => !values.is_empty(),
-        Value::Bool(true) | Value::Number(_) => true,
-    }
-}
-
 fn validate_codex_0_149_features(value: &Value) -> ProofResult<()> {
     let features = value
         .as_object()
@@ -378,13 +364,9 @@ fn validate_effective_config(result: &Value, observed_version: &str) -> ProofRes
             continue;
         }
 
-        if !meaningful(value) {
-            continue;
-        }
-
         if !ALLOWED_EFFECTIVE_CONFIG_KEYS.contains(&key.as_str()) {
             return Err(format!(
-                "T079 refuses connected proof with active or ambiguous effective config: {key}"
+                "T079 refuses connected proof with unknown effective config key: {key}"
             ));
         }
     }
@@ -1791,6 +1773,32 @@ fn effective_config_preflight_accepts_codex_0_149_defaults_and_preserves_unknown
         .unwrap_err();
 
         assert!(error.contains(key));
+    }
+
+    for value in [
+        Value::Null,
+        json!(false),
+        json!(""),
+        json!("off"),
+        json!("disabled"),
+        json!([]),
+        json!({}),
+    ] {
+        let mut config = serde_json::Map::new();
+        config.insert("model_provider".to_owned(), Value::Null);
+        config.insert("future_side_channel".to_owned(), value);
+
+        let error = validate_effective_config(
+            &json!({
+                "config": config,
+                "origins": {}
+            }),
+            T079_CODEX_CONFIG_COMPAT_VERSION,
+        )
+        .unwrap_err();
+
+        assert!(error.contains("future_side_channel"));
+        assert!(error.contains("unknown effective config key"));
     }
 
     let error = validate_effective_config(
