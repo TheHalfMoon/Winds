@@ -131,7 +131,7 @@ impl Drop for FixtureRootGuard {
 
 struct BoundCodexExecutable {
     #[cfg(target_os = "linux")]
-    _file: File,
+    file: File,
     launch_path: PathBuf,
 }
 
@@ -495,7 +495,7 @@ fn bind_verified_native_codex_executable(
     }
 
     Ok(BoundCodexExecutable {
-        _file: file,
+        file,
         launch_path,
     })
 }
@@ -1290,7 +1290,7 @@ fn t079_linux_launch_binding_rejects_wrappers_and_holds_verified_descriptor() {
             .to_string_lossy()
             .starts_with("/proc/self/fd/")
     );
-    let flags = unsafe { libc::fcntl(bound._file.as_raw_fd(), libc::F_GETFD) };
+    let flags = unsafe { libc::fcntl(bound.file.as_raw_fd(), libc::F_GETFD) };
     assert!(flags >= 0);
     assert_ne!(flags & libc::FD_CLOEXEC, 0);
 
