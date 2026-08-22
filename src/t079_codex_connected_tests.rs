@@ -20,7 +20,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 #[cfg(target_os = "linux")]
 use std::io::{Seek, SeekFrom};
 #[cfg(target_os = "linux")]
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsRawFd, OwnedFd};
 #[cfg(target_os = "linux")]
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -35,6 +35,46 @@ type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 #[cfg(target_os = "linux")]
 mod process_scope {
     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/process_scope.rs"));
+
+    impl OwnedProcess {
+        pub(super) fn terminate_direct_t079(
+            &mut self,
+            deadline: Instant,
+            label: &str,
+        ) -> Result<()> {
+            match self.child.kill() {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::InvalidInput => {}
+                Err(error) => {
+                    return Err(format!(
+                        "{label} failed to terminate its T079 direct child: {error}"
+                    )
+                    .into());
+                }
+            }
+
+            loop {
+                match self.child.try_wait().map_err(|error| {
+                    format!("{label} failed while reaping its T079 direct child: {error}")
+                })? {
+                    Some(_) => {
+                        self.disarm_unix_process_group();
+                        return Ok(());
+                    }
+                    None => {
+                        let now = Instant::now();
+                        if now >= deadline {
+                            return Err(format!(
+                                "{label} T079 direct child could not be proven reaped inside the bounded cleanup window"
+                            )
+                            .into());
+                        }
+                        thread::sleep(POLL_INTERVAL.min(deadline.saturating_duration_since(now)));
+                    }
+                }
+            }
+        }
+    }
 }
 #[cfg(target_os = "linux")]
 use process_scope::{OwnedProcess, spawn_owned_process};
@@ -406,6 +446,128 @@ fn configure_isolated_codex_environment(command: &mut Command, codex_home: Optio
     }
 }
 
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+fn install_t079_no_process_descendants_filter() -> std::io::Result<()> {
+    const BPF_LD_W_ABS: u16 = 0x20;
+    const BPF_ALU_AND_K: u16 = 0x54;
+    const BPF_JMP_JEQ_K: u16 = 0x15;
+    const BPF_RET_K: u16 = 0x06;
+
+    const SECCOMP_RET_KILL_THREAD: u32 = 0x0000_0000;
+    const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
+    const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
+    const SECCOMP_MODE_FILTER: libc::c_ulong = 2;
+    const PR_SET_SECCOMP: libc::c_int = 22;
+    const PR_SET_NO_NEW_PRIVS: libc::c_int = 38;
+
+    #[cfg(target_arch = "x86_64")]
+    const AUDIT_ARCH: u32 = 0xc000_003e;
+    #[cfg(target_arch = "aarch64")]
+    const AUDIT_ARCH: u32 = 0xc000_00b7;
+
+    #[cfg(target_arch = "x86_64")]
+    const SYS_CLONE: u32 = 56;
+    #[cfg(target_arch = "x86_64")]
+    const SYS_FORK: u32 = 57;
+    #[cfg(target_arch = "x86_64")]
+    const SYS_VFORK: u32 = 58;
+    #[cfg(target_arch = "aarch64")]
+    const SYS_CLONE: u32 = 220;
+    #[cfg(target_arch = "aarch64")]
+    const SYS_FORK: u32 = u32::MAX - 1;
+    #[cfg(target_arch = "aarch64")]
+    const SYS_VFORK: u32 = u32::MAX - 2;
+    const SYS_CLONE3: u32 = 435;
+
+    const SECCOMP_DATA_NR_OFFSET: u32 = 0;
+    const SECCOMP_DATA_ARCH_OFFSET: u32 = 4;
+    const SECCOMP_DATA_ARGS0_OFFSET: u32 = 16;
+    const X32_SYSCALL_BIT_CLEAR_MASK: u32 = 0xbfff_ffff;
+    const CLONE_THREAD_FLAG: u32 = 0x0001_0000;
+
+    const fn statement(code: u16, k: u32) -> libc::sock_filter {
+        libc::sock_filter {
+            code,
+            jt: 0,
+            jf: 0,
+            k,
+        }
+    }
+
+    const fn jump(code: u16, k: u32, jt: u8, jf: u8) -> libc::sock_filter {
+        libc::sock_filter { code, jt, jf, k }
+    }
+
+    let deny_process = SECCOMP_RET_ERRNO | (libc::EPERM as u32 & 0x0000_ffff);
+    let clone3_fallback = SECCOMP_RET_ERRNO | (libc::ENOSYS as u32 & 0x0000_ffff);
+    let mut filter = [
+        statement(BPF_LD_W_ABS, SECCOMP_DATA_ARCH_OFFSET),
+        jump(BPF_JMP_JEQ_K, AUDIT_ARCH, 1, 0),
+        statement(BPF_RET_K, SECCOMP_RET_KILL_THREAD),
+        statement(BPF_LD_W_ABS, SECCOMP_DATA_NR_OFFSET),
+        statement(BPF_ALU_AND_K, X32_SYSCALL_BIT_CLEAR_MASK),
+        jump(BPF_JMP_JEQ_K, SYS_FORK, 0, 1),
+        statement(BPF_RET_K, deny_process),
+        jump(BPF_JMP_JEQ_K, SYS_VFORK, 0, 1),
+        statement(BPF_RET_K, deny_process),
+        jump(BPF_JMP_JEQ_K, SYS_CLONE3, 0, 1),
+        statement(BPF_RET_K, clone3_fallback),
+        jump(BPF_JMP_JEQ_K, SYS_CLONE, 0, 4),
+        statement(BPF_LD_W_ABS, SECCOMP_DATA_ARGS0_OFFSET),
+        statement(BPF_ALU_AND_K, CLONE_THREAD_FLAG),
+        jump(BPF_JMP_JEQ_K, CLONE_THREAD_FLAG, 1, 0),
+        statement(BPF_RET_K, deny_process),
+        statement(BPF_RET_K, SECCOMP_RET_ALLOW),
+    ];
+    let mut program = libc::sock_fprog {
+        len: filter.len() as u16,
+        filter: filter.as_mut_ptr(),
+    };
+
+    if unsafe { libc::prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if unsafe {
+        libc::prctl(
+            PR_SET_SECCOMP,
+            SECCOMP_MODE_FILTER,
+            &mut program as *mut libc::sock_fprog,
+        )
+    } == -1
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(all(
+    target_os = "linux",
+    not(any(target_arch = "x86_64", target_arch = "aarch64"))
+))]
+fn install_t079_no_process_descendants_filter() -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "T079 process-descendant denial is not implemented for this Linux architecture",
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn configure_t079_process_descendant_denial(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+
+    // This hook is registered before process_scope::spawn_owned_process adds its
+    // own hook. It blocks process creation but deliberately permits setsid/prctl,
+    // so the later owned-scope hook can still establish the session boundary and
+    // its independent anti-escape filter. clone3 returns ENOSYS so libc thread
+    // creation can fall back to clone; clone is accepted only with CLONE_THREAD.
+    unsafe {
+        command.pre_exec(install_t079_no_process_descendants_filter);
+    }
+}
+
 #[cfg(target_os = "linux")]
 fn require_linux_native_elf(file: &mut File) -> ProofResult<()> {
     let mut magic = [0_u8; 4];
@@ -444,8 +606,6 @@ fn validate_live_codex_candidate_path(path: &Path) -> ProofResult<()> {
 fn bind_verified_native_codex_executable(
     expected: &RuntimeExecutableIdentity,
 ) -> ProofResult<BoundCodexExecutable> {
-    use std::os::fd::AsRawFd;
-
     let mut file = File::open(&expected.canonical_path)
         .map_err(|error| format!("T079 could not open verified Codex executable: {error}"))?;
     let metadata = file
@@ -527,48 +687,161 @@ fn bind_verified_native_codex_executable(
     )
 }
 
-fn observe_version_bounded(executable: &Path) -> ProofResult<String> {
-    let mut command = Command::new(executable);
-    configure_isolated_codex_environment(&mut command, None);
-    let mut child = command
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| format!("T079 could not execute Codex --version: {error}"))?;
-    let deadline = Instant::now() + VERSION_TIMEOUT;
+#[cfg(target_os = "linux")]
+fn set_nonblocking_stdout(stdout: &std::process::ChildStdout) -> ProofResult<()> {
+    let fd = stdout.as_raw_fd();
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 {
+        return Err(format!(
+            "T079 could not inspect Codex stdout descriptor flags: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(format!(
+            "T079 could not make Codex stdout nonblocking: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn finish_t079_process(
+    mut child: OwnedProcess,
+    cleanup_deadline: Instant,
+    label: &str,
+) -> ProofResult<CleanupEvidence> {
+    let graceful_deadline = std::cmp::min(Instant::now() + GRACEFUL_CHILD_EXIT, cleanup_deadline);
     loop {
         match child
             .try_wait()
-            .map_err(|error| format!("T079 could not inspect Codex --version: {error}"))?
+            .map_err(|error| format!("T079 could not inspect {label}: {error}"))?
         {
-            Some(status) => {
-                if !status.success() {
-                    return Err(format!("T079 Codex --version failed with status {status}"));
-                }
-                break;
+            Some(_) => {
+                // The T079 seccomp filter rejects fork/vfork and every clone
+                // that is not CLONE_THREAD, while clone3 is forced through the
+                // libc fallback path. A reaped direct child therefore implies
+                // there cannot be independently running process descendants.
+                return Ok(CleanupEvidence::OwnedScopeQuiescent);
             }
-            None if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
-            None => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("T079 Codex --version exceeded bounded timeout".to_owned());
-            }
+            None if Instant::now() < graceful_deadline => thread::sleep(Duration::from_millis(10)),
+            None => break,
         }
     }
 
-    let mut stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| "T079 Codex --version stdout was unavailable".to_owned())?
-        .take((MAX_VERSION_BYTES + 1) as u64);
+    child
+        .terminate_direct_t079(cleanup_deadline, label)
+        .map_err(|error| error.to_string())?;
+    Ok(CleanupEvidence::OwnedScopeTerminatedAndQuiescent)
+}
+
+#[cfg(target_os = "linux")]
+fn cleanup_version_failure(child: OwnedProcess, message: String) -> String {
+    let cleanup_deadline = Instant::now() + CLEANUP_TIMEOUT;
+    match finish_t079_process(child, cleanup_deadline, "T079 Codex --version") {
+        Ok(_) => message,
+        Err(cleanup) => format!("{message}; version cleanup evidence: {cleanup}"),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn observe_version_bounded(executable: &Path) -> ProofResult<String> {
+    let mut command = Command::new(executable);
+    configure_isolated_codex_environment(&mut command, None);
+    command
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    configure_t079_process_descendant_denial(&mut command);
+    let mut child = spawn_owned_process(&mut command, "T079 Codex --version")
+        .map_err(|error| format!("T079 could not execute Codex --version: {error}"))?;
+    let mut stdout = match child.take_stdout() {
+        Some(stdout) => stdout,
+        None => {
+            return Err(cleanup_version_failure(
+                child,
+                "T079 Codex --version stdout was unavailable".to_owned(),
+            ));
+        }
+    };
+    if let Err(error) = set_nonblocking_stdout(&stdout) {
+        return Err(cleanup_version_failure(child, error));
+    }
+
+    let deadline = Instant::now() + VERSION_TIMEOUT;
     let mut bytes = Vec::new();
-    stdout
-        .read_to_end(&mut bytes)
-        .map_err(|error| format!("T079 could not read Codex --version: {error}"))?;
-    if bytes.len() > MAX_VERSION_BYTES {
-        return Err("T079 Codex --version output exceeded bounded size".to_owned());
+    let mut stdout_eof = false;
+    let mut exit_status = None;
+    let mut chunk = [0_u8; 512];
+
+    loop {
+        if !stdout_eof {
+            loop {
+                match stdout.read(&mut chunk) {
+                    Ok(0) => {
+                        stdout_eof = true;
+                        break;
+                    }
+                    Ok(read) => {
+                        let new_len = match bytes.len().checked_add(read) {
+                            Some(new_len) => new_len,
+                            None => {
+                                return Err(cleanup_version_failure(
+                                    child,
+                                    "T079 Codex --version byte count overflowed".to_owned(),
+                                ));
+                            }
+                        };
+                        if new_len > MAX_VERSION_BYTES {
+                            return Err(cleanup_version_failure(
+                                child,
+                                "T079 Codex --version output exceeded bounded size".to_owned(),
+                            ));
+                        }
+                        bytes.extend_from_slice(&chunk[..read]);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) => {
+                        return Err(cleanup_version_failure(
+                            child,
+                            format!("T079 could not read Codex --version: {error}"),
+                        ));
+                    }
+                }
+            }
+        }
+
+        if exit_status.is_none() {
+            match child.try_wait() {
+                Ok(Some(status)) => exit_status = Some(status),
+                Ok(None) => {}
+                Err(error) => {
+                    return Err(cleanup_version_failure(
+                        child,
+                        format!("T079 could not inspect Codex --version: {error}"),
+                    ));
+                }
+            }
+        }
+
+        if stdout_eof && exit_status.is_some() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            return Err(cleanup_version_failure(
+                child,
+                "T079 Codex --version exceeded bounded timeout".to_owned(),
+            ));
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    let status = exit_status.expect("T079 version loop exits only with status");
+    if !status.success() {
+        return Err(format!("T079 Codex --version failed with status {status}"));
     }
     let text = String::from_utf8(bytes)
         .map_err(|_| "T079 Codex --version output is not UTF-8".to_owned())?;
@@ -578,6 +851,12 @@ fn observe_version_bounded(executable: &Path) -> ProofResult<String> {
         return Err("T079 Codex --version must be exactly one line".to_owned());
     }
     Ok(version.to_owned())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn observe_version_bounded(executable: &Path) -> ProofResult<String> {
+    let _ = executable;
+    Err("T079 bounded Codex version observation currently requires Linux/WSL2".to_owned())
 }
 
 fn disposable_root() -> ProofResult<PathBuf> {
@@ -596,6 +875,37 @@ fn disposable_root() -> ProofResult<PathBuf> {
         .map_err(|error| format!("T079 could not canonicalize disposable root: {error}"))
 }
 
+fn read_bounded_jsonl_frame<R: BufRead>(reader: &mut R) -> ProofResult<Option<Vec<u8>>> {
+    let mut frame = Vec::new();
+    loop {
+        let available = reader
+            .fill_buf()
+            .map_err(|error| format!("T079 Codex stdout read failed: {error}"))?;
+        if available.is_empty() {
+            return if frame.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(frame))
+            };
+        }
+
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let take = newline.map_or(available.len(), |position| position + 1);
+        let new_len = frame
+            .len()
+            .checked_add(take)
+            .ok_or_else(|| "T079 Codex frame byte count overflowed".to_owned())?;
+        if new_len > MAX_CODEX_JSONL_FRAME_BYTES {
+            return Err("T079 Codex frame exceeded bounded size".to_owned());
+        }
+        frame.extend_from_slice(&available[..take]);
+        reader.consume(take);
+        if newline.is_some() {
+            return Ok(Some(frame));
+        }
+    }
+}
+
 fn spawn_frame_reader_with_sender(
     stdout: std::process::ChildStdout,
     sender: SyncSender<FrameResult>,
@@ -604,20 +914,15 @@ fn spawn_frame_reader_with_sender(
     thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
         loop {
-            let mut frame = Vec::new();
-            match reader.read_until(b'\n', &mut frame) {
-                Ok(0) => break,
-                Ok(_) if frame.len() > MAX_CODEX_JSONL_FRAME_BYTES => {
-                    let _ = sender.send(Err("T079 Codex frame exceeded bounded size".to_owned()));
-                    break;
-                }
-                Ok(_) => {
+            match read_bounded_jsonl_frame(&mut reader) {
+                Ok(Some(frame)) => {
                     if sender.send(Ok(frame)).is_err() {
                         break;
                     }
                 }
+                Ok(None) => break,
                 Err(error) => {
-                    let _ = sender.send(Err(format!("T079 Codex stdout read failed: {error}")));
+                    let _ = sender.send(Err(error));
                     break;
                 }
             }
@@ -760,42 +1065,6 @@ fn wait_for_response<W: Write>(
     }
 }
 
-#[cfg(target_os = "linux")]
-fn finish_owned_process(
-    mut child: OwnedProcess,
-    cleanup_deadline: Instant,
-) -> ProofResult<CleanupEvidence> {
-    const LABEL: &str = "T079 Codex App Server";
-    let graceful_deadline = std::cmp::min(Instant::now() + GRACEFUL_CHILD_EXIT, cleanup_deadline);
-    let mut direct_exited = false;
-    loop {
-        match child
-            .try_wait()
-            .map_err(|error| format!("T079 could not inspect owned Codex child: {error}"))?
-        {
-            Some(_) => {
-                direct_exited = true;
-                break;
-            }
-            None if Instant::now() < graceful_deadline => thread::sleep(Duration::from_millis(10)),
-            None => break,
-        }
-    }
-
-    if direct_exited
-        && child
-            .wait_for_scope_quiescence(graceful_deadline, LABEL)
-            .map_err(|error| error.to_string())?
-    {
-        return Ok(CleanupEvidence::OwnedScopeQuiescent);
-    }
-
-    child
-        .terminate_and_prove(cleanup_deadline, LABEL)
-        .map_err(|error| error.to_string())?;
-    Ok(CleanupEvidence::OwnedScopeTerminatedAndQuiescent)
-}
-
 fn ensure_disposable_root_unchanged(root: &Path) -> ProofResult<()> {
     let mut entries = fs::read_dir(root)
         .map_err(|error| format!("T079 could not inspect disposable root: {error}"))?;
@@ -847,7 +1116,7 @@ fn reconcile_proof_cleanup<T>(
 #[cfg(target_os = "linux")]
 fn cleanup_setup_failure(child: OwnedProcess, root: &Path, message: &str) -> String {
     let cleanup_deadline = Instant::now() + CLEANUP_TIMEOUT;
-    let cleanup = finish_owned_process(child, cleanup_deadline);
+    let cleanup = finish_t079_process(child, cleanup_deadline, "T079 Codex App Server");
     let root_check = ensure_disposable_root_unchanged(root);
     match (cleanup, root_check) {
         (Ok(_), Ok(())) => message.to_owned(),
@@ -904,6 +1173,7 @@ fn run_connected_proof(
         .stdin(Stdio::from(child_stdin))
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    configure_t079_process_descendant_denial(&mut command);
     let mut child = spawn_owned_process(&mut command, "T079 Codex App Server")
         .map_err(|error| format!("T079 could not start owned Codex App Server: {error}"))?;
     let stdout = match child.take_stdout() {
@@ -1053,7 +1323,7 @@ fn run_connected_proof(
     drop(stdin);
     drop(receiver);
     let cleanup_deadline = Instant::now() + CLEANUP_TIMEOUT;
-    let cleanup = finish_owned_process(child, cleanup_deadline);
+    let cleanup = finish_t079_process(child, cleanup_deadline, "T079 Codex App Server");
     let reader_result = match wait_for_reader_completion(&done_receiver, cleanup_deadline) {
         Ok(()) => reader
             .join()
@@ -1283,7 +1553,6 @@ fn codex_launch_environment_is_explicit_allowlist_only() {
 #[cfg(target_os = "linux")]
 #[test]
 fn t079_linux_launch_binding_rejects_wrappers_and_holds_verified_descriptor() {
-    use std::os::fd::AsRawFd;
     use std::os::unix::fs::PermissionsExt;
 
     let root = disposable_root().expect("launch binding fixture");
@@ -1319,6 +1588,45 @@ fn t079_linux_launch_binding_rejects_wrappers_and_holds_verified_descriptor() {
     drop(bound);
     fs::remove_file(executable).expect("remove launch fixture");
     fs::remove_dir(root).expect("remove launch fixture root");
+}
+
+#[test]
+fn jsonl_frame_reader_rejects_newline_free_oversize_input_at_the_cap() {
+    let source = std::io::repeat(b'x').take((MAX_CODEX_JSONL_FRAME_BYTES + 1) as u64);
+    let mut reader = BufReader::new(source);
+    let error = read_bounded_jsonl_frame(&mut reader).unwrap_err();
+    assert!(error.contains("frame exceeded bounded size"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn t079_linux_seccomp_filter_denies_process_descendants() {
+    let mut command = Command::new("/bin/sh");
+    command
+        .args(["-c", "( : ) & wait"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    configure_t079_process_descendant_denial(&mut command);
+    let mut child = spawn_owned_process(&mut command, "T079 descendant-denial regression")
+        .expect("spawn filter regression child");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let status = loop {
+        match child.try_wait().expect("inspect filter regression child") {
+            Some(status) => break status,
+            None if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+            None => {
+                child
+                    .terminate_direct_t079(Instant::now() + CLEANUP_TIMEOUT, "T079 filter regression")
+                    .expect("terminate filter regression child");
+                panic!("T079 descendant-denial regression child did not exit");
+            }
+        }
+    };
+    assert!(
+        !status.success(),
+        "T079 seccomp filter unexpectedly allowed a shell background process"
+    );
 }
 
 #[test]
@@ -1405,7 +1713,7 @@ fn forbidden_runtime_activity_is_detected_fail_closed() {
             json!({"item": {"type": "collabAgentToolCall"}}),
         ),
         ("item/started", json!({"item": {"type": "webSearch"}})),
-        ("item/started", json!({"item": {"type": "hookPrompt"}})),
+        ("item/started", json!({"item": {"type": "hookPrompt"}}),
         (
             "item/started",
             json!({"item": {"type": "futureUnknownToolSurface"}}),
@@ -1555,6 +1863,7 @@ fn t079_real_codex_one_bounded_prompt() {
             "experimental_api_opt_in": true,
             "launch_environment": "ENV_CLEAR_EXPLICIT_ALLOWLIST",
             "launch_executable": "LINUX_NATIVE_VERIFIED_OPEN_FD",
+            "process_descendants": "KERNEL_DENIED_SECCOMP",
             "codex_home": "PREEXISTING_ISOLATED_NOT_READ_OR_COPIED_BY_WINDS",
             "environment_access": "disabled",
             "runtime_workspace_roots": 0,
