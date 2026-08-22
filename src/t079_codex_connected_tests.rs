@@ -750,110 +750,133 @@ fn cleanup_version_failure(child: OwnedProcess, message: String) -> String {
 
 #[cfg(target_os = "linux")]
 fn observe_version_bounded(executable: &Path) -> ProofResult<String> {
-    let mut command = Command::new(executable);
-    configure_isolated_codex_environment(&mut command, None);
-    command
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    configure_t079_process_descendant_denial(&mut command);
-    let mut child = spawn_owned_process(&mut command, "T079 Codex --version")
-        .map_err(|error| format!("T079 could not execute Codex --version: {error}"))?;
-    let mut stdout = match child.take_stdout() {
-        Some(stdout) => stdout,
-        None => {
-            return Err(cleanup_version_failure(
-                child,
-                "T079 Codex --version stdout was unavailable".to_owned(),
-            ));
+    let root = disposable_root()?;
+    let _root_guard = EmptyDisposableRootGuard { root: root.clone() };
+    let result = (|| -> ProofResult<String> {
+        let mut command = Command::new(executable);
+        configure_isolated_codex_environment(&mut command, None);
+        command
+            .arg("--version")
+            .current_dir(&root)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        configure_t079_process_descendant_denial(&mut command);
+        let mut child = spawn_owned_process(&mut command, "T079 Codex --version")
+            .map_err(|error| format!("T079 could not execute Codex --version: {error}"))?;
+        let mut stdout = match child.take_stdout() {
+            Some(stdout) => stdout,
+            None => {
+                return Err(cleanup_version_failure(
+                    child,
+                    "T079 Codex --version stdout was unavailable".to_owned(),
+                ));
+            }
+        };
+        if let Err(error) = set_nonblocking_stdout(&stdout) {
+            return Err(cleanup_version_failure(child, error));
         }
-    };
-    if let Err(error) = set_nonblocking_stdout(&stdout) {
-        return Err(cleanup_version_failure(child, error));
-    }
 
-    let deadline = Instant::now() + VERSION_TIMEOUT;
-    let mut bytes = Vec::new();
-    let mut stdout_eof = false;
-    let mut exit_status = None;
-    let mut chunk = [0_u8; 512];
+        let deadline = Instant::now() + VERSION_TIMEOUT;
+        let mut bytes = Vec::new();
+        let mut stdout_eof = false;
+        let mut exit_status = None;
+        let mut chunk = [0_u8; 512];
 
-    loop {
-        if !stdout_eof {
-            loop {
-                match stdout.read(&mut chunk) {
-                    Ok(0) => {
-                        stdout_eof = true;
-                        break;
-                    }
-                    Ok(read) => {
-                        let new_len = match bytes.len().checked_add(read) {
-                            Some(new_len) => new_len,
-                            None => {
+        loop {
+            if !stdout_eof {
+                loop {
+                    match stdout.read(&mut chunk) {
+                        Ok(0) => {
+                            stdout_eof = true;
+                            break;
+                        }
+                        Ok(read) => {
+                            let new_len = match bytes.len().checked_add(read) {
+                                Some(new_len) => new_len,
+                                None => {
+                                    return Err(cleanup_version_failure(
+                                        child,
+                                        "T079 Codex --version byte count overflowed".to_owned(),
+                                    ));
+                                }
+                            };
+                            if new_len > MAX_VERSION_BYTES {
                                 return Err(cleanup_version_failure(
                                     child,
-                                    "T079 Codex --version byte count overflowed".to_owned(),
+                                    "T079 Codex --version output exceeded bounded size".to_owned(),
                                 ));
                             }
-                        };
-                        if new_len > MAX_VERSION_BYTES {
+                            bytes.extend_from_slice(&chunk[..read]);
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(error) => {
                             return Err(cleanup_version_failure(
                                 child,
-                                "T079 Codex --version output exceeded bounded size".to_owned(),
+                                format!("T079 could not read Codex --version: {error}"),
                             ));
                         }
-                        bytes.extend_from_slice(&chunk[..read]);
                     }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
-                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                }
+            }
+
+            if exit_status.is_none() {
+                match child.try_wait() {
+                    Ok(Some(status)) => exit_status = Some(status),
+                    Ok(None) => {}
                     Err(error) => {
                         return Err(cleanup_version_failure(
                             child,
-                            format!("T079 could not read Codex --version: {error}"),
+                            format!("T079 could not inspect Codex --version: {error}"),
                         ));
                     }
                 }
             }
-        }
 
-        if exit_status.is_none() {
-            match child.try_wait() {
-                Ok(Some(status)) => exit_status = Some(status),
-                Ok(None) => {}
-                Err(error) => {
-                    return Err(cleanup_version_failure(
-                        child,
-                        format!("T079 could not inspect Codex --version: {error}"),
-                    ));
-                }
+            if stdout_eof && exit_status.is_some() {
+                break;
             }
+            if Instant::now() >= deadline {
+                return Err(cleanup_version_failure(
+                    child,
+                    "T079 Codex --version exceeded bounded timeout".to_owned(),
+                ));
+            }
+            thread::sleep(Duration::from_millis(10));
         }
 
-        if stdout_eof && exit_status.is_some() {
-            break;
+        let status = exit_status.expect("T079 version loop exits only with status");
+        if !status.success() {
+            return Err(format!("T079 Codex --version failed with status {status}"));
         }
-        if Instant::now() >= deadline {
-            return Err(cleanup_version_failure(
-                child,
-                "T079 Codex --version exceeded bounded timeout".to_owned(),
-            ));
+        let text = String::from_utf8(bytes)
+            .map_err(|_| "T079 Codex --version output is not UTF-8".to_owned())?;
+        let version = text.trim_end_matches(['\r', '\n']);
+        validate_exact_text(version, "Codex version")?;
+        if version.contains('\r') || version.contains('\n') {
+            return Err("T079 Codex --version must be exactly one line".to_owned());
         }
-        thread::sleep(Duration::from_millis(10));
-    }
+        Ok(version.to_owned())
+    })();
 
-    let status = exit_status.expect("T079 version loop exits only with status");
-    if !status.success() {
-        return Err(format!("T079 Codex --version failed with status {status}"));
+    let root_check = ensure_disposable_root_unchanged(&root);
+    match (result, root_check) {
+        (Ok(version), Ok(())) => Ok(version),
+        (result, root_check) => {
+            let mut failures = Vec::new();
+            if let Err(error) = result {
+                failures.push(format!("version={error}"));
+            }
+            if let Err(error) = root_check {
+                failures.push(format!("root_cleanup={error}"));
+            }
+            Err(format!(
+                "T079 Codex --version proof/cleanup failure: {}",
+                failures.join("; ")
+            ))
+        }
     }
-    let text = String::from_utf8(bytes)
-        .map_err(|_| "T079 Codex --version output is not UTF-8".to_owned())?;
-    let version = text.trim_end_matches(['\r', '\n']);
-    validate_exact_text(version, "Codex version")?;
-    if version.contains('\r') || version.contains('\n') {
-        return Err("T079 Codex --version must be exactly one line".to_owned());
-    }
-    Ok(version.to_owned())
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -862,20 +885,71 @@ fn observe_version_bounded(executable: &Path) -> ProofResult<String> {
     Err("T079 bounded Codex version observation currently requires Linux/WSL2".to_owned())
 }
 
+fn canonical_primary_checkout_root() -> ProofResult<PathBuf> {
+    let checkout = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let metadata = fs::metadata(checkout)
+        .map_err(|error| format!("T079 could not inspect primary checkout root: {error}"))?;
+    if !metadata.is_dir() {
+        return Err("T079 primary checkout root is not a directory".to_owned());
+    }
+    checkout
+        .canonicalize()
+        .map_err(|error| format!("T079 could not canonicalize primary checkout root: {error}"))
+}
+
+fn ensure_path_outside_primary_checkout(
+    candidate: &Path,
+    checkout: &Path,
+    label: &str,
+) -> ProofResult<()> {
+    if candidate == checkout || candidate.starts_with(checkout) {
+        return Err(format!(
+            "T079 refuses {label} inside primary checkout: {}",
+            candidate.display()
+        ));
+    }
+    Ok(())
+}
+
+fn canonical_directory_outside_primary_checkout(path: &Path, label: &str) -> ProofResult<PathBuf> {
+    if !path.is_absolute() {
+        return Err(format!("T079 requires {label} to be an absolute path"));
+    }
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("T079 could not inspect {label}: {error}"))?;
+    if !metadata.is_dir() {
+        return Err(format!("T079 requires {label} to be an existing directory"));
+    }
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| format!("T079 could not canonicalize {label}: {error}"))?;
+    let checkout = canonical_primary_checkout_root()?;
+    ensure_path_outside_primary_checkout(&canonical, &checkout, label)?;
+    Ok(canonical)
+}
+
 fn disposable_root() -> ProofResult<PathBuf> {
+    let parent = canonical_directory_outside_primary_checkout(&env::temp_dir(), "temporary parent")?;
     let sequence = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|error| format!("T079 clock error: {error}"))?
         .as_nanos();
-    let root = env::temp_dir().join(format!(
+    let root = parent.join(format!(
         "winds-t079-{}-{sequence}-{nanos}",
         std::process::id()
     ));
     fs::create_dir(&root)
         .map_err(|error| format!("T079 could not create disposable root: {error}"))?;
-    root.canonicalize()
-        .map_err(|error| format!("T079 could not canonicalize disposable root: {error}"))
+    let canonical = root
+        .canonicalize()
+        .map_err(|error| format!("T079 could not canonicalize disposable root: {error}"))?;
+    if canonical.parent() != Some(parent.as_path()) {
+        return Err("T079 disposable root escaped its canonical temporary parent".to_owned());
+    }
+    let checkout = canonical_primary_checkout_root()?;
+    ensure_path_outside_primary_checkout(&canonical, &checkout, "disposable root")?;
+    Ok(canonical)
 }
 
 fn read_bounded_jsonl_frame<R: BufRead>(reader: &mut R) -> ProofResult<Option<Vec<u8>>> {
@@ -1506,6 +1580,27 @@ fn isolated_codex_home_rejects_local_config_without_reading_credentials() {
     assert_eq!(canonical, root);
 }
 
+#[test]
+fn t079_checkout_containment_rejects_primary_checkout_and_descendants() {
+    let checkout = canonical_primary_checkout_root().expect("canonical primary checkout");
+    assert!(
+        ensure_path_outside_primary_checkout(&checkout, &checkout, "fixture root").is_err()
+    );
+    assert!(
+        ensure_path_outside_primary_checkout(&checkout.join("tmp"), &checkout, "fixture root")
+            .is_err()
+    );
+}
+
+#[test]
+fn t079_disposable_root_is_canonical_and_outside_primary_checkout() {
+    let root = disposable_root().expect("safe disposable root");
+    let checkout = canonical_primary_checkout_root().expect("canonical primary checkout");
+    assert!(root.is_absolute());
+    assert!(!root.starts_with(&checkout));
+    fs::remove_dir(root).expect("remove safe disposable root");
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn t079_macos_managed_preferences_are_fail_closed_without_reading_them() {
@@ -1591,6 +1686,30 @@ fn t079_linux_launch_binding_rejects_wrappers_and_holds_verified_descriptor() {
     drop(bound);
     fs::remove_file(executable).expect("remove launch fixture");
     fs::remove_dir(root).expect("remove launch fixture root");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn t079_version_observation_uses_disposable_working_directory() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture_root = disposable_root().expect("version fixture root");
+    let executable = fixture_root.join("codex-version-fixture");
+    fs::write(&executable, b"#!/bin/sh\nprintf '%s\\n' \"$PWD\"\n")
+        .expect("write version fixture");
+    let mut permissions = fs::metadata(&executable).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&executable, permissions).unwrap();
+
+    let observed = observe_version_bounded(&executable).expect("bounded version fixture");
+    let observed_root = PathBuf::from(observed);
+    let checkout = canonical_primary_checkout_root().expect("canonical primary checkout");
+    assert!(observed_root.is_absolute());
+    assert!(!observed_root.starts_with(&checkout));
+    assert!(!observed_root.exists());
+
+    fs::remove_file(executable).expect("remove version fixture");
+    fs::remove_dir(fixture_root).expect("remove version fixture root");
 }
 
 #[test]
