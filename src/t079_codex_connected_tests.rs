@@ -125,14 +125,14 @@ const ALLOWED_EFFECTIVE_CONFIG_KEYS: &[&str] = &[
     "service_tier",
 ];
 
-const T079_CODEX_0_149_FEATURE_KEYS: &[&str] = &[
-    "auth_elicitation",
-    "mcp_2026_07_28",
-    "memories",
-    "mentions_v2",
-    "remote_control",
-    "remote_plugin",
-    "tool_suggest",
+const T079_CODEX_0_149_FEATURE_DEFAULTS: &[(&str, bool)] = &[
+    ("auth_elicitation", true),
+    ("mcp_2026_07_28", false),
+    ("memories", false),
+    ("mentions_v2", true),
+    ("remote_control", false),
+    ("remote_plugin", false),
+    ("tool_suggest", false),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -246,7 +246,10 @@ fn validate_codex_0_149_features(value: &Value) -> ProofResult<()> {
     let mut actual = features.keys().map(String::as_str).collect::<Vec<_>>();
     actual.sort_unstable();
 
-    let mut expected = T079_CODEX_0_149_FEATURE_KEYS.to_vec();
+    let mut expected = T079_CODEX_0_149_FEATURE_DEFAULTS
+        .iter()
+        .map(|(key, _)| *key)
+        .collect::<Vec<_>>();
     expected.sort_unstable();
 
     if actual != expected {
@@ -256,10 +259,15 @@ fn validate_codex_0_149_features(value: &Value) -> ProofResult<()> {
         ));
     }
 
-    for key in T079_CODEX_0_149_FEATURE_KEYS {
-        if !features.get(*key).is_some_and(Value::is_boolean) {
+    for &(key, expected_value) in T079_CODEX_0_149_FEATURE_DEFAULTS {
+        let actual_value = features
+            .get(key)
+            .and_then(Value::as_bool)
+            .ok_or_else(|| format!("T079 Codex 0.149 feature evidence is not boolean: {key}"))?;
+
+        if actual_value != expected_value {
             return Err(format!(
-                "T079 Codex 0.149 feature evidence is not boolean: {key}"
+                "T079 Codex 0.149 feature value changed unexpectedly: {key}; expected {expected_value}, observed {actual_value}"
             ));
         }
     }
@@ -1799,6 +1807,31 @@ fn effective_config_preflight_accepts_codex_0_149_defaults_and_preserves_unknown
 
         assert!(error.contains("future_side_channel"));
         assert!(error.contains("unknown effective config key"));
+    }
+
+    for &(feature_to_flip, expected_value) in T079_CODEX_0_149_FEATURE_DEFAULTS {
+        let mut features = serde_json::Map::new();
+
+        for &(key, value) in T079_CODEX_0_149_FEATURE_DEFAULTS {
+            features.insert(key.to_owned(), Value::Bool(value));
+        }
+
+        features.insert(feature_to_flip.to_owned(), Value::Bool(!expected_value));
+
+        let error = validate_effective_config(
+            &json!({
+                "config": {
+                    "model_provider": null,
+                    "features": features
+                },
+                "origins": {}
+            }),
+            T079_CODEX_CONFIG_COMPAT_VERSION,
+        )
+        .unwrap_err();
+
+        assert!(error.contains(feature_to_flip));
+        assert!(error.contains("feature value changed unexpectedly"));
     }
 
     let error = validate_effective_config(
