@@ -107,32 +107,34 @@ type FrameResult = std::result::Result<Vec<u8>, String>;
 
 const T079_CODEX_CONFIG_COMPAT_VERSION: &str = "codex-cli 0.149.0";
 
-const ALLOWED_EFFECTIVE_CONFIG_KEYS: &[&str] = &[
-    "model",
-    "review_model",
-    "model_context_window",
-    "model_auto_compact_token_limit",
-    "model_auto_compact_token_limit_scope",
-    "model_provider",
-    "approval_policy",
-    "approvals_reviewer",
-    "sandbox_mode",
-    "forced_chatgpt_workspace_id",
-    "forced_login_method",
-    "model_reasoning_effort",
-    "model_reasoning_summary",
-    "model_verbosity",
-    "service_tier",
+const T079_CODEX_AUTHORITY_REDUCTION_ARGS: &[&str] = &[
+    "-c",
+    "agents.enabled=false",
+    "-c",
+    "features.multi_agent=false",
+    "-c",
+    "features.multi_agent_v2=false",
+    "-c",
+    "features.auth_elicitation=false",
+    "-c",
+    "features.remote_plugin=false",
+    "-c",
+    "features.tool_suggest=false",
+    "-c",
+    "include_apps_instructions=false",
+    "-c",
+    "include_collaboration_mode_instructions=false",
 ];
 
-const T079_CODEX_0_149_FEATURE_DEFAULTS: &[(&str, bool)] = &[
-    ("auth_elicitation", true),
-    ("mcp_2026_07_28", false),
-    ("memories", false),
-    ("mentions_v2", true),
-    ("remote_control", false),
-    ("remote_plugin", false),
-    ("tool_suggest", false),
+const T079_CODEX_SESSION_ORIGIN_PATHS: &[&str] = &[
+    "agents.enabled",
+    "features.auth_elicitation",
+    "features.multi_agent",
+    "features.multi_agent_v2.enabled",
+    "features.remote_plugin",
+    "features.tool_suggest",
+    "include_apps_instructions",
+    "include_collaboration_mode_instructions",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -238,81 +240,245 @@ fn initialized_client() -> CodexProtocolClient {
     client
 }
 
-fn validate_codex_0_149_features(value: &Value) -> ProofResult<()> {
-    let features = value
-        .as_object()
-        .ok_or_else(|| "T079 Codex 0.149 features evidence is not an object".to_owned())?;
+fn expected_t079_codex_0_149_config() -> Value {
+    serde_json::from_str(
+        r###"{
+        "agents": {
+            "default_subagent_model": null,
+            "default_subagent_reasoning_effort": null,
+            "enabled": false,
+            "interrupt_message": null,
+            "job_max_runtime_seconds": null,
+            "max_concurrent_threads_per_session": null,
+            "max_depth": null
+        },
+        "allow_login_shell": true,
+        "analytics": null,
+        "approval_policy": null,
+        "approvals_reviewer": null,
+        "apps": null,
+        "apps_mcp_product_sku": null,
+        "audio": null,
+        "auto_review": null,
+        "background_terminal_max_timeout": 300000,
+        "chatgpt_base_url": "https://chatgpt.com/backend-api/",
+        "check_for_update_on_startup": null,
+        "cli_auth_credentials_store": "file",
+        "compact_prompt": null,
+        "default_permissions": null,
+        "desktop": null,
+        "developer_instructions": null,
+        "disable_paste_burst": null,
+        "experimental_compact_prompt_file": null,
+        "experimental_realtime_start_instructions": null,
+        "experimental_realtime_webrtc_call_base_url": null,
+        "experimental_realtime_ws_backend_prompt": null,
+        "experimental_realtime_ws_base_url": null,
+        "experimental_realtime_ws_model": null,
+        "experimental_realtime_ws_startup_context": null,
+        "experimental_thread_store": null,
+        "experimental_thread_store_endpoint": null,
+        "experimental_use_unified_exec_tool": null,
+        "features": {
+            "auth_elicitation": false,
+            "mcp_2026_07_28": false,
+            "memories": false,
+            "mentions_v2": true,
+            "multi_agent": false,
+            "multi_agent_v2": false,
+            "network_proxy": null,
+            "remote_control": false,
+            "remote_plugin": false,
+            "tool_suggest": false
+        },
+        "feedback": null,
+        "file_opener": "vscode",
+        "forced_chatgpt_workspace_id": null,
+        "forced_login_method": null,
+        "ghost_snapshot": null,
+        "goals": null,
+        "hide_agent_reasoning": false,
+        "history": {
+            "max_bytes": null,
+            "persistence": "save-all"
+        },
+        "hooks": null,
+        "include_apps_instructions": false,
+        "include_collaboration_mode_instructions": false,
+        "include_environment_context": true,
+        "include_permissions_instructions": true,
+        "instructions": null,
+        "js_repl_node_module_dirs": null,
+        "js_repl_node_path": null,
+        "log_dir": null,
+        "marketplaces": {},
+        "mcp_oauth_callback_port": null,
+        "mcp_oauth_callback_url": null,
+        "mcp_oauth_credentials_store": "auto",
+        "mcp_servers": {},
+        "memories": null,
+        "model": null,
+        "model_auto_compact_token_limit": null,
+        "model_auto_compact_token_limit_scope": null,
+        "model_catalog_json": null,
+        "model_context_window": null,
+        "model_instructions_file": null,
+        "model_provider": null,
+        "model_providers": {},
+        "model_reasoning_effort": null,
+        "model_reasoning_summary": null,
+        "model_verbosity": null,
+        "notice": null,
+        "notify": null,
+        "openai_base_url": null,
+        "orchestrator": null,
+        "oss_provider": null,
+        "otel": null,
+        "permissions": null,
+        "personality": null,
+        "plan_mode_reasoning_effort": null,
+        "plugins": {},
+        "profile": null,
+        "profiles": {},
+        "project_doc_fallback_filenames": [],
+        "project_doc_max_bytes": 32768,
+        "project_root_markers": [".git"],
+        "projects": null,
+        "realtime": null,
+        "responses_api_metadata": null,
+        "review_model": null,
+        "sandbox_mode": null,
+        "sandbox_workspace_write": null,
+        "service_tier": null,
+        "shell_environment_policy": {
+            "exclude": null,
+            "experimental_use_profile": null,
+            "filters": null,
+            "ignore_default_excludes": null,
+            "include_only": null,
+            "inherit": null,
+            "set": null
+        },
+        "show_raw_agent_reasoning": null,
+        "skills": null,
+        "sqlite_home": null,
+        "suppress_unstable_features_warning": null,
+        "tool_output_token_limit": null,
+        "tool_suggest": null,
+        "tools": null,
+        "tui": null,
+        "web_search": null,
+        "windows": null
+    }"###,
+    )
+    .expect("static T079 Codex 0.149 config snapshot must be valid JSON")
+}
 
-    let mut actual = features.keys().map(String::as_str).collect::<Vec<_>>();
-    actual.sort_unstable();
+fn valid_config_layer_version(value: &str) -> bool {
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        return false;
+    };
 
-    let mut expected = T079_CODEX_0_149_FEATURE_DEFAULTS
-        .iter()
-        .map(|(key, _)| *key)
-        .collect::<Vec<_>>();
-    expected.sort_unstable();
+    hex.len() == 64
+        && hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
 
-    if actual != expected {
+fn validate_t079_session_origins(origins: &serde_json::Map<String, Value>) -> ProofResult<()> {
+    let mut actual_keys = origins.keys().map(String::as_str).collect::<Vec<_>>();
+    actual_keys.sort_unstable();
+
+    let mut expected_keys = T079_CODEX_SESSION_ORIGIN_PATHS.to_vec();
+    expected_keys.sort_unstable();
+
+    if actual_keys != expected_keys {
         return Err(format!(
-            "T079 Codex 0.149 features evidence changed: {}",
-            actual.join(", ")
+            "T079 Codex 0.149 session-origin surface changed: {}",
+            actual_keys.join(", ")
         ));
     }
 
-    for &(key, expected_value) in T079_CODEX_0_149_FEATURE_DEFAULTS {
-        let actual_value = features
-            .get(key)
-            .and_then(Value::as_bool)
-            .ok_or_else(|| format!("T079 Codex 0.149 feature evidence is not boolean: {key}"))?;
+    let mut shared_version: Option<&str> = None;
 
-        if actual_value != expected_value {
+    for key in T079_CODEX_SESSION_ORIGIN_PATHS {
+        let metadata = origins
+            .get(*key)
+            .and_then(Value::as_object)
+            .ok_or_else(|| format!("T079 session origin metadata is malformed: {key}"))?;
+
+        let mut metadata_keys = metadata.keys().map(String::as_str).collect::<Vec<_>>();
+        metadata_keys.sort_unstable();
+
+        if metadata_keys != vec!["name", "version"] {
+            return Err(format!("T079 session origin metadata shape changed: {key}"));
+        }
+
+        let name = metadata
+            .get("name")
+            .and_then(Value::as_object)
+            .ok_or_else(|| format!("T079 session origin source is malformed: {key}"))?;
+
+        if name.len() != 1 || name.get("type").and_then(Value::as_str) != Some("sessionFlags") {
             return Err(format!(
-                "T079 Codex 0.149 feature value changed unexpectedly: {key}; expected {expected_value}, observed {actual_value}"
+                "T079 refuses non-SessionFlags authority-reduction origin: {key}"
             ));
+        }
+
+        let version = metadata
+            .get("version")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("T079 session origin version is malformed: {key}"))?;
+
+        if !valid_config_layer_version(version) {
+            return Err(format!(
+                "T079 session origin version is not canonical SHA-256 evidence: {key}"
+            ));
+        }
+
+        match shared_version {
+            Some(expected) if version != expected => {
+                return Err(
+                    "T079 authority-reduction origins do not share one SessionFlags layer version"
+                        .to_owned(),
+                );
+            }
+            None => shared_version = Some(version),
+            _ => {}
         }
     }
 
     Ok(())
 }
 
-fn validate_codex_0_149_packaged_default(key: &str, value: &Value) -> ProofResult<bool> {
-    if key == "features" {
-        validate_codex_0_149_features(value)?;
-        return Ok(true);
-    }
+fn validate_t079_exact_config_surface(config: &serde_json::Map<String, Value>) -> ProofResult<()> {
+    let expected = expected_t079_codex_0_149_config();
+    let expected = expected
+        .as_object()
+        .expect("T079 expected config fixture must be an object");
 
-    let expected = match key {
-        "allow_login_shell" => Some(json!(true)),
-        "project_doc_max_bytes" => Some(json!(32768)),
-        "project_doc_fallback_filenames" => Some(json!([])),
-        "hide_agent_reasoning" => Some(json!(false)),
-        "history" => Some(json!({
-            "persistence": "save-all",
-            "max_bytes": null
-        })),
-        "shell_environment_policy" => Some(json!({
-            "inherit": null,
-            "ignore_default_excludes": null,
-            "exclude": null,
-            "set": null,
-            "include_only": null,
-            "filters": null,
-            "experimental_use_profile": null
-        })),
-        _ => None,
-    };
+    let mut actual_keys = config.keys().map(String::as_str).collect::<Vec<_>>();
+    actual_keys.sort_unstable();
 
-    let Some(expected) = expected else {
-        return Ok(false);
-    };
+    let mut expected_keys = expected.keys().map(String::as_str).collect::<Vec<_>>();
+    expected_keys.sort_unstable();
 
-    if value != &expected {
+    if actual_keys != expected_keys {
         return Err(format!(
-            "T079 Codex 0.149 packaged/default config changed unexpectedly: {key}"
+            "T079 Codex 0.149 effective config key set changed: {}",
+            actual_keys.join(", ")
         ));
     }
 
-    Ok(true)
+    for (key, expected_value) in expected {
+        if config.get(key) != Some(expected_value) {
+            return Err(format!(
+                "T079 Codex 0.149 effective config evidence changed at key: {key}"
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 fn validate_effective_config(result: &Value, observed_version: &str) -> ProofResult<()> {
@@ -333,51 +499,8 @@ fn validate_effective_config(result: &Value, observed_version: &str) -> ProofRes
         .and_then(Value::as_object)
         .ok_or_else(|| "T079 config/read response is missing config origins".to_owned())?;
 
-    if !origins.is_empty() {
-        let mut keys = origins.keys().cloned().collect::<Vec<_>>();
-        keys.sort();
-
-        return Err(format!(
-            "T079 refuses connected proof with non-default config origins: {}",
-            keys.join(", ")
-        ));
-    }
-
-    match config.get("model_provider") {
-        None | Some(Value::Null) => {
-            // Codex 0.149.0 represents its packaged OpenAI provider default
-            // as no explicit ConfigToml override. This interpretation is
-            // intentionally version-bound and requires an empty origins map.
-        }
-        Some(Value::String(provider)) if provider == "openai" => {}
-        Some(Value::String(provider)) => {
-            return Err(format!(
-                "T079 refuses explicit non-OpenAI model_provider: {provider}"
-            ));
-        }
-        Some(_) => {
-            return Err(
-                "T079 model_provider must be null/absent for the qualified Codex 0.149 OpenAI default or the exact string openai"
-                    .to_owned(),
-            );
-        }
-    }
-
-    for (key, value) in config {
-        if key == "model_provider" {
-            continue;
-        }
-
-        if validate_codex_0_149_packaged_default(key, value)? {
-            continue;
-        }
-
-        if !ALLOWED_EFFECTIVE_CONFIG_KEYS.contains(&key.as_str()) {
-            return Err(format!(
-                "T079 refuses connected proof with unknown effective config key: {key}"
-            ));
-        }
-    }
+    validate_t079_session_origins(origins)?;
+    validate_t079_exact_config_surface(config)?;
 
     Ok(())
 }
@@ -564,6 +687,10 @@ fn configure_isolated_codex_environment(command: &mut Command, codex_home: Optio
             command.env(key, value);
         }
     }
+}
+
+fn configure_t079_codex_authority_reduction(command: &mut Command) {
+    command.args(T079_CODEX_AUTHORITY_REDUCTION_ARGS);
 }
 
 #[cfg(all(
@@ -1362,6 +1489,7 @@ fn run_connected_proof(
     let child_stdin = OwnedFd::from(child_stdin);
     let mut command = Command::new(bound_executable.launch_path());
     configure_isolated_codex_environment(&mut command, Some(&codex_home));
+    configure_t079_codex_authority_reduction(&mut command);
     command
         .args(["app-server", "--stdio"])
         .current_dir(&root)
@@ -1632,257 +1760,283 @@ fn t079_requests_are_fixed_ephemeral_read_only_and_non_authorizing() {
 }
 
 #[test]
-fn effective_config_preflight_accepts_codex_0_149_defaults_and_preserves_unknown_key_fail_closed() {
-    validate_effective_config(
-        &json!({
-            "config": {
-                "model_provider": null,
-                "allow_login_shell": true,
-                "project_doc_max_bytes": 32768,
-                "project_doc_fallback_filenames": [],
-                "hide_agent_reasoning": false,
-                "history": {
-                    "persistence": "save-all",
-                    "max_bytes": null
-                },
-                "shell_environment_policy": {
-                    "inherit": null,
-                    "ignore_default_excludes": null,
-                    "exclude": null,
-                    "set": null,
-                    "include_only": null,
-                    "filters": null,
-                    "experimental_use_profile": null
-                },
-                "features": {
-                    "auth_elicitation": true,
-                    "mcp_2026_07_28": false,
-                    "memories": false,
-                    "mentions_v2": true,
-                    "remote_control": false,
-                    "remote_plugin": false,
-                    "tool_suggest": false
-                }
-            },
-            "origins": {}
-        }),
-        T079_CODEX_CONFIG_COMPAT_VERSION,
-    )
-    .expect("Codex 0.149 packaged/default config is acceptable");
+fn effective_config_preflight_requires_exact_codex_0_149_surface_and_authority_reduction() {
+    let layer_version = format!("sha256:{}", "a".repeat(64));
 
-    validate_effective_config(
-        &json!({
-            "config": {
-                "model": "gpt-fixture",
-                "model_provider": "openai",
-                "allow_login_shell": true
+    let origins = || {
+        json!({
+            "agents.enabled": {
+                "name": { "type": "sessionFlags" },
+                "version": layer_version
             },
-            "origins": {}
-        }),
-        T079_CODEX_CONFIG_COMPAT_VERSION,
-    )
-    .expect("explicit OpenAI provider is acceptable without non-default origins");
-
-    let error = validate_effective_config(
-        &json!({
-            "config": {
-                "model_provider": null
+            "features.auth_elicitation": {
+                "name": { "type": "sessionFlags" },
+                "version": layer_version
+            },
+            "features.multi_agent": {
+                "name": { "type": "sessionFlags" },
+                "version": layer_version
+            },
+            "features.multi_agent_v2.enabled": {
+                "name": { "type": "sessionFlags" },
+                "version": layer_version
+            },
+            "features.remote_plugin": {
+                "name": { "type": "sessionFlags" },
+                "version": layer_version
+            },
+            "features.tool_suggest": {
+                "name": { "type": "sessionFlags" },
+                "version": layer_version
+            },
+            "include_apps_instructions": {
+                "name": { "type": "sessionFlags" },
+                "version": layer_version
+            },
+            "include_collaboration_mode_instructions": {
+                "name": { "type": "sessionFlags" },
+                "version": layer_version
             }
+        })
+    };
+
+    validate_effective_config(
+        &json!({
+            "config": expected_t079_codex_0_149_config(),
+            "origins": origins()
         }),
         T079_CODEX_CONFIG_COMPAT_VERSION,
     )
-    .unwrap_err();
-    assert!(error.contains("origins"));
+    .expect("exact Codex 0.149 reduced-authority surface");
 
     let error = validate_effective_config(
         &json!({
-            "config": {
-                "model_provider": null
-            },
-            "origins": {}
+            "config": expected_t079_codex_0_149_config(),
+            "origins": origins()
         }),
         "codex-cli 0.150.0",
     )
     .unwrap_err();
     assert!(error.contains("qualified only"));
 
-    for provider in ["ollama", "azure"] {
-        let error = validate_effective_config(
-            &json!({
-                "config": {
-                    "model_provider": provider
-                },
-                "origins": {}
-            }),
-            T079_CODEX_CONFIG_COMPAT_VERSION,
-        )
-        .unwrap_err();
+    let expected = expected_t079_codex_0_149_config();
+    let keys = expected
+        .as_object()
+        .expect("expected object")
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
 
-        assert!(error.contains("model_provider"));
-    }
-
-    let error = validate_effective_config(
-        &json!({
-            "config": {
-                "model_provider": 7
-            },
-            "origins": {}
-        }),
-        T079_CODEX_CONFIG_COMPAT_VERSION,
-    )
-    .unwrap_err();
-    assert!(error.contains("model_provider"));
-
-    let error = validate_effective_config(
-        &json!({
-            "config": {
-                "model_provider": null
-            },
-            "origins": {
-                "model_provider": {
-                    "name": {
-                        "type": "user",
-                        "file": "/fixture/config.toml"
-                    },
-                    "version": "fixture"
-                }
-            }
-        }),
-        T079_CODEX_CONFIG_COMPAT_VERSION,
-    )
-    .unwrap_err();
-    assert!(error.contains("non-default config origins"));
-
-    for (key, value) in [
-        ("mcp_servers", json!({"server": {"command": "x"}})),
-        ("mcpServers", json!({"server": {"command": "x"}})),
-        ("hooks", json!([{"event": "SessionStart"}])),
-        ("apps", json!({"demo": {"enabled": true}})),
-        ("instructions", json!("use tools")),
-        ("developer_instructions", json!("run a command")),
-        ("compact_prompt", json!("override behavior")),
-        ("tools", json!({"web_search": {"enabled": true}})),
-        ("web_search", json!("live")),
-        ("notify", json!(["external-command"])),
-        ("model_providers", json!({"custom": {"name": "custom"}})),
-        ("future_side_channel", json!({"enabled": true})),
-    ] {
-        let mut config = serde_json::Map::new();
-        config.insert("model_provider".to_owned(), Value::Null);
-        config.insert(key.to_owned(), value);
+    for key in keys {
+        let mut config = expected.clone();
+        config.as_object_mut().expect("config object").remove(&key);
 
         let error = validate_effective_config(
             &json!({
                 "config": config,
-                "origins": {}
+                "origins": origins()
             }),
             T079_CODEX_CONFIG_COMPAT_VERSION,
         )
         .unwrap_err();
 
-        assert!(error.contains(key));
+        assert!(error.contains("key set changed"), "missing {key}: {error}");
     }
 
-    for value in [
-        Value::Null,
-        json!(false),
-        json!(""),
-        json!("off"),
-        json!("disabled"),
-        json!([]),
-        json!({}),
-    ] {
-        let mut config = serde_json::Map::new();
-        config.insert("model_provider".to_owned(), Value::Null);
-        config.insert("future_side_channel".to_owned(), value);
+    let mut config = expected_t079_codex_0_149_config();
+    config["future_side_channel"] = Value::Null;
+    let error = validate_effective_config(
+        &json!({
+            "config": config,
+            "origins": origins()
+        }),
+        T079_CODEX_CONFIG_COMPAT_VERSION,
+    )
+    .unwrap_err();
+    assert!(error.contains("key set changed"));
 
+    for (label, config) in [
+        {
+            let mut value = expected_t079_codex_0_149_config();
+            value["agents"]["enabled"] = json!(true);
+            ("agents.enabled", value)
+        },
+        {
+            let mut value = expected_t079_codex_0_149_config();
+            value["agents"]["researcher"] = json!({
+                "description": "unexpected role"
+            });
+            ("agents role", value)
+        },
+        {
+            let mut value = expected_t079_codex_0_149_config();
+            value["features"]["multi_agent"] = json!(true);
+            ("multi_agent", value)
+        },
+        {
+            let mut value = expected_t079_codex_0_149_config();
+            value["features"]["multi_agent_v2"] = json!(true);
+            ("multi_agent_v2", value)
+        },
+        {
+            let mut value = expected_t079_codex_0_149_config();
+            value["features"]["auth_elicitation"] = json!(true);
+            ("auth_elicitation", value)
+        },
+        {
+            let mut value = expected_t079_codex_0_149_config();
+            value["features"]["remote_plugin"] = json!(true);
+            ("remote_plugin", value)
+        },
+        {
+            let mut value = expected_t079_codex_0_149_config();
+            value["features"]["tool_suggest"] = json!(true);
+            ("tool_suggest", value)
+        },
+        {
+            let mut value = expected_t079_codex_0_149_config();
+            value["include_apps_instructions"] = json!(true);
+            ("include_apps_instructions", value)
+        },
+        {
+            let mut value = expected_t079_codex_0_149_config();
+            value["include_collaboration_mode_instructions"] = json!(true);
+            ("include_collaboration_mode_instructions", value)
+        },
+        {
+            let mut value = expected_t079_codex_0_149_config();
+            value["chatgpt_base_url"] = json!("https://example.invalid/");
+            ("chatgpt_base_url", value)
+        },
+        {
+            let mut value = expected_t079_codex_0_149_config();
+            value["mcp_servers"] = json!({
+                "unexpected": { "command": "x" }
+            });
+            ("mcp_servers", value)
+        },
+    ] {
         let error = validate_effective_config(
             &json!({
                 "config": config,
-                "origins": {}
+                "origins": origins()
             }),
             T079_CODEX_CONFIG_COMPAT_VERSION,
         )
         .unwrap_err();
 
-        assert!(error.contains("future_side_channel"));
-        assert!(error.contains("unknown effective config key"));
+        assert!(
+            error.contains("effective config evidence changed"),
+            "{label}: {error}"
+        );
     }
 
-    for &(feature_to_flip, expected_value) in T079_CODEX_0_149_FEATURE_DEFAULTS {
-        let mut features = serde_json::Map::new();
-
-        for &(key, value) in T079_CODEX_0_149_FEATURE_DEFAULTS {
-            features.insert(key.to_owned(), Value::Bool(value));
-        }
-
-        features.insert(feature_to_flip.to_owned(), Value::Bool(!expected_value));
-
-        let error = validate_effective_config(
-            &json!({
-                "config": {
-                    "model_provider": null,
-                    "features": features
-                },
-                "origins": {}
-            }),
-            T079_CODEX_CONFIG_COMPAT_VERSION,
-        )
-        .unwrap_err();
-
-        assert!(error.contains(feature_to_flip));
-        assert!(error.contains("feature value changed unexpectedly"));
-    }
+    let mut missing_origin = origins();
+    missing_origin
+        .as_object_mut()
+        .expect("origins object")
+        .remove("features.remote_plugin");
 
     let error = validate_effective_config(
         &json!({
-            "config": {
-                "model_provider": null,
-                "allow_login_shell": false
-            },
-            "origins": {}
+            "config": expected_t079_codex_0_149_config(),
+            "origins": missing_origin
         }),
         T079_CODEX_CONFIG_COMPAT_VERSION,
     )
     .unwrap_err();
-    assert!(error.contains("allow_login_shell"));
+    assert!(error.contains("session-origin surface changed"));
+
+    let mut extra_origin = origins();
+    extra_origin["future.setting"] = json!({
+        "name": { "type": "sessionFlags" },
+        "version": layer_version
+    });
 
     let error = validate_effective_config(
         &json!({
-            "config": {
-                "model_provider": null,
-                "future_side_channel": {
-                    "enabled": true
-                }
-            },
-            "origins": {}
+            "config": expected_t079_codex_0_149_config(),
+            "origins": extra_origin
         }),
         T079_CODEX_CONFIG_COMPAT_VERSION,
     )
     .unwrap_err();
-    assert!(error.contains("future_side_channel"));
+    assert!(error.contains("session-origin surface changed"));
+
+    let mut wrong_source = origins();
+    wrong_source["agents.enabled"]["name"]["type"] = json!("user");
 
     let error = validate_effective_config(
         &json!({
-            "config": {
-                "model_provider": null,
-                "features": {
-                    "auth_elicitation": true,
-                    "mcp_2026_07_28": false,
-                    "memories": false,
-                    "mentions_v2": true,
-                    "remote_control": false,
-                    "remote_plugin": false,
-                    "tool_suggest": false,
-                    "future_feature": true
-                }
-            },
-            "origins": {}
+            "config": expected_t079_codex_0_149_config(),
+            "origins": wrong_source
         }),
         T079_CODEX_CONFIG_COMPAT_VERSION,
     )
     .unwrap_err();
-    assert!(error.contains("features evidence changed"));
+    assert!(error.contains("non-SessionFlags"));
+
+    let mut malformed_version = origins();
+    malformed_version["agents.enabled"]["version"] = json!("fixture");
+
+    let error = validate_effective_config(
+        &json!({
+            "config": expected_t079_codex_0_149_config(),
+            "origins": malformed_version
+        }),
+        T079_CODEX_CONFIG_COMPAT_VERSION,
+    )
+    .unwrap_err();
+    assert!(error.contains("canonical SHA-256"));
+
+    let mut split_layer = origins();
+    split_layer["agents.enabled"]["version"] = json!(format!("sha256:{}", "b".repeat(64)));
+
+    let error = validate_effective_config(
+        &json!({
+            "config": expected_t079_codex_0_149_config(),
+            "origins": split_layer
+        }),
+        T079_CODEX_CONFIG_COMPAT_VERSION,
+    )
+    .unwrap_err();
+    assert!(error.contains("one SessionFlags layer version"));
+}
+
+#[test]
+fn t079_codex_launch_applies_fixed_authority_reduction_before_app_server() {
+    let mut command = Command::new("codex");
+    configure_t079_codex_authority_reduction(&mut command);
+    command.args(["app-server", "--stdio"]);
+
+    let args = command
+        .get_args()
+        .map(|arg| arg.to_str().expect("UTF-8 fixed T079 argument"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        args,
+        vec![
+            "-c",
+            "agents.enabled=false",
+            "-c",
+            "features.multi_agent=false",
+            "-c",
+            "features.multi_agent_v2=false",
+            "-c",
+            "features.auth_elicitation=false",
+            "-c",
+            "features.remote_plugin=false",
+            "-c",
+            "features.tool_suggest=false",
+            "-c",
+            "include_apps_instructions=false",
+            "-c",
+            "include_collaboration_mode_instructions=false",
+            "app-server",
+            "--stdio",
+        ]
+    );
 }
 
 #[test]
