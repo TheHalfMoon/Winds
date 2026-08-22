@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[path = "t079_codex_connected_tests.rs"]
+mod t079_codex_connected_tests;
+
 use serde_json::{Map, Value, json};
 use std::error::Error;
 use std::fmt;
@@ -5,6 +9,8 @@ use std::fmt;
 pub(super) const MAX_CODEX_JSONL_FRAME_BYTES: usize = 64 * 1024;
 const MAX_PROTOCOL_TEXT_BYTES: usize = 1024;
 const INITIALIZE_REQUEST_ID: u64 = 0;
+#[cfg(test)]
+pub(super) const T079_PROOF_PROMPT: &str = "Return only JSON matching the supplied schema with status WINDS_T079_OK. Do not run commands, use tools, modify files, request permissions, or access workspace contents.";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum CodexProtocolError {
@@ -164,6 +170,37 @@ impl CodexProtocolClient {
         client_title: &str,
         client_version: &str,
     ) -> Result<String, CodexProtocolError> {
+        self.initialize_request_with_experimental_api(
+            client_name,
+            client_title,
+            client_version,
+            false,
+        )
+    }
+
+    #[cfg(test)]
+    /// T079 opts into the experimental API only to send explicit empty environment/tool roots.
+    pub(super) fn t079_initialize_request(
+        &mut self,
+        client_name: &str,
+        client_title: &str,
+        client_version: &str,
+    ) -> Result<String, CodexProtocolError> {
+        self.initialize_request_with_experimental_api(
+            client_name,
+            client_title,
+            client_version,
+            true,
+        )
+    }
+
+    fn initialize_request_with_experimental_api(
+        &mut self,
+        client_name: &str,
+        client_title: &str,
+        client_version: &str,
+        experimental_api: bool,
+    ) -> Result<String, CodexProtocolError> {
         match self.state {
             HandshakeState::Fresh => {}
             HandshakeState::Failed => return Err(CodexProtocolError::ClientFailed),
@@ -173,16 +210,30 @@ impl CodexProtocolClient {
         validate_nonempty_exact(client_title)?;
         validate_nonempty_exact(client_version)?;
 
-        let line = encode_jsonl(&json!({
-            "method": "initialize",
-            "id": INITIALIZE_REQUEST_ID,
-            "params": {
+        let params = if experimental_api {
+            json!({
+                "clientInfo": {
+                    "name": client_name,
+                    "title": client_title,
+                    "version": client_version
+                },
+                "capabilities": {
+                    "experimentalApi": true
+                }
+            })
+        } else {
+            json!({
                 "clientInfo": {
                     "name": client_name,
                     "title": client_title,
                     "version": client_version
                 }
-            }
+            })
+        };
+        let line = encode_jsonl(&json!({
+            "method": "initialize",
+            "id": INITIALIZE_REQUEST_ID,
+            "params": params
         }))?;
         self.state = HandshakeState::InitializeSent;
         Ok(line)
@@ -221,6 +272,80 @@ impl CodexProtocolClient {
             "thread/fork",
             json!({ "threadId": native_thread_id.as_str() }),
         )
+    }
+
+    #[cfg(test)]
+    /// Builds the read-only T079 effective-config preflight after the mandatory handshake.
+    pub(super) fn t079_config_read(
+        &mut self,
+        cwd: &str,
+    ) -> Result<(u64, String), CodexProtocolError> {
+        validate_nonempty_exact(cwd)?;
+        self.request("config/read", json!({ "cwd": cwd, "includeLayers": false }))
+    }
+
+    #[cfg(test)]
+    /// Builds the only fresh thread shape accepted by the bounded T079 connected proof.
+    pub(super) fn t079_thread_start(
+        &mut self,
+        cwd: &str,
+    ) -> Result<(u64, String), CodexProtocolError> {
+        validate_nonempty_exact(cwd)?;
+        self.request(
+            "thread/start",
+            json!({
+                "cwd": cwd,
+                "runtimeWorkspaceRoots": [],
+                "approvalPolicy": "never",
+                "sandbox": "read-only",
+                "ephemeral": true,
+                "environments": [],
+                "dynamicTools": [],
+                "selectedCapabilityRoots": []
+            }),
+        )
+    }
+
+    #[cfg(test)]
+    /// Builds the single fixed T079 turn. The caller cannot inject a model, prompt, tool, or policy.
+    pub(super) fn t079_turn_start(
+        &mut self,
+        native_thread_id: &NativeThreadId,
+        cwd: &str,
+    ) -> Result<(u64, String), CodexProtocolError> {
+        validate_nonempty_exact(cwd)?;
+        self.request(
+            "turn/start",
+            json!({
+                "threadId": native_thread_id.as_str(),
+                "input": [{ "type": "text", "text": T079_PROOF_PROMPT }],
+                "cwd": cwd,
+                "runtimeWorkspaceRoots": [],
+                "environments": [],
+                "approvalPolicy": "never",
+                "sandboxPolicy": {
+                    "type": "readOnly",
+                    "networkAccess": false
+                },
+                "outputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "status": { "type": "string", "const": "WINDS_T079_OK" }
+                    },
+                    "required": ["status"],
+                    "additionalProperties": false
+                }
+            }),
+        )
+    }
+
+    #[cfg(test)]
+    /// Produces a denial response for command/file approval requests. It never grants authority.
+    pub(super) fn t079_decline(&self, id: &RpcId) -> Result<String, CodexProtocolError> {
+        encode_jsonl(&json!({
+            "id": rpc_id_value(id),
+            "result": { "decision": "decline" }
+        }))
     }
 
     pub(super) fn ingest_jsonl_frame(
@@ -286,17 +411,27 @@ impl CodexProtocolClient {
         method: &str,
         params: Value,
     ) -> Result<String, CodexProtocolError> {
+        self.request(method, params).map(|(_, line)| line)
+    }
+
+    fn request(
+        &mut self,
+        method: &str,
+        params: Value,
+    ) -> Result<(u64, String), CodexProtocolError> {
         match self.state {
             HandshakeState::Ready => {}
             HandshakeState::Failed => return Err(CodexProtocolError::ClientFailed),
             _ => return Err(CodexProtocolError::HandshakeIncomplete),
         }
+        validate_method(method)?;
         let id = self.next_request_id;
         self.next_request_id = self
             .next_request_id
             .checked_add(1)
             .ok_or(CodexProtocolError::MalformedFrame)?;
-        encode_jsonl(&json!({ "method": method, "id": id, "params": params }))
+        let line = encode_jsonl(&json!({ "method": method, "id": id, "params": params }))?;
+        Ok((id, line))
     }
 
     fn ingest_response(
@@ -376,6 +511,13 @@ impl CodexProtocolClient {
     fn fail<T>(&mut self, error: CodexProtocolError) -> Result<T, CodexProtocolError> {
         self.state = HandshakeState::Failed;
         Err(error)
+    }
+}
+
+fn rpc_id_value(id: &RpcId) -> Value {
+    match id {
+        RpcId::Number(value) => json!(value),
+        RpcId::Text(value) => json!(value),
     }
 }
 
