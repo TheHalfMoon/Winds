@@ -1082,7 +1082,10 @@ fn run_connected_proof(
     _winds_session_id: &str,
     _codex_home: &Path,
 ) -> ProofResult<T079Receipt> {
-    Err("T079 first connected proof currently requires Linux/WSL2 owned-process containment".to_owned())
+    Err(
+        "T079 first connected proof currently requires Linux/WSL2 owned-process containment"
+            .to_owned(),
+    )
 }
 
 #[test]
