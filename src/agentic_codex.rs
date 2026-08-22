@@ -608,21 +608,13 @@ impl CodexProtocolClient {
             return exact_object_keys(params, &["thread"])
                 && params
                     .get("thread")
-                    .and_then(Value::as_object)
-                    .and_then(|thread| thread.get("id"))
-                    .and_then(Value::as_str)
-                    == Some(thread_id);
+                    .is_some_and(|thread| t079_thread_allowed(thread, thread_id));
         }
 
         if method == "thread/status/changed" {
             return exact_object_keys(params, &["status", "threadId"])
                 && params.get("threadId").and_then(Value::as_str) == Some(thread_id)
-                && params
-                    .get("status")
-                    .and_then(Value::as_object)
-                    .and_then(|status| status.get("type"))
-                    .and_then(Value::as_str)
-                    .is_some_and(|status| matches!(status, "idle" | "active"));
+                && params.get("status").is_some_and(t079_thread_status_allowed);
         }
 
         let Some(turn_id) = self.t079_turn_id.as_deref() else {
@@ -632,35 +624,29 @@ impl CodexProtocolClient {
         match method {
             "turn/started" => {
                 exact_object_keys(params, &["threadId", "turn"])
-                    && t079_turn_notification_identity_matches(params, thread_id, turn_id)
+                    && params.get("threadId").and_then(Value::as_str) == Some(thread_id)
                     && params
                         .get("turn")
-                        .and_then(Value::as_object)
-                        .and_then(|turn| turn.get("status"))
-                        .and_then(Value::as_str)
-                        == Some("inProgress")
+                        .is_some_and(|turn| t079_turn_allowed(turn, turn_id, "inProgress"))
             }
             "turn/completed" => {
                 exact_object_keys(params, &["threadId", "turn"])
-                    && t079_turn_notification_identity_matches(params, thread_id, turn_id)
+                    && params.get("threadId").and_then(Value::as_str) == Some(thread_id)
                     && params
                         .get("turn")
-                        .and_then(Value::as_object)
-                        .and_then(|turn| turn.get("status"))
-                        .and_then(Value::as_str)
-                        == Some("completed")
+                        .is_some_and(|turn| t079_turn_allowed(turn, turn_id, "completed"))
             }
             "item/started" => {
                 exact_object_keys(params, &["item", "startedAtMs", "threadId", "turnId"])
                     && t079_notification_identity_matches(params, thread_id, turn_id)
                     && params.get("startedAtMs").is_some_and(Value::is_number)
-                    && t079_passive_item(params)
+                    && params.get("item").is_some_and(t079_passive_item)
             }
             "item/completed" => {
                 exact_object_keys(params, &["completedAtMs", "item", "threadId", "turnId"])
                     && t079_notification_identity_matches(params, thread_id, turn_id)
                     && params.get("completedAtMs").is_some_and(Value::is_number)
-                    && t079_passive_item(params)
+                    && params.get("item").is_some_and(t079_passive_item)
             }
             "item/agentMessage/delta" | "item/plan/delta" => {
                 exact_object_keys(params, &["delta", "itemId", "threadId", "turnId"])
@@ -695,7 +681,9 @@ impl CodexProtocolClient {
             "thread/tokenUsage/updated" => {
                 exact_object_keys(params, &["threadId", "tokenUsage", "turnId"])
                     && t079_notification_identity_matches(params, thread_id, turn_id)
-                    && params.get("tokenUsage").is_some_and(Value::is_object)
+                    && params
+                        .get("tokenUsage")
+                        .is_some_and(t079_thread_token_usage_allowed)
             }
             _ => false,
         }
@@ -735,6 +723,11 @@ fn exact_object_keys(object: &Map<String, Value>, expected: &[&str]) -> bool {
 }
 
 #[cfg(test)]
+fn object_keys_within(object: &Map<String, Value>, allowed: &[&str]) -> bool {
+    object.keys().all(|key| allowed.contains(&key.as_str()))
+}
+
+#[cfg(test)]
 fn t079_notification_identity_matches(
     params: &Map<String, Value>,
     thread_id: &str,
@@ -745,33 +738,165 @@ fn t079_notification_identity_matches(
 }
 
 #[cfg(test)]
-fn t079_turn_notification_identity_matches(
-    params: &Map<String, Value>,
-    thread_id: &str,
-    turn_id: &str,
-) -> bool {
-    params.get("threadId").and_then(Value::as_str) == Some(thread_id)
-        && params
-            .get("turn")
-            .and_then(Value::as_object)
-            .and_then(|turn| turn.get("id"))
-            .and_then(Value::as_str)
-            == Some(turn_id)
+fn t079_thread_status_allowed(value: &Value) -> bool {
+    let Some(status) = value.as_object() else {
+        return false;
+    };
+    match status.get("type").and_then(Value::as_str) {
+        Some("notLoaded" | "idle" | "systemError") => exact_object_keys(status, &["type"]),
+        Some("active") => {
+            exact_object_keys(status, &["activeFlags", "type"])
+                && status
+                    .get("activeFlags")
+                    .and_then(Value::as_array)
+                    .is_some_and(|flags| flags.is_empty())
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]
-fn t079_passive_item(params: &Map<String, Value>) -> bool {
-    params
-        .get("item")
-        .and_then(Value::as_object)
-        .and_then(|item| item.get("type"))
-        .and_then(Value::as_str)
-        .is_some_and(|kind| {
-            matches!(
-                kind,
-                "userMessage" | "agentMessage" | "plan" | "reasoning" | "contextCompaction"
-            )
-        })
+fn t079_thread_allowed(value: &Value, thread_id: &str) -> bool {
+    const THREAD_KEYS: &[&str] = &[
+        "agentNickname",
+        "agentRole",
+        "canAcceptDirectInput",
+        "cliVersion",
+        "createdAt",
+        "cwd",
+        "ephemeral",
+        "extra",
+        "forkedFromId",
+        "gitInfo",
+        "historyMode",
+        "id",
+        "modelProvider",
+        "name",
+        "parentThreadId",
+        "path",
+        "preview",
+        "projectId",
+        "recencyAt",
+        "section",
+        "sectionEnteredAt",
+        "sessionId",
+        "source",
+        "status",
+        "threadSource",
+        "turns",
+        "updatedAt",
+    ];
+
+    let Some(thread) = value.as_object() else {
+        return false;
+    };
+    if !object_keys_within(thread, THREAD_KEYS)
+        || thread.get("id").and_then(Value::as_str) != Some(thread_id)
+    {
+        return false;
+    }
+    if let Some(status) = thread.get("status")
+        && !t079_thread_status_allowed(status)
+    {
+        return false;
+    }
+    if let Some(extra) = thread.get("extra")
+        && !(extra.is_null() || extra.as_object().is_some_and(|extra| extra.is_empty()))
+    {
+        return false;
+    }
+    true
+}
+
+#[cfg(test)]
+fn t079_passive_item(value: &Value) -> bool {
+    let Some(item) = value.as_object() else {
+        return false;
+    };
+    let Some(kind) = item.get("type").and_then(Value::as_str) else {
+        return false;
+    };
+    if item.get("id").and_then(Value::as_str).is_none() {
+        return false;
+    }
+    match kind {
+        "userMessage" => object_keys_within(item, &["clientId", "content", "id", "type"]),
+        "agentMessage" => object_keys_within(
+            item,
+            &["delivery", "id", "memoryCitation", "phase", "text", "type"],
+        ),
+        "plan" => object_keys_within(item, &["id", "text", "type"]),
+        "reasoning" => object_keys_within(item, &["content", "id", "summary", "type"]),
+        "contextCompaction" => exact_object_keys(item, &["id", "type"]),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+fn t079_turn_allowed(value: &Value, turn_id: &str, expected_status: &str) -> bool {
+    const TURN_KEYS: &[&str] = &[
+        "completedAt",
+        "durationMs",
+        "error",
+        "id",
+        "items",
+        "itemsView",
+        "startedAt",
+        "status",
+    ];
+
+    let Some(turn) = value.as_object() else {
+        return false;
+    };
+    if !object_keys_within(turn, TURN_KEYS)
+        || turn.get("id").and_then(Value::as_str) != Some(turn_id)
+        || turn.get("status").and_then(Value::as_str) != Some(expected_status)
+    {
+        return false;
+    }
+    if let Some(items) = turn.get("items")
+        && !items
+            .as_array()
+            .is_some_and(|items| items.iter().all(t079_passive_item))
+    {
+        return false;
+    }
+    true
+}
+
+#[cfg(test)]
+fn t079_token_usage_breakdown_allowed(value: &Value) -> bool {
+    let Some(usage) = value.as_object() else {
+        return false;
+    };
+    exact_object_keys(
+        usage,
+        &[
+            "cacheWriteInputTokens",
+            "cachedInputTokens",
+            "inputTokens",
+            "outputTokens",
+            "reasoningOutputTokens",
+            "totalTokens",
+        ],
+    ) && usage.values().all(Value::is_number)
+}
+
+#[cfg(test)]
+fn t079_thread_token_usage_allowed(value: &Value) -> bool {
+    let Some(usage) = value.as_object() else {
+        return false;
+    };
+    exact_object_keys(usage, &["last", "modelContextWindow", "total"])
+        && usage
+            .get("last")
+            .is_some_and(t079_token_usage_breakdown_allowed)
+        && usage
+            .get("total")
+            .is_some_and(t079_token_usage_breakdown_allowed)
+        && usage
+            .get("modelContextWindow")
+            .is_some_and(|value| value.is_null() || value.is_number())
 }
 
 fn rpc_id_value(id: &RpcId) -> Value {
@@ -956,6 +1081,30 @@ mod t079_notification_regression_tests {
         assert_eq!(
             wrong_identity.ingest_jsonl_frame(
                 br#"{"method":"item/agentMessage/delta","params":{"threadId":"thr_t079_fixture","turnId":"turn_other","itemId":"item-1","delta":"x"}}"#
+            ),
+            Err(CodexProtocolError::UnexpectedT079Notification)
+        );
+    }
+
+    #[test]
+    fn t079_nested_notification_objects_reject_unknown_keys() {
+        for frame in [
+            br#"{"method":"thread/started","params":{"thread":{"id":"thr_t079_fixture","futureAuthority":true}}}"#.as_slice(),
+            br#"{"method":"thread/status/changed","params":{"threadId":"thr_t079_fixture","status":{"type":"idle","futureAuthority":true}}}"#.as_slice(),
+            br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_t079_fixture","status":"inProgress","futureAuthority":true}}}"#.as_slice(),
+            br#"{"method":"item/started","params":{"threadId":"thr_t079_fixture","turnId":"turn_t079_fixture","startedAtMs":1,"item":{"type":"agentMessage","id":"item-1","futureAuthority":true}}}"#.as_slice(),
+        ] {
+            let mut client = active_t079_client();
+            assert_eq!(
+                client.ingest_jsonl_frame(frame),
+                Err(CodexProtocolError::UnexpectedT079Notification)
+            );
+        }
+
+        let mut usage_client = active_t079_client();
+        assert_eq!(
+            usage_client.ingest_jsonl_frame(
+                br#"{"method":"thread/tokenUsage/updated","params":{"threadId":"thr_t079_fixture","turnId":"turn_t079_fixture","tokenUsage":{"total":{"totalTokens":1,"inputTokens":1,"cachedInputTokens":0,"cacheWriteInputTokens":0,"outputTokens":0,"reasoningOutputTokens":0},"last":{"totalTokens":1,"inputTokens":1,"cachedInputTokens":0,"cacheWriteInputTokens":0,"outputTokens":0,"reasoningOutputTokens":0},"modelContextWindow":128000,"futureAuthority":true}}}"#
             ),
             Err(CodexProtocolError::UnexpectedT079Notification)
         );
