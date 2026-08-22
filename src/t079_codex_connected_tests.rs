@@ -11,18 +11,33 @@ use serde_json::{Value, json};
 #[cfg(target_os = "linux")]
 use sha2::{Digest, Sha256};
 use std::env;
+#[cfg(target_os = "linux")]
+use std::error::Error;
 use std::fs;
 #[cfg(target_os = "linux")]
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
 #[cfg(target_os = "linux")]
 use std::io::{Seek, SeekFrom};
+#[cfg(target_os = "linux")]
+use std::os::fd::OwnedFd;
+#[cfg(target_os = "linux")]
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+#[cfg(target_os = "linux")]
+type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
+#[cfg(target_os = "linux")]
+mod process_scope {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/process_scope.rs"));
+}
+#[cfg(target_os = "linux")]
+use process_scope::{OwnedProcess, spawn_owned_process};
 
 const LIVE_PROOF_TIMEOUT: Duration = Duration::from_secs(120);
 const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -32,16 +47,20 @@ const MAX_CONNECTED_BYTES: usize = 1024 * 1024;
 const MAX_CONNECTED_FRAMES: usize = 256;
 const MAX_QUEUED_FRAMES: usize = 8;
 const MAX_VERSION_BYTES: usize = 4096;
-const BLOCKED_CODEX_CONFIG_FILES: &[&str] =
-    &["config.toml", "managed_config.toml", "requirements.toml"];
+const BLOCKED_CODEX_CONFIG_FILES: &[&str] = &[
+    "config.toml",
+    "managed_config.toml",
+    "requirements.toml",
+    "hooks.json",
+];
 #[cfg(windows)]
 const SAFE_CODEX_CHILD_ENV_KEYS: &[&str] = &["SystemRoot", "WINDIR", "TEMP", "TMP"];
 #[cfg(not(windows))]
 const SAFE_CODEX_CHILD_ENV_KEYS: &[&str] = &["TMPDIR"];
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
-type ProofResult<T> = Result<T, String>;
-type FrameResult = Result<Vec<u8>, String>;
+type ProofResult<T> = std::result::Result<T, String>;
+type FrameResult = std::result::Result<Vec<u8>, String>;
 
 const ALLOWED_EFFECTIVE_CONFIG_KEYS: &[&str] = &[
     "model",
@@ -73,8 +92,8 @@ enum RestrictionEvidence {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CleanupEvidence {
-    DirectChildReaped,
-    DirectChildTerminatedAndReaped,
+    OwnedScopeQuiescent,
+    OwnedScopeTerminatedAndQuiescent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -640,7 +659,7 @@ fn wait_for_reader_completion(receiver: &Receiver<()>, deadline: Instant) -> Pro
         .map_err(|_| "T079 stdout reader did not terminate inside bounded cleanup".to_owned())
 }
 
-fn send_line(stdin: &mut std::process::ChildStdin, line: &str) -> ProofResult<()> {
+fn send_line<W: Write>(stdin: &mut W, line: &str) -> ProofResult<()> {
     stdin
         .write_all(line.as_bytes())
         .and_then(|_| stdin.flush())
@@ -675,9 +694,9 @@ fn is_forbidden_activity(method: &str, params: &Value) -> bool {
         })
 }
 
-fn handle_server_request(
+fn handle_server_request<W: Write>(
     client: &CodexProtocolClient,
-    stdin: &mut std::process::ChildStdin,
+    stdin: &mut W,
     id: &RpcId,
     method: &str,
 ) -> ProofResult<()> {
@@ -696,9 +715,9 @@ fn handle_server_request(
     ))
 }
 
-fn wait_for_response(
+fn wait_for_response<W: Write>(
     client: &mut CodexProtocolClient,
-    stdin: &mut std::process::ChildStdin,
+    stdin: &mut W,
     receiver: &Receiver<FrameResult>,
     expected_id: u64,
     deadline: Instant,
@@ -741,46 +760,40 @@ fn wait_for_response(
     }
 }
 
-fn finish_child(mut child: Child, cleanup_deadline: Instant) -> ProofResult<CleanupEvidence> {
+#[cfg(target_os = "linux")]
+fn finish_owned_process(
+    mut child: OwnedProcess,
+    cleanup_deadline: Instant,
+) -> ProofResult<CleanupEvidence> {
+    const LABEL: &str = "T079 Codex App Server";
     let graceful_deadline = std::cmp::min(Instant::now() + GRACEFUL_CHILD_EXIT, cleanup_deadline);
+    let mut direct_exited = false;
     loop {
         match child
             .try_wait()
             .map_err(|error| format!("T079 could not inspect owned Codex child: {error}"))?
         {
-            Some(_) => return Ok(CleanupEvidence::DirectChildReaped),
+            Some(_) => {
+                direct_exited = true;
+                break;
+            }
             None if Instant::now() < graceful_deadline => thread::sleep(Duration::from_millis(10)),
             None => break,
         }
     }
 
-    if let Err(kill_error) = child.kill() {
-        return match child.try_wait() {
-            Ok(Some(_)) => Ok(CleanupEvidence::DirectChildReaped),
-            Ok(None) => Err(format!(
-                "T079 could not terminate owned Codex child: {kill_error}; direct-child cleanup remains unproven; no unbounded background reaper is spawned"
-            )),
-            Err(wait_error) => Err(format!(
-                "T079 could not terminate owned Codex child: {kill_error}; reap state is also unproven: {wait_error}; no unbounded background reaper is spawned"
-            )),
-        };
+    if direct_exited
+        && child
+            .wait_for_scope_quiescence(graceful_deadline, LABEL)
+            .map_err(|error| error.to_string())?
+    {
+        return Ok(CleanupEvidence::OwnedScopeQuiescent);
     }
 
-    loop {
-        match child
-            .try_wait()
-            .map_err(|error| format!("T079 could not reap terminated Codex child: {error}"))?
-        {
-            Some(_) => return Ok(CleanupEvidence::DirectChildTerminatedAndReaped),
-            None if Instant::now() < cleanup_deadline => thread::sleep(Duration::from_millis(10)),
-            None => {
-                return Err(
-                    "T079 terminated the owned Codex child but could not prove reap inside bounded cleanup; no unbounded background reaper is spawned"
-                        .to_owned(),
-                );
-            }
-        }
-    }
+    child
+        .terminate_and_prove(cleanup_deadline, LABEL)
+        .map_err(|error| error.to_string())?;
+    Ok(CleanupEvidence::OwnedScopeTerminatedAndQuiescent)
 }
 
 fn ensure_disposable_root_unchanged(root: &Path) -> ProofResult<()> {
@@ -831,9 +844,10 @@ fn reconcile_proof_cleanup<T>(
     }
 }
 
-fn cleanup_setup_failure(child: Child, root: &Path, message: &str) -> String {
+#[cfg(target_os = "linux")]
+fn cleanup_setup_failure(child: OwnedProcess, root: &Path, message: &str) -> String {
     let cleanup_deadline = Instant::now() + CLEANUP_TIMEOUT;
-    let cleanup = finish_child(child, cleanup_deadline);
+    let cleanup = finish_owned_process(child, cleanup_deadline);
     let root_check = ensure_disposable_root_unchanged(root);
     match (cleanup, root_check) {
         (Ok(_), Ok(())) => message.to_owned(),
@@ -843,6 +857,7 @@ fn cleanup_setup_failure(child: Child, root: &Path, message: &str) -> String {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn run_connected_proof(
     discovery: &RuntimeDiscovery,
     winds_session_id: &str,
@@ -878,24 +893,20 @@ fn run_connected_proof(
         .to_str()
         .ok_or_else(|| "T079 disposable root is not UTF-8".to_owned())?
         .to_owned();
+    let (mut stdin, child_stdin) = UnixStream::pair()
+        .map_err(|error| format!("T079 could not create owned Codex stdin channel: {error}"))?;
+    let child_stdin = OwnedFd::from(child_stdin);
     let mut command = Command::new(bound_executable.launch_path());
     configure_isolated_codex_environment(&mut command, Some(&codex_home));
-    let mut child = command
+    command
         .args(["app-server", "--stdio"])
         .current_dir(&root)
-        .stdin(Stdio::piped())
+        .stdin(Stdio::from(child_stdin))
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
+        .stderr(Stdio::null());
+    let mut child = spawn_owned_process(&mut command, "T079 Codex App Server")
         .map_err(|error| format!("T079 could not start owned Codex App Server: {error}"))?;
-    let mut stdin = match child.stdin.take() {
-        Some(stdin) => stdin,
-        None => {
-            let message = cleanup_setup_failure(child, &root, "T079 Codex child stdin unavailable");
-            return Err(message);
-        }
-    };
-    let stdout = match child.stdout.take() {
+    let stdout = match child.take_stdout() {
         Some(stdout) => stdout,
         None => {
             drop(stdin);
@@ -1042,7 +1053,7 @@ fn run_connected_proof(
     drop(stdin);
     drop(receiver);
     let cleanup_deadline = Instant::now() + CLEANUP_TIMEOUT;
-    let cleanup = finish_child(child, cleanup_deadline);
+    let cleanup = finish_owned_process(child, cleanup_deadline);
     let reader_result = match wait_for_reader_completion(&done_receiver, cleanup_deadline) {
         Ok(()) => reader
             .join()
@@ -1063,6 +1074,15 @@ fn run_connected_proof(
         restrictions: RestrictionEvidence::AgentNativeEnforced,
         cleanup,
     })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn run_connected_proof(
+    _discovery: &RuntimeDiscovery,
+    _winds_session_id: &str,
+    _codex_home: &Path,
+) -> ProofResult<T079Receipt> {
+    Err("T079 first connected proof currently requires Linux/WSL2 owned-process containment".to_owned())
 }
 
 #[test]
@@ -1198,13 +1218,15 @@ fn effective_config_preflight_rejects_side_channel_surfaces() {
 #[test]
 fn isolated_codex_home_rejects_local_config_without_reading_credentials() {
     let root = disposable_root().expect("isolated home fixture");
-    let config = root.join("config.toml");
-    fs::write(&config, b"model_provider = 'ollama'\n").expect("write config fixture");
-    let error = validate_preexisting_isolated_codex_home(&root).unwrap_err();
-    fs::remove_file(&config).expect("remove config fixture");
+    for name in ["config.toml", "hooks.json"] {
+        let surface = root.join(name);
+        fs::write(&surface, b"fixture\n").expect("write config fixture");
+        let error = validate_preexisting_isolated_codex_home(&root).unwrap_err();
+        fs::remove_file(&surface).expect("remove config fixture");
+        assert!(error.contains(name));
+    }
     let canonical = validate_preexisting_isolated_codex_home(&root).expect("clean isolated home");
     fs::remove_dir(&root).expect("remove isolated home fixture");
-    assert!(error.contains("config.toml"));
     assert_eq!(canonical, root);
 }
 
@@ -1472,7 +1494,7 @@ fn native_thread_identity_never_aliases_winds_session_identity_in_receipt_contra
         status: "WINDS_T079_OK".to_owned(),
         authority: ResultAuthority::AgentRuntimeEvidenceNotVerifiedOrAccepted,
         restrictions: RestrictionEvidence::AgentNativeEnforced,
-        cleanup: CleanupEvidence::DirectChildReaped,
+        cleanup: CleanupEvidence::OwnedScopeQuiescent,
     };
     assert_ne!(receipt.winds_session_id, receipt.native_thread_id);
     assert_eq!(
