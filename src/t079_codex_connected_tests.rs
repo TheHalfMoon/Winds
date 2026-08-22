@@ -494,10 +494,7 @@ fn bind_verified_native_codex_executable(
         return Err("T079 bound Codex descriptor does not preserve executable identity".to_owned());
     }
 
-    Ok(BoundCodexExecutable {
-        file,
-        launch_path,
-    })
+    Ok(BoundCodexExecutable { file, launch_path })
 }
 
 #[cfg(not(target_os = "linux"))]
