@@ -1617,7 +1617,10 @@ fn t079_linux_seccomp_filter_denies_process_descendants() {
             None if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
             None => {
                 child
-                    .terminate_direct_t079(Instant::now() + CLEANUP_TIMEOUT, "T079 filter regression")
+                    .terminate_direct_t079(
+                        Instant::now() + CLEANUP_TIMEOUT,
+                        "T079 filter regression",
+                    )
                     .expect("terminate filter regression child");
                 panic!("T079 descendant-denial regression child did not exit");
             }
