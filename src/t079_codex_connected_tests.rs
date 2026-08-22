@@ -7,9 +7,9 @@ use crate::agentic_runtime::{
     RuntimeIdentityRevalidation, RuntimeKind, RuntimeVersionState, SafeVersionObservation,
     discover_runtime_from_safe_observations, revalidate_runtime_identity,
 };
+use serde_json::{Value, json};
 #[cfg(target_os = "linux")]
 use sha2::{Digest, Sha256};
-use serde_json::{Value, json};
 use std::env;
 use std::fs;
 #[cfg(target_os = "linux")]
