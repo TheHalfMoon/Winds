@@ -105,6 +105,8 @@ static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 type ProofResult<T> = std::result::Result<T, String>;
 type FrameResult = std::result::Result<Vec<u8>, String>;
 
+const T079_CODEX_CONFIG_COMPAT_VERSION: &str = "codex-cli 0.149.0";
+
 const ALLOWED_EFFECTIVE_CONFIG_KEYS: &[&str] = &[
     "model",
     "review_model",
@@ -121,6 +123,16 @@ const ALLOWED_EFFECTIVE_CONFIG_KEYS: &[&str] = &[
     "model_reasoning_summary",
     "model_verbosity",
     "service_tier",
+];
+
+const T079_CODEX_0_149_FEATURE_KEYS: &[&str] = &[
+    "auth_elicitation",
+    "mcp_2026_07_28",
+    "memories",
+    "mentions_v2",
+    "remote_control",
+    "remote_plugin",
+    "tool_suggest",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -240,28 +252,143 @@ fn meaningful(value: &Value) -> bool {
     }
 }
 
-fn validate_effective_config(result: &Value) -> ProofResult<()> {
+fn validate_codex_0_149_features(value: &Value) -> ProofResult<()> {
+    let features = value
+        .as_object()
+        .ok_or_else(|| "T079 Codex 0.149 features evidence is not an object".to_owned())?;
+
+    let mut actual = features.keys().map(String::as_str).collect::<Vec<_>>();
+    actual.sort_unstable();
+
+    let mut expected = T079_CODEX_0_149_FEATURE_KEYS.to_vec();
+    expected.sort_unstable();
+
+    if actual != expected {
+        return Err(format!(
+            "T079 Codex 0.149 features evidence changed: {}",
+            actual.join(", ")
+        ));
+    }
+
+    for key in T079_CODEX_0_149_FEATURE_KEYS {
+        if !features.get(*key).is_some_and(Value::is_boolean) {
+            return Err(format!(
+                "T079 Codex 0.149 feature evidence is not boolean: {key}"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_codex_0_149_packaged_default(key: &str, value: &Value) -> ProofResult<bool> {
+    if key == "features" {
+        validate_codex_0_149_features(value)?;
+        return Ok(true);
+    }
+
+    let expected = match key {
+        "allow_login_shell" => Some(json!(true)),
+        "project_doc_max_bytes" => Some(json!(32768)),
+        "project_doc_fallback_filenames" => Some(json!([])),
+        "hide_agent_reasoning" => Some(json!(false)),
+        "history" => Some(json!({
+            "persistence": "save-all",
+            "max_bytes": null
+        })),
+        "shell_environment_policy" => Some(json!({
+            "inherit": null,
+            "ignore_default_excludes": null,
+            "exclude": null,
+            "set": null,
+            "include_only": null,
+            "filters": null,
+            "experimental_use_profile": null
+        })),
+        _ => None,
+    };
+
+    let Some(expected) = expected else {
+        return Ok(false);
+    };
+
+    if value != &expected {
+        return Err(format!(
+            "T079 Codex 0.149 packaged/default config changed unexpectedly: {key}"
+        ));
+    }
+
+    Ok(true)
+}
+
+fn validate_effective_config(result: &Value, observed_version: &str) -> ProofResult<()> {
+    if observed_version != T079_CODEX_CONFIG_COMPAT_VERSION {
+        return Err(format!(
+            "T079 config/read compatibility is qualified only for {}; observed {observed_version}",
+            T079_CODEX_CONFIG_COMPAT_VERSION
+        ));
+    }
+
     let config = result
         .get("config")
         .and_then(Value::as_object)
         .ok_or_else(|| "T079 config/read response is missing effective config".to_owned())?;
 
-    if config.get("model_provider").and_then(Value::as_str) != Some("openai") {
-        return Err(
-            "T079 requires effective model_provider=openai for the connected proof".to_owned(),
-        );
+    let origins = result
+        .get("origins")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "T079 config/read response is missing config origins".to_owned())?;
+
+    if !origins.is_empty() {
+        let mut keys = origins.keys().cloned().collect::<Vec<_>>();
+        keys.sort();
+
+        return Err(format!(
+            "T079 refuses connected proof with non-default config origins: {}",
+            keys.join(", ")
+        ));
+    }
+
+    match config.get("model_provider") {
+        None | Some(Value::Null) => {
+            // Codex 0.149.0 represents its packaged OpenAI provider default
+            // as no explicit ConfigToml override. This interpretation is
+            // intentionally version-bound and requires an empty origins map.
+        }
+        Some(Value::String(provider)) if provider == "openai" => {}
+        Some(Value::String(provider)) => {
+            return Err(format!(
+                "T079 refuses explicit non-OpenAI model_provider: {provider}"
+            ));
+        }
+        Some(_) => {
+            return Err(
+                "T079 model_provider must be null/absent for the qualified Codex 0.149 OpenAI default or the exact string openai"
+                    .to_owned(),
+            );
+        }
     }
 
     for (key, value) in config {
+        if key == "model_provider" {
+            continue;
+        }
+
+        if validate_codex_0_149_packaged_default(key, value)? {
+            continue;
+        }
+
         if !meaningful(value) {
             continue;
         }
+
         if !ALLOWED_EFFECTIVE_CONFIG_KEYS.contains(&key.as_str()) {
             return Err(format!(
                 "T079 refuses connected proof with active or ambiguous effective config: {key}"
             ));
         }
     }
+
     Ok(())
 }
 
@@ -1302,7 +1429,7 @@ fn run_connected_proof(
             &mut total_bytes,
             &mut frame_count,
         )?;
-        validate_effective_config(&config)?;
+        validate_effective_config(&config, &version)?;
 
         let (thread_id, thread_request) = client
             .t079_thread_start(&cwd)
@@ -1515,37 +1642,126 @@ fn t079_requests_are_fixed_ephemeral_read_only_and_non_authorizing() {
 }
 
 #[test]
-fn effective_config_preflight_rejects_side_channel_surfaces() {
-    validate_effective_config(&json!({
-        "config": {
-            "model": "gpt-fixture",
-            "model_provider": "openai",
-            "mcp_servers": null,
-            "hooks": [],
-            "apps": null,
-            "instructions": null,
-            "developer_instructions": null,
-            "tools": null,
-            "web_search": "disabled"
-        }
-    }))
-    .expect("allowed OpenAI model fields plus empty/disabled surfaces are acceptable");
+fn effective_config_preflight_accepts_codex_0_149_defaults_and_preserves_unknown_key_fail_closed() {
+    validate_effective_config(
+        &json!({
+            "config": {
+                "model_provider": null,
+                "allow_login_shell": true,
+                "project_doc_max_bytes": 32768,
+                "project_doc_fallback_filenames": [],
+                "hide_agent_reasoning": false,
+                "history": {
+                    "persistence": "save-all",
+                    "max_bytes": null
+                },
+                "shell_environment_policy": {
+                    "inherit": null,
+                    "ignore_default_excludes": null,
+                    "exclude": null,
+                    "set": null,
+                    "include_only": null,
+                    "filters": null,
+                    "experimental_use_profile": null
+                },
+                "features": {
+                    "auth_elicitation": true,
+                    "mcp_2026_07_28": false,
+                    "memories": false,
+                    "mentions_v2": true,
+                    "remote_control": false,
+                    "remote_plugin": false,
+                    "tool_suggest": false
+                }
+            },
+            "origins": {}
+        }),
+        T079_CODEX_CONFIG_COMPAT_VERSION,
+    )
+    .expect("Codex 0.149 packaged/default config is acceptable");
 
-    for config in [
-        json!({ "config": {} }),
-        json!({ "config": { "model_provider": null } }),
-    ] {
-        let error = validate_effective_config(&config).unwrap_err();
-        assert!(error.contains("model_provider"));
-    }
+    validate_effective_config(
+        &json!({
+            "config": {
+                "model": "gpt-fixture",
+                "model_provider": "openai",
+                "allow_login_shell": true
+            },
+            "origins": {}
+        }),
+        T079_CODEX_CONFIG_COMPAT_VERSION,
+    )
+    .expect("explicit OpenAI provider is acceptable without non-default origins");
+
+    let error = validate_effective_config(
+        &json!({
+            "config": {
+                "model_provider": null
+            }
+        }),
+        T079_CODEX_CONFIG_COMPAT_VERSION,
+    )
+    .unwrap_err();
+    assert!(error.contains("origins"));
+
+    let error = validate_effective_config(
+        &json!({
+            "config": {
+                "model_provider": null
+            },
+            "origins": {}
+        }),
+        "codex-cli 0.150.0",
+    )
+    .unwrap_err();
+    assert!(error.contains("qualified only"));
 
     for provider in ["ollama", "azure"] {
-        let error = validate_effective_config(&json!({
-            "config": { "model_provider": provider }
-        }))
+        let error = validate_effective_config(
+            &json!({
+                "config": {
+                    "model_provider": provider
+                },
+                "origins": {}
+            }),
+            T079_CODEX_CONFIG_COMPAT_VERSION,
+        )
         .unwrap_err();
+
         assert!(error.contains("model_provider"));
     }
+
+    let error = validate_effective_config(
+        &json!({
+            "config": {
+                "model_provider": 7
+            },
+            "origins": {}
+        }),
+        T079_CODEX_CONFIG_COMPAT_VERSION,
+    )
+    .unwrap_err();
+    assert!(error.contains("model_provider"));
+
+    let error = validate_effective_config(
+        &json!({
+            "config": {
+                "model_provider": null
+            },
+            "origins": {
+                "model_provider": {
+                    "name": {
+                        "type": "user",
+                        "file": "/fixture/config.toml"
+                    },
+                    "version": "fixture"
+                }
+            }
+        }),
+        T079_CODEX_CONFIG_COMPAT_VERSION,
+    )
+    .unwrap_err();
+    assert!(error.contains("non-default config origins"));
 
     for (key, value) in [
         ("mcp_servers", json!({"server": {"command": "x"}})),
@@ -1554,16 +1770,78 @@ fn effective_config_preflight_rejects_side_channel_surfaces() {
         ("apps", json!({"demo": {"enabled": true}})),
         ("instructions", json!("use tools")),
         ("developer_instructions", json!("run a command")),
+        ("compact_prompt", json!("override behavior")),
         ("tools", json!({"web_search": {"enabled": true}})),
         ("web_search", json!("live")),
+        ("notify", json!(["external-command"])),
+        ("model_providers", json!({"custom": {"name": "custom"}})),
         ("future_side_channel", json!({"enabled": true})),
     ] {
         let mut config = serde_json::Map::new();
-        config.insert("model_provider".to_owned(), json!("openai"));
+        config.insert("model_provider".to_owned(), Value::Null);
         config.insert(key.to_owned(), value);
-        let error = validate_effective_config(&json!({ "config": config })).unwrap_err();
+
+        let error = validate_effective_config(
+            &json!({
+                "config": config,
+                "origins": {}
+            }),
+            T079_CODEX_CONFIG_COMPAT_VERSION,
+        )
+        .unwrap_err();
+
         assert!(error.contains(key));
     }
+
+    let error = validate_effective_config(
+        &json!({
+            "config": {
+                "model_provider": null,
+                "allow_login_shell": false
+            },
+            "origins": {}
+        }),
+        T079_CODEX_CONFIG_COMPAT_VERSION,
+    )
+    .unwrap_err();
+    assert!(error.contains("allow_login_shell"));
+
+    let error = validate_effective_config(
+        &json!({
+            "config": {
+                "model_provider": null,
+                "future_side_channel": {
+                    "enabled": true
+                }
+            },
+            "origins": {}
+        }),
+        T079_CODEX_CONFIG_COMPAT_VERSION,
+    )
+    .unwrap_err();
+    assert!(error.contains("future_side_channel"));
+
+    let error = validate_effective_config(
+        &json!({
+            "config": {
+                "model_provider": null,
+                "features": {
+                    "auth_elicitation": true,
+                    "mcp_2026_07_28": false,
+                    "memories": false,
+                    "mentions_v2": true,
+                    "remote_control": false,
+                    "remote_plugin": false,
+                    "tool_suggest": false,
+                    "future_feature": true
+                }
+            },
+            "origins": {}
+        }),
+        T079_CODEX_CONFIG_COMPAT_VERSION,
+    )
+    .unwrap_err();
+    assert!(error.contains("features evidence changed"));
 }
 
 #[test]
