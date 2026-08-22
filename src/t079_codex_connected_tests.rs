@@ -1713,7 +1713,7 @@ fn forbidden_runtime_activity_is_detected_fail_closed() {
             json!({"item": {"type": "collabAgentToolCall"}}),
         ),
         ("item/started", json!({"item": {"type": "webSearch"}})),
-        ("item/started", json!({"item": {"type": "hookPrompt"}}),
+        ("item/started", json!({"item": {"type": "hookPrompt"}})),
         (
             "item/started",
             json!({"item": {"type": "futureUnknownToolSurface"}}),
