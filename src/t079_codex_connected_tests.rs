@@ -3,14 +3,20 @@ use crate::agentic_codex::{
     RpcId, ServerRequestDisposition, T079_PROOF_PROMPT,
 };
 use crate::agentic_runtime::{
-    EvidenceSource, RuntimeDiscovery, RuntimeDiscoveryState, RuntimeIdentityRevalidation,
-    RuntimeKind, RuntimeVersionState, SafeVersionObservation,
+    EvidenceSource, RuntimeDiscovery, RuntimeDiscoveryState, RuntimeExecutableIdentity,
+    RuntimeIdentityRevalidation, RuntimeKind, RuntimeVersionState, SafeVersionObservation,
     discover_runtime_from_safe_observations, revalidate_runtime_identity,
 };
+#[cfg(target_os = "linux")]
+use sha2::{Digest, Sha256};
 use serde_json::{Value, json};
 use std::env;
 use std::fs;
+#[cfg(target_os = "linux")]
+use std::fs::File;
 use std::io::{BufRead, BufReader, Read, Write};
+#[cfg(target_os = "linux")]
+use std::io::{Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -123,6 +129,18 @@ impl Drop for FixtureRootGuard {
     }
 }
 
+struct BoundCodexExecutable {
+    #[cfg(target_os = "linux")]
+    _file: File,
+    launch_path: PathBuf,
+}
+
+impl BoundCodexExecutable {
+    fn launch_path(&self) -> &Path {
+        &self.launch_path
+    }
+}
+
 fn parse_outbound(line: &str) -> Value {
     assert!(line.ends_with('\n'));
     serde_json::from_str(line.trim_end()).expect("T079 outbound JSONL must be valid JSON")
@@ -166,17 +184,14 @@ fn validate_effective_config(result: &Value) -> ProofResult<()> {
         .and_then(Value::as_object)
         .ok_or_else(|| "T079 config/read response is missing effective config".to_owned())?;
 
+    if config.get("model_provider").and_then(Value::as_str) != Some("openai") {
+        return Err(
+            "T079 requires effective model_provider=openai for the connected proof".to_owned(),
+        );
+    }
+
     for (key, value) in config {
         if !meaningful(value) {
-            continue;
-        }
-        if key == "model_provider" {
-            if value.as_str() != Some("openai") {
-                return Err(
-                    "T079 refuses a non-OpenAI effective model_provider for the connected proof"
-                        .to_owned(),
-                );
-            }
             continue;
         }
         if !ALLOWED_EFFECTIVE_CONFIG_KEYS.contains(&key.as_str()) {
@@ -323,28 +338,41 @@ fn validate_preexisting_isolated_codex_home(path: &Path) -> ProofResult<PathBuf>
     Ok(canonical)
 }
 
+#[cfg(target_os = "macos")]
 fn validate_no_system_codex_config() -> ProofResult<()> {
-    #[cfg(unix)]
-    {
-        let base = Path::new("/etc/codex");
-        for name in BLOCKED_CODEX_CONFIG_FILES {
-            reject_config_surface(&base.join(name), "a system Codex configuration surface")?;
-        }
-    }
-    #[cfg(windows)]
-    {
-        let program_data = env::var_os("ProgramData")
-            .ok_or_else(|| "T079 cannot prove Windows system Codex config location".to_owned())?;
-        let program_data = PathBuf::from(program_data);
-        if !program_data.is_absolute() {
-            return Err("T079 Windows ProgramData path is not absolute".to_owned());
-        }
-        let base = program_data.join("OpenAI").join("Codex");
-        for name in BLOCKED_CODEX_CONFIG_FILES {
-            reject_config_surface(&base.join(name), "a system Codex configuration surface")?;
-        }
+    Err(
+        "T079 refuses macOS live proof because com.openai.codex managed preferences (config_toml_base64 / requirements_toml_base64) are a pre-launch configuration surface that this harness intentionally does not read"
+            .to_owned(),
+    )
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn validate_no_system_codex_config() -> ProofResult<()> {
+    let base = Path::new("/etc/codex");
+    for name in BLOCKED_CODEX_CONFIG_FILES {
+        reject_config_surface(&base.join(name), "a system Codex configuration surface")?;
     }
     Ok(())
+}
+
+#[cfg(windows)]
+fn validate_no_system_codex_config() -> ProofResult<()> {
+    let program_data = env::var_os("ProgramData")
+        .ok_or_else(|| "T079 cannot prove Windows system Codex config location".to_owned())?;
+    let program_data = PathBuf::from(program_data);
+    if !program_data.is_absolute() {
+        return Err("T079 Windows ProgramData path is not absolute".to_owned());
+    }
+    let base = program_data.join("OpenAI").join("Codex");
+    for name in BLOCKED_CODEX_CONFIG_FILES {
+        reject_config_surface(&base.join(name), "a system Codex configuration surface")?;
+    }
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn validate_no_system_codex_config() -> ProofResult<()> {
+    Err("T079 live proof does not support this platform".to_owned())
 }
 
 fn configure_isolated_codex_environment(command: &mut Command, codex_home: Option<&Path>) {
@@ -357,6 +385,130 @@ fn configure_isolated_codex_environment(command: &mut Command, codex_home: Optio
             command.env(key, value);
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn require_linux_native_elf(file: &mut File) -> ProofResult<()> {
+    let mut magic = [0_u8; 4];
+    file.seek(SeekFrom::Start(0))
+        .map_err(|error| format!("T079 could not seek Codex executable: {error}"))?;
+    file.read_exact(&mut magic)
+        .map_err(|error| format!("T079 could not read Codex executable header: {error}"))?;
+    file.seek(SeekFrom::Start(0))
+        .map_err(|error| format!("T079 could not rewind Codex executable: {error}"))?;
+    if magic != [0x7f, b'E', b'L', b'F'] {
+        return Err(
+            "T079 requires WINDS_T079_CODEX_PATH to resolve to a Linux-native ELF Codex binary; interpreter wrappers are refused because PATH is intentionally absent"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn validate_live_codex_candidate_path(path: &Path) -> ProofResult<()> {
+    let mut file = File::open(path)
+        .map_err(|error| format!("T079 could not open candidate Codex executable: {error}"))?;
+    require_linux_native_elf(&mut file)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn validate_live_codex_candidate_path(path: &Path) -> ProofResult<()> {
+    let _ = path;
+    Err(
+        "T079 first connected proof currently requires Linux/WSL2 so executable launch can be bound to an already-open verified file descriptor"
+            .to_owned(),
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn bind_verified_native_codex_executable(
+    expected: &RuntimeExecutableIdentity,
+) -> ProofResult<BoundCodexExecutable> {
+    use std::os::fd::AsRawFd;
+
+    let mut file = File::open(&expected.canonical_path)
+        .map_err(|error| format!("T079 could not open verified Codex executable: {error}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("T079 could not inspect verified Codex executable: {error}"))?;
+    if !metadata.is_file() || metadata.len() != expected.byte_len {
+        return Err("T079 Codex executable metadata changed before handle binding".to_owned());
+    }
+    require_linux_native_elf(&mut file)?;
+
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut total_read = 0_u64;
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("T079 could not hash bound Codex executable: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        total_read = total_read
+            .checked_add(read as u64)
+            .ok_or_else(|| "T079 bound Codex executable byte count overflowed".to_owned())?;
+        if total_read > expected.byte_len {
+            return Err("T079 bound Codex executable exceeded expected byte length".to_owned());
+        }
+        digest.update(&buffer[..read]);
+    }
+    if total_read != expected.byte_len {
+        return Err("T079 bound Codex executable byte length changed".to_owned());
+    }
+    let sha256: String = digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    if sha256 != expected.sha256 {
+        return Err("T079 bound Codex executable digest does not match discovery".to_owned());
+    }
+    if revalidate_runtime_identity(expected).map_err(|error| error.to_string())?
+        != RuntimeIdentityRevalidation::Match
+    {
+        return Err("T079 Codex executable path changed while binding launch identity".to_owned());
+    }
+
+    let fd = file.as_raw_fd();
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags < 0 {
+        return Err(format!(
+            "T079 could not inspect Codex executable descriptor flags: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) } < 0 {
+        return Err(format!(
+            "T079 could not bind Codex executable descriptor across spawn: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+
+    let launch_path = PathBuf::from(format!("/proc/self/fd/{fd}"));
+    let launch_metadata = fs::metadata(&launch_path)
+        .map_err(|error| format!("T079 could not prove bound Codex descriptor path: {error}"))?;
+    if !launch_metadata.is_file() || launch_metadata.len() != expected.byte_len {
+        return Err("T079 bound Codex descriptor does not preserve executable identity".to_owned());
+    }
+
+    Ok(BoundCodexExecutable {
+        _file: file,
+        launch_path,
+    })
+}
+
+#[cfg(not(target_os = "linux"))]
+fn bind_verified_native_codex_executable(
+    expected: &RuntimeExecutableIdentity,
+) -> ProofResult<BoundCodexExecutable> {
+    let _ = expected;
+    Err(
+        "T079 first connected proof currently requires Linux/WSL2 handle-bound executable launch"
+            .to_owned(),
+    )
 }
 
 fn observe_version_bounded(executable: &Path) -> ProofResult<String> {
@@ -729,14 +881,15 @@ fn run_connected_proof(
         .executable
         .as_ref()
         .ok_or_else(|| "T079 discovery lost executable identity".to_owned())?;
-    let version = observe_version_bounded(&executable.observed_path)?;
+    let bound_executable = bind_verified_native_codex_executable(executable)?;
+    let version = observe_version_bounded(bound_executable.launch_path())?;
     if discovery.version.value.as_deref() != Some(version.as_str()) {
         return Err("T079 Codex version changed after discovery".to_owned());
     }
     if revalidate_runtime_identity(executable).map_err(|error| error.to_string())?
         != RuntimeIdentityRevalidation::Match
     {
-        return Err("T079 Codex executable changed immediately before launch".to_owned());
+        return Err("T079 Codex executable path changed after handle binding".to_owned());
     }
     let revalidated_codex_home = validate_preexisting_isolated_codex_home(&codex_home)?;
     if revalidated_codex_home != codex_home {
@@ -750,7 +903,7 @@ fn run_connected_proof(
         .to_str()
         .ok_or_else(|| "T079 disposable root is not UTF-8".to_owned())?
         .to_owned();
-    let mut command = Command::new(&executable.observed_path);
+    let mut command = Command::new(bound_executable.launch_path());
     configure_isolated_codex_environment(&mut command, Some(&codex_home));
     let mut child = command
         .args(["app-server", "--stdio"])
@@ -1032,6 +1185,14 @@ fn effective_config_preflight_rejects_side_channel_surfaces() {
     }))
     .expect("allowed OpenAI model fields plus empty/disabled surfaces are acceptable");
 
+    for config in [
+        json!({ "config": {} }),
+        json!({ "config": { "model_provider": null } }),
+    ] {
+        let error = validate_effective_config(&config).unwrap_err();
+        assert!(error.contains("model_provider"));
+    }
+
     for provider in ["ollama", "azure"] {
         let error = validate_effective_config(&json!({
             "config": { "model_provider": provider }
@@ -1052,6 +1213,7 @@ fn effective_config_preflight_rejects_side_channel_surfaces() {
         ("future_side_channel", json!({"enabled": true})),
     ] {
         let mut config = serde_json::Map::new();
+        config.insert("model_provider".to_owned(), json!("openai"));
         config.insert(key.to_owned(), value);
         let error = validate_effective_config(&json!({ "config": config })).unwrap_err();
         assert!(error.contains(key));
@@ -1069,6 +1231,15 @@ fn isolated_codex_home_rejects_local_config_without_reading_credentials() {
     fs::remove_dir(&root).expect("remove isolated home fixture");
     assert!(error.contains("config.toml"));
     assert_eq!(canonical, root);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn t079_macos_managed_preferences_are_fail_closed_without_reading_them() {
+    let error = validate_no_system_codex_config().unwrap_err();
+    assert!(error.contains("com.openai.codex"));
+    assert!(error.contains("config_toml_base64"));
+    assert!(error.contains("requirements_toml_base64"));
 }
 
 #[test]
@@ -1107,6 +1278,43 @@ fn codex_launch_environment_is_explicit_allowlist_only() {
         assert!(!explicit.iter().any(|(key, _)| key == forbidden));
     }
     fs::remove_dir(root).expect("remove isolated home fixture");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn t079_linux_launch_binding_rejects_wrappers_and_holds_verified_descriptor() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = disposable_root().expect("launch binding fixture");
+    let executable = root.join("codex");
+    fs::write(&executable, b"#!/usr/bin/env node\n").expect("write wrapper fixture");
+    let mut permissions = fs::metadata(&executable).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&executable, permissions).unwrap();
+    let error = validate_live_codex_candidate_path(&executable).unwrap_err();
+    assert!(error.contains("Linux-native ELF"));
+
+    fs::write(&executable, b"\x7fELFfixture-codex-v1\n").expect("write ELF fixture");
+    let discovery = discover_runtime_from_safe_observations(
+        RuntimeKind::Codex,
+        &executable,
+        SafeVersionObservation::Observed("codex-cli fixture".to_owned()),
+        &[],
+        &[],
+    )
+    .expect("native fixture discovery");
+    let expected = discovery.executable.as_ref().expect("fixture executable");
+    let bound = bind_verified_native_codex_executable(expected).expect("bound verified descriptor");
+    assert!(
+        bound
+            .launch_path()
+            .to_string_lossy()
+            .starts_with("/proc/self/fd/")
+    );
+
+    drop(bound);
+    fs::remove_file(executable).expect("remove launch fixture");
+    fs::remove_dir(root).expect("remove launch fixture root");
 }
 
 #[test]
@@ -1299,11 +1507,11 @@ fn native_thread_identity_never_aliases_winds_session_identity_in_receipt_contra
 }
 
 #[test]
-#[ignore = "T079 live proof: requires a pre-existing locally authenticated Codex executable and isolated CODEX_HOME; no install/auth/terms/credential automation"]
+#[ignore = "T079 live proof: requires Linux/WSL2, a pre-existing locally authenticated native Codex binary, and isolated CODEX_HOME; no install/auth/terms/credential automation"]
 fn t079_real_codex_one_bounded_prompt() {
     let executable = PathBuf::from(
         env::var("WINDS_T079_CODEX_PATH")
-            .expect("set WINDS_T079_CODEX_PATH to an existing Codex executable"),
+            .expect("set WINDS_T079_CODEX_PATH to an existing Linux-native Codex executable"),
     );
     let codex_home =
         PathBuf::from(env::var_os("WINDS_T079_CODEX_HOME").expect(
@@ -1313,7 +1521,9 @@ fn t079_real_codex_one_bounded_prompt() {
         .expect("set WINDS_T079_WINDS_SESSION_ID to the exact canonical Winds session id");
     let codex_home = validate_preexisting_isolated_codex_home(&codex_home)
         .expect("pre-existing isolated CODEX_HOME without local config surfaces");
-    validate_no_system_codex_config().expect("no system Codex config surfaces");
+    validate_no_system_codex_config().expect("no unvalidated system Codex config surfaces");
+    validate_live_codex_candidate_path(&executable)
+        .expect("Linux-native Codex executable required for handle-bound launch");
     let version = observe_version_bounded(&executable).expect("bounded Codex version observation");
     let discovery = discover_runtime_from_safe_observations(
         RuntimeKind::Codex,
@@ -1340,6 +1550,7 @@ fn t079_real_codex_one_bounded_prompt() {
             "cleanup": format!("{:?}", receipt.cleanup),
             "experimental_api_opt_in": true,
             "launch_environment": "ENV_CLEAR_EXPLICIT_ALLOWLIST",
+            "launch_executable": "LINUX_NATIVE_VERIFIED_OPEN_FD",
             "codex_home": "PREEXISTING_ISOLATED_NOT_READ_OR_COPIED_BY_WINDS",
             "environment_access": "disabled",
             "runtime_workspace_roots": 0,
