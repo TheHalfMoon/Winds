@@ -739,7 +739,10 @@ impl CodexProtocolClient {
             "item/completed" => {
                 exact_object_keys(params, &["completedAtMs", "item", "threadId", "turnId"])
                     && t079_notification_identity_matches(params, thread_id.as_str(), turn_id)
-                    && params.get("completedAtMs").and_then(Value::as_u64).is_some()
+                    && params
+                        .get("completedAtMs")
+                        .and_then(Value::as_u64)
+                        .is_some()
                     && params.get("item").is_some_and(t079_passive_item)
             }
             "item/agentMessage/delta" | "item/plan/delta" => {
@@ -922,7 +925,9 @@ fn t079_user_input_allowed(value: &Value) -> bool {
     };
     exact_object_keys(input, &["text", "textElements", "type"])
         && input.get("type").and_then(Value::as_str) == Some("text")
-        && input.get("text").is_some_and(|text| t079_string_allowed(text, true))
+        && input
+            .get("text")
+            .is_some_and(|text| t079_string_allowed(text, true))
         && input
             .get("textElements")
             .and_then(Value::as_array)
@@ -943,7 +948,9 @@ fn t079_thread_section_allowed(value: &Value) -> bool {
         return false;
     };
     if !exact_object_keys(section, &["appearance", "id", "name"])
-        || !section.get("id").is_some_and(|id| t079_string_allowed(id, false))
+        || !section
+            .get("id")
+            .is_some_and(|id| t079_string_allowed(id, false))
         || !section
             .get("name")
             .is_some_and(|name| t079_string_allowed(name, false))
@@ -1162,7 +1169,9 @@ fn t079_passive_item(value: &Value) -> bool {
     match kind {
         "userMessage" => {
             exact_object_keys(item, &["clientId", "content", "id", "type"])
-                && item.get("clientId").is_some_and(t079_nonempty_string_or_null)
+                && item
+                    .get("clientId")
+                    .is_some_and(t079_nonempty_string_or_null)
                 && item
                     .get("content")
                     .and_then(Value::as_array)
@@ -1172,7 +1181,9 @@ fn t079_passive_item(value: &Value) -> bool {
             exact_object_keys(
                 item,
                 &["delivery", "id", "memoryCitation", "phase", "text", "type"],
-            ) && item.get("text").is_some_and(|text| t079_string_allowed(text, true))
+            ) && item
+                .get("text")
+                .is_some_and(|text| t079_string_allowed(text, true))
                 && item.get("phase").is_some_and(|phase| {
                     phase.is_null() || matches!(phase.as_str(), Some("commentary" | "final_answer"))
                 })
@@ -1183,7 +1194,9 @@ fn t079_passive_item(value: &Value) -> bool {
         }
         "plan" => {
             exact_object_keys(item, &["id", "text", "type"])
-                && item.get("text").is_some_and(|text| t079_string_allowed(text, true))
+                && item
+                    .get("text")
+                    .is_some_and(|text| t079_string_allowed(text, true))
         }
         "reasoning" => {
             exact_object_keys(item, &["content", "id", "summary", "type"])
@@ -1628,14 +1641,20 @@ mod t079_notification_regression_tests {
             .as_object_mut()
             .expect("thread fixture object")
             .insert("createdAt".to_owned(), json!(-1));
-        assert!(!t079_thread_allowed(&negative_created_at, "thr_t079_fixture"));
+        assert!(!t079_thread_allowed(
+            &negative_created_at,
+            "thr_t079_fixture"
+        ));
 
         let mut control_character_cwd = t079_full_thread_fixture("thr_t079_fixture");
         control_character_cwd
             .as_object_mut()
             .expect("thread fixture object")
             .insert("cwd".to_owned(), json!("/tmp/\u{0007}evil"));
-        assert!(!t079_thread_allowed(&control_character_cwd, "thr_t079_fixture"));
+        assert!(!t079_thread_allowed(
+            &control_character_cwd,
+            "thr_t079_fixture"
+        ));
 
         let mut invalid_items_view = t079_full_turn_fixture("turn_t079_fixture", "inProgress");
         invalid_items_view
