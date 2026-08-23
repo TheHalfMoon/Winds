@@ -766,7 +766,10 @@ impl CodexProtocolClient {
                     && params
                         .get("delta")
                         .is_some_and(|delta| t079_string_allowed(delta, true))
-                    && params.get("summaryIndex").is_some_and(Value::is_number)
+                    && params
+                        .get("summaryIndex")
+                        .and_then(Value::as_u64)
+                        .is_some()
             }
             "item/reasoning/summaryPartAdded" => {
                 exact_object_keys(params, &["itemId", "summaryIndex", "threadId", "turnId"])
@@ -774,7 +777,10 @@ impl CodexProtocolClient {
                     && params
                         .get("itemId")
                         .is_some_and(|item_id| t079_string_allowed(item_id, false))
-                    && params.get("summaryIndex").is_some_and(Value::is_number)
+                    && params
+                        .get("summaryIndex")
+                        .and_then(Value::as_u64)
+                        .is_some()
             }
             "item/reasoning/textDelta" => {
                 exact_object_keys(
@@ -787,7 +793,10 @@ impl CodexProtocolClient {
                     && params
                         .get("delta")
                         .is_some_and(|delta| t079_string_allowed(delta, true))
-                    && params.get("contentIndex").is_some_and(Value::is_number)
+                    && params
+                        .get("contentIndex")
+                        .and_then(Value::as_u64)
+                        .is_some()
             }
             "thread/tokenUsage/updated" => {
                 exact_object_keys(params, &["threadId", "tokenUsage", "turnId"])
@@ -1592,6 +1601,36 @@ mod t079_notification_regression_tests {
                     "turnId": "turn_t079_fixture",
                     "itemId": "item-1",
                     "delta": "bad\u{0007}text"
+                }),
+            )),
+            Err(CodexProtocolError::UnexpectedT079Notification)
+        );
+
+        let mut negative_summary_index = active_t079_client();
+        assert_eq!(
+            negative_summary_index.ingest_jsonl_frame(&t079_notification_frame(
+                "item/reasoning/summaryTextDelta",
+                json!({
+                    "threadId": "thr_t079_fixture",
+                    "turnId": "turn_t079_fixture",
+                    "itemId": "item-1",
+                    "summaryIndex": -1,
+                    "delta": "x"
+                }),
+            )),
+            Err(CodexProtocolError::UnexpectedT079Notification)
+        );
+
+        let mut fractional_content_index = active_t079_client();
+        assert_eq!(
+            fractional_content_index.ingest_jsonl_frame(&t079_notification_frame(
+                "item/reasoning/textDelta",
+                json!({
+                    "threadId": "thr_t079_fixture",
+                    "turnId": "turn_t079_fixture",
+                    "itemId": "item-1",
+                    "contentIndex": 1.5,
+                    "delta": "x"
                 }),
             )),
             Err(CodexProtocolError::UnexpectedT079Notification)
