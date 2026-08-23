@@ -300,6 +300,8 @@ initialize request
 - one bounded proof session/turn unless exact-version behavior requires a narrowly documented retry;
 - no primary-checkout mutation;
 - no Winds-driven credential/terms/access escalation;
+- before any `thread/start`, T079 may admit only the exact Codex 0.149 system `configWarning` for the bundled-bubblewrap fallback while `config/read` is pending, with the pinned summary text, `details: null`, and no `path` or `range`; this warning is informational runtime evidence only, does not satisfy `config/read`, and any text/shape/phase drift fails closed;
+- do not install bubblewrap or alter the host/runtime to suppress that warning during T079 qualification; a successful matching `config/read` response and normal effective-config validation remain required;
 - decline unexpected write/tool approvals unless the reviewed task contract explicitly allows a harmless fixture operation;
 - no PR/push/merge automation.
 
