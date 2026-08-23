@@ -1396,7 +1396,10 @@ mod t079_notification_regression_tests {
             }
         );
         assert!(turn_client.t079_requests.is_empty());
-        assert_eq!(turn_client.t079_thread_id.as_deref(), Some("thr_t079_fixture"));
+        assert_eq!(
+            turn_client.t079_thread_id.as_deref(),
+            Some("thr_t079_fixture")
+        );
         assert_eq!(turn_client.t079_turn_id, None);
         assert_eq!(
             turn_client.ingest_jsonl_frame(
