@@ -733,34 +733,44 @@ impl CodexProtocolClient {
             "item/started" => {
                 exact_object_keys(params, &["item", "startedAtMs", "threadId", "turnId"])
                     && t079_notification_identity_matches(params, thread_id.as_str(), turn_id)
-                    && params.get("startedAtMs").is_some_and(Value::is_number)
+                    && params.get("startedAtMs").and_then(Value::as_u64).is_some()
                     && params.get("item").is_some_and(t079_passive_item)
             }
             "item/completed" => {
                 exact_object_keys(params, &["completedAtMs", "item", "threadId", "turnId"])
                     && t079_notification_identity_matches(params, thread_id.as_str(), turn_id)
-                    && params.get("completedAtMs").is_some_and(Value::is_number)
+                    && params.get("completedAtMs").and_then(Value::as_u64).is_some()
                     && params.get("item").is_some_and(t079_passive_item)
             }
             "item/agentMessage/delta" | "item/plan/delta" => {
                 exact_object_keys(params, &["delta", "itemId", "threadId", "turnId"])
                     && t079_notification_identity_matches(params, thread_id.as_str(), turn_id)
-                    && params.get("itemId").and_then(Value::as_str).is_some()
-                    && params.get("delta").and_then(Value::as_str).is_some()
+                    && params
+                        .get("itemId")
+                        .is_some_and(|item_id| t079_string_allowed(item_id, false))
+                    && params
+                        .get("delta")
+                        .is_some_and(|delta| t079_string_allowed(delta, true))
             }
             "item/reasoning/summaryTextDelta" => {
                 exact_object_keys(
                     params,
                     &["delta", "itemId", "summaryIndex", "threadId", "turnId"],
                 ) && t079_notification_identity_matches(params, thread_id.as_str(), turn_id)
-                    && params.get("itemId").and_then(Value::as_str).is_some()
-                    && params.get("delta").and_then(Value::as_str).is_some()
+                    && params
+                        .get("itemId")
+                        .is_some_and(|item_id| t079_string_allowed(item_id, false))
+                    && params
+                        .get("delta")
+                        .is_some_and(|delta| t079_string_allowed(delta, true))
                     && params.get("summaryIndex").is_some_and(Value::is_number)
             }
             "item/reasoning/summaryPartAdded" => {
                 exact_object_keys(params, &["itemId", "summaryIndex", "threadId", "turnId"])
                     && t079_notification_identity_matches(params, thread_id.as_str(), turn_id)
-                    && params.get("itemId").and_then(Value::as_str).is_some()
+                    && params
+                        .get("itemId")
+                        .is_some_and(|item_id| t079_string_allowed(item_id, false))
                     && params.get("summaryIndex").is_some_and(Value::is_number)
             }
             "item/reasoning/textDelta" => {
@@ -768,8 +778,12 @@ impl CodexProtocolClient {
                     params,
                     &["contentIndex", "delta", "itemId", "threadId", "turnId"],
                 ) && t079_notification_identity_matches(params, thread_id.as_str(), turn_id)
-                    && params.get("itemId").and_then(Value::as_str).is_some()
-                    && params.get("delta").and_then(Value::as_str).is_some()
+                    && params
+                        .get("itemId")
+                        .is_some_and(|item_id| t079_string_allowed(item_id, false))
+                    && params
+                        .get("delta")
+                        .is_some_and(|delta| t079_string_allowed(delta, true))
                     && params.get("contentIndex").is_some_and(Value::is_number)
             }
             "thread/tokenUsage/updated" => {
@@ -850,13 +864,28 @@ fn t079_thread_status_allowed(value: &Value) -> bool {
 }
 
 #[cfg(test)]
-fn t079_string_or_null(value: &Value) -> bool {
-    value.is_null() || value.as_str().is_some()
+fn t079_string_allowed(value: &Value, allow_empty: bool) -> bool {
+    let Some(text) = value.as_str() else {
+        return false;
+    };
+    (allow_empty || !text.trim().is_empty())
+        && text.len() <= MAX_PROTOCOL_TEXT_BYTES
+        && !text.chars().any(char::is_control)
 }
 
 #[cfg(test)]
-fn t079_i64_or_null(value: &Value) -> bool {
-    value.is_null() || value.as_i64().is_some()
+fn t079_string_or_null(value: &Value) -> bool {
+    value.is_null() || t079_string_allowed(value, true)
+}
+
+#[cfg(test)]
+fn t079_nonempty_string_or_null(value: &Value) -> bool {
+    value.is_null() || t079_string_allowed(value, false)
+}
+
+#[cfg(test)]
+fn t079_u64_or_null(value: &Value) -> bool {
+    value.is_null() || value.as_u64().is_some()
 }
 
 #[cfg(test)]
@@ -868,7 +897,7 @@ fn t079_bool_or_null(value: &Value) -> bool {
 fn t079_string_array(value: &Value) -> bool {
     value
         .as_array()
-        .is_some_and(|values| values.iter().all(|value| value.as_str().is_some()))
+        .is_some_and(|values| values.iter().all(|value| t079_string_allowed(value, true)))
 }
 
 #[cfg(test)]
@@ -893,7 +922,7 @@ fn t079_user_input_allowed(value: &Value) -> bool {
     };
     exact_object_keys(input, &["text", "textElements", "type"])
         && input.get("type").and_then(Value::as_str) == Some("text")
-        && input.get("text").and_then(Value::as_str).is_some()
+        && input.get("text").is_some_and(|text| t079_string_allowed(text, true))
         && input
             .get("textElements")
             .and_then(Value::as_array)
@@ -914,8 +943,10 @@ fn t079_thread_section_allowed(value: &Value) -> bool {
         return false;
     };
     if !exact_object_keys(section, &["appearance", "id", "name"])
-        || section.get("id").and_then(Value::as_str).is_none()
-        || section.get("name").and_then(Value::as_str).is_none()
+        || !section.get("id").is_some_and(|id| t079_string_allowed(id, false))
+        || !section
+            .get("name")
+            .is_some_and(|name| t079_string_allowed(name, false))
     {
         return false;
     }
@@ -936,9 +967,11 @@ fn t079_git_info_allowed(value: &Value) -> bool {
         return false;
     };
     exact_object_keys(info, &["branch", "originUrl", "sha"])
-        && info.get("sha").is_some_and(t079_string_or_null)
-        && info.get("branch").is_some_and(t079_string_or_null)
-        && info.get("originUrl").is_some_and(t079_string_or_null)
+        && info.get("sha").is_some_and(t079_nonempty_string_or_null)
+        && info.get("branch").is_some_and(t079_nonempty_string_or_null)
+        && info
+            .get("originUrl")
+            .is_some_and(t079_nonempty_string_or_null)
 }
 
 #[cfg(test)]
@@ -1013,38 +1046,42 @@ fn t079_thread_allowed(value: &Value, thread_id: &str) -> bool {
     {
         return false;
     }
-    for key in [
-        "agentNickname",
-        "agentRole",
-        "forkedFromId",
-        "name",
-        "parentThreadId",
-        "projectId",
-        "threadSource",
-    ] {
+    for key in ["agentNickname", "agentRole", "name", "threadSource"] {
         if let Some(value) = thread.get(key)
             && !t079_string_or_null(value)
         {
             return false;
         }
     }
-    for key in ["cliVersion", "cwd", "preview", "sessionId"] {
+    for key in ["forkedFromId", "parentThreadId", "projectId"] {
         if let Some(value) = thread.get(key)
-            && value.as_str().is_none()
+            && !t079_nonempty_string_or_null(value)
         {
             return false;
         }
     }
+    for key in ["cliVersion", "cwd", "sessionId"] {
+        if let Some(value) = thread.get(key)
+            && !t079_string_allowed(value, false)
+        {
+            return false;
+        }
+    }
+    if let Some(value) = thread.get("preview")
+        && !t079_string_allowed(value, true)
+    {
+        return false;
+    }
     for key in ["createdAt", "updatedAt"] {
         if let Some(value) = thread.get(key)
-            && value.as_i64().is_none()
+            && value.as_u64().is_none()
         {
             return false;
         }
     }
     for key in ["recencyAt", "sectionEnteredAt"] {
         if let Some(value) = thread.get(key)
-            && !t079_i64_or_null(value)
+            && !t079_u64_or_null(value)
         {
             return false;
         }
@@ -1070,7 +1107,7 @@ fn t079_thread_allowed(value: &Value, thread_id: &str) -> bool {
         return false;
     }
     if let Some(value) = thread.get("path")
-        && !t079_string_or_null(value)
+        && !t079_nonempty_string_or_null(value)
     {
         return false;
     }
@@ -1125,7 +1162,7 @@ fn t079_passive_item(value: &Value) -> bool {
     match kind {
         "userMessage" => {
             exact_object_keys(item, &["clientId", "content", "id", "type"])
-                && item.get("clientId").is_some_and(t079_string_or_null)
+                && item.get("clientId").is_some_and(t079_nonempty_string_or_null)
                 && item
                     .get("content")
                     .and_then(Value::as_array)
@@ -1135,7 +1172,7 @@ fn t079_passive_item(value: &Value) -> bool {
             exact_object_keys(
                 item,
                 &["delivery", "id", "memoryCitation", "phase", "text", "type"],
-            ) && item.get("text").and_then(Value::as_str).is_some()
+            ) && item.get("text").is_some_and(|text| t079_string_allowed(text, true))
                 && item.get("phase").is_some_and(|phase| {
                     phase.is_null() || matches!(phase.as_str(), Some("commentary" | "final_answer"))
                 })
@@ -1146,7 +1183,7 @@ fn t079_passive_item(value: &Value) -> bool {
         }
         "plan" => {
             exact_object_keys(item, &["id", "text", "type"])
-                && item.get("text").and_then(Value::as_str).is_some()
+                && item.get("text").is_some_and(|text| t079_string_allowed(text, true))
         }
         "reasoning" => {
             exact_object_keys(item, &["content", "id", "summary", "type"])
@@ -1200,7 +1237,7 @@ fn t079_turn_allowed(value: &Value, turn_id: &str, expected_status: &str) -> boo
     }
     for key in ["completedAt", "durationMs", "startedAt"] {
         if let Some(value) = turn.get(key)
-            && !t079_i64_or_null(value)
+            && !t079_u64_or_null(value)
         {
             return false;
         }
@@ -1511,6 +1548,44 @@ mod t079_notification_regression_tests {
     }
 
     #[test]
+    fn t079_notification_values_reject_negative_time_and_control_text() {
+        let mut negative_time = active_t079_client();
+        assert_eq!(
+            negative_time.ingest_jsonl_frame(&t079_notification_frame(
+                "item/started",
+                json!({
+                    "threadId": "thr_t079_fixture",
+                    "turnId": "turn_t079_fixture",
+                    "startedAtMs": -1,
+                    "item": {
+                        "type": "agentMessage",
+                        "id": "item-1",
+                        "text": "ok",
+                        "phase": null,
+                        "memoryCitation": null,
+                        "delivery": null
+                    }
+                }),
+            )),
+            Err(CodexProtocolError::UnexpectedT079Notification)
+        );
+
+        let mut control_text = active_t079_client();
+        assert_eq!(
+            control_text.ingest_jsonl_frame(&t079_notification_frame(
+                "item/agentMessage/delta",
+                json!({
+                    "threadId": "thr_t079_fixture",
+                    "turnId": "turn_t079_fixture",
+                    "itemId": "item-1",
+                    "delta": "bad\u{0007}text"
+                }),
+            )),
+            Err(CodexProtocolError::UnexpectedT079Notification)
+        );
+    }
+
+    #[test]
     fn t079_known_nested_fields_require_exact_value_shapes() {
         let mut malformed_thread = t079_full_thread_fixture("thr_t079_fixture");
         malformed_thread
@@ -1537,6 +1612,31 @@ mod t079_notification_regression_tests {
             "inProgress"
         ));
 
+        let mut negative_duration = t079_full_turn_fixture("turn_t079_fixture", "inProgress");
+        negative_duration
+            .as_object_mut()
+            .expect("turn fixture object")
+            .insert("durationMs".to_owned(), json!(-1));
+        assert!(!t079_turn_allowed(
+            &negative_duration,
+            "turn_t079_fixture",
+            "inProgress"
+        ));
+
+        let mut negative_created_at = t079_full_thread_fixture("thr_t079_fixture");
+        negative_created_at
+            .as_object_mut()
+            .expect("thread fixture object")
+            .insert("createdAt".to_owned(), json!(-1));
+        assert!(!t079_thread_allowed(&negative_created_at, "thr_t079_fixture"));
+
+        let mut control_character_cwd = t079_full_thread_fixture("thr_t079_fixture");
+        control_character_cwd
+            .as_object_mut()
+            .expect("thread fixture object")
+            .insert("cwd".to_owned(), json!("/tmp/\u{0007}evil"));
+        assert!(!t079_thread_allowed(&control_character_cwd, "thr_t079_fixture"));
+
         let mut invalid_items_view = t079_full_turn_fixture("turn_t079_fixture", "inProgress");
         invalid_items_view
             .as_object_mut()
@@ -1560,6 +1660,14 @@ mod t079_notification_regression_tests {
             "id":"item-1",
             "clientId":null,
             "content":[{"type":"image","url":"https://example.invalid/image.png"}]
+        })));
+        assert!(!t079_passive_item(&json!({
+            "type":"agentMessage",
+            "id":"item-1",
+            "text":"bad\u{0007}text",
+            "phase":null,
+            "memoryCitation":null,
+            "delivery":null
         })));
         assert!(t079_passive_item(&json!({
             "type":"agentMessage",
