@@ -942,41 +942,73 @@ fn t079_git_info_allowed(value: &Value) -> bool {
 }
 
 #[cfg(test)]
-fn t079_thread_allowed(value: &Value, thread_id: &str) -> bool {
-    const THREAD_KEYS: &[&str] = &[
-        "agentNickname",
-        "agentRole",
-        "canAcceptDirectInput",
-        "cliVersion",
-        "createdAt",
-        "cwd",
-        "ephemeral",
-        "extra",
-        "forkedFromId",
-        "gitInfo",
-        "historyMode",
-        "id",
-        "modelProvider",
-        "name",
-        "parentThreadId",
-        "path",
-        "preview",
-        "projectId",
-        "recencyAt",
-        "section",
-        "sectionEnteredAt",
-        "sessionId",
-        "source",
-        "status",
-        "threadSource",
-        "turns",
-        "updatedAt",
-    ];
+const T079_THREAD_REQUIRED_KEYS: &[&str] = &[
+    "agentNickname",
+    "agentRole",
+    "cliVersion",
+    "createdAt",
+    "cwd",
+    "ephemeral",
+    "forkedFromId",
+    "gitInfo",
+    "id",
+    "modelProvider",
+    "name",
+    "parentThreadId",
+    "path",
+    "preview",
+    "projectId",
+    "recencyAt",
+    "section",
+    "sectionEnteredAt",
+    "sessionId",
+    "source",
+    "status",
+    "threadSource",
+    "turns",
+    "updatedAt",
+];
 
+#[cfg(test)]
+const T079_THREAD_ALLOWED_KEYS: &[&str] = &[
+    "agentNickname",
+    "agentRole",
+    "canAcceptDirectInput",
+    "cliVersion",
+    "createdAt",
+    "cwd",
+    "ephemeral",
+    "extra",
+    "forkedFromId",
+    "gitInfo",
+    "historyMode",
+    "id",
+    "modelProvider",
+    "name",
+    "parentThreadId",
+    "path",
+    "preview",
+    "projectId",
+    "recencyAt",
+    "section",
+    "sectionEnteredAt",
+    "sessionId",
+    "source",
+    "status",
+    "threadSource",
+    "turns",
+    "updatedAt",
+];
+
+#[cfg(test)]
+fn t079_thread_allowed(value: &Value, thread_id: &str) -> bool {
     let Some(thread) = value.as_object() else {
         return false;
     };
-    if !object_keys_within(thread, THREAD_KEYS)
+    if !object_keys_within(thread, T079_THREAD_ALLOWED_KEYS)
+        || !T079_THREAD_REQUIRED_KEYS
+            .iter()
+            .all(|key| thread.contains_key(*key))
         || thread.get("id").and_then(Value::as_str) != Some(thread_id)
     {
         return false;
@@ -1127,22 +1159,23 @@ fn t079_passive_item(value: &Value) -> bool {
 }
 
 #[cfg(test)]
-fn t079_turn_allowed(value: &Value, turn_id: &str, expected_status: &str) -> bool {
-    const TURN_KEYS: &[&str] = &[
-        "completedAt",
-        "durationMs",
-        "error",
-        "id",
-        "items",
-        "itemsView",
-        "startedAt",
-        "status",
-    ];
+const T079_TURN_REQUIRED_KEYS: &[&str] = &[
+    "completedAt",
+    "durationMs",
+    "error",
+    "id",
+    "items",
+    "itemsView",
+    "startedAt",
+    "status",
+];
 
+#[cfg(test)]
+fn t079_turn_allowed(value: &Value, turn_id: &str, expected_status: &str) -> bool {
     let Some(turn) = value.as_object() else {
         return false;
     };
-    if !object_keys_within(turn, TURN_KEYS)
+    if !exact_object_keys(turn, T079_TURN_REQUIRED_KEYS)
         || turn.get("id").and_then(Value::as_str) != Some(turn_id)
         || turn.get("status").and_then(Value::as_str) != Some(expected_status)
     {
@@ -1293,6 +1326,53 @@ fn encode_jsonl(value: &Value) -> Result<String, CodexProtocolError> {
 mod t079_notification_regression_tests {
     use super::*;
 
+    fn t079_full_thread_fixture(id: &str) -> Value {
+        json!({
+            "id": id,
+            "sessionId": "session_t079_fixture",
+            "forkedFromId": null,
+            "parentThreadId": null,
+            "preview": "",
+            "ephemeral": true,
+            "section": null,
+            "sectionEnteredAt": null,
+            "projectId": null,
+            "modelProvider": "openai",
+            "createdAt": 1,
+            "updatedAt": 1,
+            "recencyAt": null,
+            "status": {"type": "idle"},
+            "path": null,
+            "cwd": "/tmp/winds-t079-fixture",
+            "cliVersion": "0.1.0",
+            "source": "appServer",
+            "threadSource": null,
+            "agentNickname": null,
+            "agentRole": null,
+            "gitInfo": null,
+            "name": null,
+            "turns": []
+        })
+    }
+
+    fn t079_full_turn_fixture(id: &str, status: &str) -> Value {
+        json!({
+            "id": id,
+            "items": [],
+            "itemsView": "full",
+            "status": status,
+            "error": null,
+            "startedAt": null,
+            "completedAt": null,
+            "durationMs": null
+        })
+    }
+
+    fn t079_notification_frame(method: &str, params: Value) -> Vec<u8> {
+        serde_json::to_vec(&json!({"method": method, "params": params}))
+            .expect("serialize T079 notification fixture")
+    }
+
     fn ready_t079_client() -> CodexProtocolClient {
         let mut client = CodexProtocolClient::default();
         client
@@ -1386,9 +1466,13 @@ mod t079_notification_regression_tests {
         let mut client = active_t079_client();
         assert!(matches!(
             client
-                .ingest_jsonl_frame(
-                    br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_t079_fixture","status":"inProgress"}}}"#
-                )
+                .ingest_jsonl_frame(&t079_notification_frame(
+                    "turn/started",
+                    json!({
+                        "threadId": "thr_t079_fixture",
+                        "turn": t079_full_turn_fixture("turn_t079_fixture", "inProgress")
+                    }),
+                ))
                 .expect("allowed turn start"),
             CodexInbound::Notification { method, .. } if method == "turn/started"
         ));
@@ -1428,21 +1512,45 @@ mod t079_notification_regression_tests {
 
     #[test]
     fn t079_known_nested_fields_require_exact_value_shapes() {
+        let mut malformed_thread = t079_full_thread_fixture("thr_t079_fixture");
+        malformed_thread
+            .as_object_mut()
+            .expect("thread fixture object")
+            .insert("cwd".to_owned(), json!({}));
         assert!(!t079_thread_allowed(
-            &json!({"id":"thr_t079_fixture","cwd":{}}),
+            &malformed_thread,
             "thr_t079_fixture"
         ));
+
+        let mut invalid_history = t079_full_thread_fixture("thr_t079_fixture");
+        invalid_history
+            .as_object_mut()
+            .expect("thread fixture object")
+            .insert("historyMode".to_owned(), json!("future"));
         assert!(!t079_thread_allowed(
-            &json!({"id":"thr_t079_fixture","historyMode":"future"}),
+            &invalid_history,
             "thr_t079_fixture"
         ));
+
+        let mut malformed_turn = t079_full_turn_fixture("turn_t079_fixture", "inProgress");
+        malformed_turn
+            .as_object_mut()
+            .expect("turn fixture object")
+            .insert("durationMs".to_owned(), json!({}));
         assert!(!t079_turn_allowed(
-            &json!({"id":"turn_t079_fixture","status":"inProgress","durationMs":{}}),
+            &malformed_turn,
             "turn_t079_fixture",
             "inProgress"
         ));
+
+        let mut invalid_items_view =
+            t079_full_turn_fixture("turn_t079_fixture", "inProgress");
+        invalid_items_view
+            .as_object_mut()
+            .expect("turn fixture object")
+            .insert("itemsView".to_owned(), json!("future"));
         assert!(!t079_turn_allowed(
-            &json!({"id":"turn_t079_fixture","status":"inProgress","itemsView":"future"}),
+            &invalid_items_view,
             "turn_t079_fixture",
             "inProgress"
         ));
@@ -1477,6 +1585,65 @@ mod t079_notification_regression_tests {
     }
 
     #[test]
+    fn t079_thread_rejects_omission_of_every_required_stable_field() {
+        let fixture = t079_full_thread_fixture("thr_t079_fixture");
+        assert!(t079_thread_allowed(&fixture, "thr_t079_fixture"));
+
+        for key in T079_THREAD_REQUIRED_KEYS {
+            let mut incomplete = fixture.clone();
+            incomplete
+                .as_object_mut()
+                .expect("thread fixture object")
+                .remove(*key);
+            assert!(
+                !t079_thread_allowed(&incomplete, "thr_t079_fixture"),
+                "missing required Thread field was accepted: {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn t079_turn_rejects_omission_of_every_required_field() {
+        let fixture = t079_full_turn_fixture("turn_t079_fixture", "inProgress");
+        assert!(t079_turn_allowed(
+            &fixture,
+            "turn_t079_fixture",
+            "inProgress"
+        ));
+
+        for key in T079_TURN_REQUIRED_KEYS {
+            let mut incomplete = fixture.clone();
+            incomplete
+                .as_object_mut()
+                .expect("turn fixture object")
+                .remove(*key);
+            assert!(
+                !t079_turn_allowed(&incomplete, "turn_t079_fixture", "inProgress"),
+                "missing required Turn field was accepted: {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn t079_partial_started_notifications_fail_closed() {
+        let mut thread_client = active_t079_client();
+        assert_eq!(
+            thread_client.ingest_jsonl_frame(
+                br#"{"method":"thread/started","params":{"thread":{"id":"thr_t079_fixture"}}}"#
+            ),
+            Err(CodexProtocolError::UnexpectedT079Notification)
+        );
+
+        let mut turn_client = active_t079_client();
+        assert_eq!(
+            turn_client.ingest_jsonl_frame(
+                br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_t079_fixture","status":"inProgress"}}}"#
+            ),
+            Err(CodexProtocolError::UnexpectedT079Notification)
+        );
+    }
+
+    #[test]
     fn t079_started_notifications_can_bind_identity_before_matching_response() {
         let mut client = ready_t079_client();
         let (thread_request_id, _) = client
@@ -1484,9 +1651,10 @@ mod t079_notification_regression_tests {
             .expect("thread request");
         assert!(matches!(
             client
-                .ingest_jsonl_frame(
-                    br#"{"method":"thread/started","params":{"thread":{"id":"thr_t079_fixture"}}}"#
-                )
+                .ingest_jsonl_frame(&t079_notification_frame(
+                    "thread/started",
+                    json!({"thread": t079_full_thread_fixture("thr_t079_fixture")}),
+                ))
                 .expect("pre-response thread/started"),
             CodexInbound::Notification { method, .. } if method == "thread/started"
         ));
@@ -1506,9 +1674,13 @@ mod t079_notification_regression_tests {
             .expect("turn request");
         assert!(matches!(
             client
-                .ingest_jsonl_frame(
-                    br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_t079_fixture","status":"inProgress"}}}"#
-                )
+                .ingest_jsonl_frame(&t079_notification_frame(
+                    "turn/started",
+                    json!({
+                        "threadId": "thr_t079_fixture",
+                        "turn": t079_full_turn_fixture("turn_t079_fixture", "inProgress")
+                    }),
+                ))
                 .expect("pre-response turn/started"),
             CodexInbound::Notification { method, .. } if method == "turn/started"
         ));
@@ -1530,9 +1702,10 @@ mod t079_notification_regression_tests {
             .t079_thread_start("/tmp/winds-t079-fixture")
             .expect("thread request");
         thread_client
-            .ingest_jsonl_frame(
-                br#"{"method":"thread/started","params":{"thread":{"id":"thr_from_notification"}}}"#,
-            )
+            .ingest_jsonl_frame(&t079_notification_frame(
+                "thread/started",
+                json!({"thread": t079_full_thread_fixture("thr_from_notification")}),
+            ))
             .expect("pre-response thread/started");
         assert_eq!(
             thread_client.ingest_jsonl_frame(
@@ -1561,9 +1734,13 @@ mod t079_notification_regression_tests {
             .t079_turn_start(&native, "/tmp/winds-t079-fixture")
             .expect("turn request");
         turn_client
-            .ingest_jsonl_frame(
-                br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_from_notification","status":"inProgress"}}}"#,
-            )
+            .ingest_jsonl_frame(&t079_notification_frame(
+                "turn/started",
+                json!({
+                    "threadId": "thr_t079_fixture",
+                    "turn": t079_full_turn_fixture("turn_from_notification", "inProgress")
+                }),
+            ))
             .expect("pre-response turn/started");
         assert_eq!(
             turn_client.ingest_jsonl_frame(
@@ -1597,9 +1774,10 @@ mod t079_notification_regression_tests {
             .t079_thread_start("/tmp/winds-t079-fixture")
             .expect("thread request");
         thread_client
-            .ingest_jsonl_frame(
-                br#"{"method":"thread/started","params":{"thread":{"id":"thr_from_notification"}}}"#,
-            )
+            .ingest_jsonl_frame(&t079_notification_frame(
+                "thread/started",
+                json!({"thread": t079_full_thread_fixture("thr_from_notification")}),
+            ))
             .expect("pre-response thread/started");
         assert_eq!(
             thread_client
@@ -1643,9 +1821,13 @@ mod t079_notification_regression_tests {
             .t079_turn_start(&native, "/tmp/winds-t079-fixture")
             .expect("turn request");
         turn_client
-            .ingest_jsonl_frame(
-                br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_from_notification","status":"inProgress"}}}"#,
-            )
+            .ingest_jsonl_frame(&t079_notification_frame(
+                "turn/started",
+                json!({
+                    "threadId": "thr_t079_fixture",
+                    "turn": t079_full_turn_fixture("turn_from_notification", "inProgress")
+                }),
+            ))
             .expect("pre-response turn/started");
         assert_eq!(
             turn_client
