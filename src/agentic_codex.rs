@@ -520,11 +520,19 @@ impl CodexProtocolClient {
                         evidence: EvidenceClass::AgentRuntimeEvidence,
                     })
                 }
-                (None, Some(error)) => Ok(CodexInbound::ErrorResponse {
-                    id,
-                    error: error.clone(),
-                    evidence: EvidenceClass::AgentRuntimeEvidence,
-                }),
+                (None, Some(error)) => {
+                    #[cfg(test)]
+                    if self.t079_mode
+                        && let Err(record_error) = self.record_t079_error(&id)
+                    {
+                        return self.fail(record_error);
+                    }
+                    Ok(CodexInbound::ErrorResponse {
+                        id,
+                        error: error.clone(),
+                        evidence: EvidenceClass::AgentRuntimeEvidence,
+                    })
+                }
                 _ => self.fail(CodexProtocolError::MalformedFrame),
             },
             _ => self.fail(CodexProtocolError::MalformedFrame),
@@ -584,6 +592,32 @@ impl CodexProtocolClient {
                 Ok(())
             }
         }
+    }
+
+    #[cfg(test)]
+    fn record_t079_error(&mut self, id: &RpcId) -> Result<(), CodexProtocolError> {
+        let RpcId::Number(id) = id else {
+            return Err(CodexProtocolError::MalformedFrame);
+        };
+        let Some(index) = self
+            .t079_requests
+            .iter()
+            .position(|(request_id, _)| request_id == id)
+        else {
+            return Err(CodexProtocolError::MalformedFrame);
+        };
+        let (_, kind) = self.t079_requests.remove(index);
+        match kind {
+            T079RequestKind::ConfigRead => {}
+            T079RequestKind::ThreadStart => {
+                self.t079_thread_id = None;
+                self.t079_turn_id = None;
+            }
+            T079RequestKind::TurnStart => {
+                self.t079_turn_id = None;
+            }
+        }
+        Ok(())
     }
 
     fn ingest_notification(
@@ -1284,6 +1318,89 @@ mod t079_notification_regression_tests {
         assert_eq!(
             client.ingest_jsonl_frame(
                 br#"{"method":"thread/status/changed","params":{"threadId":"thr_t079_fixture","status":{"type":"idle"}}}"#
+            ),
+            Err(CodexProtocolError::UnexpectedT079Notification)
+        );
+    }
+
+    #[test]
+    fn t079_error_responses_clear_pending_phase_and_bound_identity() {
+        let mut thread_client = ready_t079_client();
+        let (thread_request_id, _) = thread_client
+            .t079_thread_start("/tmp/winds-t079-fixture")
+            .expect("thread request");
+        thread_client
+            .ingest_jsonl_frame(
+                br#"{"method":"thread/started","params":{"thread":{"id":"thr_from_notification"}}}"#,
+            )
+            .expect("pre-response thread/started");
+        assert_eq!(
+            thread_client
+                .ingest_jsonl_frame(
+                    format!(
+                        r#"{{"id":{thread_request_id},"error":{{"code":-32000,"message":"fixture"}}}}"#
+                    )
+                    .as_bytes(),
+                )
+                .expect("thread error response"),
+            CodexInbound::ErrorResponse {
+                id: RpcId::Number(thread_request_id),
+                error: json!({"code": -32000, "message": "fixture"}),
+                evidence: EvidenceClass::AgentRuntimeEvidence,
+            }
+        );
+        assert!(thread_client.t079_requests.is_empty());
+        assert_eq!(thread_client.t079_thread_id, None);
+        assert_eq!(thread_client.t079_turn_id, None);
+        assert_eq!(
+            thread_client.ingest_jsonl_frame(
+                br#"{"method":"thread/started","params":{"thread":{"id":"thr_after_error"}}}"#
+            ),
+            Err(CodexProtocolError::UnexpectedT079Notification)
+        );
+
+        let mut turn_client = ready_t079_client();
+        let (thread_request_id, _) = turn_client
+            .t079_thread_start("/tmp/winds-t079-fixture")
+            .expect("thread request");
+        turn_client
+            .ingest_jsonl_frame(
+                format!(
+                    r#"{{"id":{thread_request_id},"result":{{"thread":{{"id":"thr_t079_fixture"}}}}}}"#
+                )
+                .as_bytes(),
+            )
+            .expect("thread response");
+        let native = NativeThreadId::parse("thr_t079_fixture").expect("native thread id");
+        let (turn_request_id, _) = turn_client
+            .t079_turn_start(&native, "/tmp/winds-t079-fixture")
+            .expect("turn request");
+        turn_client
+            .ingest_jsonl_frame(
+                br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_from_notification","status":"inProgress"}}}"#,
+            )
+            .expect("pre-response turn/started");
+        assert_eq!(
+            turn_client
+                .ingest_jsonl_frame(
+                    format!(
+                        r#"{{"id":{turn_request_id},"error":{{"code":-32000,"message":"fixture"}}}}"#
+                    )
+                    .as_bytes(),
+                )
+                .expect("turn error response"),
+            CodexInbound::ErrorResponse {
+                id: RpcId::Number(turn_request_id),
+                error: json!({"code": -32000, "message": "fixture"}),
+                evidence: EvidenceClass::AgentRuntimeEvidence,
+            }
+        );
+        assert!(turn_client.t079_requests.is_empty());
+        assert_eq!(turn_client.t079_thread_id.as_deref(), Some("thr_t079_fixture"));
+        assert_eq!(turn_client.t079_turn_id, None);
+        assert_eq!(
+            turn_client.ingest_jsonl_frame(
+                br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_after_error","status":"inProgress"}}}"#
             ),
             Err(CodexProtocolError::UnexpectedT079Notification)
         );
