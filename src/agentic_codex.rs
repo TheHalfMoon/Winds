@@ -766,10 +766,7 @@ impl CodexProtocolClient {
                     && params
                         .get("delta")
                         .is_some_and(|delta| t079_string_allowed(delta, true))
-                    && params
-                        .get("summaryIndex")
-                        .and_then(Value::as_u64)
-                        .is_some()
+                    && params.get("summaryIndex").and_then(Value::as_u64).is_some()
             }
             "item/reasoning/summaryPartAdded" => {
                 exact_object_keys(params, &["itemId", "summaryIndex", "threadId", "turnId"])
@@ -777,10 +774,7 @@ impl CodexProtocolClient {
                     && params
                         .get("itemId")
                         .is_some_and(|item_id| t079_string_allowed(item_id, false))
-                    && params
-                        .get("summaryIndex")
-                        .and_then(Value::as_u64)
-                        .is_some()
+                    && params.get("summaryIndex").and_then(Value::as_u64).is_some()
             }
             "item/reasoning/textDelta" => {
                 exact_object_keys(
@@ -793,10 +787,7 @@ impl CodexProtocolClient {
                     && params
                         .get("delta")
                         .is_some_and(|delta| t079_string_allowed(delta, true))
-                    && params
-                        .get("contentIndex")
-                        .and_then(Value::as_u64)
-                        .is_some()
+                    && params.get("contentIndex").and_then(Value::as_u64).is_some()
             }
             "thread/tokenUsage/updated" => {
                 exact_object_keys(params, &["threadId", "tokenUsage", "turnId"])
