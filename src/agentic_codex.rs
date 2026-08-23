@@ -558,7 +558,13 @@ impl CodexProtocolClient {
                     .and_then(Value::as_str)
                     .ok_or(CodexProtocolError::MalformedFrame)?;
                 validate_native_thread_id(thread_id)?;
-                self.t079_thread_id = Some(thread_id.to_owned());
+                match self.t079_thread_id.as_deref() {
+                    Some(bound_thread_id) if bound_thread_id != thread_id => {
+                        return Err(CodexProtocolError::MalformedFrame);
+                    }
+                    Some(_) => {}
+                    None => self.t079_thread_id = Some(thread_id.to_owned()),
+                }
                 Ok(())
             }
             T079RequestKind::TurnStart => {
@@ -568,7 +574,13 @@ impl CodexProtocolClient {
                     .and_then(Value::as_str)
                     .ok_or(CodexProtocolError::MalformedFrame)?;
                 validate_nonempty_exact(turn_id)?;
-                self.t079_turn_id = Some(turn_id.to_owned());
+                match self.t079_turn_id.as_deref() {
+                    Some(bound_turn_id) if bound_turn_id != turn_id => {
+                        return Err(CodexProtocolError::MalformedFrame);
+                    }
+                    Some(_) => {}
+                    None => self.t079_turn_id = Some(turn_id.to_owned()),
+                }
                 Ok(())
             }
         }
@@ -596,25 +608,76 @@ impl CodexProtocolClient {
     }
 
     #[cfg(test)]
-    fn t079_notification_allowed(&self, method: &str, params: &Value) -> bool {
+    fn t079_notification_allowed(&mut self, method: &str, params: &Value) -> bool {
         let Some(params) = params.as_object() else {
-            return false;
-        };
-        let Some(thread_id) = self.t079_thread_id.as_deref() else {
             return false;
         };
 
         if method == "thread/started" {
-            return exact_object_keys(params, &["thread"])
-                && params
-                    .get("thread")
-                    .is_some_and(|thread| t079_thread_allowed(thread, thread_id));
+            if !exact_object_keys(params, &["thread"]) {
+                return false;
+            }
+            let Some(thread) = params.get("thread") else {
+                return false;
+            };
+            if let Some(thread_id) = self.t079_thread_id.as_deref() {
+                return t079_thread_allowed(thread, thread_id);
+            }
+            if !self
+                .t079_requests
+                .iter()
+                .any(|(_, kind)| *kind == T079RequestKind::ThreadStart)
+            {
+                return false;
+            }
+            let Some(thread_id) = thread
+                .get("id")
+                .and_then(Value::as_str)
+            else {
+                return false;
+            };
+            if validate_native_thread_id(thread_id).is_err()
+                || !t079_thread_allowed(thread, thread_id)
+            {
+                return false;
+            }
+            self.t079_thread_id = Some(thread_id.to_owned());
+            return true;
         }
+
+        let Some(thread_id) = self.t079_thread_id.clone() else {
+            return false;
+        };
 
         if method == "thread/status/changed" {
             return exact_object_keys(params, &["status", "threadId"])
-                && params.get("threadId").and_then(Value::as_str) == Some(thread_id)
+                && params.get("threadId").and_then(Value::as_str) == Some(thread_id.as_str())
                 && params.get("status").is_some_and(t079_thread_status_allowed);
+        }
+
+        if method == "turn/started" && self.t079_turn_id.is_none() {
+            if !self
+                .t079_requests
+                .iter()
+                .any(|(_, kind)| *kind == T079RequestKind::TurnStart)
+                || !exact_object_keys(params, &["threadId", "turn"])
+                || params.get("threadId").and_then(Value::as_str) != Some(thread_id.as_str())
+            {
+                return false;
+            }
+            let Some(turn) = params.get("turn") else {
+                return false;
+            };
+            let Some(turn_id) = turn.get("id").and_then(Value::as_str) else {
+                return false;
+            };
+            if validate_nonempty_exact(turn_id).is_err()
+                || !t079_turn_allowed(turn, turn_id, "inProgress")
+            {
+                return false;
+            }
+            self.t079_turn_id = Some(turn_id.to_owned());
+            return true;
         }
 
         let Some(turn_id) = self.t079_turn_id.as_deref() else {
@@ -624,33 +687,33 @@ impl CodexProtocolClient {
         match method {
             "turn/started" => {
                 exact_object_keys(params, &["threadId", "turn"])
-                    && params.get("threadId").and_then(Value::as_str) == Some(thread_id)
+                    && params.get("threadId").and_then(Value::as_str) == Some(thread_id.as_str())
                     && params
                         .get("turn")
                         .is_some_and(|turn| t079_turn_allowed(turn, turn_id, "inProgress"))
             }
             "turn/completed" => {
                 exact_object_keys(params, &["threadId", "turn"])
-                    && params.get("threadId").and_then(Value::as_str) == Some(thread_id)
+                    && params.get("threadId").and_then(Value::as_str) == Some(thread_id.as_str())
                     && params
                         .get("turn")
                         .is_some_and(|turn| t079_turn_allowed(turn, turn_id, "completed"))
             }
             "item/started" => {
                 exact_object_keys(params, &["item", "startedAtMs", "threadId", "turnId"])
-                    && t079_notification_identity_matches(params, thread_id, turn_id)
+                    && t079_notification_identity_matches(params, thread_id.as_str(), turn_id)
                     && params.get("startedAtMs").is_some_and(Value::is_number)
                     && params.get("item").is_some_and(t079_passive_item)
             }
             "item/completed" => {
                 exact_object_keys(params, &["completedAtMs", "item", "threadId", "turnId"])
-                    && t079_notification_identity_matches(params, thread_id, turn_id)
+                    && t079_notification_identity_matches(params, thread_id.as_str(), turn_id)
                     && params.get("completedAtMs").is_some_and(Value::is_number)
                     && params.get("item").is_some_and(t079_passive_item)
             }
             "item/agentMessage/delta" | "item/plan/delta" => {
                 exact_object_keys(params, &["delta", "itemId", "threadId", "turnId"])
-                    && t079_notification_identity_matches(params, thread_id, turn_id)
+                    && t079_notification_identity_matches(params, thread_id.as_str(), turn_id)
                     && params.get("itemId").and_then(Value::as_str).is_some()
                     && params.get("delta").and_then(Value::as_str).is_some()
             }
@@ -658,14 +721,14 @@ impl CodexProtocolClient {
                 exact_object_keys(
                     params,
                     &["delta", "itemId", "summaryIndex", "threadId", "turnId"],
-                ) && t079_notification_identity_matches(params, thread_id, turn_id)
+                ) && t079_notification_identity_matches(params, thread_id.as_str(), turn_id)
                     && params.get("itemId").and_then(Value::as_str).is_some()
                     && params.get("delta").and_then(Value::as_str).is_some()
                     && params.get("summaryIndex").is_some_and(Value::is_number)
             }
             "item/reasoning/summaryPartAdded" => {
                 exact_object_keys(params, &["itemId", "summaryIndex", "threadId", "turnId"])
-                    && t079_notification_identity_matches(params, thread_id, turn_id)
+                    && t079_notification_identity_matches(params, thread_id.as_str(), turn_id)
                     && params.get("itemId").and_then(Value::as_str).is_some()
                     && params.get("summaryIndex").is_some_and(Value::is_number)
             }
@@ -673,14 +736,14 @@ impl CodexProtocolClient {
                 exact_object_keys(
                     params,
                     &["contentIndex", "delta", "itemId", "threadId", "turnId"],
-                ) && t079_notification_identity_matches(params, thread_id, turn_id)
+                ) && t079_notification_identity_matches(params, thread_id.as_str(), turn_id)
                     && params.get("itemId").and_then(Value::as_str).is_some()
                     && params.get("delta").and_then(Value::as_str).is_some()
                     && params.get("contentIndex").is_some_and(Value::is_number)
             }
             "thread/tokenUsage/updated" => {
                 exact_object_keys(params, &["threadId", "tokenUsage", "turnId"])
-                    && t079_notification_identity_matches(params, thread_id, turn_id)
+                    && t079_notification_identity_matches(params, thread_id.as_str(), turn_id)
                     && params
                         .get("tokenUsage")
                         .is_some_and(t079_thread_token_usage_allowed)
@@ -982,7 +1045,7 @@ fn encode_jsonl(value: &Value) -> Result<String, CodexProtocolError> {
 mod t079_notification_regression_tests {
     use super::*;
 
-    fn active_t079_client() -> CodexProtocolClient {
+    fn ready_t079_client() -> CodexProtocolClient {
         let mut client = CodexProtocolClient::default();
         client
             .t079_initialize_request("winds", "Winds", "0.1.0")
@@ -1005,6 +1068,11 @@ mod t079_notification_regression_tests {
                 format!(r#"{{"id":{config_id},"result":{{"config":{{}}}}}}"#).as_bytes(),
             )
             .expect("config response");
+        client
+    }
+
+    fn active_t079_client() -> CodexProtocolClient {
+        let mut client = ready_t079_client();
 
         let (thread_id, _) = client
             .t079_thread_start("/tmp/winds-t079-fixture")
@@ -1105,6 +1173,120 @@ mod t079_notification_regression_tests {
         assert_eq!(
             usage_client.ingest_jsonl_frame(
                 br#"{"method":"thread/tokenUsage/updated","params":{"threadId":"thr_t079_fixture","turnId":"turn_t079_fixture","tokenUsage":{"total":{"totalTokens":1,"inputTokens":1,"cachedInputTokens":0,"cacheWriteInputTokens":0,"outputTokens":0,"reasoningOutputTokens":0},"last":{"totalTokens":1,"inputTokens":1,"cachedInputTokens":0,"cacheWriteInputTokens":0,"outputTokens":0,"reasoningOutputTokens":0},"modelContextWindow":128000,"futureAuthority":true}}}"#
+            ),
+            Err(CodexProtocolError::UnexpectedT079Notification)
+        );
+    }
+
+    #[test]
+    fn t079_started_notifications_can_bind_identity_before_matching_response() {
+        let mut client = ready_t079_client();
+        let (thread_request_id, _) = client
+            .t079_thread_start("/tmp/winds-t079-fixture")
+            .expect("thread request");
+        assert!(matches!(
+            client
+                .ingest_jsonl_frame(
+                    br#"{"method":"thread/started","params":{"thread":{"id":"thr_t079_fixture"}}}"#
+                )
+                .expect("pre-response thread/started"),
+            CodexInbound::Notification { method, .. } if method == "thread/started"
+        ));
+        assert_eq!(client.t079_thread_id.as_deref(), Some("thr_t079_fixture"));
+        client
+            .ingest_jsonl_frame(
+                format!(
+                    r#"{{"id":{thread_request_id},"result":{{"thread":{{"id":"thr_t079_fixture"}}}}}}"#
+                )
+                .as_bytes(),
+            )
+            .expect("matching thread response");
+
+        let native = NativeThreadId::parse("thr_t079_fixture").expect("native thread id");
+        let (turn_request_id, _) = client
+            .t079_turn_start(&native, "/tmp/winds-t079-fixture")
+            .expect("turn request");
+        assert!(matches!(
+            client
+                .ingest_jsonl_frame(
+                    br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_t079_fixture","status":"inProgress"}}}"#
+                )
+                .expect("pre-response turn/started"),
+            CodexInbound::Notification { method, .. } if method == "turn/started"
+        ));
+        assert_eq!(client.t079_turn_id.as_deref(), Some("turn_t079_fixture"));
+        client
+            .ingest_jsonl_frame(
+                format!(
+                    r#"{{"id":{turn_request_id},"result":{{"turn":{{"id":"turn_t079_fixture"}}}}}}"#
+                )
+                .as_bytes(),
+            )
+            .expect("matching turn response");
+    }
+
+    #[test]
+    fn t079_pre_response_identity_mismatch_fails_closed() {
+        let mut thread_client = ready_t079_client();
+        let (thread_request_id, _) = thread_client
+            .t079_thread_start("/tmp/winds-t079-fixture")
+            .expect("thread request");
+        thread_client
+            .ingest_jsonl_frame(
+                br#"{"method":"thread/started","params":{"thread":{"id":"thr_from_notification"}}}"#,
+            )
+            .expect("pre-response thread/started");
+        assert_eq!(
+            thread_client.ingest_jsonl_frame(
+                format!(
+                    r#"{{"id":{thread_request_id},"result":{{"thread":{{"id":"thr_from_response"}}}}}}"#
+                )
+                .as_bytes(),
+            ),
+            Err(CodexProtocolError::MalformedFrame)
+        );
+
+        let mut turn_client = ready_t079_client();
+        let (thread_request_id, _) = turn_client
+            .t079_thread_start("/tmp/winds-t079-fixture")
+            .expect("thread request");
+        turn_client
+            .ingest_jsonl_frame(
+                format!(
+                    r#"{{"id":{thread_request_id},"result":{{"thread":{{"id":"thr_t079_fixture"}}}}}}"#
+                )
+                .as_bytes(),
+            )
+            .expect("thread response");
+        let native = NativeThreadId::parse("thr_t079_fixture").expect("native thread id");
+        let (turn_request_id, _) = turn_client
+            .t079_turn_start(&native, "/tmp/winds-t079-fixture")
+            .expect("turn request");
+        turn_client
+            .ingest_jsonl_frame(
+                br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_from_notification","status":"inProgress"}}}"#,
+            )
+            .expect("pre-response turn/started");
+        assert_eq!(
+            turn_client.ingest_jsonl_frame(
+                format!(
+                    r#"{{"id":{turn_request_id},"result":{{"turn":{{"id":"turn_from_response"}}}}}}"#
+                )
+                .as_bytes(),
+            ),
+            Err(CodexProtocolError::MalformedFrame)
+        );
+    }
+
+    #[test]
+    fn t079_pre_response_status_does_not_introduce_thread_identity() {
+        let mut client = ready_t079_client();
+        client
+            .t079_thread_start("/tmp/winds-t079-fixture")
+            .expect("thread request");
+        assert_eq!(
+            client.ingest_jsonl_frame(
+                br#"{"method":"thread/status/changed","params":{"threadId":"thr_t079_fixture","status":{"type":"idle"}}}"#
             ),
             Err(CodexProtocolError::UnexpectedT079Notification)
         );
