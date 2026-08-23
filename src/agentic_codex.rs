@@ -1517,20 +1517,14 @@ mod t079_notification_regression_tests {
             .as_object_mut()
             .expect("thread fixture object")
             .insert("cwd".to_owned(), json!({}));
-        assert!(!t079_thread_allowed(
-            &malformed_thread,
-            "thr_t079_fixture"
-        ));
+        assert!(!t079_thread_allowed(&malformed_thread, "thr_t079_fixture"));
 
         let mut invalid_history = t079_full_thread_fixture("thr_t079_fixture");
         invalid_history
             .as_object_mut()
             .expect("thread fixture object")
             .insert("historyMode".to_owned(), json!("future"));
-        assert!(!t079_thread_allowed(
-            &invalid_history,
-            "thr_t079_fixture"
-        ));
+        assert!(!t079_thread_allowed(&invalid_history, "thr_t079_fixture"));
 
         let mut malformed_turn = t079_full_turn_fixture("turn_t079_fixture", "inProgress");
         malformed_turn
@@ -1543,8 +1537,7 @@ mod t079_notification_regression_tests {
             "inProgress"
         ));
 
-        let mut invalid_items_view =
-            t079_full_turn_fixture("turn_t079_fixture", "inProgress");
+        let mut invalid_items_view = t079_full_turn_fixture("turn_t079_fixture", "inProgress");
         invalid_items_view
             .as_object_mut()
             .expect("turn fixture object")
