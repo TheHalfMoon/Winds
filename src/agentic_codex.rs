@@ -883,9 +883,7 @@ fn t079_text_element_allowed(value: &Value) -> bool {
         && exact_object_keys(range, &["end", "start"])
         && range.get("start").and_then(Value::as_u64).is_some()
         && range.get("end").and_then(Value::as_u64).is_some()
-        && element
-            .get("placeholder")
-            .is_some_and(t079_string_or_null)
+        && element.get("placeholder").is_some_and(t079_string_or_null)
 }
 
 #[cfg(test)]
@@ -1070,9 +1068,7 @@ fn t079_thread_allowed(value: &Value, thread_id: &str) -> bool {
         return false;
     }
     if let Some(turns) = thread.get("turns")
-        && !turns
-            .as_array()
-            .is_some_and(|turns| turns.is_empty())
+        && !turns.as_array().is_some_and(|turns| turns.is_empty())
     {
         return false;
     }
@@ -1109,8 +1105,7 @@ fn t079_passive_item(value: &Value) -> bool {
                 &["delivery", "id", "memoryCitation", "phase", "text", "type"],
             ) && item.get("text").and_then(Value::as_str).is_some()
                 && item.get("phase").is_some_and(|phase| {
-                    phase.is_null()
-                        || matches!(phase.as_str(), Some("commentary" | "final_answer"))
+                    phase.is_null() || matches!(phase.as_str(), Some("commentary" | "final_answer"))
                 })
                 && item.get("memoryCitation").is_some_and(Value::is_null)
                 && item.get("delivery").is_some_and(|delivery| {
