@@ -630,10 +630,7 @@ impl CodexProtocolClient {
             {
                 return false;
             }
-            let Some(thread_id) = thread
-                .get("id")
-                .and_then(Value::as_str)
-            else {
+            let Some(thread_id) = thread.get("id").and_then(Value::as_str) else {
                 return false;
             };
             if validate_native_thread_id(thread_id).is_err()
