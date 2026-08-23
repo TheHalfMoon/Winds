@@ -776,7 +776,7 @@ mod tests {
         let root = TestRoot::new("drop-live");
         let mut store = store_with_workspace(&root);
         let profile = native_sh_profile();
-        let execution = TerminalExecution::start_native(
+        let mut execution = TerminalExecution::start_native(
             &mut store,
             "execution-drop",
             "workspace-1",
@@ -786,7 +786,19 @@ mod tests {
         )
         .unwrap();
 
+        let output = drain_output(execution.take_output_reader().unwrap());
+        let ready = root.path().join("drop-live-ready");
+        execution
+            .send_input(b"printf ready > drop-live-ready; while :; do sleep 1; done\n")
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !ready.is_file() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(ready.is_file(), "drop fixture shell never became live");
+
         drop(execution);
+        output.join().unwrap();
         let final_record = store.load_execution("execution-drop").unwrap();
         assert_eq!(final_record.status_source, FactSource::WindsObserved);
         assert!(final_record.started_unix_ms.is_some());

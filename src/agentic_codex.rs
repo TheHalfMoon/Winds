@@ -11,6 +11,14 @@ const MAX_PROTOCOL_TEXT_BYTES: usize = 1024;
 const INITIALIZE_REQUEST_ID: u64 = 0;
 #[cfg(test)]
 pub(super) const T079_PROOF_PROMPT: &str = "Return only JSON matching the supplied schema with status WINDS_T079_OK. Do not run commands, use tools, modify files, request permissions, or access workspace contents.";
+#[cfg(test)]
+const T079_MISSING_SYSTEM_BWRAP_WARNING: &str = concat!(
+    "Codex could not find bubblewrap on PATH. ",
+    "Install bubblewrap with your OS package manager. ",
+    "See the sandbox prerequisites: ",
+    "https://developers.openai.com/codex/concepts/sandboxing#prerequisites. ",
+    "Codex will use the bundled bubblewrap in the meantime."
+);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum CodexProtocolError {
@@ -647,6 +655,10 @@ impl CodexProtocolClient {
             return false;
         };
 
+        if method == "configWarning" {
+            return self.t079_missing_bwrap_config_warning_allowed(params);
+        }
+
         if method == "thread/started" {
             if !exact_object_keys(params, &["thread"]) {
                 return false;
@@ -798,6 +810,21 @@ impl CodexProtocolClient {
             }
             _ => false,
         }
+    }
+
+    #[cfg(test)]
+    fn t079_missing_bwrap_config_warning_allowed(&self, params: &Map<String, Value>) -> bool {
+        self.t079_mode
+            && self.t079_thread_id.is_none()
+            && self.t079_turn_id.is_none()
+            && self
+                .t079_requests
+                .iter()
+                .any(|(_, kind)| *kind == T079RequestKind::ConfigRead)
+            && exact_object_keys(params, &["details", "summary"])
+            && params.get("summary").and_then(Value::as_str)
+                == Some(T079_MISSING_SYSTEM_BWRAP_WARNING)
+            && params.get("details").is_some_and(Value::is_null)
     }
 
     fn ingest_server_request(
@@ -1445,7 +1472,7 @@ mod t079_notification_regression_tests {
             .expect("serialize T079 notification fixture")
     }
 
-    fn ready_t079_client() -> CodexProtocolClient {
+    fn config_read_pending_t079_client() -> (CodexProtocolClient, u64) {
         let mut client = CodexProtocolClient::default();
         client
             .t079_initialize_request("winds", "Winds", "0.1.0")
@@ -1463,6 +1490,11 @@ mod t079_notification_regression_tests {
         let (config_id, _) = client
             .t079_config_read("/tmp/winds-t079-fixture")
             .expect("config request");
+        (client, config_id)
+    }
+
+    fn ready_t079_client() -> CodexProtocolClient {
+        let (mut client, config_id) = config_read_pending_t079_client();
         client
             .ingest_jsonl_frame(
                 format!(r#"{{"id":{config_id},"result":{{"config":{{}}}}}}"#).as_bytes(),
@@ -1499,6 +1531,129 @@ mod t079_notification_regression_tests {
             )
             .expect("turn response");
         client
+    }
+
+    #[test]
+    fn t079_exact_missing_bwrap_warning_is_admitted_only_while_config_read_is_pending() {
+        let (mut client, config_id) = config_read_pending_t079_client();
+        let inbound = client
+            .ingest_jsonl_frame(&t079_notification_frame(
+                "configWarning",
+                json!({
+                    "summary": T079_MISSING_SYSTEM_BWRAP_WARNING,
+                    "details": null
+                }),
+            ))
+            .expect("exact MISSING_BWRAP config warning");
+
+        assert!(matches!(
+            inbound,
+            CodexInbound::Notification { method, .. } if method == "configWarning"
+        ));
+
+        assert!(matches!(
+            client
+                .ingest_jsonl_frame(
+                    format!(r#"{{"id":{config_id},"result":{{"config":{{}}}}}}"#).as_bytes(),
+                )
+                .expect("config response after warning"),
+            CodexInbound::Response {
+                id: RpcId::Number(id),
+                ..
+            } if id == config_id
+        ));
+    }
+
+    #[test]
+    fn t079_missing_bwrap_warning_rejects_any_shape_or_summary_drift() {
+        let cases = [
+            json!({
+                "summary": format!("{T079_MISSING_SYSTEM_BWRAP_WARNING}!"),
+                "details": null
+            }),
+            json!({
+                "summary": "Some other recoverable config warning.",
+                "details": null
+            }),
+            json!({
+                "summary": T079_MISSING_SYSTEM_BWRAP_WARNING,
+                "details": "unexpected detail"
+            }),
+            json!({
+                "summary": T079_MISSING_SYSTEM_BWRAP_WARNING,
+                "details": null,
+                "path": "/tmp/config.toml"
+            }),
+            json!({
+                "summary": T079_MISSING_SYSTEM_BWRAP_WARNING,
+                "details": null,
+                "range": {
+                    "start": {"line": 1, "column": 1},
+                    "end": {"line": 1, "column": 2}
+                }
+            }),
+        ];
+
+        for params in cases {
+            let (mut client, _) = config_read_pending_t079_client();
+            assert_eq!(
+                client.ingest_jsonl_frame(&t079_notification_frame("configWarning", params)),
+                Err(CodexProtocolError::UnexpectedT079Notification)
+            );
+        }
+    }
+
+    #[test]
+    fn t079_missing_bwrap_warning_requires_pending_config_read_and_no_bound_thread() {
+        let mut without_config_read = CodexProtocolClient::default();
+        without_config_read
+            .t079_initialize_request("winds", "Winds", "0.1.0")
+            .expect("T079 initialize");
+        without_config_read
+            .ingest_jsonl_frame(br#"{"id":0,"result":{"userAgent":"fixture"}}"#)
+            .expect("initialize response");
+        without_config_read
+            .initialized_notification()
+            .expect("initialized notification");
+
+        assert_eq!(
+            without_config_read.ingest_jsonl_frame(&t079_notification_frame(
+                "configWarning",
+                json!({
+                    "summary": T079_MISSING_SYSTEM_BWRAP_WARNING,
+                    "details": null
+                }),
+            )),
+            Err(CodexProtocolError::UnexpectedT079Notification)
+        );
+
+        let mut after_thread_binding = ready_t079_client();
+        let (thread_request_id, _) = after_thread_binding
+            .t079_thread_start("/tmp/winds-t079-fixture")
+            .expect("thread request");
+        after_thread_binding
+            .ingest_jsonl_frame(
+                format!(
+                    r#"{{"id":{thread_request_id},"result":{{"thread":{{"id":"thr_t079_fixture"}}}}}}"#
+                )
+                .as_bytes(),
+            )
+            .expect("thread response");
+
+        after_thread_binding
+            .t079_config_read("/tmp/winds-t079-fixture")
+            .expect("second config request used only to prove thread binding remains dominant");
+
+        assert_eq!(
+            after_thread_binding.ingest_jsonl_frame(&t079_notification_frame(
+                "configWarning",
+                json!({
+                    "summary": T079_MISSING_SYSTEM_BWRAP_WARNING,
+                    "details": null
+                }),
+            )),
+            Err(CodexProtocolError::UnexpectedT079Notification)
+        );
     }
 
     #[test]
