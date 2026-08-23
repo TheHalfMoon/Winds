@@ -1273,7 +1273,7 @@ fn t079_token_usage_breakdown_allowed(value: &Value) -> bool {
             "reasoningOutputTokens",
             "totalTokens",
         ],
-    ) && usage.values().all(Value::is_number)
+    ) && usage.values().all(|value| value.as_u64().is_some())
 }
 
 #[cfg(test)]
@@ -1290,7 +1290,7 @@ fn t079_thread_token_usage_allowed(value: &Value) -> bool {
             .is_some_and(t079_token_usage_breakdown_allowed)
         && usage
             .get("modelContextWindow")
-            .is_some_and(|value| value.is_null() || value.is_number())
+            .is_some_and(|value| value.is_null() || value.as_u64().is_some())
 }
 
 fn rpc_id_value(id: &RpcId) -> Value {
@@ -1415,6 +1415,28 @@ mod t079_notification_regression_tests {
             "startedAt": null,
             "completedAt": null,
             "durationMs": null
+        })
+    }
+
+    fn t079_token_usage_fixture() -> Value {
+        json!({
+            "total": {
+                "totalTokens": 1,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 0,
+                "reasoningOutputTokens": 0
+            },
+            "last": {
+                "totalTokens": 1,
+                "inputTokens": 1,
+                "cachedInputTokens": 0,
+                "cacheWriteInputTokens": 0,
+                "outputTokens": 0,
+                "reasoningOutputTokens": 0
+            },
+            "modelContextWindow": 128000
         })
     }
 
@@ -1622,6 +1644,51 @@ mod t079_notification_regression_tests {
                     "itemId": "item-1",
                     "contentIndex": 1.5,
                     "delta": "x"
+                }),
+            )),
+            Err(CodexProtocolError::UnexpectedT079Notification)
+        );
+
+        let mut negative_input_tokens_value = t079_token_usage_fixture();
+        negative_input_tokens_value["last"]["inputTokens"] = json!(-1);
+        let mut negative_input_tokens = active_t079_client();
+        assert_eq!(
+            negative_input_tokens.ingest_jsonl_frame(&t079_notification_frame(
+                "thread/tokenUsage/updated",
+                json!({
+                    "threadId": "thr_t079_fixture",
+                    "turnId": "turn_t079_fixture",
+                    "tokenUsage": negative_input_tokens_value
+                }),
+            )),
+            Err(CodexProtocolError::UnexpectedT079Notification)
+        );
+
+        let mut fractional_total_tokens_value = t079_token_usage_fixture();
+        fractional_total_tokens_value["total"]["totalTokens"] = json!(1.5);
+        let mut fractional_total_tokens = active_t079_client();
+        assert_eq!(
+            fractional_total_tokens.ingest_jsonl_frame(&t079_notification_frame(
+                "thread/tokenUsage/updated",
+                json!({
+                    "threadId": "thr_t079_fixture",
+                    "turnId": "turn_t079_fixture",
+                    "tokenUsage": fractional_total_tokens_value
+                }),
+            )),
+            Err(CodexProtocolError::UnexpectedT079Notification)
+        );
+
+        let mut negative_context_window_value = t079_token_usage_fixture();
+        negative_context_window_value["modelContextWindow"] = json!(-1);
+        let mut negative_context_window = active_t079_client();
+        assert_eq!(
+            negative_context_window.ingest_jsonl_frame(&t079_notification_frame(
+                "thread/tokenUsage/updated",
+                json!({
+                    "threadId": "thr_t079_fixture",
+                    "turnId": "turn_t079_fixture",
+                    "tokenUsage": negative_context_window_value
                 }),
             )),
             Err(CodexProtocolError::UnexpectedT079Notification)
