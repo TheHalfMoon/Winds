@@ -850,6 +850,100 @@ fn t079_thread_status_allowed(value: &Value) -> bool {
 }
 
 #[cfg(test)]
+fn t079_string_or_null(value: &Value) -> bool {
+    value.is_null() || value.as_str().is_some()
+}
+
+#[cfg(test)]
+fn t079_i64_or_null(value: &Value) -> bool {
+    value.is_null() || value.as_i64().is_some()
+}
+
+#[cfg(test)]
+fn t079_bool_or_null(value: &Value) -> bool {
+    value.is_null() || value.as_bool().is_some()
+}
+
+#[cfg(test)]
+fn t079_string_array(value: &Value) -> bool {
+    value
+        .as_array()
+        .is_some_and(|values| values.iter().all(|value| value.as_str().is_some()))
+}
+
+#[cfg(test)]
+fn t079_text_element_allowed(value: &Value) -> bool {
+    let Some(element) = value.as_object() else {
+        return false;
+    };
+    let Some(range) = element.get("byteRange").and_then(Value::as_object) else {
+        return false;
+    };
+    exact_object_keys(element, &["byteRange", "placeholder"])
+        && exact_object_keys(range, &["end", "start"])
+        && range.get("start").and_then(Value::as_u64).is_some()
+        && range.get("end").and_then(Value::as_u64).is_some()
+        && element
+            .get("placeholder")
+            .is_some_and(t079_string_or_null)
+}
+
+#[cfg(test)]
+fn t079_user_input_allowed(value: &Value) -> bool {
+    let Some(input) = value.as_object() else {
+        return false;
+    };
+    exact_object_keys(input, &["text", "textElements", "type"])
+        && input.get("type").and_then(Value::as_str) == Some("text")
+        && input.get("text").and_then(Value::as_str).is_some()
+        && input
+            .get("textElements")
+            .and_then(Value::as_array)
+            .is_some_and(|elements| elements.iter().all(t079_text_element_allowed))
+}
+
+#[cfg(test)]
+fn t079_session_source_allowed(value: &Value) -> bool {
+    matches!(
+        value.as_str(),
+        Some("cli" | "vscode" | "exec" | "appServer" | "unknown")
+    )
+}
+
+#[cfg(test)]
+fn t079_thread_section_allowed(value: &Value) -> bool {
+    let Some(section) = value.as_object() else {
+        return false;
+    };
+    if !exact_object_keys(section, &["appearance", "id", "name"])
+        || section.get("id").and_then(Value::as_str).is_none()
+        || section.get("name").and_then(Value::as_str).is_none()
+    {
+        return false;
+    }
+    match section.get("appearance") {
+        Some(Value::Null) => true,
+        Some(Value::Object(appearance)) => {
+            exact_object_keys(appearance, &["color", "icon"])
+                && appearance.get("icon").is_some_and(t079_string_or_null)
+                && appearance.get("color").is_some_and(t079_string_or_null)
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+fn t079_git_info_allowed(value: &Value) -> bool {
+    let Some(info) = value.as_object() else {
+        return false;
+    };
+    exact_object_keys(info, &["branch", "originUrl", "sha"])
+        && info.get("sha").is_some_and(t079_string_or_null)
+        && info.get("branch").is_some_and(t079_string_or_null)
+        && info.get("originUrl").is_some_and(t079_string_or_null)
+}
+
+#[cfg(test)]
 fn t079_thread_allowed(value: &Value, thread_id: &str) -> bool {
     const THREAD_KEYS: &[&str] = &[
         "agentNickname",
@@ -889,6 +983,72 @@ fn t079_thread_allowed(value: &Value, thread_id: &str) -> bool {
     {
         return false;
     }
+    for key in [
+        "agentNickname",
+        "agentRole",
+        "forkedFromId",
+        "name",
+        "parentThreadId",
+        "projectId",
+        "threadSource",
+    ] {
+        if let Some(value) = thread.get(key)
+            && !t079_string_or_null(value)
+        {
+            return false;
+        }
+    }
+    for key in ["cliVersion", "cwd", "preview", "sessionId"] {
+        if let Some(value) = thread.get(key)
+            && value.as_str().is_none()
+        {
+            return false;
+        }
+    }
+    for key in ["createdAt", "updatedAt"] {
+        if let Some(value) = thread.get(key)
+            && value.as_i64().is_none()
+        {
+            return false;
+        }
+    }
+    for key in ["recencyAt", "sectionEnteredAt"] {
+        if let Some(value) = thread.get(key)
+            && !t079_i64_or_null(value)
+        {
+            return false;
+        }
+    }
+    if let Some(value) = thread.get("canAcceptDirectInput")
+        && !t079_bool_or_null(value)
+    {
+        return false;
+    }
+    if let Some(value) = thread.get("ephemeral")
+        && value.as_bool().is_none()
+    {
+        return false;
+    }
+    if let Some(value) = thread.get("historyMode")
+        && !matches!(value.as_str(), Some("legacy" | "paginated"))
+    {
+        return false;
+    }
+    if let Some(value) = thread.get("modelProvider")
+        && value.as_str() != Some("openai")
+    {
+        return false;
+    }
+    if let Some(value) = thread.get("path")
+        && !t079_string_or_null(value)
+    {
+        return false;
+    }
+    if let Some(value) = thread.get("source")
+        && !t079_session_source_allowed(value)
+    {
+        return false;
+    }
     if let Some(status) = thread.get("status")
         && !t079_thread_status_allowed(status)
     {
@@ -896,6 +1056,23 @@ fn t079_thread_allowed(value: &Value, thread_id: &str) -> bool {
     }
     if let Some(extra) = thread.get("extra")
         && !(extra.is_null() || extra.as_object().is_some_and(|extra| extra.is_empty()))
+    {
+        return false;
+    }
+    if let Some(section) = thread.get("section")
+        && !(section.is_null() || t079_thread_section_allowed(section))
+    {
+        return false;
+    }
+    if let Some(info) = thread.get("gitInfo")
+        && !(info.is_null() || t079_git_info_allowed(info))
+    {
+        return false;
+    }
+    if let Some(turns) = thread.get("turns")
+        && !turns
+            .as_array()
+            .is_some_and(|turns| turns.is_empty())
     {
         return false;
     }
@@ -910,17 +1087,45 @@ fn t079_passive_item(value: &Value) -> bool {
     let Some(kind) = item.get("type").and_then(Value::as_str) else {
         return false;
     };
-    if item.get("id").and_then(Value::as_str).is_none() {
+    if !item
+        .get("id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| validate_nonempty_exact(id).is_ok())
+    {
         return false;
     }
     match kind {
-        "userMessage" => object_keys_within(item, &["clientId", "content", "id", "type"]),
-        "agentMessage" => object_keys_within(
-            item,
-            &["delivery", "id", "memoryCitation", "phase", "text", "type"],
-        ),
-        "plan" => object_keys_within(item, &["id", "text", "type"]),
-        "reasoning" => object_keys_within(item, &["content", "id", "summary", "type"]),
+        "userMessage" => {
+            exact_object_keys(item, &["clientId", "content", "id", "type"])
+                && item.get("clientId").is_some_and(t079_string_or_null)
+                && item
+                    .get("content")
+                    .and_then(Value::as_array)
+                    .is_some_and(|content| content.iter().all(t079_user_input_allowed))
+        }
+        "agentMessage" => {
+            exact_object_keys(
+                item,
+                &["delivery", "id", "memoryCitation", "phase", "text", "type"],
+            ) && item.get("text").and_then(Value::as_str).is_some()
+                && item.get("phase").is_some_and(|phase| {
+                    phase.is_null()
+                        || matches!(phase.as_str(), Some("commentary" | "final_answer"))
+                })
+                && item.get("memoryCitation").is_some_and(Value::is_null)
+                && item.get("delivery").is_some_and(|delivery| {
+                    delivery.is_null() || delivery.as_str() == Some("async")
+                })
+        }
+        "plan" => {
+            exact_object_keys(item, &["id", "text", "type"])
+                && item.get("text").and_then(Value::as_str).is_some()
+        }
+        "reasoning" => {
+            exact_object_keys(item, &["content", "id", "summary", "type"])
+                && item.get("summary").is_some_and(t079_string_array)
+                && item.get("content").is_some_and(t079_string_array)
+        }
         "contextCompaction" => exact_object_keys(item, &["id", "type"]),
         _ => false,
     }
@@ -954,6 +1159,23 @@ fn t079_turn_allowed(value: &Value, turn_id: &str, expected_status: &str) -> boo
             .is_some_and(|items| items.iter().all(t079_passive_item))
     {
         return false;
+    }
+    if let Some(items_view) = turn.get("itemsView")
+        && !matches!(items_view.as_str(), Some("notLoaded" | "summary" | "full"))
+    {
+        return false;
+    }
+    if let Some(error) = turn.get("error")
+        && !error.is_null()
+    {
+        return false;
+    }
+    for key in ["completedAt", "durationMs", "startedAt"] {
+        if let Some(value) = turn.get(key)
+            && !t079_i64_or_null(value)
+        {
+            return false;
+        }
     }
     true
 }
@@ -1083,7 +1305,7 @@ mod t079_notification_regression_tests {
             .expect("T079 initialize");
         assert_eq!(
             client
-                .ingest_jsonl_frame(br#"{"id":0,"result":{"userAgent":"fixture"}}"#)
+                .ingest_jsonl_frame(br#"{\"id\":0,\"result\":{\"userAgent\":\"fixture\"}}"#)
                 .expect("initialize response"),
             CodexInbound::InitializeAccepted
         );
@@ -1096,7 +1318,7 @@ mod t079_notification_regression_tests {
             .expect("config request");
         client
             .ingest_jsonl_frame(
-                format!(r#"{{"id":{config_id},"result":{{"config":{{}}}}}}"#).as_bytes(),
+                format!(r#"{{\"id\":{config_id},\"result\":{{\"config\":{{}}}}}}"#).as_bytes(),
             )
             .expect("config response");
         client
@@ -1111,7 +1333,7 @@ mod t079_notification_regression_tests {
         client
             .ingest_jsonl_frame(
                 format!(
-                    r#"{{"id":{thread_id},"result":{{"thread":{{"id":"thr_t079_fixture"}}}}}}"#
+                    r#"{{\"id\":{thread_id},\"result\":{{\"thread\":{{\"id\":\"thr_t079_fixture\"}}}}}}"#
                 )
                 .as_bytes(),
             )
@@ -1124,7 +1346,7 @@ mod t079_notification_regression_tests {
         client
             .ingest_jsonl_frame(
                 format!(
-                    r#"{{"id":{turn_request_id},"result":{{"turn":{{"id":"turn_t079_fixture"}}}}}}"#
+                    r#"{{\"id\":{turn_request_id},\"result\":{{\"turn\":{{\"id\":\"turn_t079_fixture\"}}}}}}"#
                 )
                 .as_bytes(),
             )
@@ -1135,9 +1357,9 @@ mod t079_notification_regression_tests {
     #[test]
     fn t079_unknown_notifications_fail_closed_even_with_empty_or_plausible_params() {
         for frame in [
-            br#"{"method":"future/authorityChanged","params":{}}"#.as_slice(),
-            br#"{"method":"future/authorityChanged","params":{"threadId":"thr_t079_fixture","turnId":"turn_t079_fixture"}}"#.as_slice(),
-            br#"{"method":"item/futurePassiveDelta","params":{"threadId":"thr_t079_fixture","turnId":"turn_t079_fixture","itemId":"item-1","delta":"x"}}"#.as_slice(),
+            br#"{\"method\":\"future/authorityChanged\",\"params\":{}}"#.as_slice(),
+            br#"{\"method\":\"future/authorityChanged\",\"params\":{\"threadId\":\"thr_t079_fixture\",\"turnId\":\"turn_t079_fixture\"}}"#.as_slice(),
+            br#"{\"method\":\"item/futurePassiveDelta\",\"params\":{\"threadId\":\"thr_t079_fixture\",\"turnId\":\"turn_t079_fixture\",\"itemId\":\"item-1\",\"delta\":\"x\"}}"#.as_slice(),
         ] {
             let mut client = active_t079_client();
             assert_eq!(
@@ -1154,14 +1376,14 @@ mod t079_notification_regression_tests {
             .t079_initialize_request("winds", "Winds", "0.1.0")
             .expect("T079 initialize");
         before_thread
-            .ingest_jsonl_frame(br#"{"id":0,"result":{"userAgent":"fixture"}}"#)
+            .ingest_jsonl_frame(br#"{\"id\":0,\"result\":{\"userAgent\":\"fixture\"}}"#)
             .expect("initialize response");
         before_thread
             .initialized_notification()
             .expect("initialized notification");
         assert_eq!(
             before_thread.ingest_jsonl_frame(
-                br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_t079_fixture","status":"inProgress"}}}"#
+                br#"{\"method\":\"turn/started\",\"params\":{\"threadId\":\"thr_t079_fixture\",\"turn\":{\"id\":\"turn_t079_fixture\",\"status\":\"inProgress\"}}}"#
             ),
             Err(CodexProtocolError::UnexpectedT079Notification)
         );
@@ -1170,7 +1392,7 @@ mod t079_notification_regression_tests {
         assert!(matches!(
             client
                 .ingest_jsonl_frame(
-                    br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_t079_fixture","status":"inProgress"}}}"#
+                    br#"{\"method\":\"turn/started\",\"params\":{\"threadId\":\"thr_t079_fixture\",\"turn\":{\"id\":\"turn_t079_fixture\",\"status\":\"inProgress\"}}}"#
                 )
                 .expect("allowed turn start"),
             CodexInbound::Notification { method, .. } if method == "turn/started"
@@ -1179,7 +1401,7 @@ mod t079_notification_regression_tests {
         let mut wrong_identity = active_t079_client();
         assert_eq!(
             wrong_identity.ingest_jsonl_frame(
-                br#"{"method":"item/agentMessage/delta","params":{"threadId":"thr_t079_fixture","turnId":"turn_other","itemId":"item-1","delta":"x"}}"#
+                br#"{\"method\":\"item/agentMessage/delta\",\"params\":{\"threadId\":\"thr_t079_fixture\",\"turnId\":\"turn_other\",\"itemId\":\"item-1\",\"delta\":\"x\"}}"#
             ),
             Err(CodexProtocolError::UnexpectedT079Notification)
         );
@@ -1188,10 +1410,10 @@ mod t079_notification_regression_tests {
     #[test]
     fn t079_nested_notification_objects_reject_unknown_keys() {
         for frame in [
-            br#"{"method":"thread/started","params":{"thread":{"id":"thr_t079_fixture","futureAuthority":true}}}"#.as_slice(),
-            br#"{"method":"thread/status/changed","params":{"threadId":"thr_t079_fixture","status":{"type":"idle","futureAuthority":true}}}"#.as_slice(),
-            br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_t079_fixture","status":"inProgress","futureAuthority":true}}}"#.as_slice(),
-            br#"{"method":"item/started","params":{"threadId":"thr_t079_fixture","turnId":"turn_t079_fixture","startedAtMs":1,"item":{"type":"agentMessage","id":"item-1","futureAuthority":true}}}"#.as_slice(),
+            br#"{\"method\":\"thread/started\",\"params\":{\"thread\":{\"id\":\"thr_t079_fixture\",\"futureAuthority\":true}}}"#.as_slice(),
+            br#"{\"method\":\"thread/status/changed\",\"params\":{\"threadId\":\"thr_t079_fixture\",\"status\":{\"type\":\"idle\",\"futureAuthority\":true}}}"#.as_slice(),
+            br#"{\"method\":\"turn/started\",\"params\":{\"threadId\":\"thr_t079_fixture\",\"turn\":{\"id\":\"turn_t079_fixture\",\"status\":\"inProgress\",\"futureAuthority\":true}}}"#.as_slice(),
+            br#"{\"method\":\"item/started\",\"params\":{\"threadId\":\"thr_t079_fixture\",\"turnId\":\"turn_t079_fixture\",\"startedAtMs\":1,\"item\":{\"type\":\"agentMessage\",\"id\":\"item-1\",\"futureAuthority\":true}}}"#.as_slice(),
         ] {
             let mut client = active_t079_client();
             assert_eq!(
@@ -1203,10 +1425,60 @@ mod t079_notification_regression_tests {
         let mut usage_client = active_t079_client();
         assert_eq!(
             usage_client.ingest_jsonl_frame(
-                br#"{"method":"thread/tokenUsage/updated","params":{"threadId":"thr_t079_fixture","turnId":"turn_t079_fixture","tokenUsage":{"total":{"totalTokens":1,"inputTokens":1,"cachedInputTokens":0,"cacheWriteInputTokens":0,"outputTokens":0,"reasoningOutputTokens":0},"last":{"totalTokens":1,"inputTokens":1,"cachedInputTokens":0,"cacheWriteInputTokens":0,"outputTokens":0,"reasoningOutputTokens":0},"modelContextWindow":128000,"futureAuthority":true}}}"#
+                br#"{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"threadId\":\"thr_t079_fixture\",\"turnId\":\"turn_t079_fixture\",\"tokenUsage\":{\"total\":{\"totalTokens\":1,\"inputTokens\":1,\"cachedInputTokens\":0,\"cacheWriteInputTokens\":0,\"outputTokens\":0,\"reasoningOutputTokens\":0},\"last\":{\"totalTokens\":1,\"inputTokens\":1,\"cachedInputTokens\":0,\"cacheWriteInputTokens\":0,\"outputTokens\":0,\"reasoningOutputTokens\":0},\"modelContextWindow\":128000,\"futureAuthority\":true}}}"#
             ),
             Err(CodexProtocolError::UnexpectedT079Notification)
         );
+    }
+
+    #[test]
+    fn t079_known_nested_fields_require_exact_value_shapes() {
+        assert!(!t079_thread_allowed(
+            &json!({"id":"thr_t079_fixture","cwd":{}}),
+            "thr_t079_fixture"
+        ));
+        assert!(!t079_thread_allowed(
+            &json!({"id":"thr_t079_fixture","historyMode":"future"}),
+            "thr_t079_fixture"
+        ));
+        assert!(!t079_turn_allowed(
+            &json!({"id":"turn_t079_fixture","status":"inProgress","durationMs":{}}),
+            "turn_t079_fixture",
+            "inProgress"
+        ));
+        assert!(!t079_turn_allowed(
+            &json!({"id":"turn_t079_fixture","status":"inProgress","itemsView":"future"}),
+            "turn_t079_fixture",
+            "inProgress"
+        ));
+        assert!(!t079_passive_item(&json!({
+            "type":"agentMessage",
+            "id":"item-1",
+            "text":{},
+            "phase":null,
+            "memoryCitation":null,
+            "delivery":null
+        })));
+        assert!(!t079_passive_item(&json!({
+            "type":"userMessage",
+            "id":"item-1",
+            "clientId":null,
+            "content":[{"type":"image","url":"https://example.invalid/image.png"}]
+        })));
+        assert!(t079_passive_item(&json!({
+            "type":"agentMessage",
+            "id":"item-1",
+            "text":"ok",
+            "phase":"final_answer",
+            "memoryCitation":null,
+            "delivery":null
+        })));
+        assert!(t079_passive_item(&json!({
+            "type":"userMessage",
+            "id":"item-1",
+            "clientId":null,
+            "content":[{"type":"text","text":T079_PROOF_PROMPT,"textElements":[]}]
+        })));
     }
 
     #[test]
@@ -1218,7 +1490,7 @@ mod t079_notification_regression_tests {
         assert!(matches!(
             client
                 .ingest_jsonl_frame(
-                    br#"{"method":"thread/started","params":{"thread":{"id":"thr_t079_fixture"}}}"#
+                    br#"{\"method\":\"thread/started\",\"params\":{\"thread\":{\"id\":\"thr_t079_fixture\"}}}"#
                 )
                 .expect("pre-response thread/started"),
             CodexInbound::Notification { method, .. } if method == "thread/started"
@@ -1227,7 +1499,7 @@ mod t079_notification_regression_tests {
         client
             .ingest_jsonl_frame(
                 format!(
-                    r#"{{"id":{thread_request_id},"result":{{"thread":{{"id":"thr_t079_fixture"}}}}}}"#
+                    r#"{{\"id\":{thread_request_id},\"result\":{{\"thread\":{{\"id\":\"thr_t079_fixture\"}}}}}}"#
                 )
                 .as_bytes(),
             )
@@ -1240,7 +1512,7 @@ mod t079_notification_regression_tests {
         assert!(matches!(
             client
                 .ingest_jsonl_frame(
-                    br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_t079_fixture","status":"inProgress"}}}"#
+                    br#"{\"method\":\"turn/started\",\"params\":{\"threadId\":\"thr_t079_fixture\",\"turn\":{\"id\":\"turn_t079_fixture\",\"status\":\"inProgress\"}}}"#
                 )
                 .expect("pre-response turn/started"),
             CodexInbound::Notification { method, .. } if method == "turn/started"
@@ -1249,7 +1521,7 @@ mod t079_notification_regression_tests {
         client
             .ingest_jsonl_frame(
                 format!(
-                    r#"{{"id":{turn_request_id},"result":{{"turn":{{"id":"turn_t079_fixture"}}}}}}"#
+                    r#"{{\"id\":{turn_request_id},\"result\":{{\"turn\":{{\"id\":\"turn_t079_fixture\"}}}}}}"#
                 )
                 .as_bytes(),
             )
@@ -1264,13 +1536,13 @@ mod t079_notification_regression_tests {
             .expect("thread request");
         thread_client
             .ingest_jsonl_frame(
-                br#"{"method":"thread/started","params":{"thread":{"id":"thr_from_notification"}}}"#,
+                br#"{\"method\":\"thread/started\",\"params\":{\"thread\":{\"id\":\"thr_from_notification\"}}}"#,
             )
             .expect("pre-response thread/started");
         assert_eq!(
             thread_client.ingest_jsonl_frame(
                 format!(
-                    r#"{{"id":{thread_request_id},"result":{{"thread":{{"id":"thr_from_response"}}}}}}"#
+                    r#"{{\"id\":{thread_request_id},\"result\":{{\"thread\":{{\"id\":\"thr_from_response\"}}}}}}"#
                 )
                 .as_bytes(),
             ),
@@ -1284,7 +1556,7 @@ mod t079_notification_regression_tests {
         turn_client
             .ingest_jsonl_frame(
                 format!(
-                    r#"{{"id":{thread_request_id},"result":{{"thread":{{"id":"thr_t079_fixture"}}}}}}"#
+                    r#"{{\"id\":{thread_request_id},\"result\":{{\"thread\":{{\"id\":\"thr_t079_fixture\"}}}}}}"#
                 )
                 .as_bytes(),
             )
@@ -1295,13 +1567,13 @@ mod t079_notification_regression_tests {
             .expect("turn request");
         turn_client
             .ingest_jsonl_frame(
-                br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_from_notification","status":"inProgress"}}}"#,
+                br#"{\"method\":\"turn/started\",\"params\":{\"threadId\":\"thr_t079_fixture\",\"turn\":{\"id\":\"turn_from_notification\",\"status\":\"inProgress\"}}}"#,
             )
             .expect("pre-response turn/started");
         assert_eq!(
             turn_client.ingest_jsonl_frame(
                 format!(
-                    r#"{{"id":{turn_request_id},"result":{{"turn":{{"id":"turn_from_response"}}}}}}"#
+                    r#"{{\"id\":{turn_request_id},\"result\":{{\"turn\":{{\"id\":\"turn_from_response\"}}}}}}"#
                 )
                 .as_bytes(),
             ),
@@ -1317,7 +1589,7 @@ mod t079_notification_regression_tests {
             .expect("thread request");
         assert_eq!(
             client.ingest_jsonl_frame(
-                br#"{"method":"thread/status/changed","params":{"threadId":"thr_t079_fixture","status":{"type":"idle"}}}"#
+                br#"{\"method\":\"thread/status/changed\",\"params\":{\"threadId\":\"thr_t079_fixture\",\"status\":{\"type\":\"idle\"}}}"#
             ),
             Err(CodexProtocolError::UnexpectedT079Notification)
         );
@@ -1331,14 +1603,14 @@ mod t079_notification_regression_tests {
             .expect("thread request");
         thread_client
             .ingest_jsonl_frame(
-                br#"{"method":"thread/started","params":{"thread":{"id":"thr_from_notification"}}}"#,
+                br#"{\"method\":\"thread/started\",\"params\":{\"thread\":{\"id\":\"thr_from_notification\"}}}"#,
             )
             .expect("pre-response thread/started");
         assert_eq!(
             thread_client
                 .ingest_jsonl_frame(
                     format!(
-                        r#"{{"id":{thread_request_id},"error":{{"code":-32000,"message":"fixture"}}}}"#
+                        r#"{{\"id\":{thread_request_id},\"error\":{{\"code\":-32000,\"message\":\"fixture\"}}}}"#
                     )
                     .as_bytes(),
                 )
@@ -1354,7 +1626,7 @@ mod t079_notification_regression_tests {
         assert_eq!(thread_client.t079_turn_id, None);
         assert_eq!(
             thread_client.ingest_jsonl_frame(
-                br#"{"method":"thread/started","params":{"thread":{"id":"thr_after_error"}}}"#
+                br#"{\"method\":\"thread/started\",\"params\":{\"thread\":{\"id\":\"thr_after_error\"}}}"#
             ),
             Err(CodexProtocolError::UnexpectedT079Notification)
         );
@@ -1366,7 +1638,7 @@ mod t079_notification_regression_tests {
         turn_client
             .ingest_jsonl_frame(
                 format!(
-                    r#"{{"id":{thread_request_id},"result":{{"thread":{{"id":"thr_t079_fixture"}}}}}}"#
+                    r#"{{\"id\":{thread_request_id},\"result\":{{\"thread\":{{\"id\":\"thr_t079_fixture\"}}}}}}"#
                 )
                 .as_bytes(),
             )
@@ -1377,14 +1649,14 @@ mod t079_notification_regression_tests {
             .expect("turn request");
         turn_client
             .ingest_jsonl_frame(
-                br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_from_notification","status":"inProgress"}}}"#,
+                br#"{\"method\":\"turn/started\",\"params\":{\"threadId\":\"thr_t079_fixture\",\"turn\":{\"id\":\"turn_from_notification\",\"status\":\"inProgress\"}}}"#,
             )
             .expect("pre-response turn/started");
         assert_eq!(
             turn_client
                 .ingest_jsonl_frame(
                     format!(
-                        r#"{{"id":{turn_request_id},"error":{{"code":-32000,"message":"fixture"}}}}"#
+                        r#"{{\"id\":{turn_request_id},\"error\":{{\"code\":-32000,\"message\":\"fixture\"}}}}"#
                     )
                     .as_bytes(),
                 )
@@ -1403,7 +1675,7 @@ mod t079_notification_regression_tests {
         assert_eq!(turn_client.t079_turn_id, None);
         assert_eq!(
             turn_client.ingest_jsonl_frame(
-                br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_after_error","status":"inProgress"}}}"#
+                br#"{\"method\":\"turn/started\",\"params\":{\"threadId\":\"thr_t079_fixture\",\"turn\":{\"id\":\"turn_after_error\",\"status\":\"inProgress\"}}}"#
             ),
             Err(CodexProtocolError::UnexpectedT079Notification)
         );
