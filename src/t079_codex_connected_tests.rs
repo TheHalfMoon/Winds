@@ -1,6 +1,7 @@
 use crate::agentic_codex::{
-    CodexInbound, CodexProtocolClient, EvidenceClass, MAX_CODEX_JSONL_FRAME_BYTES, NativeThreadId,
-    RpcId, ServerRequestDisposition, T079_PROOF_PROMPT,
+    CodexInbound, CodexProtocolClient, CodexProtocolError, EvidenceClass,
+    MAX_CODEX_JSONL_FRAME_BYTES, NativeThreadId, RpcId, ServerRequestDisposition,
+    T079_PROOF_PROMPT,
 };
 use crate::agentic_runtime::{
     EvidenceSource, RuntimeDiscovery, RuntimeDiscoveryState, RuntimeExecutableIdentity,
@@ -226,6 +227,75 @@ impl BoundCodexExecutable {
 fn parse_outbound(line: &str) -> Value {
     assert!(line.ends_with('\n'));
     serde_json::from_str(line.trim_end()).expect("T079 outbound JSONL must be valid JSON")
+}
+
+fn t079_diagnostic_identifier(value: &str) -> String {
+    if value.len() <= 96
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'/'))
+    {
+        value.to_owned()
+    } else {
+        format!("<redacted-identifier-len:{}>", value.len())
+    }
+}
+
+fn t079_diagnostic_object_keys(value: Option<&Value>) -> String {
+    let Some(object) = value.and_then(Value::as_object) else {
+        return "NONE".to_owned();
+    };
+    let mut keys = object
+        .keys()
+        .map(|key| t079_diagnostic_identifier(key))
+        .collect::<Vec<_>>();
+    keys.sort_unstable();
+    keys.join(",")
+}
+
+fn t079_rejection_metadata(frame: &[u8], phase: &str) -> String {
+    let Ok(value) = serde_json::from_slice::<Value>(frame) else {
+        return format!("phase={phase};frame=UNPARSEABLE_JSON");
+    };
+    let method = value
+        .get("method")
+        .and_then(Value::as_str)
+        .map(t079_diagnostic_identifier)
+        .unwrap_or_else(|| "NON_NOTIFICATION".to_owned());
+    let params = value.get("params");
+
+    let mut fields = vec![
+        format!("phase={phase}"),
+        format!("method={method}"),
+        format!("param_keys={}", t079_diagnostic_object_keys(params)),
+    ];
+
+    for key in ["thread", "turn", "item", "status", "tokenUsage"] {
+        let nested = params.and_then(|params| params.get(key));
+        if nested.is_some_and(Value::is_object) {
+            fields.push(format!(
+                "{key}_keys={}",
+                t079_diagnostic_object_keys(nested)
+            ));
+        }
+    }
+
+    fields.join(";")
+}
+
+fn ingest_t079_frame_with_rejection_metadata(
+    client: &mut CodexProtocolClient,
+    frame: &[u8],
+    phase: &str,
+) -> ProofResult<CodexInbound> {
+    let metadata = t079_rejection_metadata(frame, phase);
+    match client.ingest_jsonl_frame(frame) {
+        Ok(inbound) => Ok(inbound),
+        Err(CodexProtocolError::UnexpectedT079Notification) => Err(format!(
+            "T079 Codex protocol failure: rejected notification metadata: {metadata}"
+        )),
+        Err(error) => Err(format!("T079 Codex protocol failure: {error}")),
+    }
 }
 
 fn initialized_client() -> CodexProtocolClient {
@@ -1397,21 +1467,25 @@ fn handle_server_request<W: Write>(
     ))
 }
 
+#[derive(Debug, Clone, Copy)]
+struct T079ResponseWait {
+    expected_id: u64,
+    phase: &'static str,
+}
+
 fn wait_for_response<W: Write>(
     client: &mut CodexProtocolClient,
     stdin: &mut W,
     receiver: &Receiver<FrameResult>,
-    expected_id: u64,
+    wait: T079ResponseWait,
     deadline: Instant,
     total_bytes: &mut usize,
     frame_count: &mut usize,
 ) -> ProofResult<Value> {
+    let T079ResponseWait { expected_id, phase } = wait;
     loop {
         let frame = receive_frame(receiver, deadline, total_bytes, frame_count)?;
-        match client
-            .ingest_jsonl_frame(&frame)
-            .map_err(|error| format!("T079 Codex protocol failure: {error}"))?
-        {
+        match ingest_t079_frame_with_rejection_metadata(client, &frame, phase)? {
             CodexInbound::Response {
                 id: RpcId::Number(id),
                 result,
@@ -1597,7 +1671,10 @@ fn run_connected_proof(
             &mut client,
             &mut stdin,
             &receiver,
-            config_id,
+            T079ResponseWait {
+                expected_id: config_id,
+                phase: "config/read",
+            },
             deadline,
             &mut total_bytes,
             &mut frame_count,
@@ -1612,7 +1689,10 @@ fn run_connected_proof(
             &mut client,
             &mut stdin,
             &receiver,
-            thread_id,
+            T079ResponseWait {
+                expected_id: thread_id,
+                phase: "thread/start",
+            },
             deadline,
             &mut total_bytes,
             &mut frame_count,
@@ -1632,7 +1712,10 @@ fn run_connected_proof(
             &mut client,
             &mut stdin,
             &receiver,
-            turn_request_id,
+            T079ResponseWait {
+                expected_id: turn_request_id,
+                phase: "turn/start",
+            },
             deadline,
             &mut total_bytes,
             &mut frame_count,
@@ -1642,10 +1725,7 @@ fn run_connected_proof(
 
         loop {
             let frame = receive_frame(&receiver, deadline, &mut total_bytes, &mut frame_count)?;
-            match client
-                .ingest_jsonl_frame(&frame)
-                .map_err(|error| format!("T079 Codex protocol failure: {error}"))?
-            {
+            match ingest_t079_frame_with_rejection_metadata(&mut client, &frame, "turn/runtime")? {
                 CodexInbound::Notification {
                     method,
                     params,
@@ -2434,6 +2514,46 @@ fn forbidden_runtime_activity_is_detected_fail_closed() {
             &json!({"item": {"type": kind, "text": "{}"}})
         ));
     }
+}
+
+#[test]
+fn t079_rejection_metadata_exposes_shape_without_scalar_values() {
+    let frame = br#"{"method":"future/notification","params":{"secretField":"DO_NOT_PRINT","thread":{"id":"secret-thread","path":"/secret/path"},"item":{"type":"secretType","text":"secret-text"}}}"#;
+    let metadata = t079_rejection_metadata(frame, "fixture-phase");
+
+    assert!(metadata.contains("phase=fixture-phase"));
+    assert!(metadata.contains("method=future/notification"));
+    assert!(metadata.contains("param_keys=item,secretField,thread"));
+    assert!(metadata.contains("thread_keys=id,path"));
+    assert!(metadata.contains("item_keys=text,type"));
+
+    for forbidden in [
+        "DO_NOT_PRINT",
+        "secret-thread",
+        "/secret/path",
+        "secretType",
+        "secret-text",
+    ] {
+        assert!(
+            !metadata.contains(forbidden),
+            "diagnostic leaked scalar value: {forbidden}"
+        );
+    }
+}
+
+#[test]
+fn t079_unexpected_notification_error_reports_only_rejection_metadata() {
+    let mut client = initialized_client();
+    let frame = br#"{"method":"future/notification","params":{"futureKey":"PRIVATE_VALUE"}}"#;
+
+    let error =
+        ingest_t079_frame_with_rejection_metadata(&mut client, frame, "fixture-wait").unwrap_err();
+
+    assert!(error.contains("rejected notification metadata"));
+    assert!(error.contains("phase=fixture-wait"));
+    assert!(error.contains("method=future/notification"));
+    assert!(error.contains("param_keys=futureKey"));
+    assert!(!error.contains("PRIVATE_VALUE"));
 }
 
 #[test]
