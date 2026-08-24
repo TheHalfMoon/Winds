@@ -13,6 +13,8 @@ use sha2::{Digest, Sha256};
 use std::env;
 #[cfg(target_os = "linux")]
 use std::error::Error;
+#[cfg(target_os = "linux")]
+use std::ffi::CString;
 use std::fs;
 #[cfg(target_os = "linux")]
 use std::fs::File;
@@ -20,7 +22,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 #[cfg(target_os = "linux")]
 use std::io::{Seek, SeekFrom};
 #[cfg(target_os = "linux")]
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 #[cfg(target_os = "linux")]
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -209,6 +211,8 @@ impl Drop for FixtureRootGuard {
 
 struct BoundCodexExecutable {
     #[cfg(target_os = "linux")]
+    // Sealed anonymous snapshot retained so /proc/self/fd/<fd> resolves to
+    // the exact verified bytes even if the original pathname is later mutated.
     file: File,
     launch_path: PathBuf,
 }
@@ -856,21 +860,37 @@ fn validate_live_codex_candidate_path(path: &Path) -> ProofResult<()> {
 fn bind_verified_native_codex_executable(
     expected: &RuntimeExecutableIdentity,
 ) -> ProofResult<BoundCodexExecutable> {
-    let mut file = File::open(&expected.canonical_path)
+    let mut source = File::open(&expected.canonical_path)
         .map_err(|error| format!("T079 could not open verified Codex executable: {error}"))?;
-    let metadata = file
+    let metadata = source
         .metadata()
         .map_err(|error| format!("T079 could not inspect verified Codex executable: {error}"))?;
     if !metadata.is_file() || metadata.len() != expected.byte_len {
         return Err("T079 Codex executable metadata changed before handle binding".to_owned());
     }
-    require_linux_native_elf(&mut file)?;
+    require_linux_native_elf(&mut source)?;
+
+    let snapshot_name =
+        CString::new("winds-t079-codex-executable").expect("static memfd name contains no NUL");
+    let snapshot_fd = unsafe {
+        libc::memfd_create(
+            snapshot_name.as_ptr(),
+            libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
+        )
+    };
+    if snapshot_fd < 0 {
+        return Err(format!(
+            "T079 could not create anonymous executable snapshot: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let mut snapshot = unsafe { File::from_raw_fd(snapshot_fd) };
 
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     let mut total_read = 0_u64;
     loop {
-        let read = file
+        let read = source
             .read(&mut buffer)
             .map_err(|error| format!("T079 could not hash bound Codex executable: {error}"))?;
         if read == 0 {
@@ -883,6 +903,9 @@ fn bind_verified_native_codex_executable(
             return Err("T079 bound Codex executable exceeded expected byte length".to_owned());
         }
         digest.update(&buffer[..read]);
+        snapshot
+            .write_all(&buffer[..read])
+            .map_err(|error| format!("T079 could not copy executable snapshot: {error}"))?;
     }
     if total_read != expected.byte_len {
         return Err("T079 bound Codex executable byte length changed".to_owned());
@@ -895,35 +918,64 @@ fn bind_verified_native_codex_executable(
     if sha256 != expected.sha256 {
         return Err("T079 bound Codex executable digest does not match discovery".to_owned());
     }
+
+    if unsafe { libc::fchmod(snapshot_fd, 0o500) } < 0 {
+        return Err(format!(
+            "T079 could not mark executable snapshot executable: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+
+    let required_seals =
+        libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
+    if unsafe { libc::fcntl(snapshot_fd, libc::F_ADD_SEALS, required_seals) } < 0 {
+        return Err(format!(
+            "T079 could not seal executable snapshot: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let observed_seals = unsafe { libc::fcntl(snapshot_fd, libc::F_GET_SEALS) };
+    if observed_seals < 0 || observed_seals & required_seals != required_seals {
+        return Err("T079 executable snapshot seal evidence is incomplete".to_owned());
+    }
+
+    // Preserve path provenance through the end of snapshot construction. After
+    // this check, launch no longer depends on pathname contents: the sealed
+    // memfd holds the already-hashed bytes.
     if revalidate_runtime_identity(expected).map_err(|error| error.to_string())?
         != RuntimeIdentityRevalidation::Match
     {
         return Err("T079 Codex executable path changed while binding launch identity".to_owned());
     }
 
-    let fd = file.as_raw_fd();
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    let flags = unsafe { libc::fcntl(snapshot_fd, libc::F_GETFD) };
     if flags < 0 {
         return Err(format!(
-            "T079 could not inspect Codex executable descriptor flags: {}",
+            "T079 could not inspect Codex executable snapshot descriptor flags: {}",
             std::io::Error::last_os_error()
         ));
     }
     if flags & libc::FD_CLOEXEC == 0 {
         return Err(
-            "T079 requires the bound Codex executable descriptor to remain close-on-exec in the parent process"
+            "T079 requires the sealed executable snapshot descriptor to remain close-on-exec in the parent process"
                 .to_owned(),
         );
     }
 
-    let launch_path = PathBuf::from(format!("/proc/self/fd/{fd}"));
-    let launch_metadata = fs::metadata(&launch_path)
-        .map_err(|error| format!("T079 could not prove bound Codex descriptor path: {error}"))?;
+    let launch_path = PathBuf::from(format!("/proc/self/fd/{snapshot_fd}"));
+    let launch_metadata = fs::metadata(&launch_path).map_err(|error| {
+        format!("T079 could not prove sealed executable snapshot path: {error}")
+    })?;
     if !launch_metadata.is_file() || launch_metadata.len() != expected.byte_len {
-        return Err("T079 bound Codex descriptor does not preserve executable identity".to_owned());
+        return Err(
+            "T079 sealed executable snapshot does not preserve executable identity".to_owned(),
+        );
     }
 
-    Ok(BoundCodexExecutable { file, launch_path })
+    Ok(BoundCodexExecutable {
+        file: snapshot,
+        launch_path,
+    })
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -1699,6 +1751,17 @@ fn t079_isolated_codex_environment_disables_remote_control_startup() {
 
 #[test]
 fn t079_requests_are_fixed_ephemeral_read_only_and_non_authorizing() {
+    let mut generic = CodexProtocolClient::default();
+    let generic_initialize = generic
+        .initialize_request("winds", "Winds", "0.1.0")
+        .expect("generic initialize request");
+    let generic_initialize = parse_outbound(&generic_initialize);
+    assert_eq!(generic_initialize["method"], "initialize");
+    assert!(
+        generic_initialize["params"].get("capabilities").is_none(),
+        "generic initialize must not inherit T079 notification opt-outs"
+    );
+
     let mut handshake = CodexProtocolClient::default();
     let initialize = handshake
         .t079_initialize_request("winds", "Winds", "0.1.0")
@@ -2178,6 +2241,24 @@ fn t079_linux_launch_binding_rejects_wrappers_and_holds_verified_descriptor() {
     let flags = unsafe { libc::fcntl(bound.file.as_raw_fd(), libc::F_GETFD) };
     assert!(flags >= 0);
     assert_ne!(flags & libc::FD_CLOEXEC, 0);
+
+    let required_seals =
+        libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
+    let seals = unsafe { libc::fcntl(bound.file.as_raw_fd(), libc::F_GET_SEALS) };
+    assert!(seals >= 0);
+    assert_eq!(seals & required_seals, required_seals);
+
+    let verified_snapshot = fs::read(bound.launch_path()).expect("read sealed verified snapshot");
+    fs::write(&executable, b"\x7fELFmutated-after-binding\n")
+        .expect("mutate original path after binding");
+    assert_ne!(
+        fs::read(&executable).expect("read mutated source"),
+        verified_snapshot
+    );
+    assert_eq!(
+        fs::read(bound.launch_path()).expect("re-read sealed snapshot"),
+        verified_snapshot
+    );
 
     drop(bound);
     fs::remove_file(executable).expect("remove launch fixture");

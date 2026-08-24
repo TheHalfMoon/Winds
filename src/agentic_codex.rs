@@ -179,6 +179,8 @@ pub(super) struct CodexProtocolClient {
     #[cfg(test)]
     t079_requests: Vec<(u64, T079RequestKind)>,
     #[cfg(test)]
+    t079_thread_start_issued: bool,
+    #[cfg(test)]
     t079_thread_id: Option<String>,
     #[cfg(test)]
     t079_turn_id: Option<String>,
@@ -194,6 +196,8 @@ impl Default for CodexProtocolClient {
             #[cfg(test)]
             t079_requests: Vec::new(),
             #[cfg(test)]
+            t079_thread_start_issued: false,
+            #[cfg(test)]
             t079_thread_id: None,
             #[cfg(test)]
             t079_turn_id: None,
@@ -208,38 +212,42 @@ impl CodexProtocolClient {
         client_title: &str,
         client_version: &str,
     ) -> Result<String, CodexProtocolError> {
-        self.initialize_request_with_experimental_api(
+        self.initialize_request_with_capabilities(
             client_name,
             client_title,
             client_version,
             false,
+            None,
         )
     }
 
     #[cfg(test)]
-    /// T079 opts into the experimental API only to send explicit empty environment/tool roots.
+    /// T079 opts into the experimental API for explicit empty environment/tool roots and
+    /// separately opts out only the pinned remote-control status notification.
     pub(super) fn t079_initialize_request(
         &mut self,
         client_name: &str,
         client_title: &str,
         client_version: &str,
     ) -> Result<String, CodexProtocolError> {
-        let request = self.initialize_request_with_experimental_api(
+        let request = self.initialize_request_with_capabilities(
             client_name,
             client_title,
             client_version,
             true,
+            Some(&["remoteControl/status/changed"]),
         )?;
         self.t079_mode = true;
         Ok(request)
     }
 
-    fn initialize_request_with_experimental_api(
+    fn initialize_request_with_capabilities(
         &mut self,
         client_name: &str,
         client_title: &str,
         client_version: &str,
         experimental_api: bool,
+        opt_out_notification_methods: Option<&[&str]>,
     ) -> Result<String, CodexProtocolError> {
         match self.state {
             HandshakeState::Fresh => {}
@@ -250,8 +258,8 @@ impl CodexProtocolClient {
         validate_nonempty_exact(client_title)?;
         validate_nonempty_exact(client_version)?;
 
-        let params = if experimental_api {
-            json!({
+        let params = match (experimental_api, opt_out_notification_methods) {
+            (true, Some(methods)) => json!({
                 "clientInfo": {
                     "name": client_name,
                     "title": client_title,
@@ -259,17 +267,36 @@ impl CodexProtocolClient {
                 },
                 "capabilities": {
                     "experimentalApi": true,
-                    "optOutNotificationMethods": ["remoteControl/status/changed"]
+                    "optOutNotificationMethods": methods
                 }
-            })
-        } else {
-            json!({
+            }),
+            (true, None) => json!({
+                "clientInfo": {
+                    "name": client_name,
+                    "title": client_title,
+                    "version": client_version
+                },
+                "capabilities": {
+                    "experimentalApi": true
+                }
+            }),
+            (false, Some(methods)) => json!({
+                "clientInfo": {
+                    "name": client_name,
+                    "title": client_title,
+                    "version": client_version
+                },
+                "capabilities": {
+                    "optOutNotificationMethods": methods
+                }
+            }),
+            (false, None) => json!({
                 "clientInfo": {
                     "name": client_name,
                     "title": client_title,
                     "version": client_version
                 }
-            })
+            }),
         };
         let line = encode_jsonl(&json!({
             "method": "initialize",
@@ -336,7 +363,7 @@ impl CodexProtocolClient {
         cwd: &str,
     ) -> Result<(u64, String), CodexProtocolError> {
         validate_nonempty_exact(cwd)?;
-        self.t079_request(
+        let request = self.t079_request(
             T079RequestKind::ThreadStart,
             "thread/start",
             json!({
@@ -349,7 +376,9 @@ impl CodexProtocolClient {
                 "dynamicTools": [],
                 "selectedCapabilityRoots": []
             }),
-        )
+        )?;
+        self.t079_thread_start_issued = true;
+        Ok(request)
     }
 
     #[cfg(test)]
@@ -816,6 +845,7 @@ impl CodexProtocolClient {
     #[cfg(test)]
     fn t079_missing_bwrap_config_warning_allowed(&self, params: &Map<String, Value>) -> bool {
         self.t079_mode
+            && !self.t079_thread_start_issued
             && self.t079_thread_id.is_none()
             && self.t079_turn_id.is_none()
             && self
@@ -1653,6 +1683,65 @@ mod t079_notification_regression_tests {
                     "details": null
                 }),
             )),
+            Err(CodexProtocolError::UnexpectedT079Notification)
+        );
+    }
+
+    #[test]
+    fn t079_missing_bwrap_warning_is_rejected_after_thread_start_is_issued_or_fails() {
+        let warning = || {
+            t079_notification_frame(
+                "configWarning",
+                json!({
+                    "summary": T079_MISSING_SYSTEM_BWRAP_WARNING,
+                    "details": null
+                }),
+            )
+        };
+
+        let (mut while_thread_pending, _) = config_read_pending_t079_client();
+        while_thread_pending
+            .t079_thread_start("/tmp/winds-t079-fixture")
+            .expect("thread request while config/read remains pending");
+        assert!(while_thread_pending.t079_thread_start_issued);
+        assert_eq!(
+            while_thread_pending.ingest_jsonl_frame(&warning()),
+            Err(CodexProtocolError::UnexpectedT079Notification)
+        );
+
+        let (mut after_thread_failure, _) = config_read_pending_t079_client();
+        let (thread_request_id, _) = after_thread_failure
+            .t079_thread_start("/tmp/winds-t079-fixture")
+            .expect("thread request while config/read remains pending");
+        assert!(matches!(
+            after_thread_failure
+                .ingest_jsonl_frame(
+                    format!(
+                        r#"{{"id":{thread_request_id},"error":{{"code":-32000,"message":"fixture"}}}}"#
+                    )
+                    .as_bytes(),
+                )
+                .expect("thread error response"),
+            CodexInbound::ErrorResponse {
+                id: RpcId::Number(id),
+                ..
+            } if id == thread_request_id
+        ));
+        assert!(after_thread_failure.t079_thread_start_issued);
+        assert!(
+            !after_thread_failure
+                .t079_requests
+                .iter()
+                .any(|(_, kind)| *kind == T079RequestKind::ThreadStart)
+        );
+        assert!(
+            after_thread_failure
+                .t079_requests
+                .iter()
+                .any(|(_, kind)| *kind == T079RequestKind::ConfigRead)
+        );
+        assert_eq!(
+            after_thread_failure.ingest_jsonl_frame(&warning()),
             Err(CodexProtocolError::UnexpectedT079Notification)
         );
     }
