@@ -794,7 +794,11 @@ fn parse_structured_agent_message(text: &str) -> ProofResult<String> {
 }
 
 fn validate_exact_text(value: &str, label: &str) -> ProofResult<()> {
-    if value.trim().is_empty() || value != value.trim() || value.chars().any(char::is_control) {
+    if value.trim().is_empty()
+        || value != value.trim()
+        || value.len() > super::MAX_PROTOCOL_TEXT_BYTES
+        || value.chars().any(char::is_control)
+    {
         return Err(format!("{label} is not an exact safe text identity"));
     }
     Ok(())
@@ -2606,6 +2610,20 @@ fn thread_and_result_validation_preserve_exact_provenance_and_non_authority() {
         parse_structured_agent_message(r#"{"status":"WINDS_T079_OK","verified":true}"#).is_err()
     );
     assert!(parse_structured_agent_message(r#"{"status":"OTHER"}"#).is_err());
+}
+
+#[test]
+fn t079_exact_text_identity_is_bounded_by_protocol_limit() {
+    let at_limit = "x".repeat(super::MAX_PROTOCOL_TEXT_BYTES);
+    validate_exact_text(&at_limit, "fixture identity").expect("at-limit identity");
+
+    let oversized = "x".repeat(super::MAX_PROTOCOL_TEXT_BYTES + 1);
+    let error = validate_exact_text(&oversized, "fixture identity").unwrap_err();
+    assert!(error.contains("exact safe text identity"));
+    assert!(
+        turn_id_from_start_result(&json!({ "turn": { "id": oversized } })).is_err(),
+        "server-provided turn ids must share the same protocol text bound"
+    );
 }
 
 #[test]
