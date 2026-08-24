@@ -229,53 +229,47 @@ fn parse_outbound(line: &str) -> Value {
     serde_json::from_str(line.trim_end()).expect("T079 outbound JSONL must be valid JSON")
 }
 
-fn t079_diagnostic_identifier(value: &str) -> String {
-    if value.len() <= 96
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'/'))
-    {
-        value.to_owned()
-    } else {
-        format!("<redacted-identifier-len:{}>", value.len())
+fn t079_diagnostic_shape(value: Option<&Value>) -> &'static str {
+    match value {
+        Some(Value::Object(_)) => "OBJECT",
+        Some(Value::Array(_)) => "ARRAY",
+        Some(Value::String(_)) => "STRING",
+        Some(Value::Number(_)) => "NUMBER",
+        Some(Value::Bool(_)) => "BOOL",
+        Some(Value::Null) => "NULL",
+        None => "ABSENT",
     }
 }
 
-fn t079_diagnostic_object_keys(value: Option<&Value>) -> String {
-    let Some(object) = value.and_then(Value::as_object) else {
-        return "NONE".to_owned();
-    };
-    let mut keys = object
-        .keys()
-        .map(|key| t079_diagnostic_identifier(key))
-        .collect::<Vec<_>>();
-    keys.sort_unstable();
-    keys.join(",")
+fn t079_diagnostic_object_key_count(value: Option<&Value>) -> u16 {
+    value
+        .and_then(Value::as_object)
+        .map(|object| u16::try_from(object.len()).unwrap_or(u16::MAX))
+        .unwrap_or(0)
 }
 
 fn t079_rejection_metadata(frame: &[u8], phase: &str) -> String {
     let Ok(value) = serde_json::from_slice::<Value>(frame) else {
         return format!("phase={phase};frame=UNPARSEABLE_JSON");
     };
-    let method = value
-        .get("method")
-        .and_then(Value::as_str)
-        .map(t079_diagnostic_identifier)
-        .unwrap_or_else(|| "NON_NOTIFICATION".to_owned());
     let params = value.get("params");
 
     let mut fields = vec![
         format!("phase={phase}"),
-        format!("method={method}"),
-        format!("param_keys={}", t079_diagnostic_object_keys(params)),
+        format!("method_shape={}", t079_diagnostic_shape(value.get("method"))),
+        format!("params_shape={}", t079_diagnostic_shape(params)),
+        format!(
+            "param_key_count={}",
+            t079_diagnostic_object_key_count(params)
+        ),
     ];
 
     for key in ["thread", "turn", "item", "status", "tokenUsage"] {
         let nested = params.and_then(|params| params.get(key));
         if nested.is_some_and(Value::is_object) {
             fields.push(format!(
-                "{key}_keys={}",
-                t079_diagnostic_object_keys(nested)
+                "{key}_key_count={}",
+                t079_diagnostic_object_key_count(nested)
             ));
         }
     }
@@ -2519,17 +2513,24 @@ fn forbidden_runtime_activity_is_detected_fail_closed() {
 }
 
 #[test]
-fn t079_rejection_metadata_exposes_shape_without_scalar_values() {
-    let frame = br#"{"method":"future/notification","params":{"secretField":"DO_NOT_PRINT","thread":{"id":"secret-thread","path":"/secret/path"},"item":{"type":"secretType","text":"secret-text"}}}"#;
+fn t079_rejection_metadata_exposes_shape_without_untrusted_identifiers_or_scalar_values() {
+    let frame = br#"{"method":"apiKeySecret","params":{"credentialToken":"DO_NOT_PRINT","thread":{"privateIdentifier":"secret-thread","secretPath":"/secret/path"},"item":{"apiSecretType":"secretType","privateText":"secret-text"}}}"#;
     let metadata = t079_rejection_metadata(frame, "fixture-phase");
 
     assert!(metadata.contains("phase=fixture-phase"));
-    assert!(metadata.contains("method=future/notification"));
-    assert!(metadata.contains("param_keys=item,secretField,thread"));
-    assert!(metadata.contains("thread_keys=id,path"));
-    assert!(metadata.contains("item_keys=text,type"));
+    assert!(metadata.contains("method_shape=STRING"));
+    assert!(metadata.contains("params_shape=OBJECT"));
+    assert!(metadata.contains("param_key_count=3"));
+    assert!(metadata.contains("thread_key_count=2"));
+    assert!(metadata.contains("item_key_count=2"));
 
     for forbidden in [
+        "apiKeySecret",
+        "credentialToken",
+        "privateIdentifier",
+        "secretPath",
+        "apiSecretType",
+        "privateText",
         "DO_NOT_PRINT",
         "secret-thread",
         "/secret/path",
@@ -2538,7 +2539,7 @@ fn t079_rejection_metadata_exposes_shape_without_scalar_values() {
     ] {
         assert!(
             !metadata.contains(forbidden),
-            "diagnostic leaked scalar value: {forbidden}"
+            "diagnostic leaked untrusted identifier or scalar value: {forbidden}"
         );
     }
 }
@@ -2546,16 +2547,22 @@ fn t079_rejection_metadata_exposes_shape_without_scalar_values() {
 #[test]
 fn t079_unexpected_notification_error_reports_only_rejection_metadata() {
     let mut client = initialized_client();
-    let frame = br#"{"method":"future/notification","params":{"futureKey":"PRIVATE_VALUE"}}"#;
+    let frame = br#"{"method":"apiKeySecret","params":{"credentialToken":"PRIVATE_VALUE"}}"#;
 
     let error =
         ingest_t079_frame_with_rejection_metadata(&mut client, frame, "fixture-wait").unwrap_err();
 
     assert!(error.contains("rejected notification metadata"));
     assert!(error.contains("phase=fixture-wait"));
-    assert!(error.contains("method=future/notification"));
-    assert!(error.contains("param_keys=futureKey"));
-    assert!(!error.contains("PRIVATE_VALUE"));
+    assert!(error.contains("method_shape=STRING"));
+    assert!(error.contains("params_shape=OBJECT"));
+    assert!(error.contains("param_key_count=1"));
+    for forbidden in ["apiKeySecret", "credentialToken", "PRIVATE_VALUE"] {
+        assert!(
+            !error.contains(forbidden),
+            "enriched error leaked untrusted identifier or scalar value: {forbidden}"
+        );
+    }
 }
 
 #[test]
