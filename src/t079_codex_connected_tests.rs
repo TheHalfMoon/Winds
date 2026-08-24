@@ -2719,12 +2719,8 @@ fn t079_model_rerouted_is_classified_but_remains_fail_closed() {
     );
 
     let mut classified = initialized_client();
-    let error = ingest_t079_frame_with_rejection_metadata(
-        &mut classified,
-        &frame,
-        "turn/start",
-    )
-    .unwrap_err();
+    let error = ingest_t079_frame_with_rejection_metadata(&mut classified, &frame, "turn/start")
+        .unwrap_err();
     assert!(error.contains("METHOD_CLASS=KNOWN_MODEL_REROUTED"));
     assert!(error.contains("KNOWN_KEY_COUNT=5"));
     assert!(error.contains("UNKNOWN_KEY_COUNT=0"));
@@ -2823,7 +2819,10 @@ fn t079_rejected_known_codex_0149_notifications_stay_rejected() {
             "thread-secret",
             "turn-secret",
         ] {
-            assert!(!metadata.contains(forbidden), "diagnostic leaked {forbidden}");
+            assert!(
+                !metadata.contains(forbidden),
+                "diagnostic leaked {forbidden}"
+            );
         }
     }
 }
@@ -2861,7 +2860,10 @@ fn t079_known_method_extra_key_is_counted_without_key_or_value_leakage() {
         "other-secret-model",
         "highRiskCyberActivity",
     ] {
-        assert!(!metadata.contains(forbidden), "diagnostic leaked {forbidden}");
+        assert!(
+            !metadata.contains(forbidden),
+            "diagnostic leaked {forbidden}"
+        );
     }
 }
 
@@ -2918,7 +2920,10 @@ fn t079_five_key_candidates_receive_distinct_static_classes() {
             "model-b",
             "private-reason",
         ] {
-            assert!(!metadata.contains(forbidden), "diagnostic leaked {forbidden}");
+            assert!(
+                !metadata.contains(forbidden),
+                "diagnostic leaked {forbidden}"
+            );
         }
     }
 }
@@ -2964,7 +2969,10 @@ fn t079_rejection_diagnostics_do_not_add_protocol_state_mutation() {
     assert_eq!(direct.next_request_id, wrapped.next_request_id);
     assert_eq!(direct.t079_mode, wrapped.t079_mode);
     assert_eq!(direct.t079_requests, wrapped.t079_requests);
-    assert_eq!(direct.t079_thread_start_issued, wrapped.t079_thread_start_issued);
+    assert_eq!(
+        direct.t079_thread_start_issued,
+        wrapped.t079_thread_start_issued
+    );
     assert_eq!(direct.t079_thread_id, wrapped.t079_thread_id);
     assert_eq!(direct.t079_turn_id, wrapped.t079_turn_id);
 }
