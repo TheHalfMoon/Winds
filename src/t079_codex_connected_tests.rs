@@ -248,11 +248,156 @@ fn t079_diagnostic_object_key_count(value: Option<&Value>) -> u16 {
         .unwrap_or(0)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum T079RejectedMethodClass {
+    KnownConfigWarning,
+    KnownThreadStarted,
+    KnownThreadStatusChanged,
+    KnownTurnStarted,
+    KnownTurnCompleted,
+    KnownItemStarted,
+    KnownItemCompleted,
+    KnownAgentMessageDelta,
+    KnownPlanDelta,
+    KnownReasoningSummaryTextDelta,
+    KnownReasoningSummaryPartAdded,
+    KnownReasoningTextDelta,
+    KnownTokenUsageUpdated,
+    KnownModelRerouted,
+    KnownModelVerification,
+    KnownModelSafetyBufferingUpdated,
+    KnownTurnModerationMetadata,
+    KnownErrorNotification,
+    KnownWarning,
+    KnownGuardianWarning,
+    UnknownMethod,
+}
+
+impl T079RejectedMethodClass {
+    fn from_method(value: Option<&Value>) -> Self {
+        match value.and_then(Value::as_str) {
+            Some("configWarning") => Self::KnownConfigWarning,
+            Some("thread/started") => Self::KnownThreadStarted,
+            Some("thread/status/changed") => Self::KnownThreadStatusChanged,
+            Some("turn/started") => Self::KnownTurnStarted,
+            Some("turn/completed") => Self::KnownTurnCompleted,
+            Some("item/started") => Self::KnownItemStarted,
+            Some("item/completed") => Self::KnownItemCompleted,
+            Some("item/agentMessage/delta") => Self::KnownAgentMessageDelta,
+            Some("item/plan/delta") => Self::KnownPlanDelta,
+            Some("item/reasoning/summaryTextDelta") => Self::KnownReasoningSummaryTextDelta,
+            Some("item/reasoning/summaryPartAdded") => Self::KnownReasoningSummaryPartAdded,
+            Some("item/reasoning/textDelta") => Self::KnownReasoningTextDelta,
+            Some("thread/tokenUsage/updated") => Self::KnownTokenUsageUpdated,
+            Some("model/rerouted") => Self::KnownModelRerouted,
+            Some("model/verification") => Self::KnownModelVerification,
+            Some("model/safetyBuffering/updated") => Self::KnownModelSafetyBufferingUpdated,
+            Some("turn/moderationMetadata") => Self::KnownTurnModerationMetadata,
+            Some("error") => Self::KnownErrorNotification,
+            Some("warning") => Self::KnownWarning,
+            Some("guardianWarning") => Self::KnownGuardianWarning,
+            _ => Self::UnknownMethod,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::KnownConfigWarning => "KNOWN_CONFIG_WARNING",
+            Self::KnownThreadStarted => "KNOWN_THREAD_STARTED",
+            Self::KnownThreadStatusChanged => "KNOWN_THREAD_STATUS_CHANGED",
+            Self::KnownTurnStarted => "KNOWN_TURN_STARTED",
+            Self::KnownTurnCompleted => "KNOWN_TURN_COMPLETED",
+            Self::KnownItemStarted => "KNOWN_ITEM_STARTED",
+            Self::KnownItemCompleted => "KNOWN_ITEM_COMPLETED",
+            Self::KnownAgentMessageDelta => "KNOWN_AGENT_MESSAGE_DELTA",
+            Self::KnownPlanDelta => "KNOWN_PLAN_DELTA",
+            Self::KnownReasoningSummaryTextDelta => "KNOWN_REASONING_SUMMARY_TEXT_DELTA",
+            Self::KnownReasoningSummaryPartAdded => "KNOWN_REASONING_SUMMARY_PART_ADDED",
+            Self::KnownReasoningTextDelta => "KNOWN_REASONING_TEXT_DELTA",
+            Self::KnownTokenUsageUpdated => "KNOWN_TOKEN_USAGE_UPDATED",
+            Self::KnownModelRerouted => "KNOWN_MODEL_REROUTED",
+            Self::KnownModelVerification => "KNOWN_MODEL_VERIFICATION",
+            Self::KnownModelSafetyBufferingUpdated => "KNOWN_MODEL_SAFETY_BUFFERING_UPDATED",
+            Self::KnownTurnModerationMetadata => "KNOWN_TURN_MODERATION_METADATA",
+            Self::KnownErrorNotification => "KNOWN_ERROR_NOTIFICATION",
+            Self::KnownWarning => "KNOWN_WARNING",
+            Self::KnownGuardianWarning => "KNOWN_GUARDIAN_WARNING",
+            Self::UnknownMethod => "UNKNOWN_METHOD",
+        }
+    }
+
+    fn known_param_keys(self) -> &'static [&'static str] {
+        match self {
+            Self::KnownConfigWarning => &["details", "summary"],
+            Self::KnownThreadStarted => &["thread"],
+            Self::KnownThreadStatusChanged => &["status", "threadId"],
+            Self::KnownTurnStarted | Self::KnownTurnCompleted => &["threadId", "turn"],
+            Self::KnownItemStarted => &["item", "startedAtMs", "threadId", "turnId"],
+            Self::KnownItemCompleted => &["completedAtMs", "item", "threadId", "turnId"],
+            Self::KnownAgentMessageDelta | Self::KnownPlanDelta => {
+                &["delta", "itemId", "threadId", "turnId"]
+            }
+            Self::KnownReasoningSummaryTextDelta => {
+                &["delta", "itemId", "summaryIndex", "threadId", "turnId"]
+            }
+            Self::KnownReasoningSummaryPartAdded => {
+                &["itemId", "summaryIndex", "threadId", "turnId"]
+            }
+            Self::KnownReasoningTextDelta => {
+                &["contentIndex", "delta", "itemId", "threadId", "turnId"]
+            }
+            Self::KnownTokenUsageUpdated => &["threadId", "tokenUsage", "turnId"],
+            Self::KnownModelRerouted => &["threadId", "turnId", "fromModel", "toModel", "reason"],
+            Self::KnownModelVerification => &["threadId", "turnId", "verifications"],
+            Self::KnownModelSafetyBufferingUpdated => &[
+                "threadId",
+                "turnId",
+                "model",
+                "useCases",
+                "reasons",
+                "showBufferingUi",
+                "fasterModel",
+            ],
+            Self::KnownTurnModerationMetadata => &["threadId", "turnId", "metadata"],
+            Self::KnownErrorNotification => &["error", "willRetry", "threadId", "turnId"],
+            Self::KnownWarning | Self::KnownGuardianWarning => &["threadId", "message"],
+            Self::UnknownMethod => &[],
+        }
+    }
+}
+
+fn t079_diagnostic_known_unknown_key_counts(
+    params: Option<&Value>,
+    method_class: T079RejectedMethodClass,
+) -> (u16, u16) {
+    let Some(params) = params.and_then(Value::as_object) else {
+        return (0, 0);
+    };
+    let known_keys = method_class.known_param_keys();
+    let known = params
+        .keys()
+        .filter(|key| known_keys.contains(&key.as_str()))
+        .count();
+    let unknown = params.len().saturating_sub(known);
+    (
+        u16::try_from(known).unwrap_or(u16::MAX),
+        u16::try_from(unknown).unwrap_or(u16::MAX),
+    )
+}
+
+std::thread_local! {
+    static T079_REJECTION_METADATA_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
 fn t079_rejection_metadata(frame: &[u8], phase: &str) -> String {
+    T079_REJECTION_METADATA_CALLS.with(|calls| calls.set(calls.get().saturating_add(1)));
     let Ok(value) = serde_json::from_slice::<Value>(frame) else {
         return format!("phase={phase};frame=UNPARSEABLE_JSON");
     };
     let params = value.get("params");
+    let method_class = T079RejectedMethodClass::from_method(value.get("method"));
+    let (known_key_count, unknown_key_count) =
+        t079_diagnostic_known_unknown_key_counts(params, method_class);
 
     let mut fields = vec![
         format!("phase={phase}"),
@@ -260,11 +405,14 @@ fn t079_rejection_metadata(frame: &[u8], phase: &str) -> String {
             "method_shape={}",
             t079_diagnostic_shape(value.get("method"))
         ),
+        format!("METHOD_CLASS={}", method_class.label()),
         format!("params_shape={}", t079_diagnostic_shape(params)),
         format!(
             "param_key_count={}",
             t079_diagnostic_object_key_count(params)
         ),
+        format!("KNOWN_KEY_COUNT={known_key_count}"),
+        format!("UNKNOWN_KEY_COUNT={unknown_key_count}"),
     ];
 
     for key in ["thread", "turn", "item", "status", "tokenUsage"] {
@@ -2522,8 +2670,11 @@ fn t079_rejection_metadata_exposes_shape_without_untrusted_identifiers_or_scalar
 
     assert!(metadata.contains("phase=fixture-phase"));
     assert!(metadata.contains("method_shape=STRING"));
+    assert!(metadata.contains("METHOD_CLASS=UNKNOWN_METHOD"));
     assert!(metadata.contains("params_shape=OBJECT"));
     assert!(metadata.contains("param_key_count=3"));
+    assert!(metadata.contains("KNOWN_KEY_COUNT=0"));
+    assert!(metadata.contains("UNKNOWN_KEY_COUNT=3"));
     assert!(metadata.contains("thread_key_count=2"));
     assert!(metadata.contains("item_key_count=2"));
 
@@ -2548,6 +2699,231 @@ fn t079_rejection_metadata_exposes_shape_without_untrusted_identifiers_or_scalar
 }
 
 #[test]
+fn t079_model_rerouted_is_classified_but_remains_fail_closed() {
+    let frame = serde_json::to_vec(&json!({
+        "method": "model/rerouted",
+        "params": {
+            "threadId": "thr_fixture",
+            "turnId": "turn_fixture",
+            "fromModel": "fixture-a",
+            "toModel": "fixture-b",
+            "reason": "highRiskCyberActivity"
+        }
+    }))
+    .expect("serialize model/rerouted fixture");
+
+    let mut direct = initialized_client();
+    assert_eq!(
+        direct.ingest_jsonl_frame(&frame),
+        Err(CodexProtocolError::UnexpectedT079Notification)
+    );
+
+    let mut classified = initialized_client();
+    let error = ingest_t079_frame_with_rejection_metadata(
+        &mut classified,
+        &frame,
+        "turn/start",
+    )
+    .unwrap_err();
+    assert!(error.contains("METHOD_CLASS=KNOWN_MODEL_REROUTED"));
+    assert!(error.contains("KNOWN_KEY_COUNT=5"));
+    assert!(error.contains("UNKNOWN_KEY_COUNT=0"));
+    for forbidden in [
+        "model/rerouted",
+        "thr_fixture",
+        "turn_fixture",
+        "fixture-a",
+        "fixture-b",
+        "highRiskCyberActivity",
+    ] {
+        assert!(!error.contains(forbidden), "diagnostic leaked {forbidden}");
+    }
+}
+
+#[test]
+fn t079_rejected_known_codex_0149_notifications_stay_rejected() {
+    let cases = [
+        (
+            "model/verification",
+            json!({
+                "threadId": "SECRET_TOKEN_DO_NOT_PRINT",
+                "turnId": "turn-secret",
+                "verifications": []
+            }),
+            "KNOWN_MODEL_VERIFICATION",
+        ),
+        (
+            "model/safetyBuffering/updated",
+            json!({
+                "threadId": "SECRET_TOKEN_DO_NOT_PRINT",
+                "turnId": "turn-secret",
+                "model": "model-secret-name",
+                "useCases": ["private-use-case"],
+                "reasons": ["private-reason"],
+                "showBufferingUi": true,
+                "fasterModel": null
+            }),
+            "KNOWN_MODEL_SAFETY_BUFFERING_UPDATED",
+        ),
+        (
+            "turn/moderationMetadata",
+            json!({
+                "threadId": "SECRET_TOKEN_DO_NOT_PRINT",
+                "turnId": "turn-secret",
+                "metadata": {"credentialToken": "private-value"}
+            }),
+            "KNOWN_TURN_MODERATION_METADATA",
+        ),
+        (
+            "error",
+            json!({
+                "error": {"message": "SECRET_TOKEN_DO_NOT_PRINT"},
+                "willRetry": false,
+                "threadId": "thread-secret",
+                "turnId": "turn-secret"
+            }),
+            "KNOWN_ERROR_NOTIFICATION",
+        ),
+        (
+            "warning",
+            json!({
+                "threadId": null,
+                "message": "SECRET_TOKEN_DO_NOT_PRINT"
+            }),
+            "KNOWN_WARNING",
+        ),
+        (
+            "guardianWarning",
+            json!({
+                "threadId": "thread-secret",
+                "message": "SECRET_TOKEN_DO_NOT_PRINT"
+            }),
+            "KNOWN_GUARDIAN_WARNING",
+        ),
+    ];
+
+    for (method, params, expected_class) in cases {
+        let frame = serde_json::to_vec(&json!({"method": method, "params": params}))
+            .expect("serialize rejected known notification fixture");
+        let mut client = initialized_client();
+        assert_eq!(
+            client.ingest_jsonl_frame(&frame),
+            Err(CodexProtocolError::UnexpectedT079Notification),
+            "{method} unexpectedly became admissible"
+        );
+        let metadata = t079_rejection_metadata(&frame, "fixture-phase");
+        assert!(metadata.contains(&format!("METHOD_CLASS={expected_class}")));
+        assert!(metadata.contains("UNKNOWN_KEY_COUNT=0"));
+        assert!(!metadata.contains(method));
+        for forbidden in [
+            "SECRET_TOKEN_DO_NOT_PRINT",
+            "private-value",
+            "model-secret-name",
+            "credentialToken",
+            "thread-secret",
+            "turn-secret",
+        ] {
+            assert!(!metadata.contains(forbidden), "diagnostic leaked {forbidden}");
+        }
+    }
+}
+
+#[test]
+fn t079_known_method_extra_key_is_counted_without_key_or_value_leakage() {
+    let frame = serde_json::to_vec(&json!({
+        "method": "model/rerouted",
+        "params": {
+            "threadId": "thread-secret",
+            "turnId": "turn-secret",
+            "fromModel": "model-secret-name",
+            "toModel": "other-secret-model",
+            "reason": "highRiskCyberActivity",
+            "unknownSecretField": "SECRET_TOKEN_DO_NOT_PRINT"
+        }
+    }))
+    .expect("serialize extra-key fixture");
+
+    let mut client = initialized_client();
+    assert_eq!(
+        client.ingest_jsonl_frame(&frame),
+        Err(CodexProtocolError::UnexpectedT079Notification)
+    );
+    let metadata = t079_rejection_metadata(&frame, "turn/start");
+    assert!(metadata.contains("METHOD_CLASS=KNOWN_MODEL_REROUTED"));
+    assert!(metadata.contains("KNOWN_KEY_COUNT=5"));
+    assert!(metadata.contains("UNKNOWN_KEY_COUNT=1"));
+    for forbidden in [
+        "unknownSecretField",
+        "SECRET_TOKEN_DO_NOT_PRINT",
+        "thread-secret",
+        "turn-secret",
+        "model-secret-name",
+        "other-secret-model",
+        "highRiskCyberActivity",
+    ] {
+        assert!(!metadata.contains(forbidden), "diagnostic leaked {forbidden}");
+    }
+}
+
+#[test]
+fn t079_five_key_candidates_receive_distinct_static_classes() {
+    for (method, params, expected_class) in [
+        (
+            "model/rerouted",
+            json!({
+                "threadId": "thread-secret",
+                "turnId": "turn-secret",
+                "fromModel": "model-a",
+                "toModel": "model-b",
+                "reason": "private-reason"
+            }),
+            "KNOWN_MODEL_REROUTED",
+        ),
+        (
+            "item/reasoning/summaryTextDelta",
+            json!({
+                "threadId": "thread-secret",
+                "turnId": "turn-secret",
+                "itemId": "item-secret",
+                "delta": "private-delta",
+                "summaryIndex": 0
+            }),
+            "KNOWN_REASONING_SUMMARY_TEXT_DELTA",
+        ),
+        (
+            "item/reasoning/textDelta",
+            json!({
+                "threadId": "thread-secret",
+                "turnId": "turn-secret",
+                "itemId": "item-secret",
+                "delta": "private-delta",
+                "contentIndex": 0
+            }),
+            "KNOWN_REASONING_TEXT_DELTA",
+        ),
+    ] {
+        let frame = serde_json::to_vec(&json!({"method": method, "params": params}))
+            .expect("serialize five-key fixture");
+        let metadata = t079_rejection_metadata(&frame, "turn/start");
+        assert!(metadata.contains(&format!("METHOD_CLASS={expected_class}")));
+        assert!(metadata.contains("KNOWN_KEY_COUNT=5"));
+        assert!(metadata.contains("UNKNOWN_KEY_COUNT=0"));
+        assert!(!metadata.contains(method));
+        for forbidden in [
+            "thread-secret",
+            "turn-secret",
+            "item-secret",
+            "private-delta",
+            "model-a",
+            "model-b",
+            "private-reason",
+        ] {
+            assert!(!metadata.contains(forbidden), "diagnostic leaked {forbidden}");
+        }
+    }
+}
+
+#[test]
 fn t079_unexpected_notification_error_reports_only_rejection_metadata() {
     let mut client = initialized_client();
     let frame = br#"{"method":"apiKeySecret","params":{"credentialToken":"PRIVATE_VALUE"}}"#;
@@ -2558,14 +2934,73 @@ fn t079_unexpected_notification_error_reports_only_rejection_metadata() {
     assert!(error.contains("rejected notification metadata"));
     assert!(error.contains("phase=fixture-wait"));
     assert!(error.contains("method_shape=STRING"));
+    assert!(error.contains("METHOD_CLASS=UNKNOWN_METHOD"));
     assert!(error.contains("params_shape=OBJECT"));
     assert!(error.contains("param_key_count=1"));
+    assert!(error.contains("KNOWN_KEY_COUNT=0"));
+    assert!(error.contains("UNKNOWN_KEY_COUNT=1"));
     for forbidden in ["apiKeySecret", "credentialToken", "PRIVATE_VALUE"] {
         assert!(
             !error.contains(forbidden),
             "enriched error leaked untrusted identifier or scalar value: {forbidden}"
         );
     }
+}
+
+#[test]
+fn t079_rejection_diagnostics_do_not_add_protocol_state_mutation() {
+    let frame = br#"{"method":"apiKeySecret","params":{"credentialToken":"PRIVATE_VALUE"}}"#;
+    let mut direct = initialized_client();
+    let mut wrapped = initialized_client();
+
+    assert_eq!(
+        direct.ingest_jsonl_frame(frame),
+        Err(CodexProtocolError::UnexpectedT079Notification)
+    );
+    let _ = ingest_t079_frame_with_rejection_metadata(&mut wrapped, frame, "fixture-wait")
+        .expect_err("wrapped rejection remains fail closed");
+
+    assert_eq!(direct.state, wrapped.state);
+    assert_eq!(direct.next_request_id, wrapped.next_request_id);
+    assert_eq!(direct.t079_mode, wrapped.t079_mode);
+    assert_eq!(direct.t079_requests, wrapped.t079_requests);
+    assert_eq!(direct.t079_thread_start_issued, wrapped.t079_thread_start_issued);
+    assert_eq!(direct.t079_thread_id, wrapped.t079_thread_id);
+    assert_eq!(direct.t079_turn_id, wrapped.t079_turn_id);
+}
+
+#[test]
+fn t079_accepted_path_does_not_compute_rejection_metadata() {
+    let mut client = initialized_client();
+    let _ = client
+        .t079_config_read("/tmp/winds-t079-fixture")
+        .expect("pending config/read fixture");
+    let frame = serde_json::to_vec(&json!({
+        "method": "configWarning",
+        "params": {
+            "summary": super::T079_MISSING_SYSTEM_BWRAP_WARNING,
+            "details": null
+        }
+    }))
+    .expect("serialize admitted configWarning fixture");
+
+    T079_REJECTION_METADATA_CALLS.with(|calls| calls.set(0));
+    assert!(matches!(
+        ingest_t079_frame_with_rejection_metadata(&mut client, &frame, "config/read")
+            .expect("exact config warning remains admitted"),
+        CodexInbound::Notification { method, .. } if method == "configWarning"
+    ));
+    T079_REJECTION_METADATA_CALLS.with(|calls| assert_eq!(calls.get(), 0));
+
+    let mut rejected = initialized_client();
+    let rejected_frame = br#"{"method":"future/unknown","params":{}}"#;
+    let _ = ingest_t079_frame_with_rejection_metadata(
+        &mut rejected,
+        rejected_frame,
+        "fixture-rejection",
+    )
+    .expect_err("unknown notification remains rejected");
+    T079_REJECTION_METADATA_CALLS.with(|calls| assert_eq!(calls.get(), 1));
 }
 
 #[test]
