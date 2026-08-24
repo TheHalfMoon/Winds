@@ -288,12 +288,14 @@ fn ingest_t079_frame_with_rejection_metadata(
     frame: &[u8],
     phase: &str,
 ) -> ProofResult<CodexInbound> {
-    let metadata = t079_rejection_metadata(frame, phase);
     match client.ingest_jsonl_frame(frame) {
         Ok(inbound) => Ok(inbound),
-        Err(CodexProtocolError::UnexpectedT079Notification) => Err(format!(
-            "T079 Codex protocol failure: rejected notification metadata: {metadata}"
-        )),
+        Err(CodexProtocolError::UnexpectedT079Notification) => {
+            let metadata = t079_rejection_metadata(frame, phase);
+            Err(format!(
+                "T079 Codex protocol failure: rejected notification metadata: {metadata}"
+            ))
+        }
         Err(error) => Err(format!("T079 Codex protocol failure: {error}")),
     }
 }
