@@ -256,7 +256,10 @@ fn t079_rejection_metadata(frame: &[u8], phase: &str) -> String {
 
     let mut fields = vec![
         format!("phase={phase}"),
-        format!("method_shape={}", t079_diagnostic_shape(value.get("method"))),
+        format!(
+            "method_shape={}",
+            t079_diagnostic_shape(value.get("method"))
+        ),
         format!("params_shape={}", t079_diagnostic_shape(params)),
         format!(
             "param_key_count={}",
