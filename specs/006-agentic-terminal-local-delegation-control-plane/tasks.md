@@ -345,7 +345,7 @@ initialize request
 - `src/agentic_claude.rs`
 - runtime-binding/Agent-execution persistence only if already canonically justified by prior tasks
 - `src/t080_claude_planner_tests.rs`
-- `src/main.rs` only under Global Rule 10
+- `src/main.rs` only for minimal proof/module/test registration
 
 **Acceptance evidence**:
 - exact executable/version revalidation;
