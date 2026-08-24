@@ -100,6 +100,8 @@ const BLOCKED_CODEX_CONFIG_FILES: &[&str] = &[
 const SAFE_CODEX_CHILD_ENV_KEYS: &[&str] = &["SystemRoot", "WINDIR", "TEMP", "TMP"];
 #[cfg(not(windows))]
 const SAFE_CODEX_CHILD_ENV_KEYS: &[&str] = &["TMPDIR"];
+const T079_REMOTE_CONTROL_DISABLED_ENV_VAR: &str =
+    "CODEX_INTERNAL_APP_SERVER_REMOTE_CONTROL_DISABLED";
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
 type ProofResult<T> = std::result::Result<T, String>;
@@ -679,6 +681,7 @@ fn validate_no_system_codex_config() -> ProofResult<()> {
 
 fn configure_isolated_codex_environment(command: &mut Command, codex_home: Option<&Path>) {
     command.env_clear();
+    command.env(T079_REMOTE_CONTROL_DISABLED_ENV_VAR, "1");
     if let Some(codex_home) = codex_home {
         command.env("CODEX_HOME", codex_home);
     }
@@ -1682,6 +1685,19 @@ fn run_connected_proof(
 }
 
 #[test]
+fn t079_isolated_codex_environment_disables_remote_control_startup() {
+    let mut command = Command::new("codex");
+    configure_isolated_codex_environment(&mut command, None);
+
+    let remote_control_disabled = command
+        .get_envs()
+        .find(|(key, _)| *key == std::ffi::OsStr::new(T079_REMOTE_CONTROL_DISABLED_ENV_VAR))
+        .and_then(|(_, value)| value);
+
+    assert_eq!(remote_control_disabled, Some(std::ffi::OsStr::new("1")));
+}
+
+#[test]
 fn t079_requests_are_fixed_ephemeral_read_only_and_non_authorizing() {
     let mut handshake = CodexProtocolClient::default();
     let initialize = handshake
@@ -1694,11 +1710,15 @@ fn t079_requests_are_fixed_ephemeral_read_only_and_non_authorizing() {
         true
     );
     assert_eq!(
+        initialize["params"]["capabilities"]["optOutNotificationMethods"],
+        json!(["remoteControl/status/changed"])
+    );
+    assert_eq!(
         initialize["params"]["capabilities"]
             .as_object()
             .expect("capabilities object")
             .len(),
-        1
+        2
     );
 
     let mut client = initialized_client();
@@ -2104,7 +2124,11 @@ fn codex_launch_environment_is_explicit_allowlist_only() {
         .expect("CODEX_HOME must be explicit");
     assert_eq!(PathBuf::from(&codex_home.1), root);
     for (key, _) in &explicit {
-        assert!(key == "CODEX_HOME" || SAFE_CODEX_CHILD_ENV_KEYS.contains(&key.as_str()));
+        assert!(
+            key == "CODEX_HOME"
+                || key == T079_REMOTE_CONTROL_DISABLED_ENV_VAR
+                || SAFE_CODEX_CHILD_ENV_KEYS.contains(&key.as_str())
+        );
     }
     for forbidden in [
         "HOME",

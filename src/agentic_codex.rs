@@ -258,7 +258,8 @@ impl CodexProtocolClient {
                     "version": client_version
                 },
                 "capabilities": {
-                    "experimentalApi": true
+                    "experimentalApi": true,
+                    "optOutNotificationMethods": ["remoteControl/status/changed"]
                 }
             })
         } else {

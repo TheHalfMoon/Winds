@@ -302,6 +302,7 @@ initialize request
 - no Winds-driven credential/terms/access escalation;
 - before any `thread/start`, T079 may admit only the exact Codex 0.149 system `configWarning` for the bundled-bubblewrap fallback while `config/read` is pending, with the pinned summary text, `details: null`, and no `path` or `range`; this warning is informational runtime evidence only, does not satisfy `config/read`, and any text/shape/phase drift fails closed;
 - do not install bubblewrap or alter the host/runtime to suppress that warning during T079 qualification; a successful matching `config/read` response and normal effective-config validation remain required;
+- disable Codex App Server remote-control startup for every T079 child with the pinned upstream `CODEX_INTERNAL_APP_SERVER_REMOTE_CONTROL_DISABLED=1` marker so Codex 0.149 selects its ephemeral-disabled startup mode instead of resolving persisted remote-control state; the T079 initialize request must also opt out exactly `remoteControl/status/changed`, because Codex 0.149 sends the current remote-control status snapshot to newly initialized clients even when remote control is disabled; this suppression does not authorize any remote-control request, pairing, persistence, connection, or execution;
 - decline unexpected write/tool approvals unless the reviewed task contract explicitly allows a harmless fixture operation;
 - no PR/push/merge automation.
 
