@@ -303,6 +303,35 @@ initialize request
 - before any `thread/start`, T079 may admit only the exact Codex 0.149 system `configWarning` for the bundled-bubblewrap fallback while `config/read` is pending, with the pinned summary text, `details: null`, and no `path` or `range`; this warning is informational runtime evidence only, does not satisfy `config/read`, and any text/shape/phase drift fails closed; once a T079 `thread/start` request has been issued, that warning is permanently inadmissible for the connection even if the thread request later fails;
 - do not install bubblewrap or alter the host/runtime to suppress that warning during T079 qualification; a successful matching `config/read` response and normal effective-config validation remain required;
 - when a T079 notification has already failed the exact allowlist with `UnexpectedT079Notification`, rejection diagnostics may additionally classify its method into a closed, compile-time-static Codex 0.149 `METHOD_CLASS` and report bounded `KNOWN_KEY_COUNT` / `UNKNOWN_KEY_COUNT` values against that class's statically pinned top-level parameter-key set; known classes are diagnostic labels only, unknown/non-string methods render only as `UNKNOWN_METHOD`, and no class or key count may change admissibility, bind thread/turn identity, mutate request/handshake state, grant authority, or convert rejection into acceptance. Existing static proof-phase and JSON shape categories plus the statically named nested object counts for `thread`, `turn`, `item`, `status`, and `tokenUsage` may remain. All counts saturate at `u16::MAX` (`65535`). Never record attacker-controlled raw method text, unknown object-key text, raw params, scalar values, IDs, paths, prompt/model text, config values, credential material, or other payload contents. Compute all classification/key-count metadata only after the protocol client has already failed closed, so accepted frames incur no rejection-metadata parse/classification and the diagnostic path is non-authoritative. This diagnostic authority does not admit `model/rerouted`, `model/verification`, `model/safetyBuffering/updated`, `turn/moderationMetadata`, `error`, `warning`, `guardianWarning`, wildcard methods, or any other previously inadmissible notification;
+
+The T079 rejection-diagnostic registry is pinned exactly as follows. These labels and key sets are descriptive only after fail-closed rejection; they are not notification admission rules.
+
+| `METHOD_CLASS` | Exact known top-level `params` keys |
+| --- | --- |
+| `KNOWN_CONFIG_WARNING` | `details`, `summary` |
+| `KNOWN_THREAD_STARTED` | `thread` |
+| `KNOWN_THREAD_STATUS_CHANGED` | `status`, `threadId` |
+| `KNOWN_TURN_STARTED` | `threadId`, `turn` |
+| `KNOWN_TURN_COMPLETED` | `threadId`, `turn` |
+| `KNOWN_ITEM_STARTED` | `item`, `startedAtMs`, `threadId`, `turnId` |
+| `KNOWN_ITEM_COMPLETED` | `completedAtMs`, `item`, `threadId`, `turnId` |
+| `KNOWN_AGENT_MESSAGE_DELTA` | `delta`, `itemId`, `threadId`, `turnId` |
+| `KNOWN_PLAN_DELTA` | `delta`, `itemId`, `threadId`, `turnId` |
+| `KNOWN_REASONING_SUMMARY_TEXT_DELTA` | `delta`, `itemId`, `summaryIndex`, `threadId`, `turnId` |
+| `KNOWN_REASONING_SUMMARY_PART_ADDED` | `itemId`, `summaryIndex`, `threadId`, `turnId` |
+| `KNOWN_REASONING_TEXT_DELTA` | `contentIndex`, `delta`, `itemId`, `threadId`, `turnId` |
+| `KNOWN_TOKEN_USAGE_UPDATED` | `threadId`, `tokenUsage`, `turnId` |
+| `KNOWN_MODEL_REROUTED` | `threadId`, `turnId`, `fromModel`, `toModel`, `reason` |
+| `KNOWN_MODEL_VERIFICATION` | `threadId`, `turnId`, `verifications` |
+| `KNOWN_MODEL_SAFETY_BUFFERING_UPDATED` | `threadId`, `turnId`, `model`, `useCases`, `reasons`, `showBufferingUi`, `fasterModel` |
+| `KNOWN_TURN_MODERATION_METADATA` | `threadId`, `turnId`, `metadata` |
+| `KNOWN_ERROR_NOTIFICATION` | `error`, `willRetry`, `threadId`, `turnId` |
+| `KNOWN_WARNING` | `threadId`, `message` |
+| `KNOWN_GUARDIAN_WARNING` | `threadId`, `message` |
+| `UNKNOWN_METHOD` | none |
+
+This registry is closed for T079: there are exactly 20 known diagnostic classes plus the single `UNKNOWN_METHOD` fallback. `UNKNOWN_METHOD` has no known parameter-key set. Any addition, removal, rename, or change to a class or its exact known top-level key set requires an explicit Spec 006 amendment and fresh review before implementation. Classification and `KNOWN_KEY_COUNT` / `UNKNOWN_KEY_COUNT` computation remain rejection-only and non-authoritative, occur only after `UnexpectedT079Notification` has already failed closed, and cannot alter admissibility, identity binding, request/handshake state, runtime authority, or any other protocol decision. A method being listed above does not make that notification admissible. Counts continue to saturate at `u16::MAX` (`65535`); only the statically named nested object counts `thread`, `turn`, `item`, `status`, and `tokenUsage` may be reported. Raw attacker-controlled method text, unknown key text, raw params, scalar values, IDs, paths, prompt/model text, config values, credential material, and other payload contents remain prohibited from rejection diagnostics.
+
 - disable Codex App Server remote-control startup for every T079 child with the pinned upstream `CODEX_INTERNAL_APP_SERVER_REMOTE_CONTROL_DISABLED=1` marker so Codex 0.149 selects its ephemeral-disabled startup mode instead of resolving persisted remote-control state; the T079 initialize request must also opt out exactly `remoteControl/status/changed`, because Codex 0.149 sends the current remote-control status snapshot to newly initialized clients even when remote control is disabled; this suppression does not authorize any remote-control request, pairing, persistence, connection, or execution;
 - on Linux/WSL2, copy the discovered native Codex executable bytes into an anonymous `memfd` while computing the exact expected SHA-256, set executable-only permissions, seal the snapshot against write/grow/shrink and further seal changes, retain close-on-exec in the parent, and launch only through the sealed `/proc/self/fd/<fd>` snapshot after final pathname provenance revalidation; later mutation of the original executable pathname must not change the launched bytes;
 - decline unexpected write/tool approvals unless the reviewed task contract explicitly allows a harmless fixture operation;
