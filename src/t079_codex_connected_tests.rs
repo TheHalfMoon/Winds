@@ -1191,6 +1191,9 @@ fn bind_verified_native_codex_executable(
         return Err("T079 executable snapshot seal evidence is incomplete".to_owned());
     }
 
+    // Preserve path provenance through the end of snapshot construction. After
+    // this check, launch no longer depends on pathname contents: the sealed
+    // memfd holds the already-hashed bytes.
     if revalidate_runtime_identity(expected).map_err(|error| error.to_string())?
         != RuntimeIdentityRevalidation::Match
     {
@@ -1270,6 +1273,10 @@ fn finish_t079_process(
             .map_err(|error| format!("T079 could not inspect {label}: {error}"))?
         {
             Some(_) => {
+                // The T079 seccomp filter rejects fork/vfork and every clone
+                // that is not CLONE_THREAD, while clone3 is forced through the
+                // libc fallback path. A reaped direct child therefore implies
+                // there cannot be independently running process descendants.
                 return Ok(CleanupEvidence::OwnedScopeQuiescent);
             }
             None if Instant::now() < graceful_deadline => thread::sleep(Duration::from_millis(10)),
