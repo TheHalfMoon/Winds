@@ -832,6 +832,47 @@ fn validate_discovery(discovery: &RuntimeDiscovery) -> ProofResult<()> {
     }
 }
 
+fn prepare_bound_codex_version_observation(
+    executable: &Path,
+) -> ProofResult<(RuntimeExecutableIdentity, BoundCodexExecutable)> {
+    validate_live_codex_candidate_path(executable)?;
+    let pre_version = discover_runtime_from_safe_observations(
+        RuntimeKind::Codex,
+        executable,
+        SafeVersionObservation::Unavailable,
+        &[],
+        &[],
+    )
+    .map_err(|error| error.to_string())?;
+    let identity = pre_version.executable.ok_or_else(|| {
+        "T079 Codex executable became unavailable before version binding".to_owned()
+    })?;
+    let bound = bind_verified_native_codex_executable(&identity)?;
+    Ok((identity, bound))
+}
+
+fn discover_codex_from_bound_version(
+    executable: &Path,
+    expected: &RuntimeExecutableIdentity,
+    version: String,
+) -> ProofResult<RuntimeDiscovery> {
+    let discovery = discover_runtime_from_safe_observations(
+        RuntimeKind::Codex,
+        executable,
+        SafeVersionObservation::Observed(version),
+        &[],
+        &[],
+    )
+    .map_err(|error| error.to_string())?;
+    if discovery.executable.as_ref() != Some(expected) {
+        return Err(
+            "T079 Codex executable identity changed between pre-version binding and discovery"
+                .to_owned(),
+        );
+    }
+    Ok(discovery)
+}
+
 fn reject_config_surface(path: &Path, label: &str) -> ProofResult<()> {
     match fs::symlink_metadata(path) {
         Ok(_) => Err(format!(
@@ -847,17 +888,8 @@ fn reject_config_surface(path: &Path, label: &str) -> ProofResult<()> {
 }
 
 fn validate_preexisting_isolated_codex_home(path: &Path) -> ProofResult<PathBuf> {
-    if !path.is_absolute() {
-        return Err("T079 requires WINDS_T079_CODEX_HOME to be an absolute path".to_owned());
-    }
-    let metadata = fs::metadata(path)
-        .map_err(|error| format!("T079 could not inspect pre-existing CODEX_HOME: {error}"))?;
-    if !metadata.is_dir() {
-        return Err("T079 requires WINDS_T079_CODEX_HOME to name an existing directory".to_owned());
-    }
-    let canonical = path
-        .canonicalize()
-        .map_err(|error| format!("T079 could not canonicalize pre-existing CODEX_HOME: {error}"))?;
+    let canonical =
+        canonical_directory_outside_primary_checkout(path, "WINDS_T079_CODEX_HOME")?;
     for name in BLOCKED_CODEX_CONFIG_FILES {
         reject_config_surface(
             &canonical.join(name),
@@ -2369,6 +2401,18 @@ fn isolated_codex_home_rejects_local_config_without_reading_credentials() {
 }
 
 #[test]
+fn isolated_codex_home_rejects_primary_checkout_and_descendants() {
+    let checkout = canonical_primary_checkout_root().expect("canonical primary checkout");
+    let descendant = checkout.join("src");
+
+    for candidate in [&checkout, &descendant] {
+        let error = validate_preexisting_isolated_codex_home(candidate).unwrap_err();
+        assert!(error.contains("WINDS_T079_CODEX_HOME"));
+        assert!(error.contains("inside primary checkout"));
+    }
+}
+
+#[test]
 fn t079_checkout_containment_rejects_primary_checkout_and_descendants() {
     let checkout = canonical_primary_checkout_root().expect("canonical primary checkout");
     assert!(ensure_path_outside_primary_checkout(&checkout, &checkout, "fixture root").is_err());
@@ -2453,16 +2497,15 @@ fn t079_linux_launch_binding_rejects_wrappers_and_holds_verified_descriptor() {
     assert!(error.contains("Linux-native ELF"));
 
     fs::write(&executable, b"\x7fELFfixture-codex-v1\n").expect("write ELF fixture");
-    let discovery = discover_runtime_from_safe_observations(
-        RuntimeKind::Codex,
+    let (expected, bound) = prepare_bound_codex_version_observation(&executable)
+        .expect("pre-version identity bound to sealed descriptor");
+    let discovery = discover_codex_from_bound_version(
         &executable,
-        SafeVersionObservation::Observed("codex-cli fixture".to_owned()),
-        &[],
-        &[],
+        &expected,
+        "codex-cli fixture".to_owned(),
     )
-    .expect("native fixture discovery");
-    let expected = discovery.executable.as_ref().expect("fixture executable");
-    let bound = bind_verified_native_codex_executable(expected).expect("bound verified descriptor");
+    .expect("unchanged source reconciles with pre-version identity");
+    assert_eq!(discovery.executable.as_ref(), Some(&expected));
     assert!(
         bound
             .launch_path()
@@ -2490,6 +2533,15 @@ fn t079_linux_launch_binding_rejects_wrappers_and_holds_verified_descriptor() {
         fs::read(bound.launch_path()).expect("re-read sealed snapshot"),
         verified_snapshot
     );
+    let error = discover_codex_from_bound_version(
+        &executable,
+        &expected,
+        "codex-cli fixture".to_owned(),
+    )
+    .unwrap_err();
+    assert!(error.contains(
+        "identity changed between pre-version binding and discovery"
+    ));
 
     drop(bound);
     fs::remove_file(executable).expect("remove launch fixture");
@@ -3128,17 +3180,18 @@ fn t079_real_codex_one_bounded_prompt() {
     let codex_home = validate_preexisting_isolated_codex_home(&codex_home)
         .expect("pre-existing isolated CODEX_HOME without local config surfaces");
     validate_no_system_codex_config().expect("no unvalidated system Codex config surfaces");
-    validate_live_codex_candidate_path(&executable)
-        .expect("Linux-native Codex executable required for handle-bound launch");
-    let version = observe_version_bounded(&executable).expect("bounded Codex version observation");
-    let discovery = discover_runtime_from_safe_observations(
-        RuntimeKind::Codex,
+    let (pre_version_identity, bound_version_executable) =
+        prepare_bound_codex_version_observation(&executable)
+            .expect("static Codex identity bound before first version observation");
+    let version = observe_version_bounded(bound_version_executable.launch_path())
+        .expect("bounded Codex version observation through sealed snapshot");
+    let discovery = discover_codex_from_bound_version(
         &executable,
-        SafeVersionObservation::Observed(version),
-        &[],
-        &[],
+        &pre_version_identity,
+        version,
     )
-    .expect("exact Codex discovery");
+    .expect("exact Codex discovery matches pre-version static identity");
+    drop(bound_version_executable);
     let receipt = run_connected_proof(&discovery, &winds_session_id, &codex_home)
         .expect("bounded T079 proof");
 
