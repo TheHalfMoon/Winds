@@ -888,8 +888,7 @@ fn reject_config_surface(path: &Path, label: &str) -> ProofResult<()> {
 }
 
 fn validate_preexisting_isolated_codex_home(path: &Path) -> ProofResult<PathBuf> {
-    let canonical =
-        canonical_directory_outside_primary_checkout(path, "WINDS_T079_CODEX_HOME")?;
+    let canonical = canonical_directory_outside_primary_checkout(path, "WINDS_T079_CODEX_HOME")?;
     for name in BLOCKED_CODEX_CONFIG_FILES {
         reject_config_surface(
             &canonical.join(name),
@@ -1192,9 +1191,6 @@ fn bind_verified_native_codex_executable(
         return Err("T079 executable snapshot seal evidence is incomplete".to_owned());
     }
 
-    // Preserve path provenance through the end of snapshot construction. After
-    // this check, launch no longer depends on pathname contents: the sealed
-    // memfd holds the already-hashed bytes.
     if revalidate_runtime_identity(expected).map_err(|error| error.to_string())?
         != RuntimeIdentityRevalidation::Match
     {
@@ -1274,10 +1270,6 @@ fn finish_t079_process(
             .map_err(|error| format!("T079 could not inspect {label}: {error}"))?
         {
             Some(_) => {
-                // The T079 seccomp filter rejects fork/vfork and every clone
-                // that is not CLONE_THREAD, while clone3 is forced through the
-                // libc fallback path. A reaped direct child therefore implies
-                // there cannot be independently running process descendants.
                 return Ok(CleanupEvidence::OwnedScopeQuiescent);
             }
             None if Instant::now() < graceful_deadline => thread::sleep(Duration::from_millis(10)),
@@ -2499,12 +2491,9 @@ fn t079_linux_launch_binding_rejects_wrappers_and_holds_verified_descriptor() {
     fs::write(&executable, b"\x7fELFfixture-codex-v1\n").expect("write ELF fixture");
     let (expected, bound) = prepare_bound_codex_version_observation(&executable)
         .expect("pre-version identity bound to sealed descriptor");
-    let discovery = discover_codex_from_bound_version(
-        &executable,
-        &expected,
-        "codex-cli fixture".to_owned(),
-    )
-    .expect("unchanged source reconciles with pre-version identity");
+    let discovery =
+        discover_codex_from_bound_version(&executable, &expected, "codex-cli fixture".to_owned())
+            .expect("unchanged source reconciles with pre-version identity");
     assert_eq!(discovery.executable.as_ref(), Some(&expected));
     assert!(
         bound
@@ -2533,15 +2522,10 @@ fn t079_linux_launch_binding_rejects_wrappers_and_holds_verified_descriptor() {
         fs::read(bound.launch_path()).expect("re-read sealed snapshot"),
         verified_snapshot
     );
-    let error = discover_codex_from_bound_version(
-        &executable,
-        &expected,
-        "codex-cli fixture".to_owned(),
-    )
-    .unwrap_err();
-    assert!(error.contains(
-        "identity changed between pre-version binding and discovery"
-    ));
+    let error =
+        discover_codex_from_bound_version(&executable, &expected, "codex-cli fixture".to_owned())
+            .unwrap_err();
+    assert!(error.contains("identity changed between pre-version binding and discovery"));
 
     drop(bound);
     fs::remove_file(executable).expect("remove launch fixture");
@@ -3185,12 +3169,8 @@ fn t079_real_codex_one_bounded_prompt() {
             .expect("static Codex identity bound before first version observation");
     let version = observe_version_bounded(bound_version_executable.launch_path())
         .expect("bounded Codex version observation through sealed snapshot");
-    let discovery = discover_codex_from_bound_version(
-        &executable,
-        &pre_version_identity,
-        version,
-    )
-    .expect("exact Codex discovery matches pre-version static identity");
+    let discovery = discover_codex_from_bound_version(&executable, &pre_version_identity, version)
+        .expect("exact Codex discovery matches pre-version static identity");
     drop(bound_version_executable);
     let receipt = run_connected_proof(&discovery, &winds_session_id, &codex_home)
         .expect("bounded T079 proof");
