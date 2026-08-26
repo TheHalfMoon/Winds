@@ -110,6 +110,20 @@ static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 type ProofResult<T> = std::result::Result<T, String>;
 type FrameResult = std::result::Result<Vec<u8>, String>;
 
+fn validate_t079_connected_proof_platform(os: &str, arch: &str) -> ProofResult<()> {
+    if os != "linux" {
+        return Err(format!(
+            "T079 live connected proof supports only Linux/WSL2; observed platform {os}/{arch}"
+        ));
+    }
+    match arch {
+        "x86_64" | "aarch64" => Ok(()),
+        _ => Err(format!(
+            "T079 live connected proof does not support Linux architecture {arch}; supported architectures are x86_64 and aarch64"
+        )),
+    }
+}
+
 const T079_CODEX_CONFIG_COMPAT_VERSION: &str = "codex-cli 0.149.0";
 
 const T079_CODEX_AUTHORITY_REDUCTION_ARGS: &[&str] = &[
@@ -212,8 +226,6 @@ impl Drop for FixtureRootGuard {
 
 struct BoundCodexExecutable {
     #[cfg(target_os = "linux")]
-    // Sealed anonymous snapshot retained so /proc/self/fd/<fd> resolves to
-    // the exact verified bytes even if the original pathname is later mutated.
     file: File,
     launch_path: PathBuf,
 }
@@ -1064,11 +1076,6 @@ fn install_t079_no_process_descendants_filter() -> std::io::Result<()> {
 fn configure_t079_process_descendant_denial(command: &mut Command) {
     use std::os::unix::process::CommandExt;
 
-    // This hook is registered before process_scope::spawn_owned_process adds its
-    // own hook. It blocks process creation but deliberately permits setsid/prctl,
-    // so the later owned-scope hook can still establish the session boundary and
-    // its independent anti-escape filter. clone3 returns ENOSYS so libc thread
-    // creation can fall back to clone; clone is accepted only with CLONE_THREAD.
     unsafe {
         command.pre_exec(install_t079_no_process_descendants_filter);
     }
@@ -1191,9 +1198,6 @@ fn bind_verified_native_codex_executable(
         return Err("T079 executable snapshot seal evidence is incomplete".to_owned());
     }
 
-    // Preserve path provenance through the end of snapshot construction. After
-    // this check, launch no longer depends on pathname contents: the sealed
-    // memfd holds the already-hashed bytes.
     if revalidate_runtime_identity(expected).map_err(|error| error.to_string())?
         != RuntimeIdentityRevalidation::Match
     {
@@ -1272,13 +1276,7 @@ fn finish_t079_process(
             .try_wait()
             .map_err(|error| format!("T079 could not inspect {label}: {error}"))?
         {
-            Some(_) => {
-                // The T079 seccomp filter rejects fork/vfork and every clone
-                // that is not CLONE_THREAD, while clone3 is forced through the
-                // libc fallback path. A reaped direct child therefore implies
-                // there cannot be independently running process descendants.
-                return Ok(CleanupEvidence::OwnedScopeQuiescent);
-            }
+            Some(_) => return Ok(CleanupEvidence::OwnedScopeQuiescent),
             None if Instant::now() < graceful_deadline => thread::sleep(Duration::from_millis(10)),
             None => break,
         }
@@ -1343,15 +1341,10 @@ fn observe_version_bounded(executable: &Path) -> ProofResult<String> {
                             break;
                         }
                         Ok(read) => {
-                            let new_len = match bytes.len().checked_add(read) {
-                                Some(new_len) => new_len,
-                                None => {
-                                    return Err(cleanup_version_failure(
-                                        child,
-                                        "T079 Codex --version byte count overflowed".to_owned(),
-                                    ));
-                                }
-                            };
+                            let new_len = bytes
+                                .len()
+                                .checked_add(read)
+                                .ok_or_else(|| "T079 Codex --version byte count overflowed".to_owned())?;
                             if new_len > MAX_VERSION_BYTES {
                                 return Err(cleanup_version_failure(
                                     child,
@@ -1765,6 +1758,7 @@ fn run_connected_proof(
     winds_session_id: &str,
     codex_home: &Path,
 ) -> ProofResult<T079Receipt> {
+    validate_t079_connected_proof_platform(env::consts::OS, env::consts::ARCH)?;
     validate_exact_text(winds_session_id, "Winds session id")?;
     let codex_home = validate_preexisting_isolated_codex_home(codex_home)?;
     validate_no_system_codex_config()?;
@@ -1996,6 +1990,22 @@ fn run_connected_proof(
         "T079 first connected proof currently requires Linux/WSL2 owned-process containment"
             .to_owned(),
     )
+}
+
+#[test]
+fn t079_connected_proof_platform_preflight_accepts_only_seccomp_supported_linux_architectures() {
+    assert!(validate_t079_connected_proof_platform("linux", "x86_64").is_ok());
+    assert!(validate_t079_connected_proof_platform("linux", "aarch64").is_ok());
+
+    let unsupported_arch =
+        validate_t079_connected_proof_platform("linux", "riscv64").unwrap_err();
+    assert!(unsupported_arch.contains("riscv64"));
+    assert!(unsupported_arch.contains("x86_64"));
+    assert!(unsupported_arch.contains("aarch64"));
+
+    let unsupported_os =
+        validate_t079_connected_proof_platform("windows", "x86_64").unwrap_err();
+    assert!(unsupported_os.contains("Linux/WSL2"));
 }
 
 #[test]
@@ -3156,8 +3166,10 @@ fn native_thread_identity_never_aliases_winds_session_identity_in_receipt_contra
 }
 
 #[test]
-#[ignore = "T079 live proof: requires Linux/WSL2, a pre-existing locally authenticated native Codex binary, and isolated CODEX_HOME; no install/auth/terms/credential automation"]
+#[ignore = "T079 live proof: requires Linux/WSL2 x86_64 or aarch64, a pre-existing locally authenticated native Codex binary, and isolated CODEX_HOME; no install/auth/terms/credential automation"]
 fn t079_real_codex_one_bounded_prompt() {
+    validate_t079_connected_proof_platform(env::consts::OS, env::consts::ARCH)
+        .expect("supported T079 connected-proof platform");
     let executable = PathBuf::from(
         env::var("WINDS_T079_CODEX_PATH")
             .expect("set WINDS_T079_CODEX_PATH to an existing Linux-native Codex executable"),
