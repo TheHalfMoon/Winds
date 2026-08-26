@@ -766,11 +766,15 @@ impl CodexProtocolClient {
                         .is_some_and(|turn| t079_turn_allowed(turn, turn_id, "inProgress"))
             }
             "turn/completed" => {
-                exact_object_keys(params, &["threadId", "turn"])
+                let allowed = exact_object_keys(params, &["threadId", "turn"])
                     && params.get("threadId").and_then(Value::as_str) == Some(thread_id.as_str())
                     && params
                         .get("turn")
-                        .is_some_and(|turn| t079_turn_allowed(turn, turn_id, "completed"))
+                        .is_some_and(|turn| t079_turn_allowed(turn, turn_id, "completed"));
+                if allowed {
+                    self.t079_turn_id = None;
+                }
+                allowed
             }
             "item/started" => {
                 exact_object_keys(params, &["item", "startedAtMs", "threadId", "turnId"])
