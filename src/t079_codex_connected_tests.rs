@@ -2018,14 +2018,12 @@ fn t079_connected_proof_platform_preflight_accepts_only_seccomp_supported_linux_
     assert!(validate_t079_connected_proof_platform("linux", "x86_64").is_ok());
     assert!(validate_t079_connected_proof_platform("linux", "aarch64").is_ok());
 
-    let unsupported_arch =
-        validate_t079_connected_proof_platform("linux", "riscv64").unwrap_err();
+    let unsupported_arch = validate_t079_connected_proof_platform("linux", "riscv64").unwrap_err();
     assert!(unsupported_arch.contains("riscv64"));
     assert!(unsupported_arch.contains("x86_64"));
     assert!(unsupported_arch.contains("aarch64"));
 
-    let unsupported_os =
-        validate_t079_connected_proof_platform("windows", "x86_64").unwrap_err();
+    let unsupported_os = validate_t079_connected_proof_platform("windows", "x86_64").unwrap_err();
     assert!(unsupported_os.contains("Linux/WSL2"));
 }
 
