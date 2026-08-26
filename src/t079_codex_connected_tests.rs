@@ -226,6 +226,8 @@ impl Drop for FixtureRootGuard {
 
 struct BoundCodexExecutable {
     #[cfg(target_os = "linux")]
+    // Sealed anonymous snapshot retained so /proc/self/fd/<fd> resolves to
+    // the exact verified bytes even if the original pathname is later mutated.
     file: File,
     launch_path: PathBuf,
 }
@@ -1076,6 +1078,11 @@ fn install_t079_no_process_descendants_filter() -> std::io::Result<()> {
 fn configure_t079_process_descendant_denial(command: &mut Command) {
     use std::os::unix::process::CommandExt;
 
+    // This hook is registered before process_scope::spawn_owned_process adds its
+    // own hook. It blocks process creation but deliberately permits setsid/prctl,
+    // so the later owned-scope hook can still establish the session boundary and
+    // its independent anti-escape filter. clone3 returns ENOSYS so libc thread
+    // creation can fall back to clone; clone is accepted only with CLONE_THREAD.
     unsafe {
         command.pre_exec(install_t079_no_process_descendants_filter);
     }
@@ -1198,6 +1205,9 @@ fn bind_verified_native_codex_executable(
         return Err("T079 executable snapshot seal evidence is incomplete".to_owned());
     }
 
+    // Preserve path provenance through the end of snapshot construction. After
+    // this check, launch no longer depends on pathname contents: the sealed
+    // memfd holds the already-hashed bytes.
     if revalidate_runtime_identity(expected).map_err(|error| error.to_string())?
         != RuntimeIdentityRevalidation::Match
     {
@@ -1276,7 +1286,13 @@ fn finish_t079_process(
             .try_wait()
             .map_err(|error| format!("T079 could not inspect {label}: {error}"))?
         {
-            Some(_) => return Ok(CleanupEvidence::OwnedScopeQuiescent),
+            Some(_) => {
+                // The T079 seccomp filter rejects fork/vfork and every clone
+                // that is not CLONE_THREAD, while clone3 is forced through the
+                // libc fallback path. A reaped direct child therefore implies
+                // there cannot be independently running process descendants.
+                return Ok(CleanupEvidence::OwnedScopeQuiescent);
+            }
             None if Instant::now() < graceful_deadline => thread::sleep(Duration::from_millis(10)),
             None => break,
         }
@@ -1341,10 +1357,15 @@ fn observe_version_bounded(executable: &Path) -> ProofResult<String> {
                             break;
                         }
                         Ok(read) => {
-                            let new_len = bytes
-                                .len()
-                                .checked_add(read)
-                                .ok_or_else(|| "T079 Codex --version byte count overflowed".to_owned())?;
+                            let new_len = match bytes.len().checked_add(read) {
+                                Some(new_len) => new_len,
+                                None => {
+                                    return Err(cleanup_version_failure(
+                                        child,
+                                        "T079 Codex --version byte count overflowed".to_owned(),
+                                    ));
+                                }
+                            };
                             if new_len > MAX_VERSION_BYTES {
                                 return Err(cleanup_version_failure(
                                     child,
