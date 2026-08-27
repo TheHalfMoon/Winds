@@ -186,8 +186,6 @@ pub(super) struct CodexProtocolClient {
     t079_thread_id: Option<String>,
     #[cfg(test)]
     t079_turn_id: Option<String>,
-    #[cfg(test)]
-    t079_turn_completed: bool,
 }
 
 impl Default for CodexProtocolClient {
@@ -207,8 +205,6 @@ impl Default for CodexProtocolClient {
             t079_thread_id: None,
             #[cfg(test)]
             t079_turn_id: None,
-            #[cfg(test)]
-            t079_turn_completed: false,
         }
     }
 }
@@ -675,11 +671,9 @@ impl CodexProtocolClient {
             T079RequestKind::ThreadStart => {
                 self.t079_thread_id = None;
                 self.t079_turn_id = None;
-                self.t079_turn_completed = false;
             }
             T079RequestKind::TurnStart => {
                 self.t079_turn_id = None;
-                self.t079_turn_completed = false;
             }
         }
         Ok(())
@@ -755,10 +749,6 @@ impl CodexProtocolClient {
                 && params.get("status").is_some_and(t079_thread_status_allowed);
         }
 
-        if self.t079_turn_completed {
-            return false;
-        }
-
         if method == "turn/started" && self.t079_turn_id.is_none() {
             if !self
                 .t079_requests
@@ -803,7 +793,7 @@ impl CodexProtocolClient {
                         .get("turn")
                         .is_some_and(|turn| t079_turn_allowed(turn, turn_id, "completed"));
                 if allowed {
-                    self.t079_turn_completed = true;
+                    self.t079_turn_id = None;
                 }
                 allowed
             }
@@ -1899,8 +1889,38 @@ mod t079_notification_regression_tests {
             Err(CodexProtocolError::UnexpectedT079Notification)
         );
 
-        let mut negative_summary_index = t079_token_usage_fixture();
-        negative_summary_index["last"]["inputTokens"] = json!(-1);
+        let mut negative_summary_index = active_t079_client();
+        assert_eq!(
+            negative_summary_index.ingest_jsonl_frame(&t079_notification_frame(
+                "item/reasoning/summaryTextDelta",
+                json!({
+                    "threadId": "thr_t079_fixture",
+                    "turnId": "turn_t079_fixture",
+                    "itemId": "item-1",
+                    "summaryIndex": -1,
+                    "delta": "x"
+                }),
+            )),
+            Err(CodexProtocolError::UnexpectedT079Notification)
+        );
+
+        let mut fractional_content_index = active_t079_client();
+        assert_eq!(
+            fractional_content_index.ingest_jsonl_frame(&t079_notification_frame(
+                "item/reasoning/textDelta",
+                json!({
+                    "threadId": "thr_t079_fixture",
+                    "turnId": "turn_t079_fixture",
+                    "itemId": "item-1",
+                    "contentIndex": 1.5,
+                    "delta": "x"
+                }),
+            )),
+            Err(CodexProtocolError::UnexpectedT079Notification)
+        );
+
+        let mut negative_input_tokens_value = t079_token_usage_fixture();
+        negative_input_tokens_value["last"]["inputTokens"] = json!(-1);
         let mut negative_input_tokens = active_t079_client();
         assert_eq!(
             negative_input_tokens.ingest_jsonl_frame(&t079_notification_frame(
@@ -1908,7 +1928,7 @@ mod t079_notification_regression_tests {
                 json!({
                     "threadId": "thr_t079_fixture",
                     "turnId": "turn_t079_fixture",
-                    "tokenUsage": negative_summary_index
+                    "tokenUsage": negative_input_tokens_value
                 }),
             )),
             Err(CodexProtocolError::UnexpectedT079Notification)
@@ -2163,79 +2183,6 @@ mod t079_notification_regression_tests {
     }
 
     #[test]
-    fn t079_turn_completion_is_terminal_before_delayed_start_response() {
-        let mut client = ready_t079_client();
-        let (thread_request_id, _) = client
-            .t079_thread_start("/tmp/winds-t079-fixture")
-            .expect("thread request");
-        client
-            .ingest_jsonl_frame(
-                format!(
-                    r#"{{"id":{thread_request_id},"result":{{"thread":{{"id":"thr_t079_fixture"}}}}}}"#
-                )
-                .as_bytes(),
-            )
-            .expect("thread response");
-
-        let native = NativeThreadId::parse("thr_t079_fixture").expect("native thread id");
-        let (turn_request_id, _) = client
-            .t079_turn_start(&native, "/tmp/winds-t079-fixture")
-            .expect("turn request");
-        client
-            .ingest_jsonl_frame(&t079_notification_frame(
-                "turn/started",
-                json!({
-                    "threadId": "thr_t079_fixture",
-                    "turn": t079_full_turn_fixture("turn_t079_fixture", "inProgress")
-                }),
-            ))
-            .expect("pre-response turn/started");
-        assert!(matches!(
-            client
-                .ingest_jsonl_frame(&t079_notification_frame(
-                    "turn/completed",
-                    json!({
-                        "threadId": "thr_t079_fixture",
-                        "turn": t079_full_turn_fixture("turn_t079_fixture", "completed")
-                    }),
-                ))
-                .expect("pre-response turn/completed"),
-            CodexInbound::Notification { method, .. } if method == "turn/completed"
-        ));
-        assert!(client.t079_turn_completed);
-        assert_eq!(client.t079_turn_id.as_deref(), Some("turn_t079_fixture"));
-
-        assert!(matches!(
-            client
-                .ingest_jsonl_frame(
-                    format!(
-                        r#"{{"id":{turn_request_id},"result":{{"turn":{{"id":"turn_t079_fixture"}}}}}}"#
-                    )
-                    .as_bytes(),
-                )
-                .expect("delayed matching turn response"),
-            CodexInbound::Response {
-                id: RpcId::Number(id),
-                ..
-            } if id == turn_request_id
-        ));
-        assert!(client.t079_requests.is_empty());
-        assert!(client.t079_turn_completed);
-        assert_eq!(client.t079_turn_id.as_deref(), Some("turn_t079_fixture"));
-
-        assert_eq!(
-            client.ingest_jsonl_frame(&t079_notification_frame(
-                "turn/started",
-                json!({
-                    "threadId": "thr_t079_fixture",
-                    "turn": t079_full_turn_fixture("turn_t079_fixture", "inProgress")
-                }),
-            )),
-            Err(CodexProtocolError::UnexpectedT079Notification)
-        );
-    }
-
-    #[test]
     fn t079_pre_response_identity_mismatch_fails_closed() {
         let mut thread_client = ready_t079_client();
         let (thread_request_id, _) = thread_client
@@ -2382,7 +2329,6 @@ mod t079_notification_regression_tests {
         assert!(thread_client.t079_requests.is_empty());
         assert_eq!(thread_client.t079_thread_id, None);
         assert_eq!(thread_client.t079_turn_id, None);
-        assert!(!thread_client.t079_turn_completed);
         assert_eq!(
             thread_client.ingest_jsonl_frame(
                 br#"{"method":"thread/started","params":{"thread":{"id":"thr_after_error"}}}"#
@@ -2436,7 +2382,6 @@ mod t079_notification_regression_tests {
             Some("thr_t079_fixture")
         );
         assert_eq!(turn_client.t079_turn_id, None);
-        assert!(!turn_client.t079_turn_completed);
         assert_eq!(
             turn_client.ingest_jsonl_frame(
                 br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_after_error","status":"inProgress"}}}"#
@@ -2481,7 +2426,6 @@ mod t079_notification_regression_tests {
         assert!(client.t079_requests.is_empty());
         assert_eq!(client.t079_thread_id, None);
         assert_eq!(client.t079_turn_id, None);
-        assert!(!client.t079_turn_completed);
 
         assert_eq!(
             client.ingest_jsonl_frame(
