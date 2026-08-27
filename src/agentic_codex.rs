@@ -660,24 +660,19 @@ impl CodexProtocolClient {
             return Err(CodexProtocolError::MalformedFrame);
         };
         let (_, kind) = self.t079_requests.remove(index);
+        self.t079_requests
+            .retain(|(_, pending_kind)| *pending_kind != kind);
+        if kind == T079RequestKind::ThreadStart {
+            self.t079_requests
+                .retain(|(_, pending_kind)| *pending_kind != T079RequestKind::TurnStart);
+        }
         match kind {
-            T079RequestKind::ConfigRead => {
-                self.t079_requests
-                    .retain(|(_, pending_kind)| *pending_kind != T079RequestKind::ConfigRead);
-            }
+            T079RequestKind::ConfigRead => {}
             T079RequestKind::ThreadStart => {
-                self.t079_requests.retain(|(_, pending_kind)| {
-                    !matches!(
-                        *pending_kind,
-                        T079RequestKind::ThreadStart | T079RequestKind::TurnStart
-                    )
-                });
                 self.t079_thread_id = None;
                 self.t079_turn_id = None;
             }
             T079RequestKind::TurnStart => {
-                self.t079_requests
-                    .retain(|(_, pending_kind)| *pending_kind != T079RequestKind::TurnStart);
                 self.t079_turn_id = None;
             }
         }
@@ -2412,14 +2407,7 @@ mod t079_notification_regression_tests {
         let (turn_request_id, _) = client
             .t079_turn_start(&native, "/tmp/winds-t079-fixture")
             .expect("dependent turn request");
-        assert!(client
-            .t079_requests
-            .iter()
-            .any(|(_, kind)| *kind == T079RequestKind::ThreadStart));
-        assert!(client
-            .t079_requests
-            .iter()
-            .any(|(_, kind)| *kind == T079RequestKind::TurnStart));
+        assert_eq!(client.t079_requests.len(), 2);
 
         assert!(matches!(
             client
