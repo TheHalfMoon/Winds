@@ -181,6 +181,8 @@ pub(super) struct CodexProtocolClient {
     #[cfg(test)]
     t079_thread_start_issued: bool,
     #[cfg(test)]
+    t079_turn_start_issued: bool,
+    #[cfg(test)]
     t079_thread_id: Option<String>,
     #[cfg(test)]
     t079_turn_id: Option<String>,
@@ -197,6 +199,8 @@ impl Default for CodexProtocolClient {
             t079_requests: Vec::new(),
             #[cfg(test)]
             t079_thread_start_issued: false,
+            #[cfg(test)]
+            t079_turn_start_issued: false,
             #[cfg(test)]
             t079_thread_id: None,
             #[cfg(test)]
@@ -363,6 +367,9 @@ impl CodexProtocolClient {
         cwd: &str,
     ) -> Result<(u64, String), CodexProtocolError> {
         validate_nonempty_exact(cwd)?;
+        if self.t079_thread_start_issued {
+            return self.fail(CodexProtocolError::MalformedFrame);
+        }
         let request = self.t079_request(
             T079RequestKind::ThreadStart,
             "thread/start",
@@ -389,7 +396,10 @@ impl CodexProtocolClient {
         cwd: &str,
     ) -> Result<(u64, String), CodexProtocolError> {
         validate_nonempty_exact(cwd)?;
-        self.t079_request(
+        if self.t079_turn_start_issued {
+            return self.fail(CodexProtocolError::MalformedFrame);
+        }
+        let request = self.t079_request(
             T079RequestKind::TurnStart,
             "turn/start",
             json!({
@@ -412,7 +422,9 @@ impl CodexProtocolClient {
                     "additionalProperties": false
                 }
             }),
-        )
+        )?;
+        self.t079_turn_start_issued = true;
+        Ok(request)
     }
 
     #[cfg(test)]
@@ -645,6 +657,8 @@ impl CodexProtocolClient {
             return Err(CodexProtocolError::MalformedFrame);
         };
         let (_, kind) = self.t079_requests.remove(index);
+        self.t079_requests
+            .retain(|(_, pending_kind)| *pending_kind != kind);
         match kind {
             T079RequestKind::ConfigRead => {}
             T079RequestKind::ThreadStart => {
@@ -2230,6 +2244,51 @@ mod t079_notification_regression_tests {
                 br#"{"method":"thread/status/changed","params":{"threadId":"thr_t079_fixture","status":{"type":"idle"}}}"#
             ),
             Err(CodexProtocolError::UnexpectedT079Notification)
+        );
+    }
+
+    #[test]
+    fn t079_thread_and_turn_start_requests_are_single_shot() {
+        let mut thread_client = ready_t079_client();
+        thread_client
+            .t079_thread_start("/tmp/winds-t079-fixture")
+            .expect("first thread request");
+        assert_eq!(
+            thread_client.t079_thread_start("/tmp/winds-t079-fixture"),
+            Err(CodexProtocolError::MalformedFrame)
+        );
+        assert_eq!(
+            thread_client.ingest_jsonl_frame(
+                br#"{"method":"thread/started","params":{"thread":{"id":"thr_after_duplicate"}}}"#
+            ),
+            Err(CodexProtocolError::ClientFailed)
+        );
+
+        let mut turn_client = ready_t079_client();
+        let (thread_request_id, _) = turn_client
+            .t079_thread_start("/tmp/winds-t079-fixture")
+            .expect("thread request");
+        turn_client
+            .ingest_jsonl_frame(
+                format!(
+                    r#"{{"id":{thread_request_id},"result":{{"thread":{{"id":"thr_t079_fixture"}}}}}}"#
+                )
+                .as_bytes(),
+            )
+            .expect("thread response");
+        let native = NativeThreadId::parse("thr_t079_fixture").expect("native thread id");
+        turn_client
+            .t079_turn_start(&native, "/tmp/winds-t079-fixture")
+            .expect("first turn request");
+        assert_eq!(
+            turn_client.t079_turn_start(&native, "/tmp/winds-t079-fixture"),
+            Err(CodexProtocolError::MalformedFrame)
+        );
+        assert_eq!(
+            turn_client.ingest_jsonl_frame(
+                br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_after_duplicate","status":"inProgress"}}}"#
+            ),
+            Err(CodexProtocolError::ClientFailed)
         );
     }
 
