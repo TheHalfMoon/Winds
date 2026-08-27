@@ -284,6 +284,7 @@ enum T079RejectedMethodClass {
     KnownErrorNotification,
     KnownWarning,
     KnownGuardianWarning,
+    KnownTerminalInteraction,
     UnknownMethod,
 }
 
@@ -310,6 +311,7 @@ impl T079RejectedMethodClass {
             Some("error") => Self::KnownErrorNotification,
             Some("warning") => Self::KnownWarning,
             Some("guardianWarning") => Self::KnownGuardianWarning,
+            Some("item/commandExecution/terminalInteraction") => Self::KnownTerminalInteraction,
             _ => Self::UnknownMethod,
         }
     }
@@ -336,6 +338,7 @@ impl T079RejectedMethodClass {
             Self::KnownErrorNotification => "KNOWN_ERROR_NOTIFICATION",
             Self::KnownWarning => "KNOWN_WARNING",
             Self::KnownGuardianWarning => "KNOWN_GUARDIAN_WARNING",
+            Self::KnownTerminalInteraction => "KNOWN_TERMINAL_INTERACTION",
             Self::UnknownMethod => "UNKNOWN_METHOD",
         }
     }
@@ -375,6 +378,9 @@ impl T079RejectedMethodClass {
             Self::KnownTurnModerationMetadata => &["threadId", "turnId", "metadata"],
             Self::KnownErrorNotification => &["error", "willRetry", "threadId", "turnId"],
             Self::KnownWarning | Self::KnownGuardianWarning => &["threadId", "message"],
+            Self::KnownTerminalInteraction => {
+                &["itemId", "processId", "stdin", "threadId", "turnId"]
+            }
             Self::UnknownMethod => &[],
         }
     }
@@ -2821,6 +2827,52 @@ fn t079_model_rerouted_is_classified_but_remains_fail_closed() {
         "fixture-a",
         "fixture-b",
         "highRiskCyberActivity",
+    ] {
+        assert!(!error.contains(forbidden), "diagnostic leaked {forbidden}");
+    }
+}
+
+#[test]
+fn t079_terminal_interaction_is_classified_but_remains_fail_closed() {
+    assert_eq!(
+        T079RejectedMethodClass::KnownTerminalInteraction.known_param_keys(),
+        &["itemId", "processId", "stdin", "threadId", "turnId"]
+    );
+
+    let frame = serde_json::to_vec(&json!({
+        "method": "item/commandExecution/terminalInteraction",
+        "params": {
+            "itemId": "item-secret",
+            "processId": "process-secret",
+            "stdin": "private-stdin",
+            "threadId": "thread-secret",
+            "turnId": "turn-secret"
+        }
+    }))
+    .expect("serialize terminal interaction fixture");
+
+    let mut direct = initialized_client();
+    assert_eq!(
+        direct.ingest_jsonl_frame(&frame),
+        Err(CodexProtocolError::UnexpectedT079Notification),
+        "terminal interaction unexpectedly became admissible"
+    );
+
+    let mut classified = initialized_client();
+    let error = ingest_t079_frame_with_rejection_metadata(&mut classified, &frame, "turn/start")
+        .unwrap_err();
+    assert!(error.contains("METHOD_CLASS=KNOWN_TERMINAL_INTERACTION"));
+    assert!(error.contains("param_key_count=5"));
+    assert!(error.contains("KNOWN_KEY_COUNT=5"));
+    assert!(error.contains("UNKNOWN_KEY_COUNT=0"));
+
+    for forbidden in [
+        "item/commandExecution/terminalInteraction",
+        "item-secret",
+        "process-secret",
+        "private-stdin",
+        "thread-secret",
+        "turn-secret",
     ] {
         assert!(!error.contains(forbidden), "diagnostic leaked {forbidden}");
     }
