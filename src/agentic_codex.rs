@@ -626,6 +626,9 @@ impl CodexProtocolClient {
                 Ok(())
             }
             T079RequestKind::TurnStart => {
+                if self.t079_thread_id.is_none() {
+                    return Err(CodexProtocolError::MalformedFrame);
+                }
                 let turn_id = result
                     .get("turn")
                     .and_then(|turn| turn.get("id"))
@@ -657,15 +660,24 @@ impl CodexProtocolClient {
             return Err(CodexProtocolError::MalformedFrame);
         };
         let (_, kind) = self.t079_requests.remove(index);
-        self.t079_requests
-            .retain(|(_, pending_kind)| *pending_kind != kind);
         match kind {
-            T079RequestKind::ConfigRead => {}
+            T079RequestKind::ConfigRead => {
+                self.t079_requests
+                    .retain(|(_, pending_kind)| *pending_kind != T079RequestKind::ConfigRead);
+            }
             T079RequestKind::ThreadStart => {
+                self.t079_requests.retain(|(_, pending_kind)| {
+                    !matches!(
+                        *pending_kind,
+                        T079RequestKind::ThreadStart | T079RequestKind::TurnStart
+                    )
+                });
                 self.t079_thread_id = None;
                 self.t079_turn_id = None;
             }
             T079RequestKind::TurnStart => {
+                self.t079_requests
+                    .retain(|(_, pending_kind)| *pending_kind != T079RequestKind::TurnStart);
                 self.t079_turn_id = None;
             }
         }
@@ -2380,6 +2392,67 @@ mod t079_notification_regression_tests {
                 br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_after_error","status":"inProgress"}}}"#
             ),
             Err(CodexProtocolError::UnexpectedT079Notification)
+        );
+    }
+
+    #[test]
+    fn t079_thread_start_error_cancels_pending_dependent_turn() {
+        let mut client = ready_t079_client();
+        let (thread_request_id, _) = client
+            .t079_thread_start("/tmp/winds-t079-fixture")
+            .expect("thread request");
+        client
+            .ingest_jsonl_frame(&t079_notification_frame(
+                "thread/started",
+                json!({"thread": t079_full_thread_fixture("thr_t079_fixture")}),
+            ))
+            .expect("pre-response thread/started");
+
+        let native = NativeThreadId::parse("thr_t079_fixture").expect("native thread id");
+        let (turn_request_id, _) = client
+            .t079_turn_start(&native, "/tmp/winds-t079-fixture")
+            .expect("dependent turn request");
+        assert!(client
+            .t079_requests
+            .iter()
+            .any(|(_, kind)| *kind == T079RequestKind::ThreadStart));
+        assert!(client
+            .t079_requests
+            .iter()
+            .any(|(_, kind)| *kind == T079RequestKind::TurnStart));
+
+        assert!(matches!(
+            client
+                .ingest_jsonl_frame(
+                    format!(
+                        r#"{{"id":{thread_request_id},"error":{{"code":-32000,"message":"fixture"}}}}"#
+                    )
+                    .as_bytes(),
+                )
+                .expect("thread error response"),
+            CodexInbound::ErrorResponse {
+                id: RpcId::Number(id),
+                ..
+            } if id == thread_request_id
+        ));
+        assert!(client.t079_requests.is_empty());
+        assert_eq!(client.t079_thread_id, None);
+        assert_eq!(client.t079_turn_id, None);
+
+        assert_eq!(
+            client.ingest_jsonl_frame(
+                format!(
+                    r#"{{"id":{turn_request_id},"result":{{"turn":{{"id":"turn_after_thread_error"}}}}}}"#
+                )
+                .as_bytes(),
+            ),
+            Err(CodexProtocolError::MalformedFrame)
+        );
+        assert_eq!(
+            client.ingest_jsonl_frame(
+                br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_after_thread_error","status":"inProgress"}}}"#
+            ),
+            Err(CodexProtocolError::ClientFailed)
         );
     }
 }
