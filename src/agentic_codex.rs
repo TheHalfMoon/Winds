@@ -186,6 +186,8 @@ pub(super) struct CodexProtocolClient {
     t079_thread_id: Option<String>,
     #[cfg(test)]
     t079_turn_id: Option<String>,
+    #[cfg(test)]
+    t079_turn_completed: bool,
 }
 
 impl Default for CodexProtocolClient {
@@ -205,6 +207,8 @@ impl Default for CodexProtocolClient {
             t079_thread_id: None,
             #[cfg(test)]
             t079_turn_id: None,
+            #[cfg(test)]
+            t079_turn_completed: false,
         }
     }
 }
@@ -671,9 +675,11 @@ impl CodexProtocolClient {
             T079RequestKind::ThreadStart => {
                 self.t079_thread_id = None;
                 self.t079_turn_id = None;
+                self.t079_turn_completed = false;
             }
             T079RequestKind::TurnStart => {
                 self.t079_turn_id = None;
+                self.t079_turn_completed = false;
             }
         }
         Ok(())
@@ -749,6 +755,10 @@ impl CodexProtocolClient {
                 && params.get("status").is_some_and(t079_thread_status_allowed);
         }
 
+        if self.t079_turn_completed {
+            return false;
+        }
+
         if method == "turn/started" && self.t079_turn_id.is_none() {
             if !self
                 .t079_requests
@@ -793,7 +803,7 @@ impl CodexProtocolClient {
                         .get("turn")
                         .is_some_and(|turn| t079_turn_allowed(turn, turn_id, "completed"));
                 if allowed {
-                    self.t079_turn_id = None;
+                    self.t079_turn_completed = true;
                 }
                 allowed
             }
@@ -1535,7 +1545,7 @@ mod t079_notification_regression_tests {
             .expect("T079 initialize");
         assert_eq!(
             client
-                .ingest_jsonl_frame(br#"{"id":0,"result":{"userAgent":"fixture"}}"#)
+                .ingest_jsonl_frame(br#"{\"id\":0,\"result\":{\"userAgent\":\"fixture\"}}"#)
                 .expect("initialize response"),
             CodexInbound::InitializeAccepted
         );
@@ -1553,7 +1563,7 @@ mod t079_notification_regression_tests {
         let (mut client, config_id) = config_read_pending_t079_client();
         client
             .ingest_jsonl_frame(
-                format!(r#"{{"id":{config_id},"result":{{"config":{{}}}}}}"#).as_bytes(),
+                format!(r#"{{\"id\":{config_id},\"result\":{{\"config\":{{}}}}}}"#).as_bytes(),
             )
             .expect("config response");
         client
@@ -1568,7 +1578,7 @@ mod t079_notification_regression_tests {
         client
             .ingest_jsonl_frame(
                 format!(
-                    r#"{{"id":{thread_id},"result":{{"thread":{{"id":"thr_t079_fixture"}}}}}}"#
+                    r#"{{\"id\":{thread_id},\"result\":{{\"thread\":{{\"id\":\"thr_t079_fixture\"}}}}}}"#
                 )
                 .as_bytes(),
             )
@@ -1581,7 +1591,7 @@ mod t079_notification_regression_tests {
         client
             .ingest_jsonl_frame(
                 format!(
-                    r#"{{"id":{turn_request_id},"result":{{"turn":{{"id":"turn_t079_fixture"}}}}}}"#
+                    r#"{{\"id\":{turn_request_id},\"result\":{{\"turn\":{{\"id\":\"turn_t079_fixture\"}}}}}}"#
                 )
                 .as_bytes(),
             )
@@ -1610,7 +1620,7 @@ mod t079_notification_regression_tests {
         assert!(matches!(
             client
                 .ingest_jsonl_frame(
-                    format!(r#"{{"id":{config_id},"result":{{"config":{{}}}}}}"#).as_bytes(),
+                    format!(r#"{{\"id\":{config_id},\"result\":{{\"config\":{{}}}}}}"#).as_bytes(),
                 )
                 .expect("config response after warning"),
             CodexInbound::Response {
@@ -1666,7 +1676,7 @@ mod t079_notification_regression_tests {
             .t079_initialize_request("winds", "Winds", "0.1.0")
             .expect("T079 initialize");
         without_config_read
-            .ingest_jsonl_frame(br#"{"id":0,"result":{"userAgent":"fixture"}}"#)
+            .ingest_jsonl_frame(br#"{\"id\":0,\"result\":{\"userAgent\":\"fixture\"}}"#)
             .expect("initialize response");
         without_config_read
             .initialized_notification()
@@ -1690,7 +1700,7 @@ mod t079_notification_regression_tests {
         after_thread_binding
             .ingest_jsonl_frame(
                 format!(
-                    r#"{{"id":{thread_request_id},"result":{{"thread":{{"id":"thr_t079_fixture"}}}}}}"#
+                    r#"{{\"id\":{thread_request_id},\"result\":{{\"thread\":{{\"id\":\"thr_t079_fixture\"}}}}}}"#
                 )
                 .as_bytes(),
             )
@@ -1742,7 +1752,7 @@ mod t079_notification_regression_tests {
             after_thread_failure
                 .ingest_jsonl_frame(
                     format!(
-                        r#"{{"id":{thread_request_id},"error":{{"code":-32000,"message":"fixture"}}}}"#
+                        r#"{{\"id\":{thread_request_id},\"error\":{{\"code\":-32000,\"message\":\"fixture\"}}}}"#
                     )
                     .as_bytes(),
                 )
@@ -1774,9 +1784,9 @@ mod t079_notification_regression_tests {
     #[test]
     fn t079_unknown_notifications_fail_closed_even_with_empty_or_plausible_params() {
         for frame in [
-            br#"{"method":"future/authorityChanged","params":{}}"#.as_slice(),
-            br#"{"method":"future/authorityChanged","params":{"threadId":"thr_t079_fixture","turnId":"turn_t079_fixture"}}"#.as_slice(),
-            br#"{"method":"item/futurePassiveDelta","params":{"threadId":"thr_t079_fixture","turnId":"turn_t079_fixture","itemId":"item-1","delta":"x"}}"#.as_slice(),
+            br#"{\"method\":\"future/authorityChanged\",\"params\":{}}"#.as_slice(),
+            br#"{\"method\":\"future/authorityChanged\",\"params\":{\"threadId\":\"thr_t079_fixture\",\"turnId\":\"turn_t079_fixture\"}}"#.as_slice(),
+            br#"{\"method\":\"item/futurePassiveDelta\",\"params\":{\"threadId\":\"thr_t079_fixture\",\"turnId\":\"turn_t079_fixture\",\"itemId\":\"item-1\",\"delta\":\"x\"}}"#.as_slice(),
         ] {
             let mut client = active_t079_client();
             assert_eq!(
@@ -1793,14 +1803,14 @@ mod t079_notification_regression_tests {
             .t079_initialize_request("winds", "Winds", "0.1.0")
             .expect("T079 initialize");
         before_thread
-            .ingest_jsonl_frame(br#"{"id":0,"result":{"userAgent":"fixture"}}"#)
+            .ingest_jsonl_frame(br#"{\"id\":0,\"result\":{\"userAgent\":\"fixture\"}}"#)
             .expect("initialize response");
         before_thread
             .initialized_notification()
             .expect("initialized notification");
         assert_eq!(
             before_thread.ingest_jsonl_frame(
-                br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_t079_fixture","status":"inProgress"}}}"#
+                br#"{\"method\":\"turn/started\",\"params\":{\"threadId\":\"thr_t079_fixture\",\"turn\":{\"id\":\"turn_t079_fixture\",\"status\":\"inProgress\"}}}"#
             ),
             Err(CodexProtocolError::UnexpectedT079Notification)
         );
@@ -1822,7 +1832,7 @@ mod t079_notification_regression_tests {
         let mut wrong_identity = active_t079_client();
         assert_eq!(
             wrong_identity.ingest_jsonl_frame(
-                br#"{"method":"item/agentMessage/delta","params":{"threadId":"thr_t079_fixture","turnId":"turn_other","itemId":"item-1","delta":"x"}}"#
+                br#"{\"method\":\"item/agentMessage/delta\",\"params\":{\"threadId\":\"thr_t079_fixture\",\"turnId\":\"turn_other\",\"itemId\":\"item-1\",\"delta\":\"x\"}}"#
             ),
             Err(CodexProtocolError::UnexpectedT079Notification)
         );
@@ -1831,10 +1841,10 @@ mod t079_notification_regression_tests {
     #[test]
     fn t079_nested_notification_objects_reject_unknown_keys() {
         for frame in [
-            br#"{"method":"thread/started","params":{"thread":{"id":"thr_t079_fixture","futureAuthority":true}}}"#.as_slice(),
-            br#"{"method":"thread/status/changed","params":{"threadId":"thr_t079_fixture","status":{"type":"idle","futureAuthority":true}}}"#.as_slice(),
-            br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_t079_fixture","status":"inProgress","futureAuthority":true}}}"#.as_slice(),
-            br#"{"method":"item/started","params":{"threadId":"thr_t079_fixture","turnId":"turn_t079_fixture","startedAtMs":1,"item":{"type":"agentMessage","id":"item-1","futureAuthority":true}}}"#.as_slice(),
+            br#"{\"method\":\"thread/started\",\"params\":{\"thread\":{\"id\":\"thr_t079_fixture\",\"futureAuthority\":true}}}"#.as_slice(),
+            br#"{\"method\":\"thread/status/changed\",\"params\":{\"threadId\":\"thr_t079_fixture\",\"status\":{\"type\":\"idle\",\"futureAuthority\":true}}}"#.as_slice(),
+            br#"{\"method\":\"turn/started\",\"params\":{\"threadId\":\"thr_t079_fixture\",\"turn\":{\"id\":\"turn_t079_fixture\",\"status\":\"inProgress\",\"futureAuthority\":true}}}"#.as_slice(),
+            br#"{\"method\":\"item/started\",\"params\":{\"threadId\":\"thr_t079_fixture\",\"turnId\":\"turn_t079_fixture\",\"startedAtMs\":1,\"item\":{\"type\":\"agentMessage\",\"id\":\"item-1\",\"futureAuthority\":true}}}"#.as_slice(),
         ] {
             let mut client = active_t079_client();
             assert_eq!(
@@ -1846,7 +1856,7 @@ mod t079_notification_regression_tests {
         let mut usage_client = active_t079_client();
         assert_eq!(
             usage_client.ingest_jsonl_frame(
-                br#"{"method":"thread/tokenUsage/updated","params":{"threadId":"thr_t079_fixture","turnId":"turn_t079_fixture","tokenUsage":{"total":{"totalTokens":1,"inputTokens":1,"cachedInputTokens":0,"cacheWriteInputTokens":0,"outputTokens":0,"reasoningOutputTokens":0},"last":{"totalTokens":1,"inputTokens":1,"cachedInputTokens":0,"cacheWriteInputTokens":0,"outputTokens":0,"reasoningOutputTokens":0},"modelContextWindow":128000,"futureAuthority":true}}}"#
+                br#"{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"threadId\":\"thr_t079_fixture\",\"turnId\":\"turn_t079_fixture\",\"tokenUsage\":{\"total\":{\"totalTokens\":1,\"inputTokens\":1,\"cachedInputTokens\":0,\"cacheWriteInputTokens\":0,\"outputTokens\":0,\"reasoningOutputTokens\":0},\"last\":{\"totalTokens\":1,\"inputTokens\":1,\"cachedInputTokens\":0,\"cacheWriteInputTokens\":0,\"outputTokens\":0,\"reasoningOutputTokens\":0},\"modelContextWindow\":128000,\"futureAuthority\":true}}}"#
             ),
             Err(CodexProtocolError::UnexpectedT079Notification)
         );
@@ -2116,7 +2126,7 @@ mod t079_notification_regression_tests {
         let mut thread_client = active_t079_client();
         assert_eq!(
             thread_client.ingest_jsonl_frame(
-                br#"{"method":"thread/started","params":{"thread":{"id":"thr_t079_fixture"}}}"#
+                br#"{\"method\":\"thread/started\",\"params\":{\"thread\":{\"id\":\"thr_t079_fixture\"}}}"#
             ),
             Err(CodexProtocolError::UnexpectedT079Notification)
         );
@@ -2124,7 +2134,7 @@ mod t079_notification_regression_tests {
         let mut turn_client = active_t079_client();
         assert_eq!(
             turn_client.ingest_jsonl_frame(
-                br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_t079_fixture","status":"inProgress"}}}"#
+                br#"{\"method\":\"turn/started\",\"params\":{\"threadId\":\"thr_t079_fixture\",\"turn\":{\"id\":\"turn_t079_fixture\",\"status\":\"inProgress\"}}}"#
             ),
             Err(CodexProtocolError::UnexpectedT079Notification)
         );
@@ -2149,7 +2159,7 @@ mod t079_notification_regression_tests {
         client
             .ingest_jsonl_frame(
                 format!(
-                    r#"{{"id":{thread_request_id},"result":{{"thread":{{"id":"thr_t079_fixture"}}}}}}"#
+                    r#"{{\"id\":{thread_request_id},\"result\":{{\"thread\":{{\"id\":\"thr_t079_fixture\"}}}}}}"#
                 )
                 .as_bytes(),
             )
@@ -2175,11 +2185,84 @@ mod t079_notification_regression_tests {
         client
             .ingest_jsonl_frame(
                 format!(
-                    r#"{{"id":{turn_request_id},"result":{{"turn":{{"id":"turn_t079_fixture"}}}}}}"#
+                    r#"{{\"id\":{turn_request_id},\"result\":{{\"turn\":{{\"id\":\"turn_t079_fixture\"}}}}}}"#
                 )
                 .as_bytes(),
             )
             .expect("matching turn response");
+    }
+
+    #[test]
+    fn t079_turn_completion_is_terminal_before_delayed_start_response() {
+        let mut client = ready_t079_client();
+        let (thread_request_id, _) = client
+            .t079_thread_start("/tmp/winds-t079-fixture")
+            .expect("thread request");
+        client
+            .ingest_jsonl_frame(
+                format!(
+                    r#"{{\"id\":{thread_request_id},\"result\":{{\"thread\":{{\"id\":\"thr_t079_fixture\"}}}}}}"#
+                )
+                .as_bytes(),
+            )
+            .expect("thread response");
+
+        let native = NativeThreadId::parse("thr_t079_fixture").expect("native thread id");
+        let (turn_request_id, _) = client
+            .t079_turn_start(&native, "/tmp/winds-t079-fixture")
+            .expect("turn request");
+        client
+            .ingest_jsonl_frame(&t079_notification_frame(
+                "turn/started",
+                json!({
+                    "threadId": "thr_t079_fixture",
+                    "turn": t079_full_turn_fixture("turn_t079_fixture", "inProgress")
+                }),
+            ))
+            .expect("pre-response turn/started");
+        assert!(matches!(
+            client
+                .ingest_jsonl_frame(&t079_notification_frame(
+                    "turn/completed",
+                    json!({
+                        "threadId": "thr_t079_fixture",
+                        "turn": t079_full_turn_fixture("turn_t079_fixture", "completed")
+                    }),
+                ))
+                .expect("pre-response turn/completed"),
+            CodexInbound::Notification { method, .. } if method == "turn/completed"
+        ));
+        assert!(client.t079_turn_completed);
+        assert_eq!(client.t079_turn_id.as_deref(), Some("turn_t079_fixture"));
+
+        assert!(matches!(
+            client
+                .ingest_jsonl_frame(
+                    format!(
+                        r#"{{\"id\":{turn_request_id},\"result\":{{\"turn\":{{\"id\":\"turn_t079_fixture\"}}}}}}"#
+                    )
+                    .as_bytes(),
+                )
+                .expect("delayed matching turn response"),
+            CodexInbound::Response {
+                id: RpcId::Number(id),
+                ..
+            } if id == turn_request_id
+        ));
+        assert!(client.t079_requests.is_empty());
+        assert!(client.t079_turn_completed);
+        assert_eq!(client.t079_turn_id.as_deref(), Some("turn_t079_fixture"));
+
+        assert_eq!(
+            client.ingest_jsonl_frame(&t079_notification_frame(
+                "turn/started",
+                json!({
+                    "threadId": "thr_t079_fixture",
+                    "turn": t079_full_turn_fixture("turn_t079_fixture", "inProgress")
+                }),
+            )),
+            Err(CodexProtocolError::UnexpectedT079Notification)
+        );
     }
 
     #[test]
@@ -2197,7 +2280,7 @@ mod t079_notification_regression_tests {
         assert_eq!(
             thread_client.ingest_jsonl_frame(
                 format!(
-                    r#"{{"id":{thread_request_id},"result":{{"thread":{{"id":"thr_from_response"}}}}}}"#
+                    r#"{{\"id\":{thread_request_id},\"result\":{{\"thread\":{{\"id\":\"thr_from_response\"}}}}}}"#
                 )
                 .as_bytes(),
             ),
@@ -2211,7 +2294,7 @@ mod t079_notification_regression_tests {
         turn_client
             .ingest_jsonl_frame(
                 format!(
-                    r#"{{"id":{thread_request_id},"result":{{"thread":{{"id":"thr_t079_fixture"}}}}}}"#
+                    r#"{{\"id\":{thread_request_id},\"result\":{{\"thread\":{{\"id\":\"thr_t079_fixture\"}}}}}}"#
                 )
                 .as_bytes(),
             )
@@ -2232,7 +2315,7 @@ mod t079_notification_regression_tests {
         assert_eq!(
             turn_client.ingest_jsonl_frame(
                 format!(
-                    r#"{{"id":{turn_request_id},"result":{{"turn":{{"id":"turn_from_response"}}}}}}"#
+                    r#"{{\"id\":{turn_request_id},\"result\":{{\"turn\":{{\"id\":\"turn_from_response\"}}}}}}"#
                 )
                 .as_bytes(),
             ),
@@ -2248,7 +2331,7 @@ mod t079_notification_regression_tests {
             .expect("thread request");
         assert_eq!(
             client.ingest_jsonl_frame(
-                br#"{"method":"thread/status/changed","params":{"threadId":"thr_t079_fixture","status":{"type":"idle"}}}"#
+                br#"{\"method\":\"thread/status/changed\",\"params\":{\"threadId\":\"thr_t079_fixture\",\"status\":{\"type\":\"idle\"}}}"#
             ),
             Err(CodexProtocolError::UnexpectedT079Notification)
         );
@@ -2266,7 +2349,7 @@ mod t079_notification_regression_tests {
         );
         assert_eq!(
             thread_client.ingest_jsonl_frame(
-                br#"{"method":"thread/started","params":{"thread":{"id":"thr_after_duplicate"}}}"#
+                br#"{\"method\":\"thread/started\",\"params\":{\"thread\":{\"id\":\"thr_after_duplicate\"}}}"#
             ),
             Err(CodexProtocolError::ClientFailed)
         );
@@ -2278,7 +2361,7 @@ mod t079_notification_regression_tests {
         turn_client
             .ingest_jsonl_frame(
                 format!(
-                    r#"{{"id":{thread_request_id},"result":{{"thread":{{"id":"thr_t079_fixture"}}}}}}"#
+                    r#"{{\"id\":{thread_request_id},\"result\":{{\"thread\":{{\"id\":\"thr_t079_fixture\"}}}}}}"#
                 )
                 .as_bytes(),
             )
@@ -2293,7 +2376,7 @@ mod t079_notification_regression_tests {
         );
         assert_eq!(
             turn_client.ingest_jsonl_frame(
-                br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_after_duplicate","status":"inProgress"}}}"#
+                br#"{\"method\":\"turn/started\",\"params\":{\"threadId\":\"thr_t079_fixture\",\"turn\":{\"id\":\"turn_after_duplicate\",\"status\":\"inProgress\"}}}"#
             ),
             Err(CodexProtocolError::ClientFailed)
         );
@@ -2315,7 +2398,7 @@ mod t079_notification_regression_tests {
             thread_client
                 .ingest_jsonl_frame(
                     format!(
-                        r#"{{"id":{thread_request_id},"error":{{"code":-32000,"message":"fixture"}}}}"#
+                        r#"{{\"id\":{thread_request_id},\"error\":{{\"code\":-32000,\"message\":\"fixture\"}}}}"#
                     )
                     .as_bytes(),
                 )
@@ -2329,9 +2412,10 @@ mod t079_notification_regression_tests {
         assert!(thread_client.t079_requests.is_empty());
         assert_eq!(thread_client.t079_thread_id, None);
         assert_eq!(thread_client.t079_turn_id, None);
+        assert!(!thread_client.t079_turn_completed);
         assert_eq!(
             thread_client.ingest_jsonl_frame(
-                br#"{"method":"thread/started","params":{"thread":{"id":"thr_after_error"}}}"#
+                br#"{\"method\":\"thread/started\",\"params\":{\"thread\":{\"id\":\"thr_after_error\"}}}"#
             ),
             Err(CodexProtocolError::UnexpectedT079Notification)
         );
@@ -2343,7 +2427,7 @@ mod t079_notification_regression_tests {
         turn_client
             .ingest_jsonl_frame(
                 format!(
-                    r#"{{"id":{thread_request_id},"result":{{"thread":{{"id":"thr_t079_fixture"}}}}}}"#
+                    r#"{{\"id\":{thread_request_id},\"result\":{{\"thread\":{{\"id\":\"thr_t079_fixture\"}}}}}}"#
                 )
                 .as_bytes(),
             )
@@ -2365,7 +2449,7 @@ mod t079_notification_regression_tests {
             turn_client
                 .ingest_jsonl_frame(
                     format!(
-                        r#"{{"id":{turn_request_id},"error":{{"code":-32000,"message":"fixture"}}}}"#
+                        r#"{{\"id\":{turn_request_id},\"error\":{{\"code\":-32000,\"message\":\"fixture\"}}}}"#
                     )
                     .as_bytes(),
                 )
@@ -2382,9 +2466,10 @@ mod t079_notification_regression_tests {
             Some("thr_t079_fixture")
         );
         assert_eq!(turn_client.t079_turn_id, None);
+        assert!(!turn_client.t079_turn_completed);
         assert_eq!(
             turn_client.ingest_jsonl_frame(
-                br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_after_error","status":"inProgress"}}}"#
+                br#"{\"method\":\"turn/started\",\"params\":{\"threadId\":\"thr_t079_fixture\",\"turn\":{\"id\":\"turn_after_error\",\"status\":\"inProgress\"}}}"#
             ),
             Err(CodexProtocolError::UnexpectedT079Notification)
         );
@@ -2413,7 +2498,7 @@ mod t079_notification_regression_tests {
             client
                 .ingest_jsonl_frame(
                     format!(
-                        r#"{{"id":{thread_request_id},"error":{{"code":-32000,"message":"fixture"}}}}"#
+                        r#"{{\"id\":{thread_request_id},\"error\":{{\"code\":-32000,\"message\":\"fixture\"}}}}"#
                     )
                     .as_bytes(),
                 )
@@ -2426,11 +2511,12 @@ mod t079_notification_regression_tests {
         assert!(client.t079_requests.is_empty());
         assert_eq!(client.t079_thread_id, None);
         assert_eq!(client.t079_turn_id, None);
+        assert!(!client.t079_turn_completed);
 
         assert_eq!(
             client.ingest_jsonl_frame(
                 format!(
-                    r#"{{"id":{turn_request_id},"result":{{"turn":{{"id":"turn_after_thread_error"}}}}}}"#
+                    r#"{{\"id\":{turn_request_id},\"result\":{{\"turn\":{{\"id\":\"turn_after_thread_error\"}}}}}}"#
                 )
                 .as_bytes(),
             ),
@@ -2438,7 +2524,7 @@ mod t079_notification_regression_tests {
         );
         assert_eq!(
             client.ingest_jsonl_frame(
-                br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_after_thread_error","status":"inProgress"}}}"#
+                br#"{\"method\":\"turn/started\",\"params\":{\"threadId\":\"thr_t079_fixture\",\"turn\":{\"id\":\"turn_after_thread_error\",\"status\":\"inProgress\"}}}"#
             ),
             Err(CodexProtocolError::ClientFailed)
         );
