@@ -794,6 +794,8 @@ impl CodexProtocolClient {
                         .is_some_and(|turn| t079_turn_allowed(turn, turn_id, "completed"));
                 if allowed {
                     self.t079_turn_id = None;
+                    self.t079_requests
+                        .retain(|(_, kind)| *kind != T079RequestKind::TurnStart);
                 }
                 allowed
             }
@@ -2180,6 +2182,72 @@ mod t079_notification_regression_tests {
                 .as_bytes(),
             )
             .expect("matching turn response");
+    }
+
+    #[test]
+    fn t079_turn_completion_cancels_pending_response_and_stays_terminal() {
+        let mut client = ready_t079_client();
+        let (thread_request_id, _) = client
+            .t079_thread_start("/tmp/winds-t079-fixture")
+            .expect("thread request");
+        client
+            .ingest_jsonl_frame(
+                format!(
+                    r#"{{"id":{thread_request_id},"result":{{"thread":{{"id":"thr_t079_fixture"}}}}}}"#
+                )
+                .as_bytes(),
+            )
+            .expect("thread response");
+
+        let native = NativeThreadId::parse("thr_t079_fixture").expect("native thread id");
+        let (turn_request_id, _) = client
+            .t079_turn_start(&native, "/tmp/winds-t079-fixture")
+            .expect("turn request");
+        client
+            .ingest_jsonl_frame(&t079_notification_frame(
+                "turn/started",
+                json!({
+                    "threadId": "thr_t079_fixture",
+                    "turn": t079_full_turn_fixture("turn_t079_fixture", "inProgress")
+                }),
+            ))
+            .expect("pre-response turn/started");
+        client
+            .ingest_jsonl_frame(&t079_notification_frame(
+                "turn/completed",
+                json!({
+                    "threadId": "thr_t079_fixture",
+                    "turn": t079_full_turn_fixture("turn_t079_fixture", "completed")
+                }),
+            ))
+            .expect("terminal turn completion");
+
+        assert_eq!(client.t079_turn_id, None);
+        assert!(
+            !client
+                .t079_requests
+                .iter()
+                .any(|(_, kind)| *kind == T079RequestKind::TurnStart)
+        );
+        assert_eq!(
+            client.ingest_jsonl_frame(
+                format!(
+                    r#"{{"id":{turn_request_id},"result":{{"turn":{{"id":"turn_t079_fixture"}}}}}}"#
+                )
+                .as_bytes(),
+            ),
+            Err(CodexProtocolError::MalformedFrame)
+        );
+        assert_eq!(
+            client.ingest_jsonl_frame(&t079_notification_frame(
+                "turn/started",
+                json!({
+                    "threadId": "thr_t079_fixture",
+                    "turn": t079_full_turn_fixture("turn_t079_fixture", "inProgress")
+                }),
+            )),
+            Err(CodexProtocolError::ClientFailed)
+        );
     }
 
     #[test]
