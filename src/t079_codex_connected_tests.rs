@@ -140,6 +140,8 @@ const T079_CODEX_AUTHORITY_REDUCTION_ARGS: &[&str] = &[
     "-c",
     "features.tool_suggest=false",
     "-c",
+    "features.shell_tool=false",
+    "-c",
     "include_apps_instructions=false",
     "-c",
     "include_collaboration_mode_instructions=false",
@@ -152,6 +154,7 @@ const T079_CODEX_SESSION_ORIGIN_PATHS: &[&str] = &[
     "features.multi_agent_v2.enabled",
     "features.remote_plugin",
     "features.tool_suggest",
+    "features.shell_tool",
     "include_apps_instructions",
     "include_collaboration_mode_instructions",
 ];
@@ -532,6 +535,7 @@ fn expected_t079_codex_0_149_config() -> Value {
             "network_proxy": null,
             "remote_control": false,
             "remote_plugin": false,
+            "shell_tool": false,
             "tool_suggest": false
         },
         "feedback": null,
@@ -2169,6 +2173,10 @@ fn effective_config_preflight_requires_exact_codex_0_149_surface_and_authority_r
                 "name": { "type": "sessionFlags" },
                 "version": layer_version
             },
+            "features.shell_tool": {
+                "name": { "type": "sessionFlags" },
+                "version": layer_version
+            },
             "include_apps_instructions": {
                 "name": { "type": "sessionFlags" },
                 "version": layer_version
@@ -2272,6 +2280,11 @@ fn effective_config_preflight_requires_exact_codex_0_149_surface_and_authority_r
             let mut value = expected_t079_codex_0_149_config();
             value["features"]["tool_suggest"] = json!(true);
             ("tool_suggest", value)
+        },
+        {
+            let mut value = expected_t079_codex_0_149_config();
+            value["features"]["shell_tool"] = json!(true);
+            ("shell_tool", value)
         },
         {
             let mut value = expected_t079_codex_0_149_config();
@@ -2409,6 +2422,8 @@ fn t079_codex_launch_applies_fixed_authority_reduction_before_app_server() {
             "features.remote_plugin=false",
             "-c",
             "features.tool_suggest=false",
+            "-c",
+            "features.shell_tool=false",
             "-c",
             "include_apps_instructions=false",
             "-c",
