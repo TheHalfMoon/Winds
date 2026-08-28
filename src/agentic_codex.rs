@@ -2468,7 +2468,10 @@ mod t079_notification_regression_tests {
             .t079_turn_start(&native, "/tmp/winds-t079-fixture")
             .expect("turn request");
         let request: Value = serde_json::from_str(request.trim_end()).expect("turn request JSON");
-        assert_eq!(request.get("method").and_then(Value::as_str), Some("turn/start"));
+        assert_eq!(
+            request.get("method").and_then(Value::as_str),
+            Some("turn/start")
+        );
         assert_eq!(
             request
                 .get("params")
