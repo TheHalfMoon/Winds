@@ -396,6 +396,10 @@ impl CodexProtocolClient {
         cwd: &str,
     ) -> Result<(u64, String), CodexProtocolError> {
         validate_nonempty_exact(cwd)?;
+        match self.t079_thread_id.as_deref() {
+            Some(bound_thread_id) if bound_thread_id == native_thread_id.as_str() => {}
+            _ => return self.fail(CodexProtocolError::MalformedFrame),
+        }
         if self.t079_turn_start_issued {
             return self.fail(CodexProtocolError::MalformedFrame);
         }
@@ -2364,6 +2368,120 @@ mod t079_notification_regression_tests {
                 br#"{"method":"turn/started","params":{"threadId":"thr_t079_fixture","turn":{"id":"turn_after_duplicate","status":"inProgress"}}}"#
             ),
             Err(CodexProtocolError::ClientFailed)
+        );
+    }
+
+    #[test]
+    fn t079_thread_start_error_prevents_later_turn_request() {
+        let mut client = ready_t079_client();
+        let (thread_request_id, _) = client
+            .t079_thread_start("/tmp/winds-t079-fixture")
+            .expect("thread request");
+        assert!(matches!(
+            client
+                .ingest_jsonl_frame(
+                    format!(
+                        r#"{{"id":{thread_request_id},"error":{{"code":-32000,"message":"fixture"}}}}"#
+                    )
+                    .as_bytes(),
+                )
+                .expect("thread error response"),
+            CodexInbound::ErrorResponse {
+                id: RpcId::Number(id),
+                ..
+            } if id == thread_request_id
+        ));
+
+        let native = NativeThreadId::parse("thr_after_failed_start").expect("native thread id");
+        assert_eq!(
+            client.t079_turn_start(&native, "/tmp/winds-t079-fixture"),
+            Err(CodexProtocolError::MalformedFrame)
+        );
+        assert!(!client.t079_turn_start_issued);
+        assert!(
+            !client
+                .t079_requests
+                .iter()
+                .any(|(_, kind)| *kind == T079RequestKind::TurnStart)
+        );
+    }
+
+    #[test]
+    fn t079_turn_start_rejects_unbound_or_mismatched_thread() {
+        let mut unbound = ready_t079_client();
+        let native = NativeThreadId::parse("thr_unbound").expect("native thread id");
+        assert_eq!(
+            unbound.t079_turn_start(&native, "/tmp/winds-t079-fixture"),
+            Err(CodexProtocolError::MalformedFrame)
+        );
+        assert!(!unbound.t079_turn_start_issued);
+        assert!(
+            !unbound
+                .t079_requests
+                .iter()
+                .any(|(_, kind)| *kind == T079RequestKind::TurnStart)
+        );
+
+        let mut mismatched = ready_t079_client();
+        let (thread_request_id, _) = mismatched
+            .t079_thread_start("/tmp/winds-t079-fixture")
+            .expect("thread request");
+        mismatched
+            .ingest_jsonl_frame(
+                format!(
+                    r#"{{"id":{thread_request_id},"result":{{"thread":{{"id":"thr_t079_fixture"}}}}}}"#
+                )
+                .as_bytes(),
+            )
+            .expect("thread response");
+        let wrong = NativeThreadId::parse("thr_other").expect("native thread id");
+        assert_eq!(
+            mismatched.t079_turn_start(&wrong, "/tmp/winds-t079-fixture"),
+            Err(CodexProtocolError::MalformedFrame)
+        );
+        assert!(!mismatched.t079_turn_start_issued);
+        assert!(
+            !mismatched
+                .t079_requests
+                .iter()
+                .any(|(_, kind)| *kind == T079RequestKind::TurnStart)
+        );
+    }
+
+    #[test]
+    fn t079_turn_start_accepts_exact_bound_thread() {
+        let mut client = ready_t079_client();
+        let (thread_request_id, _) = client
+            .t079_thread_start("/tmp/winds-t079-fixture")
+            .expect("thread request");
+        client
+            .ingest_jsonl_frame(
+                format!(
+                    r#"{{"id":{thread_request_id},"result":{{"thread":{{"id":"thr_t079_fixture"}}}}}}"#
+                )
+                .as_bytes(),
+            )
+            .expect("thread response");
+
+        let native = NativeThreadId::parse("thr_t079_fixture").expect("native thread id");
+        let (_, request) = client
+            .t079_turn_start(&native, "/tmp/winds-t079-fixture")
+            .expect("turn request");
+        let request: Value = serde_json::from_str(request.trim_end()).expect("turn request JSON");
+        assert_eq!(request.get("method").and_then(Value::as_str), Some("turn/start"));
+        assert_eq!(
+            request
+                .get("params")
+                .and_then(|params| params.get("threadId"))
+                .and_then(Value::as_str),
+            Some("thr_t079_fixture")
+        );
+        assert!(client.t079_turn_start_issued);
+        assert!(
+            client
+                .t079_requests
+                .iter()
+                .any(|(_, kind)| *kind == T079RequestKind::TurnStart)
         );
     }
 
