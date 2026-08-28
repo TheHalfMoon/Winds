@@ -640,10 +640,7 @@ fn validate_t079_session_origins(origins: &serde_json::Map<String, Value>) -> Pr
     expected_keys.sort_unstable();
 
     if actual_keys != expected_keys {
-        return Err(format!(
-            "T079 Codex 0.149 session-origin surface changed: {}",
-            actual_keys.join(", ")
-        ));
+        return Err("T079 Codex 0.149 session-origin surface changed".to_owned());
     }
 
     let mut shared_version: Option<&str> = None;
@@ -711,10 +708,7 @@ fn validate_t079_exact_config_surface(config: &serde_json::Map<String, Value>) -
     expected_keys.sort_unstable();
 
     if actual_keys != expected_keys {
-        return Err(format!(
-            "T079 Codex 0.149 effective config key set changed: {}",
-            actual_keys.join(", ")
-        ));
+        return Err("T079 Codex 0.149 effective config key set changed".to_owned());
     }
 
     for (key, expected_value) in expected {
@@ -1652,11 +1646,16 @@ fn is_forbidden_activity(method: &str, params: &Value) -> bool {
         })
 }
 
+fn t079_bounded_protocol_failure(phase: &'static str, category: &'static str) -> String {
+    format!("T079 Codex protocol failure: phase={phase};category={category}")
+}
+
 fn handle_server_request<W: Write>(
     client: &CodexProtocolClient,
     stdin: &mut W,
     id: &RpcId,
     method: &str,
+    phase: &'static str,
 ) -> ProofResult<()> {
     if matches!(
         method,
@@ -1664,12 +1663,14 @@ fn handle_server_request<W: Write>(
     ) {
         let decline = client.t079_decline(id).map_err(|error| error.to_string())?;
         send_line(stdin, &decline)?;
-        return Err(format!(
-            "T079 Codex requested unexpected authority and was explicitly declined: {method}"
+        return Err(t079_bounded_protocol_failure(
+            phase,
+            "UNEXPECTED_AUTHORITY_REQUEST_DECLINED",
         ));
     }
-    Err(format!(
-        "T079 refuses unexpected server-initiated request without granting it: {method}"
+    Err(t079_bounded_protocol_failure(
+        phase,
+        "UNEXPECTED_SERVER_REQUEST",
     ))
 }
 
@@ -1697,13 +1698,14 @@ fn wait_for_response<W: Write>(
                 result,
                 evidence: EvidenceClass::AgentRuntimeEvidence,
             } if id == expected_id => return Ok(result),
-            CodexInbound::ErrorResponse { id, error, .. } => {
-                return Err(format!("T079 Codex request {id:?} failed: {error}"));
+            CodexInbound::ErrorResponse { .. } => {
+                return Err(t079_bounded_protocol_failure(phase, "ERROR_RESPONSE"));
             }
             CodexInbound::Notification { method, params, .. } => {
                 if is_forbidden_activity(&method, &params) {
-                    return Err(format!(
-                        "T079 observed forbidden runtime activity: {method}"
+                    return Err(t079_bounded_protocol_failure(
+                        phase,
+                        "FORBIDDEN_RUNTIME_ACTIVITY",
                     ));
                 }
             }
@@ -1712,11 +1714,9 @@ fn wait_for_response<W: Write>(
                 method,
                 disposition: ServerRequestDisposition::RequiresExternalDecision,
                 ..
-            } => handle_server_request(client, stdin, &id, &method)?,
-            other => {
-                return Err(format!(
-                    "T079 received response/event that cannot satisfy request {expected_id}: {other:?}"
-                ));
+            } => handle_server_request(client, stdin, &id, &method, phase)?,
+            _ => {
+                return Err(t079_bounded_protocol_failure(phase, "UNEXPECTED_INBOUND"));
             }
         }
     }
@@ -1939,8 +1939,9 @@ fn run_connected_proof(
                     evidence: EvidenceClass::AgentRuntimeEvidence,
                 } => {
                     if is_forbidden_activity(&method, &params) {
-                        return Err(format!(
-                            "T079 observed forbidden runtime activity: {method}"
+                        return Err(t079_bounded_protocol_failure(
+                            "turn/runtime",
+                            "FORBIDDEN_RUNTIME_ACTIVITY",
                         ));
                     }
                     if method == "item/completed"
@@ -1974,9 +1975,18 @@ fn run_connected_proof(
                     method,
                     disposition: ServerRequestDisposition::RequiresExternalDecision,
                     ..
-                } => handle_server_request(&client, &mut stdin, &id, &method)?,
-                CodexInbound::ErrorResponse { id, error, .. } => {
-                    return Err(format!("T079 Codex runtime error {id:?}: {error}"));
+                } => handle_server_request(
+                    &client,
+                    &mut stdin,
+                    &id,
+                    &method,
+                    "turn/runtime",
+                )?,
+                CodexInbound::ErrorResponse { .. } => {
+                    return Err(t079_bounded_protocol_failure(
+                        "turn/runtime",
+                        "ERROR_RESPONSE",
+                    ));
                 }
                 CodexInbound::Response { .. } | CodexInbound::InitializeAccepted => {
                     return Err("T079 received an unexpected response after turn/start".to_owned());
@@ -2231,8 +2241,9 @@ fn effective_config_preflight_requires_exact_codex_0_149_surface_and_authority_r
         assert!(error.contains("key set changed"), "missing {key}: {error}");
     }
 
+    let secret_config_key = "SECRET_CONFIG_KEY_DO_NOT_PRINT";
     let mut config = expected_t079_codex_0_149_config();
-    config["future_side_channel"] = Value::Null;
+    config[secret_config_key] = Value::Null;
     let error = validate_effective_config(
         &json!({
             "config": config,
@@ -2242,6 +2253,7 @@ fn effective_config_preflight_requires_exact_codex_0_149_surface_and_authority_r
     )
     .unwrap_err();
     assert!(error.contains("key set changed"));
+    assert!(!error.contains(secret_config_key));
 
     for (label, config) in [
         {
@@ -2340,8 +2352,9 @@ fn effective_config_preflight_requires_exact_codex_0_149_surface_and_authority_r
     .unwrap_err();
     assert!(error.contains("session-origin surface changed"));
 
+    let secret_origin_key = "SECRET_ORIGIN_KEY_DO_NOT_PRINT";
     let mut extra_origin = origins();
-    extra_origin["future.setting"] = json!({
+    extra_origin[secret_origin_key] = json!({
         "name": { "type": "sessionFlags" },
         "version": layer_version
     });
@@ -2355,6 +2368,7 @@ fn effective_config_preflight_requires_exact_codex_0_149_surface_and_authority_r
     )
     .unwrap_err();
     assert!(error.contains("session-origin surface changed"));
+    assert!(!error.contains(secret_origin_key));
 
     let mut wrong_source = origins();
     wrong_source["agents.enabled"]["name"]["type"] = json!("user");
@@ -2733,6 +2747,136 @@ fn approval_response_is_decline_only_and_unknown_requests_never_authorize() {
     );
     assert!(!decline.to_string().contains("accept"));
     assert!(!decline.to_string().contains("approve"));
+}
+
+#[test]
+fn t079_server_request_failure_diagnostics_do_not_echo_app_server_values() {
+    let client = initialized_client();
+    let secret_id_text = "SECRET_RPC_ID_DO_NOT_PRINT";
+
+    for (method, category) in [
+        ("SECRET_SERVER_METHOD_DO_NOT_PRINT", "UNEXPECTED_SERVER_REQUEST"),
+        (
+            "item/commandExecution/requestApproval",
+            "UNEXPECTED_AUTHORITY_REQUEST_DECLINED",
+        ),
+    ] {
+        let mut protocol_output = Vec::new();
+        let error = handle_server_request(
+            &client,
+            &mut protocol_output,
+            &RpcId::Text(secret_id_text.to_owned()),
+            method,
+            "turn/runtime",
+        )
+        .unwrap_err();
+
+        assert!(error.contains("phase=turn/runtime"));
+        assert!(error.contains(&format!("category={category}")));
+        assert!(!error.contains(secret_id_text));
+        assert!(!error.contains(method));
+    }
+}
+
+#[test]
+fn t079_wait_for_response_error_diagnostics_do_not_echo_error_payload() {
+    let mut client = initialized_client();
+    let (request_id, _) = client
+        .t079_config_read("/tmp/winds-t079-fixture")
+        .expect("pending config/read fixture");
+    let (sender, receiver) = mpsc::sync_channel(1);
+    sender
+        .send(Ok(
+            serde_json::to_vec(&json!({
+                "id": request_id,
+                "error": {
+                    "code": -32000,
+                    "message": "SECRET_ERROR_MESSAGE_DO_NOT_PRINT",
+                    "data": {
+                        "SECRET_ERROR_KEY_DO_NOT_PRINT": "SECRET_ERROR_OBJECT_DO_NOT_PRINT",
+                        "scalar": "SECRET_ERROR_SCALAR_DO_NOT_PRINT"
+                    }
+                }
+            }))
+            .expect("serialize error response fixture"),
+        ))
+        .expect("queue error response fixture");
+    drop(sender);
+
+    let mut stdin = Vec::new();
+    let mut total_bytes = 0usize;
+    let mut frame_count = 0usize;
+    let error = wait_for_response(
+        &mut client,
+        &mut stdin,
+        &receiver,
+        T079ResponseWait {
+            expected_id: request_id,
+            phase: "config/read",
+        },
+        Instant::now() + Duration::from_secs(1),
+        &mut total_bytes,
+        &mut frame_count,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("phase=config/read"));
+    assert!(error.contains("category=ERROR_RESPONSE"));
+    for forbidden in [
+        "SECRET_ERROR_MESSAGE_DO_NOT_PRINT",
+        "SECRET_ERROR_KEY_DO_NOT_PRINT",
+        "SECRET_ERROR_OBJECT_DO_NOT_PRINT",
+        "SECRET_ERROR_SCALAR_DO_NOT_PRINT",
+    ] {
+        assert!(!error.contains(forbidden), "diagnostic leaked {forbidden}");
+    }
+}
+
+#[test]
+fn t079_wait_for_response_server_request_diagnostics_do_not_echo_request_payload() {
+    let mut client = initialized_client();
+    let (request_id, _) = client
+        .t079_config_read("/tmp/winds-t079-fixture")
+        .expect("pending config/read fixture");
+    let secret_id = "SECRET_SERVER_REQUEST_ID_DO_NOT_PRINT";
+    let secret_method = "SECRET_SERVER_REQUEST_METHOD_DO_NOT_PRINT";
+    let secret_key = "SECRET_SERVER_REQUEST_KEY_DO_NOT_PRINT";
+    let secret_value = "SECRET_SERVER_REQUEST_VALUE_DO_NOT_PRINT";
+    let (sender, receiver) = mpsc::sync_channel(1);
+    sender
+        .send(Ok(
+            serde_json::to_vec(&json!({
+                "id": secret_id,
+                "method": secret_method,
+                "params": { secret_key: secret_value }
+            }))
+            .expect("serialize server request fixture"),
+        ))
+        .expect("queue server request fixture");
+    drop(sender);
+
+    let mut stdin = Vec::new();
+    let mut total_bytes = 0usize;
+    let mut frame_count = 0usize;
+    let error = wait_for_response(
+        &mut client,
+        &mut stdin,
+        &receiver,
+        T079ResponseWait {
+            expected_id: request_id,
+            phase: "config/read",
+        },
+        Instant::now() + Duration::from_secs(1),
+        &mut total_bytes,
+        &mut frame_count,
+    )
+    .unwrap_err();
+
+    assert!(error.contains("phase=config/read"));
+    assert!(error.contains("category=UNEXPECTED_SERVER_REQUEST"));
+    for forbidden in [secret_id, secret_method, secret_key, secret_value] {
+        assert!(!error.contains(forbidden), "diagnostic leaked {forbidden}");
+    }
 }
 
 #[test]
