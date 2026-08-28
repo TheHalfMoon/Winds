@@ -257,10 +257,8 @@ impl BoundCodexHome {
     }
 
     fn assert_stable(&self) -> ProofResult<()> {
-        let self_event_mask = libc::IN_Q_OVERFLOW
-            | libc::IN_MOVE_SELF
-            | libc::IN_DELETE_SELF
-            | libc::IN_IGNORED;
+        let self_event_mask =
+            libc::IN_Q_OVERFLOW | libc::IN_MOVE_SELF | libc::IN_DELETE_SELF | libc::IN_IGNORED;
         let mut buffer = [0_u8; 4096];
 
         loop {
@@ -314,7 +312,10 @@ impl BoundCodexHome {
                 }
                 if name_len > 0 {
                     let name = &buffer[offset + header..offset + record_len];
-                    let name = &name[..name.iter().position(|byte| *byte == 0).unwrap_or(name.len())];
+                    let name = &name[..name
+                        .iter()
+                        .position(|byte| *byte == 0)
+                        .unwrap_or(name.len())];
                     if BLOCKED_CODEX_CONFIG_FILES
                         .iter()
                         .any(|blocked| name == blocked.as_bytes())
@@ -1077,7 +1078,8 @@ fn bind_preexisting_isolated_codex_home(path: &Path) -> ProofResult<BoundCodexHo
         | libc::IN_ATTRIB
         | libc::IN_MOVE_SELF
         | libc::IN_DELETE_SELF;
-    if unsafe { libc::inotify_add_watch(watcher.as_raw_fd(), watch_path.as_ptr(), watch_mask) } < 0 {
+    if unsafe { libc::inotify_add_watch(watcher.as_raw_fd(), watch_path.as_ptr(), watch_mask) } < 0
+    {
         return Err(format!(
             "T079 could not bind CODEX_HOME mutation watch: {}",
             std::io::Error::last_os_error()
@@ -1111,7 +1113,9 @@ fn configure_bound_codex_home_inheritance(
     let fd = codex_home.directory.as_raw_fd();
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
     if flags < 0 || flags & libc::FD_CLOEXEC == 0 {
-        return Err("T079 could not prove parent CODEX_HOME descriptor is close-on-exec".to_owned());
+        return Err(
+            "T079 could not prove parent CODEX_HOME descriptor is close-on-exec".to_owned(),
+        );
     }
 
     unsafe {
@@ -1855,11 +1859,8 @@ fn drain_post_terminal_frames(
                     continue;
                 }
                 if failure.is_none() {
-                    let _ = ingest_t079_frame_with_rejection_metadata(
-                        client,
-                        &frame,
-                        "post-terminal",
-                    );
+                    let _ =
+                        ingest_t079_frame_with_rejection_metadata(client, &frame, "post-terminal");
                     failure = Some(t079_bounded_protocol_failure(
                         "post-terminal",
                         "UNEXPECTED_POST_TERMINAL_FRAME",
@@ -2821,7 +2822,10 @@ fn t079_bound_codex_home_rejects_path_replacement_and_blocked_config_mutation() 
     fs::rename(&root, &moved).expect("move original isolated home");
     fs::create_dir(&root).expect("replace original isolated home pathname");
     assert_eq!(
-        bound.launch_path().canonicalize().expect("bound target after rename"),
+        bound
+            .launch_path()
+            .canonicalize()
+            .expect("bound target after rename"),
         moved
     );
     let error = bound.assert_stable().unwrap_err();
@@ -2831,7 +2835,8 @@ fn t079_bound_codex_home_rejects_path_replacement_and_blocked_config_mutation() 
     fs::remove_dir(&moved).expect("remove original bound home");
 
     let config_root = disposable_root().expect("bound home config mutation fixture");
-    let bound = bind_preexisting_isolated_codex_home(&config_root).expect("bind config fixture home");
+    let bound =
+        bind_preexisting_isolated_codex_home(&config_root).expect("bind config fixture home");
     fs::write(config_root.join("config.toml"), b"fixture\n").expect("inject blocked config");
     let error = bound.assert_stable().unwrap_err();
     assert!(error.contains("configuration surface changed"));
@@ -3126,7 +3131,9 @@ fn t079_only_final_answer_phase_can_populate_structured_proof_result() {
 fn t079_post_terminal_drain_rejects_queued_frames_instead_of_discarding_them() {
     let (sender, receiver) = mpsc::sync_channel(1);
     sender
-        .send(Ok(br#"{"method":"future/postTerminal","params":{}}"#.to_vec()))
+        .send(Ok(
+            br#"{"method":"future/postTerminal","params":{}}"#.to_vec()
+        ))
         .expect("queue post-terminal fixture");
     drop(sender);
 
