@@ -1975,13 +1975,7 @@ fn run_connected_proof(
                     method,
                     disposition: ServerRequestDisposition::RequiresExternalDecision,
                     ..
-                } => handle_server_request(
-                    &client,
-                    &mut stdin,
-                    &id,
-                    &method,
-                    "turn/runtime",
-                )?,
+                } => handle_server_request(&client, &mut stdin, &id, &method, "turn/runtime")?,
                 CodexInbound::ErrorResponse { .. } => {
                     return Err(t079_bounded_protocol_failure(
                         "turn/runtime",
@@ -2755,7 +2749,10 @@ fn t079_server_request_failure_diagnostics_do_not_echo_app_server_values() {
     let secret_id_text = "SECRET_RPC_ID_DO_NOT_PRINT";
 
     for (method, category) in [
-        ("SECRET_SERVER_METHOD_DO_NOT_PRINT", "UNEXPECTED_SERVER_REQUEST"),
+        (
+            "SECRET_SERVER_METHOD_DO_NOT_PRINT",
+            "UNEXPECTED_SERVER_REQUEST",
+        ),
         (
             "item/commandExecution/requestApproval",
             "UNEXPECTED_AUTHORITY_REQUEST_DECLINED",
@@ -2786,20 +2783,18 @@ fn t079_wait_for_response_error_diagnostics_do_not_echo_error_payload() {
         .expect("pending config/read fixture");
     let (sender, receiver) = mpsc::sync_channel(1);
     sender
-        .send(Ok(
-            serde_json::to_vec(&json!({
-                "id": request_id,
-                "error": {
-                    "code": -32000,
-                    "message": "SECRET_ERROR_MESSAGE_DO_NOT_PRINT",
-                    "data": {
-                        "SECRET_ERROR_KEY_DO_NOT_PRINT": "SECRET_ERROR_OBJECT_DO_NOT_PRINT",
-                        "scalar": "SECRET_ERROR_SCALAR_DO_NOT_PRINT"
-                    }
+        .send(Ok(serde_json::to_vec(&json!({
+            "id": request_id,
+            "error": {
+                "code": -32000,
+                "message": "SECRET_ERROR_MESSAGE_DO_NOT_PRINT",
+                "data": {
+                    "SECRET_ERROR_KEY_DO_NOT_PRINT": "SECRET_ERROR_OBJECT_DO_NOT_PRINT",
+                    "scalar": "SECRET_ERROR_SCALAR_DO_NOT_PRINT"
                 }
-            }))
-            .expect("serialize error response fixture"),
-        ))
+            }
+        }))
+        .expect("serialize error response fixture")))
         .expect("queue error response fixture");
     drop(sender);
 
@@ -2840,18 +2835,15 @@ fn t079_wait_for_response_server_request_diagnostics_do_not_echo_request_payload
         .expect("pending config/read fixture");
     let secret_id = "SECRET_SERVER_REQUEST_ID_DO_NOT_PRINT";
     let secret_method = "SECRET_SERVER_REQUEST_METHOD_DO_NOT_PRINT";
-    let secret_key = "SECRET_SERVER_REQUEST_KEY_DO_NOT_PRINT";
     let secret_value = "SECRET_SERVER_REQUEST_VALUE_DO_NOT_PRINT";
     let (sender, receiver) = mpsc::sync_channel(1);
     sender
-        .send(Ok(
-            serde_json::to_vec(&json!({
-                "id": secret_id,
-                "method": secret_method,
-                "params": { secret_key: secret_value }
-            }))
-            .expect("serialize server request fixture"),
-        ))
+        .send(Ok(serde_json::to_vec(&json!({
+            "id": secret_id,
+            "method": secret_method,
+            "params": { "SECRET_SERVER_REQUEST_KEY_DO_NOT_PRINT": secret_value }
+        }))
+        .expect("serialize server request fixture")))
         .expect("queue server request fixture");
     drop(sender);
 
@@ -2874,7 +2866,12 @@ fn t079_wait_for_response_server_request_diagnostics_do_not_echo_request_payload
 
     assert!(error.contains("phase=config/read"));
     assert!(error.contains("category=UNEXPECTED_SERVER_REQUEST"));
-    for forbidden in [secret_id, secret_method, secret_key, secret_value] {
+    for forbidden in [
+        secret_id,
+        secret_method,
+        "SECRET_SERVER_REQUEST_KEY_DO_NOT_PRINT",
+        secret_value,
+    ] {
         assert!(!error.contains(forbidden), "diagnostic leaked {forbidden}");
     }
 }
