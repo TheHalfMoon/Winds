@@ -25,6 +25,8 @@ use std::io::{Seek, SeekFrom};
 #[cfg(target_os = "linux")]
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 #[cfg(target_os = "linux")]
+use std::os::unix::ffi::OsStrExt;
+#[cfg(target_os = "linux")]
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -238,6 +240,102 @@ struct BoundCodexExecutable {
 impl BoundCodexExecutable {
     fn launch_path(&self) -> &Path {
         &self.launch_path
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct BoundCodexHome {
+    directory: File,
+    launch_path: PathBuf,
+    watcher: OwnedFd,
+}
+
+#[cfg(target_os = "linux")]
+impl BoundCodexHome {
+    fn launch_path(&self) -> &Path {
+        &self.launch_path
+    }
+
+    fn assert_stable(&self) -> ProofResult<()> {
+        let self_event_mask = libc::IN_Q_OVERFLOW
+            | libc::IN_MOVE_SELF
+            | libc::IN_DELETE_SELF
+            | libc::IN_IGNORED;
+        let mut buffer = [0_u8; 4096];
+
+        loop {
+            let read = unsafe {
+                libc::read(
+                    self.watcher.as_raw_fd(),
+                    buffer.as_mut_ptr().cast(),
+                    buffer.len(),
+                )
+            };
+            if read < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() == Some(libc::EAGAIN) {
+                    break;
+                }
+                if error.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(format!(
+                    "T079 could not inspect bound CODEX_HOME mutation evidence: {error}"
+                ));
+            }
+            if read == 0 {
+                break;
+            }
+
+            let read = read as usize;
+            let header = std::mem::size_of::<libc::inotify_event>();
+            let mut offset = 0usize;
+            while offset < read {
+                if read - offset < header {
+                    return Err("T079 bound CODEX_HOME mutation evidence was truncated".to_owned());
+                }
+                let event = unsafe {
+                    std::ptr::read_unaligned(
+                        buffer.as_ptr().add(offset).cast::<libc::inotify_event>(),
+                    )
+                };
+                let name_len = event.len as usize;
+                let record_len = header
+                    .checked_add(name_len)
+                    .ok_or_else(|| "T079 CODEX_HOME watch record overflowed".to_owned())?;
+                if record_len > read - offset {
+                    return Err("T079 bound CODEX_HOME mutation evidence was malformed".to_owned());
+                }
+                if event.mask & self_event_mask != 0 {
+                    return Err(
+                        "T079 bound CODEX_HOME directory identity changed before proof completion"
+                            .to_owned(),
+                    );
+                }
+                if name_len > 0 {
+                    let name = &buffer[offset + header..offset + record_len];
+                    let name = &name[..name.iter().position(|byte| *byte == 0).unwrap_or(name.len())];
+                    if BLOCKED_CODEX_CONFIG_FILES
+                        .iter()
+                        .any(|blocked| name == blocked.as_bytes())
+                    {
+                        return Err(
+                            "T079 bound CODEX_HOME configuration surface changed before proof completion"
+                                .to_owned(),
+                        );
+                    }
+                }
+                offset += record_len;
+            }
+        }
+
+        for name in BLOCKED_CODEX_CONFIG_FILES {
+            reject_config_surface(
+                &self.launch_path.join(name),
+                "a bound local CODEX_HOME configuration surface",
+            )?;
+        }
+        Ok(())
     }
 }
 
@@ -811,6 +909,21 @@ fn parse_structured_agent_message(text: &str) -> ProofResult<String> {
     Ok("WINDS_T079_OK".to_owned())
 }
 
+fn completed_final_answer_text(params: &Value) -> ProofResult<Option<&str>> {
+    let Some(item) = params.get("item") else {
+        return Ok(None);
+    };
+    if item.get("type").and_then(Value::as_str) != Some("agentMessage")
+        || item.get("phase").and_then(Value::as_str) != Some("final_answer")
+    {
+        return Ok(None);
+    }
+    item.get("text")
+        .and_then(Value::as_str)
+        .map(Some)
+        .ok_or_else(|| "T079 completed final-answer agent message is missing text".to_owned())
+}
+
 fn validate_exact_text(value: &str, label: &str) -> ProofResult<()> {
     if value.trim().is_empty()
         || value != value.trim()
@@ -914,6 +1027,106 @@ fn validate_preexisting_isolated_codex_home(path: &Path) -> ProofResult<PathBuf>
         )?;
     }
     Ok(canonical)
+}
+
+#[cfg(target_os = "linux")]
+fn bind_preexisting_isolated_codex_home(path: &Path) -> ProofResult<BoundCodexHome> {
+    let canonical = canonical_directory_outside_primary_checkout(path, "WINDS_T079_CODEX_HOME")?;
+    let directory = File::open(&canonical)
+        .map_err(|error| format!("T079 could not open isolated CODEX_HOME directory: {error}"))?;
+    let fd = directory.as_raw_fd();
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags < 0 {
+        return Err(format!(
+            "T079 could not inspect CODEX_HOME descriptor flags: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    if flags & libc::FD_CLOEXEC == 0 {
+        return Err(
+            "T079 requires the bound CODEX_HOME descriptor to remain close-on-exec in the parent process"
+                .to_owned(),
+        );
+    }
+
+    let launch_path = PathBuf::from(format!("/proc/self/fd/{fd}"));
+    let bound_target = launch_path
+        .canonicalize()
+        .map_err(|error| format!("T079 could not resolve bound CODEX_HOME descriptor: {error}"))?;
+    if bound_target != canonical {
+        return Err("T079 CODEX_HOME identity changed during handle binding".to_owned());
+    }
+    let checkout = canonical_primary_checkout_root()?;
+    ensure_path_outside_primary_checkout(&bound_target, &checkout, "bound CODEX_HOME")?;
+
+    let raw_watcher = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
+    if raw_watcher < 0 {
+        return Err(format!(
+            "T079 could not create CODEX_HOME mutation watch: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let watcher = unsafe { OwnedFd::from_raw_fd(raw_watcher) };
+    let watch_path = CString::new(launch_path.as_os_str().as_bytes())
+        .map_err(|_| "T079 bound CODEX_HOME path contains NUL".to_owned())?;
+    let watch_mask = libc::IN_CREATE
+        | libc::IN_MOVED_TO
+        | libc::IN_DELETE
+        | libc::IN_MOVED_FROM
+        | libc::IN_CLOSE_WRITE
+        | libc::IN_ATTRIB
+        | libc::IN_MOVE_SELF
+        | libc::IN_DELETE_SELF;
+    if unsafe { libc::inotify_add_watch(watcher.as_raw_fd(), watch_path.as_ptr(), watch_mask) } < 0 {
+        return Err(format!(
+            "T079 could not bind CODEX_HOME mutation watch: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+
+    if launch_path
+        .canonicalize()
+        .map_err(|error| format!("T079 could not revalidate bound CODEX_HOME: {error}"))?
+        != canonical
+    {
+        return Err("T079 CODEX_HOME identity changed while binding mutation watch".to_owned());
+    }
+
+    let bound = BoundCodexHome {
+        directory,
+        launch_path,
+        watcher,
+    };
+    bound.assert_stable()?;
+    Ok(bound)
+}
+
+#[cfg(target_os = "linux")]
+fn configure_bound_codex_home_inheritance(
+    command: &mut Command,
+    codex_home: &BoundCodexHome,
+) -> ProofResult<()> {
+    use std::os::unix::process::CommandExt;
+
+    let fd = codex_home.directory.as_raw_fd();
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags < 0 || flags & libc::FD_CLOEXEC == 0 {
+        return Err("T079 could not prove parent CODEX_HOME descriptor is close-on-exec".to_owned());
+    }
+
+    unsafe {
+        command.pre_exec(move || {
+            let flags = libc::fcntl(fd, libc::F_GETFD);
+            if flags < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if libc::fcntl(fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -1578,6 +1791,23 @@ fn spawn_frame_reader_with_sender(
     })
 }
 
+fn record_connected_frame(
+    frame: &[u8],
+    total_bytes: &mut usize,
+    frame_count: &mut usize,
+) -> ProofResult<()> {
+    *frame_count = frame_count
+        .checked_add(1)
+        .ok_or_else(|| "T079 connected frame count overflowed".to_owned())?;
+    *total_bytes = total_bytes
+        .checked_add(frame.len())
+        .ok_or_else(|| "T079 connected output byte count overflowed".to_owned())?;
+    if *frame_count > MAX_CONNECTED_FRAMES || *total_bytes > MAX_CONNECTED_BYTES {
+        return Err("T079 connected output exceeded bounded transcript limits".to_owned());
+    }
+    Ok(())
+}
+
 fn receive_frame(
     receiver: &Receiver<FrameResult>,
     deadline: Instant,
@@ -1591,14 +1821,75 @@ fn receive_frame(
     let frame = receiver
         .recv_timeout(deadline.saturating_duration_since(now))
         .map_err(|error| format!("T079 Codex frame unavailable: {error}"))??;
-    *frame_count += 1;
-    *total_bytes = total_bytes
-        .checked_add(frame.len())
-        .ok_or_else(|| "T079 connected output byte count overflowed".to_owned())?;
-    if *frame_count > MAX_CONNECTED_FRAMES || *total_bytes > MAX_CONNECTED_BYTES {
-        return Err("T079 connected output exceeded bounded transcript limits".to_owned());
-    }
+    record_connected_frame(&frame, total_bytes, frame_count)?;
     Ok(frame)
+}
+
+fn drain_post_terminal_frames(
+    client: &mut CodexProtocolClient,
+    receiver: &Receiver<FrameResult>,
+    deadline: Instant,
+    total_bytes: &mut usize,
+    frame_count: &mut usize,
+) -> (ProofResult<()>, bool) {
+    let mut failure: Option<String> = None;
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
+            let timeout = "T079 stdout reader did not reach EOF inside bounded post-terminal drain";
+            return (
+                Err(match failure {
+                    Some(failure) => format!("{failure}; {timeout}"),
+                    None => timeout.to_owned(),
+                }),
+                false,
+            );
+        }
+
+        match receiver.recv_timeout(deadline.saturating_duration_since(now)) {
+            Ok(Ok(frame)) => {
+                if let Err(error) = record_connected_frame(&frame, total_bytes, frame_count) {
+                    if failure.is_none() {
+                        failure = Some(error);
+                    }
+                    continue;
+                }
+                if failure.is_none() {
+                    let _ = ingest_t079_frame_with_rejection_metadata(
+                        client,
+                        &frame,
+                        "post-terminal",
+                    );
+                    failure = Some(t079_bounded_protocol_failure(
+                        "post-terminal",
+                        "UNEXPECTED_POST_TERMINAL_FRAME",
+                    ));
+                }
+            }
+            Ok(Err(_)) => {
+                if failure.is_none() {
+                    failure = Some(t079_bounded_protocol_failure(
+                        "post-terminal",
+                        "STDOUT_READER_FAILURE",
+                    ));
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return (failure.map_or(Ok(()), Err), true);
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let timeout =
+                    "T079 stdout reader did not reach EOF inside bounded post-terminal drain";
+                return (
+                    Err(match failure {
+                        Some(failure) => format!("{failure}; {timeout}"),
+                        None => timeout.to_owned(),
+                    }),
+                    false,
+                );
+            }
+        }
+    }
 }
 
 fn wait_for_reader_completion(receiver: &Receiver<()>, deadline: Instant) -> ProofResult<()> {
@@ -1791,7 +2082,7 @@ fn run_connected_proof(
 ) -> ProofResult<T079Receipt> {
     validate_t079_connected_proof_platform(env::consts::OS, env::consts::ARCH)?;
     validate_exact_text(winds_session_id, "Winds session id")?;
-    let codex_home = validate_preexisting_isolated_codex_home(codex_home)?;
+    let bound_codex_home = bind_preexisting_isolated_codex_home(codex_home)?;
     validate_no_system_codex_config()?;
     validate_discovery(discovery)?;
     let executable = discovery
@@ -1808,10 +2099,7 @@ fn run_connected_proof(
     {
         return Err("T079 Codex executable path changed after handle binding".to_owned());
     }
-    let revalidated_codex_home = validate_preexisting_isolated_codex_home(&codex_home)?;
-    if revalidated_codex_home != codex_home {
-        return Err("T079 CODEX_HOME identity changed before launch".to_owned());
-    }
+    bound_codex_home.assert_stable()?;
     validate_no_system_codex_config()?;
 
     let root = disposable_root()?;
@@ -1824,7 +2112,7 @@ fn run_connected_proof(
         .map_err(|error| format!("T079 could not create owned Codex stdin channel: {error}"))?;
     let child_stdin = OwnedFd::from(child_stdin);
     let mut command = Command::new(bound_executable.launch_path());
-    configure_isolated_codex_environment(&mut command, Some(&codex_home));
+    configure_isolated_codex_environment(&mut command, Some(bound_codex_home.launch_path()));
     configure_t079_codex_authority_reduction(&mut command);
     command
         .args(["app-server", "--stdio"])
@@ -1832,9 +2120,16 @@ fn run_connected_proof(
         .stdin(Stdio::from(child_stdin))
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+    configure_bound_codex_home_inheritance(&mut command, &bound_codex_home)?;
     configure_t079_process_descendant_denial(&mut command);
+    bound_codex_home.assert_stable()?;
     let mut child = spawn_owned_process(&mut command, "T079 Codex App Server")
         .map_err(|error| format!("T079 could not start owned Codex App Server: {error}"))?;
+    if let Err(error) = bound_codex_home.assert_stable() {
+        drop(stdin);
+        let message = cleanup_setup_failure(child, &root, &error);
+        return Err(message);
+    }
     let stdout = match child.take_stdout() {
         Some(stdout) => stdout,
         None => {
@@ -1851,7 +2146,7 @@ fn run_connected_proof(
     let mut total_bytes = 0usize;
     let mut frame_count = 0usize;
 
-    let proof = (|| -> ProofResult<(String, String, String)> {
+    let proof = (|| -> ProofResult<(String, String, String, CodexProtocolClient)> {
         let mut client = CodexProtocolClient::default();
         let initialize = client
             .t079_initialize_request("winds", "Winds", "0.1.0")
@@ -1887,6 +2182,7 @@ fn run_connected_proof(
             &mut frame_count,
         )?;
         validate_effective_config(&config, &version)?;
+        bound_codex_home.assert_stable()?;
 
         let (thread_id, thread_request) = client
             .t079_thread_start(&cwd)
@@ -1945,12 +2241,8 @@ fn run_connected_proof(
                         ));
                     }
                     if method == "item/completed"
-                        && let Some(item) = params.get("item")
-                        && item.get("type").and_then(Value::as_str) == Some("agentMessage")
+                        && let Some(text) = completed_final_answer_text(&params)?
                     {
-                        let text = item.get("text").and_then(Value::as_str).ok_or_else(|| {
-                            "T079 completed agent message is missing text".to_owned()
-                        })?;
                         final_agent_message = Some(text.to_owned());
                     }
                     if method == "turn/completed" {
@@ -1964,10 +2256,16 @@ fn run_connected_proof(
                             return Err("T079 Codex turn did not complete successfully".to_owned());
                         }
                         let text = final_agent_message.as_deref().ok_or_else(|| {
-                            "T079 completed without a bounded final agent message".to_owned()
+                            "T079 completed without a bounded final-answer agent message".to_owned()
                         })?;
                         let status = parse_structured_agent_message(text)?;
-                        return Ok((native_thread_id.as_str().to_owned(), turn_id, status));
+                        bound_codex_home.assert_stable()?;
+                        return Ok((
+                            native_thread_id.as_str().to_owned(),
+                            turn_id,
+                            status,
+                            client,
+                        ));
                     }
                 }
                 CodexInbound::ServerRequest {
@@ -1990,14 +2288,54 @@ fn run_connected_proof(
     })();
 
     drop(stdin);
-    drop(receiver);
     let cleanup_deadline = Instant::now() + CLEANUP_TIMEOUT;
     let cleanup = finish_t079_process(child, cleanup_deadline, "T079 Codex App Server");
-    let reader_result = match wait_for_reader_completion(&done_receiver, cleanup_deadline) {
-        Ok(()) => reader
-            .join()
-            .map_err(|_| "T079 stdout reader panicked during bounded cleanup".to_owned()),
-        Err(error) => Err(error),
+    let (proof, reader_result) = match proof {
+        Ok((native_thread_id, turn_id, status, mut client)) => {
+            let reader_deadline = Instant::now() + CLEANUP_TIMEOUT;
+            let (post_terminal, reader_closed) = drain_post_terminal_frames(
+                &mut client,
+                &receiver,
+                reader_deadline,
+                &mut total_bytes,
+                &mut frame_count,
+            );
+            let home_check = bound_codex_home.assert_stable();
+            let proof = match (post_terminal, home_check) {
+                (Ok(()), Ok(())) => Ok((native_thread_id, turn_id, status)),
+                (post_terminal, home_check) => {
+                    let mut failures = Vec::new();
+                    if let Err(error) = post_terminal {
+                        failures.push(format!("post_terminal={error}"));
+                    }
+                    if let Err(error) = home_check {
+                        failures.push(format!("codex_home={error}"));
+                    }
+                    Err(format!(
+                        "T079 terminal proof failure: {}",
+                        failures.join("; ")
+                    ))
+                }
+            };
+            let reader_result = if reader_closed {
+                reader
+                    .join()
+                    .map_err(|_| "T079 stdout reader panicked during bounded cleanup".to_owned())
+            } else {
+                Err("T079 stdout reader did not terminate inside bounded cleanup".to_owned())
+            };
+            (proof, reader_result)
+        }
+        Err(error) => {
+            drop(receiver);
+            let reader_result = match wait_for_reader_completion(&done_receiver, cleanup_deadline) {
+                Ok(()) => reader
+                    .join()
+                    .map_err(|_| "T079 stdout reader panicked during bounded cleanup".to_owned()),
+                Err(reader_error) => Err(reader_error),
+            };
+            (Err(error), reader_result)
+        }
     };
     let root_check = ensure_disposable_root_unchanged(&root);
 
@@ -2468,6 +2806,40 @@ fn isolated_codex_home_rejects_local_config_without_reading_credentials() {
     assert_eq!(canonical, root);
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn t079_bound_codex_home_rejects_path_replacement_and_blocked_config_mutation() {
+    let root = disposable_root().expect("bound home path replacement fixture");
+    let moved = root.with_extension("bound-original");
+    let bound = bind_preexisting_isolated_codex_home(&root).expect("bind isolated home");
+    assert!(
+        bound
+            .launch_path()
+            .to_string_lossy()
+            .starts_with("/proc/self/fd/")
+    );
+    fs::rename(&root, &moved).expect("move original isolated home");
+    fs::create_dir(&root).expect("replace original isolated home pathname");
+    assert_eq!(
+        bound.launch_path().canonicalize().expect("bound target after rename"),
+        moved
+    );
+    let error = bound.assert_stable().unwrap_err();
+    assert!(error.contains("directory identity changed"));
+    fs::remove_dir(&root).expect("remove replacement home");
+    drop(bound);
+    fs::remove_dir(&moved).expect("remove original bound home");
+
+    let config_root = disposable_root().expect("bound home config mutation fixture");
+    let bound = bind_preexisting_isolated_codex_home(&config_root).expect("bind config fixture home");
+    fs::write(config_root.join("config.toml"), b"fixture\n").expect("inject blocked config");
+    let error = bound.assert_stable().unwrap_err();
+    assert!(error.contains("configuration surface changed"));
+    fs::remove_file(config_root.join("config.toml")).expect("remove blocked config");
+    drop(bound);
+    fs::remove_dir(config_root).expect("remove config fixture home");
+}
+
 #[test]
 fn isolated_codex_home_rejects_primary_checkout_and_descendants() {
     let checkout = canonical_primary_checkout_root().expect("canonical primary checkout");
@@ -2722,6 +3094,57 @@ fn thread_and_result_validation_preserve_exact_provenance_and_non_authority() {
         parse_structured_agent_message(r#"{"status":"WINDS_T079_OK","verified":true}"#).is_err()
     );
     assert!(parse_structured_agent_message(r#"{"status":"OTHER"}"#).is_err());
+}
+
+#[test]
+fn t079_only_final_answer_phase_can_populate_structured_proof_result() {
+    for phase in [Value::Null, json!("commentary")] {
+        let params = json!({
+            "item": {
+                "type": "agentMessage",
+                "phase": phase,
+                "text": "{\"status\":\"WINDS_T079_OK\"}"
+            }
+        });
+        assert_eq!(completed_final_answer_text(&params).unwrap(), None);
+    }
+
+    let params = json!({
+        "item": {
+            "type": "agentMessage",
+            "phase": "final_answer",
+            "text": "{\"status\":\"WINDS_T079_OK\"}"
+        }
+    });
+    assert_eq!(
+        completed_final_answer_text(&params).unwrap(),
+        Some("{\"status\":\"WINDS_T079_OK\"}")
+    );
+}
+
+#[test]
+fn t079_post_terminal_drain_rejects_queued_frames_instead_of_discarding_them() {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    sender
+        .send(Ok(br#"{"method":"future/postTerminal","params":{}}"#.to_vec()))
+        .expect("queue post-terminal fixture");
+    drop(sender);
+
+    let mut client = initialized_client();
+    let mut total_bytes = 0usize;
+    let mut frame_count = 0usize;
+    let (result, reader_closed) = drain_post_terminal_frames(
+        &mut client,
+        &receiver,
+        Instant::now() + Duration::from_secs(1),
+        &mut total_bytes,
+        &mut frame_count,
+    );
+    let error = result.unwrap_err();
+    assert!(reader_closed);
+    assert!(error.contains("UNEXPECTED_POST_TERMINAL_FRAME"));
+    assert_eq!(frame_count, 1);
+    assert!(total_bytes > 0);
 }
 
 #[test]
@@ -3444,7 +3867,7 @@ fn t079_real_codex_one_bounded_prompt() {
             "launch_environment": "ENV_CLEAR_EXPLICIT_ALLOWLIST",
             "launch_executable": "LINUX_NATIVE_VERIFIED_OPEN_FD",
             "process_descendants": "KERNEL_DENIED_SECCOMP",
-            "codex_home": "PREEXISTING_ISOLATED_NOT_READ_OR_COPIED_BY_WINDS",
+            "codex_home": "PREEXISTING_ISOLATED_BOUND_OPEN_FD_NOT_READ_OR_COPIED_BY_WINDS",
             "environment_access": "disabled",
             "runtime_workspace_roots": 0,
             "instruction_sources": 0,
