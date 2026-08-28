@@ -2123,6 +2123,17 @@ fn t079_requests_are_fixed_ephemeral_read_only_and_non_authorizing() {
         })
     );
 
+    assert!(matches!(
+        client
+            .ingest_jsonl_frame(br#"{"id":2,"result":{"thread":{"id":"thr_t079_fixture"}}}"#)
+            .expect("thread response"),
+        CodexInbound::Response {
+            id: RpcId::Number(2),
+            evidence: EvidenceClass::AgentRuntimeEvidence,
+            ..
+        }
+    ));
+
     let native = NativeThreadId::parse("thr_t079_fixture").expect("native id");
     let (turn_id, turn) = client.t079_turn_start(&native, cwd).expect("turn request");
     assert_eq!(turn_id, 3);
