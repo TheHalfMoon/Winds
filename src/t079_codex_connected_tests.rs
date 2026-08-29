@@ -104,7 +104,7 @@ const BLOCKED_CODEX_CONFIG_FILES: &[&str] = &[
 #[cfg(windows)]
 const SAFE_CODEX_CHILD_ENV_KEYS: &[&str] = &["SystemRoot", "WINDIR", "TEMP", "TMP"];
 #[cfg(not(windows))]
-const SAFE_CODEX_CHILD_ENV_KEYS: &[&str] = &["TMPDIR"];
+const SAFE_CODEX_CHILD_ENV_KEYS: &[&str] = &[];
 const T079_REMOTE_CONTROL_DISABLED_ENV_VAR: &str =
     "CODEX_INTERNAL_APP_SERVER_REMOTE_CONTROL_DISABLED";
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
@@ -845,10 +845,16 @@ fn validate_effective_config(result: &Value, observed_version: &str) -> ProofRes
     Ok(())
 }
 
-fn validate_thread_start_result(result: &Value) -> ProofResult<NativeThreadId> {
+fn validate_thread_start_result(
+    result: &Value,
+    expected_cwd: &str,
+) -> ProofResult<NativeThreadId> {
     let thread = result
         .get("thread")
         .ok_or_else(|| "T079 thread/start response is missing thread".to_owned())?;
+    if thread.get("cwd").and_then(Value::as_str) != Some(expected_cwd) {
+        return Err("T079 Codex thread cwd does not match disposable proof root".to_owned());
+    }
     if thread.get("ephemeral").and_then(Value::as_bool) != Some(true) {
         return Err("T079 requires an ephemeral Codex thread".to_owned());
     }
@@ -2201,7 +2207,7 @@ fn run_connected_proof(
             &mut total_bytes,
             &mut frame_count,
         )?;
-        let native_thread_id = validate_thread_start_result(&thread_result)?;
+        let native_thread_id = validate_thread_start_result(&thread_result, &cwd)?;
         if native_thread_id.as_str() == winds_session_id {
             return Err(
                 "T079 native thread id must not alias canonical Winds session id".to_owned(),
@@ -2924,6 +2930,11 @@ fn codex_launch_environment_is_explicit_allowlist_only() {
     ] {
         assert!(!explicit.iter().any(|(key, _)| key == forbidden));
     }
+    #[cfg(not(windows))]
+    assert!(
+        !explicit.iter().any(|(key, _)| key == "TMPDIR"),
+        "non-Windows T079 launch must not inherit host TMPDIR"
+    );
     fs::remove_dir(root).expect("remove isolated home fixture");
 }
 
@@ -3052,43 +3063,74 @@ fn t079_linux_seccomp_filter_denies_process_descendants() {
 
 #[test]
 fn thread_and_result_validation_preserve_exact_provenance_and_non_authority() {
-    let native = validate_thread_start_result(&json!({
-        "thread": { "id": "thr_exact", "ephemeral": true, "path": null },
-        "approvalPolicy": "never",
-        "sandbox": { "type": "readOnly", "networkAccess": false },
-        "runtimeWorkspaceRoots": [],
-        "instructionSources": []
-    }))
+    let cwd = "/tmp/winds-t079-fixture";
+    let native = validate_thread_start_result(
+        &json!({
+            "thread": { "id": "thr_exact", "cwd": cwd, "ephemeral": true, "path": null },
+            "approvalPolicy": "never",
+            "sandbox": { "type": "readOnly", "networkAccess": false },
+            "runtimeWorkspaceRoots": [],
+            "instructionSources": []
+        }),
+        cwd,
+    )
     .expect("exact T079 thread evidence");
     assert_eq!(native.as_str(), "thr_exact");
     assert!(
-        validate_thread_start_result(&json!({
-            "thread": { "id": "thr_exact", "ephemeral": false, "path": "/persisted" },
-            "approvalPolicy": "never",
-            "sandbox": { "type": "readOnly", "networkAccess": false },
-            "runtimeWorkspaceRoots": [],
-            "instructionSources": []
-        }))
+        validate_thread_start_result(
+            &json!({
+                "thread": {
+                    "id": "thr_exact",
+                    "cwd": "/tmp/winds-t079-other",
+                    "ephemeral": true,
+                    "path": null
+                },
+                "approvalPolicy": "never",
+                "sandbox": { "type": "readOnly", "networkAccess": false },
+                "runtimeWorkspaceRoots": [],
+                "instructionSources": []
+            }),
+            cwd,
+        )
         .is_err()
     );
     assert!(
-        validate_thread_start_result(&json!({
-            "thread": { "id": "thr_exact", "ephemeral": true, "path": null },
-            "approvalPolicy": "never",
-            "sandbox": { "type": "readOnly", "networkAccess": false },
-            "runtimeWorkspaceRoots": [],
-            "instructionSources": ["/home/user/AGENTS.md"]
-        }))
+        validate_thread_start_result(
+            &json!({
+                "thread": { "id": "thr_exact", "cwd": cwd, "ephemeral": false, "path": "/persisted" },
+                "approvalPolicy": "never",
+                "sandbox": { "type": "readOnly", "networkAccess": false },
+                "runtimeWorkspaceRoots": [],
+                "instructionSources": []
+            }),
+            cwd,
+        )
         .is_err()
     );
     assert!(
-        validate_thread_start_result(&json!({
-            "thread": { "id": "thr_exact", "ephemeral": true, "path": null },
-            "approvalPolicy": "never",
-            "sandbox": { "type": "readOnly", "networkAccess": false },
-            "runtimeWorkspaceRoots": ["/tmp/winds-t079-fixture"],
-            "instructionSources": []
-        }))
+        validate_thread_start_result(
+            &json!({
+                "thread": { "id": "thr_exact", "cwd": cwd, "ephemeral": true, "path": null },
+                "approvalPolicy": "never",
+                "sandbox": { "type": "readOnly", "networkAccess": false },
+                "runtimeWorkspaceRoots": [],
+                "instructionSources": ["/home/user/AGENTS.md"]
+            }),
+            cwd,
+        )
+        .is_err()
+    );
+    assert!(
+        validate_thread_start_result(
+            &json!({
+                "thread": { "id": "thr_exact", "cwd": cwd, "ephemeral": true, "path": null },
+                "approvalPolicy": "never",
+                "sandbox": { "type": "readOnly", "networkAccess": false },
+                "runtimeWorkspaceRoots": ["/tmp/winds-t079-fixture"],
+                "instructionSources": []
+            }),
+            cwd,
+        )
         .is_err()
     );
     assert_eq!(
