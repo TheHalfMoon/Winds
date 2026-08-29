@@ -845,10 +845,7 @@ fn validate_effective_config(result: &Value, observed_version: &str) -> ProofRes
     Ok(())
 }
 
-fn validate_thread_start_result(
-    result: &Value,
-    expected_cwd: &str,
-) -> ProofResult<NativeThreadId> {
+fn validate_thread_start_result(result: &Value, expected_cwd: &str) -> ProofResult<NativeThreadId> {
     let thread = result
         .get("thread")
         .ok_or_else(|| "T079 thread/start response is missing thread".to_owned())?;
