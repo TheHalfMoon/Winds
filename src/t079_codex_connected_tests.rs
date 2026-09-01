@@ -138,6 +138,8 @@ const T079_CODEX_AUTHORITY_REDUCTION_ARGS: &[&str] = &[
     "-c",
     "features.auth_elicitation=false",
     "-c",
+    "features.apps=false",
+    "-c",
     "features.remote_plugin=false",
     "-c",
     "features.tool_suggest=false",
@@ -152,6 +154,7 @@ const T079_CODEX_AUTHORITY_REDUCTION_ARGS: &[&str] = &[
 const T079_CODEX_SESSION_ORIGIN_PATHS: &[&str] = &[
     "agents.enabled",
     "features.auth_elicitation",
+    "features.apps",
     "features.multi_agent",
     "features.multi_agent_v2.enabled",
     "features.remote_plugin",
@@ -574,7 +577,7 @@ fn initialized_client() -> CodexProtocolClient {
         .expect("T079 initialize request");
     assert_eq!(
         client
-            .ingest_jsonl_frame(br#"{"id":0,"result":{"userAgent":"fixture"}}"#)
+            .ingest_jsonl_frame(br#"{\"id\":0,\"result\":{\"userAgent\":\"fixture\"}}"#)
             .expect("initialize response"),
         CodexInbound::InitializeAccepted
     );
@@ -625,6 +628,7 @@ fn expected_t079_codex_0_149_config() -> Value {
         "experimental_thread_store_endpoint": null,
         "experimental_use_unified_exec_tool": null,
         "features": {
+            "apps": false,
             "auth_elicitation": false,
             "mcp_2026_07_28": false,
             "memories": false,
@@ -2467,7 +2471,7 @@ fn t079_requests_are_fixed_ephemeral_read_only_and_non_authorizing() {
 
     assert!(matches!(
         client
-            .ingest_jsonl_frame(br#"{"id":2,"result":{"thread":{"id":"thr_t079_fixture"}}}"#)
+            .ingest_jsonl_frame(br#"{\"id\":2,\"result\":{\"thread\":{\"id\":\"thr_t079_fixture\"}}}"#)
             .expect("thread response"),
         CodexInbound::Response {
             id: RpcId::Number(2),
@@ -2511,6 +2515,10 @@ fn effective_config_preflight_requires_exact_codex_0_149_surface_and_authority_r
                 "version": layer_version
             },
             "features.auth_elicitation": {
+                "name": { "type": "sessionFlags" },
+                "version": layer_version
+            },
+            "features.apps": {
                 "name": { "type": "sessionFlags" },
                 "version": layer_version
             },
@@ -2617,6 +2625,11 @@ fn effective_config_preflight_requires_exact_codex_0_149_surface_and_authority_r
         },
         {
             let mut value = expected_t079_codex_0_149_config();
+            value["features"]["apps"] = json!(true);
+            ("apps", value)
+        },
+        {
+            let mut value = expected_t079_codex_0_149_config();
             value["features"]["multi_agent"] = json!(true);
             ("multi_agent", value)
         },
@@ -2687,7 +2700,7 @@ fn effective_config_preflight_requires_exact_codex_0_149_surface_and_authority_r
     missing_origin
         .as_object_mut()
         .expect("origins object")
-        .remove("features.remote_plugin");
+        .remove("features.apps");
 
     let error = validate_effective_config(
         &json!({
@@ -2718,7 +2731,7 @@ fn effective_config_preflight_requires_exact_codex_0_149_surface_and_authority_r
     assert!(!error.contains(secret_origin_key));
 
     let mut wrong_source = origins();
-    wrong_source["agents.enabled"]["name"]["type"] = json!("user");
+    wrong_source["features.apps"]["name"]["type"] = json!("user");
 
     let error = validate_effective_config(
         &json!({
@@ -2731,7 +2744,7 @@ fn effective_config_preflight_requires_exact_codex_0_149_surface_and_authority_r
     assert!(error.contains("non-SessionFlags"));
 
     let mut malformed_version = origins();
-    malformed_version["agents.enabled"]["version"] = json!("fixture");
+    malformed_version["features.apps"]["version"] = json!("fixture");
 
     let error = validate_effective_config(
         &json!({
@@ -2744,7 +2757,7 @@ fn effective_config_preflight_requires_exact_codex_0_149_surface_and_authority_r
     assert!(error.contains("canonical SHA-256"));
 
     let mut split_layer = origins();
-    split_layer["agents.enabled"]["version"] = json!(format!("sha256:{}", "b".repeat(64)));
+    split_layer["features.apps"]["version"] = json!(format!("sha256:{}", "b".repeat(64)));
 
     let error = validate_effective_config(
         &json!({
@@ -2780,6 +2793,8 @@ fn t079_codex_launch_applies_fixed_authority_reduction_before_app_server() {
             "-c",
             "features.auth_elicitation=false",
             "-c",
+            "features.apps=false",
+            "-c",
             "features.remote_plugin=false",
             "-c",
             "features.tool_suggest=false",
@@ -2792,6 +2807,13 @@ fn t079_codex_launch_applies_fixed_authority_reduction_before_app_server() {
             "app-server",
             "--stdio",
         ]
+    );
+    assert_eq!(
+        args.iter()
+            .filter(|argument| **argument == "features.apps=false")
+            .count(),
+        1,
+        "T079 must disable Codex Apps exactly once through SessionFlags"
     );
 }
 
@@ -3131,13 +3153,13 @@ fn thread_and_result_validation_preserve_exact_provenance_and_non_authority() {
         .is_err()
     );
     assert_eq!(
-        parse_structured_agent_message(r#"{"status":"WINDS_T079_OK"}"#).unwrap(),
+        parse_structured_agent_message(r#"{\"status\":\"WINDS_T079_OK\"}"#).unwrap(),
         "WINDS_T079_OK"
     );
     assert!(
-        parse_structured_agent_message(r#"{"status":"WINDS_T079_OK","verified":true}"#).is_err()
+        parse_structured_agent_message(r#"{\"status\":\"WINDS_T079_OK\",\"verified\":true}"#).is_err()
     );
-    assert!(parse_structured_agent_message(r#"{"status":"OTHER"}"#).is_err());
+    assert!(parse_structured_agent_message(r#"{\"status\":\"OTHER\"}"#).is_err());
 }
 
 #[test]
@@ -3171,7 +3193,7 @@ fn t079_post_terminal_drain_rejects_queued_frames_instead_of_discarding_them() {
     let (sender, receiver) = mpsc::sync_channel(1);
     sender
         .send(Ok(
-            br#"{"method":"future/postTerminal","params":{}}"#.to_vec()
+            br#"{\"method\":\"future/postTerminal\",\"params\":{}}"#.to_vec()
         ))
         .expect("queue post-terminal fixture");
     drop(sender);
@@ -3393,7 +3415,7 @@ fn forbidden_runtime_activity_is_detected_fail_closed() {
 
 #[test]
 fn t079_rejection_metadata_exposes_shape_without_untrusted_identifiers_or_scalar_values() {
-    let frame = br#"{"method":"apiKeySecret","params":{"credentialToken":"DO_NOT_PRINT","thread":{"privateIdentifier":"secret-thread","secretPath":"/secret/path"},"item":{"apiSecretType":"secretType","privateText":"secret-text"}}}"#;
+    let frame = br#"{\"method\":\"apiKeySecret\",\"params\":{\"credentialToken\":\"DO_NOT_PRINT\",\"thread\":{\"privateIdentifier\":\"secret-thread\",\"secretPath\":\"/secret/path\"},\"item\":{\"apiSecretType\":\"secretType\",\"privateText\":\"secret-text\"}}}"#;
     let metadata = t079_rejection_metadata(frame, "fixture-phase");
 
     assert!(metadata.contains("phase=fixture-phase"));
@@ -3705,7 +3727,7 @@ fn t079_five_key_candidates_receive_distinct_static_classes() {
 #[test]
 fn t079_unexpected_notification_error_reports_only_rejection_metadata() {
     let mut client = initialized_client();
-    let frame = br#"{"method":"apiKeySecret","params":{"credentialToken":"PRIVATE_VALUE"}}"#;
+    let frame = br#"{\"method\":\"apiKeySecret\",\"params\":{\"credentialToken\":\"PRIVATE_VALUE\"}}"#;
 
     let error =
         ingest_t079_frame_with_rejection_metadata(&mut client, frame, "fixture-wait").unwrap_err();
@@ -3728,7 +3750,7 @@ fn t079_unexpected_notification_error_reports_only_rejection_metadata() {
 
 #[test]
 fn t079_rejection_diagnostics_do_not_add_protocol_state_mutation() {
-    let frame = br#"{"method":"apiKeySecret","params":{"credentialToken":"PRIVATE_VALUE"}}"#;
+    let frame = br#"{\"method\":\"apiKeySecret\",\"params\":{\"credentialToken\":\"PRIVATE_VALUE\"}}"#;
     let mut direct = initialized_client();
     let mut wrapped = initialized_client();
 
@@ -3775,7 +3797,7 @@ fn t079_accepted_path_does_not_compute_rejection_metadata() {
     T079_REJECTION_METADATA_CALLS.with(|calls| assert_eq!(calls.get(), 0));
 
     let mut rejected = initialized_client();
-    let rejected_frame = br#"{"method":"future/unknown","params":{}}"#;
+    let rejected_frame = br#"{\"method\":\"future/unknown\",\"params\":{}}"#;
     let _ = ingest_t079_frame_with_rejection_metadata(
         &mut rejected,
         rejected_frame,
