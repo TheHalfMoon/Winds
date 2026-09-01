@@ -577,7 +577,7 @@ fn initialized_client() -> CodexProtocolClient {
         .expect("T079 initialize request");
     assert_eq!(
         client
-            .ingest_jsonl_frame(br#"{\"id\":0,\"result\":{\"userAgent\":\"fixture\"}}"#)
+            .ingest_jsonl_frame(br#"{"id":0,"result":{"userAgent":"fixture"}}"#)
             .expect("initialize response"),
         CodexInbound::InitializeAccepted
     );
@@ -1515,10 +1515,6 @@ fn finish_t079_process(
             .map_err(|error| format!("T079 could not inspect {label}: {error}"))?
         {
             Some(_) => {
-                // The T079 seccomp filter rejects fork/vfork and every clone
-                // that is not CLONE_THREAD, while clone3 is forced through the
-                // libc fallback path. A reaped direct child therefore implies
-                // there cannot be independently running process descendants.
                 return Ok(CleanupEvidence::OwnedScopeQuiescent);
             }
             None if Instant::now() < graceful_deadline => thread::sleep(Duration::from_millis(10)),
@@ -2471,7 +2467,7 @@ fn t079_requests_are_fixed_ephemeral_read_only_and_non_authorizing() {
 
     assert!(matches!(
         client
-            .ingest_jsonl_frame(br#"{\"id\":2,\"result\":{\"thread\":{\"id\":\"thr_t079_fixture\"}}}"#)
+            .ingest_jsonl_frame(br#"{"id":2,"result":{"thread":{"id":"thr_t079_fixture"}}}"#)
             .expect("thread response"),
         CodexInbound::Response {
             id: RpcId::Number(2),
@@ -3153,13 +3149,13 @@ fn thread_and_result_validation_preserve_exact_provenance_and_non_authority() {
         .is_err()
     );
     assert_eq!(
-        parse_structured_agent_message(r#"{\"status\":\"WINDS_T079_OK\"}"#).unwrap(),
+        parse_structured_agent_message(r#"{"status":"WINDS_T079_OK"}"#).unwrap(),
         "WINDS_T079_OK"
     );
     assert!(
-        parse_structured_agent_message(r#"{\"status\":\"WINDS_T079_OK\",\"verified\":true}"#).is_err()
+        parse_structured_agent_message(r#"{"status":"WINDS_T079_OK","verified":true}"#).is_err()
     );
-    assert!(parse_structured_agent_message(r#"{\"status\":\"OTHER\"}"#).is_err());
+    assert!(parse_structured_agent_message(r#"{"status":"OTHER"}"#).is_err());
 }
 
 #[test]
@@ -3193,7 +3189,7 @@ fn t079_post_terminal_drain_rejects_queued_frames_instead_of_discarding_them() {
     let (sender, receiver) = mpsc::sync_channel(1);
     sender
         .send(Ok(
-            br#"{\"method\":\"future/postTerminal\",\"params\":{}}"#.to_vec()
+            br#"{"method":"future/postTerminal","params":{}}"#.to_vec()
         ))
         .expect("queue post-terminal fixture");
     drop(sender);
@@ -3415,7 +3411,7 @@ fn forbidden_runtime_activity_is_detected_fail_closed() {
 
 #[test]
 fn t079_rejection_metadata_exposes_shape_without_untrusted_identifiers_or_scalar_values() {
-    let frame = br#"{\"method\":\"apiKeySecret\",\"params\":{\"credentialToken\":\"DO_NOT_PRINT\",\"thread\":{\"privateIdentifier\":\"secret-thread\",\"secretPath\":\"/secret/path\"},\"item\":{\"apiSecretType\":\"secretType\",\"privateText\":\"secret-text\"}}}"#;
+    let frame = br#"{"method":"apiKeySecret","params":{"credentialToken":"DO_NOT_PRINT","thread":{"privateIdentifier":"secret-thread","secretPath":"/secret/path"},"item":{"apiSecretType":"secretType","privateText":"secret-text"}}}"#;
     let metadata = t079_rejection_metadata(frame, "fixture-phase");
 
     assert!(metadata.contains("phase=fixture-phase"));
@@ -3727,7 +3723,7 @@ fn t079_five_key_candidates_receive_distinct_static_classes() {
 #[test]
 fn t079_unexpected_notification_error_reports_only_rejection_metadata() {
     let mut client = initialized_client();
-    let frame = br#"{\"method\":\"apiKeySecret\",\"params\":{\"credentialToken\":\"PRIVATE_VALUE\"}}"#;
+    let frame = br#"{"method":"apiKeySecret","params":{"credentialToken":"PRIVATE_VALUE"}}"#;
 
     let error =
         ingest_t079_frame_with_rejection_metadata(&mut client, frame, "fixture-wait").unwrap_err();
@@ -3750,7 +3746,7 @@ fn t079_unexpected_notification_error_reports_only_rejection_metadata() {
 
 #[test]
 fn t079_rejection_diagnostics_do_not_add_protocol_state_mutation() {
-    let frame = br#"{\"method\":\"apiKeySecret\",\"params\":{\"credentialToken\":\"PRIVATE_VALUE\"}}"#;
+    let frame = br#"{"method":"apiKeySecret","params":{"credentialToken":"PRIVATE_VALUE"}}"#;
     let mut direct = initialized_client();
     let mut wrapped = initialized_client();
 
@@ -3797,7 +3793,7 @@ fn t079_accepted_path_does_not_compute_rejection_metadata() {
     T079_REJECTION_METADATA_CALLS.with(|calls| assert_eq!(calls.get(), 0));
 
     let mut rejected = initialized_client();
-    let rejected_frame = br#"{\"method\":\"future/unknown\",\"params\":{}}"#;
+    let rejected_frame = br#"{"method":"future/unknown","params":{}}"#;
     let _ = ingest_t079_frame_with_rejection_metadata(
         &mut rejected,
         rejected_frame,
