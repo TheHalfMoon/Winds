@@ -6,10 +6,12 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  T079_BASE_SHA: 4e4731d459075cb0fbf78e428de2662c3e03f8c3
+  T079_TRANSFER_BRANCH: tmp/t079-qualified-blob-4e4731d
 
 jobs:
   rust:
@@ -24,6 +26,7 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
       - name: Verify checkout identity
         shell: bash
         run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
@@ -76,3 +79,22 @@ jobs:
         with:
           name: t079-exec-denial-qualified-${{ env.CANDIDATE_SHA }}
           path: src/t079_codex_connected_tests.rs
+      - name: Create exact-parent one-file transfer commit
+        if: matrix.os == 'ubuntu-latest'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          cp src/t079_codex_connected_tests.rs /tmp/t079-qualified.rs
+          git checkout --detach "$T079_BASE_SHA"
+          cp /tmp/t079-qualified.rs src/t079_codex_connected_tests.rs
+          test "$(git diff --name-only | tr '\n' ' ')" = "src/t079_codex_connected_tests.rs "
+          cargo fmt --all -- --check
+          git config user.name "Winds Qualification Bot"
+          git config user.email "winds-qualification@users.noreply.github.com"
+          git add src/t079_codex_connected_tests.rs
+          git commit -m "fix(006): deny T079 post-launch executable replacement"
+          test "$(git rev-parse HEAD^)" = "$T079_BASE_SHA"
+          test "$(git diff --name-only HEAD^ HEAD | tr '\n' ' ')" = "src/t079_codex_connected_tests.rs "
+          git remote set-url origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin "HEAD:refs/heads/${T079_TRANSFER_BRANCH}" --force-with-lease="refs/heads/${T079_TRANSFER_BRANCH}:"
