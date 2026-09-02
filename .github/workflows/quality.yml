@@ -45,6 +45,8 @@ jobs:
           PY
           git apply --check /tmp/t079-exec-denial-v2.patch
           git apply /tmp/t079-exec-denial-v2.patch
+          git apply --check .github/t079-exec-denial-v2-clippy.patch
+          git apply .github/t079-exec-denial-v2-clippy.patch
           test "$(git diff --name-only | tr '\n' ' ')" = "src/t079_codex_connected_tests.rs "
           cargo fmt --all
       - name: Format
