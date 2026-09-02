@@ -23,7 +23,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 #[cfg(target_os = "linux")]
 use std::io::{Seek, SeekFrom};
 #[cfg(target_os = "linux")]
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 #[cfg(target_os = "linux")]
 use std::os::unix::ffi::OsStrExt;
 #[cfg(target_os = "linux")]
@@ -45,6 +45,10 @@ mod process_scope {
     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/process_scope.rs"));
 
     impl OwnedProcess {
+        pub(super) fn direct_child_id_t079(&self) -> u32 {
+            self.child.id()
+        }
+
         pub(super) fn terminate_direct_t079(
             &mut self,
             deadline: Instant,
@@ -1194,11 +1198,396 @@ fn configure_t079_codex_authority_reduction(command: &mut Command) {
     command.args(T079_CODEX_AUTHORITY_REDUCTION_ARGS);
 }
 
+#[cfg(target_os = "linux")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct T079SeccompData {
+    nr: i32,
+    arch: u32,
+    instruction_pointer: u64,
+    args: [u64; 6],
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct T079SeccompNotif {
+    id: u64,
+    pid: u32,
+    flags: u32,
+    data: T079SeccompData,
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct T079SeccompNotifResp {
+    id: u64,
+    val: i64,
+    error: i32,
+    flags: u32,
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct T079SeccompNotifSizes {
+    seccomp_notif: u16,
+    seccomp_notif_resp: u16,
+    seccomp_data: u16,
+}
+
+#[cfg(target_os = "linux")]
+#[repr(C)]
+struct T079FdControlMessage {
+    header: libc::cmsghdr,
+    fd: RawFd,
+    padding: [u8; 4],
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct T079ExecSupervisorReport {
+    initial_pid: u32,
+    denied_execs: u32,
+}
+
+#[cfg(target_os = "linux")]
+struct T079ExecSupervisor {
+    handoff_child: Option<UnixStream>,
+    stop: UnixStream,
+    join: Option<thread::JoinHandle<ProofResult<T079ExecSupervisorReport>>>,
+    expected_pid: Option<u32>,
+}
+
+#[cfg(target_os = "linux")]
+impl T079ExecSupervisor {
+    fn bind_child(&mut self, pid: u32) {
+        self.expected_pid = Some(pid);
+        // The child-side descriptor must remain open in the parent until after
+        // fork. Once spawn returns, only the child's inherited copy is needed.
+        self.handoff_child = None;
+    }
+
+    fn finish(mut self) -> ProofResult<T079ExecSupervisorReport> {
+        self.handoff_child = None;
+        let stop_result = self.stop.write_all(&[1_u8]);
+        let join = self
+            .join
+            .take()
+            .ok_or_else(|| "T079 exec supervisor join handle was unavailable".to_owned())?;
+        let report = join
+            .join()
+            .map_err(|_| "T079 exec supervisor panicked".to_owned())??;
+        if let Err(error) = stop_result
+            && error.kind() != std::io::ErrorKind::BrokenPipe
+        {
+            return Err(format!("T079 could not stop exec supervisor: {error}"));
+        }
+        let expected_pid = self
+            .expected_pid
+            .ok_or_else(|| "T079 exec supervisor was not bound to an owned child".to_owned())?;
+        if report.initial_pid != expected_pid {
+            return Err(format!(
+                "T079 exec supervisor initial PID mismatch: expected {expected_pid}, observed {}",
+                report.initial_pid
+            ));
+        }
+        Ok(report)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for T079ExecSupervisor {
+    fn drop(&mut self) {
+        self.handoff_child = None;
+        let _ = self.stop.write_all(&[1_u8]);
+        if let Some(join) = self.join.take() {
+            let _ = join.join();
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+const fn t079_ioctl_iowr(nr: u64, size: u64) -> libc::c_ulong {
+    const IOC_NRBITS: u64 = 8;
+    const IOC_TYPEBITS: u64 = 8;
+    const IOC_SIZEBITS: u64 = 14;
+    const IOC_NRSHIFT: u64 = 0;
+    const IOC_TYPESHIFT: u64 = IOC_NRSHIFT + IOC_NRBITS;
+    const IOC_SIZESHIFT: u64 = IOC_TYPESHIFT + IOC_TYPEBITS;
+    const IOC_DIRSHIFT: u64 = IOC_SIZESHIFT + IOC_SIZEBITS;
+    const IOC_WRITE: u64 = 1;
+    const IOC_READ: u64 = 2;
+    const SECCOMP_IOC_MAGIC: u64 = b'!' as u64;
+
+    (((IOC_READ | IOC_WRITE) << IOC_DIRSHIFT)
+        | (size << IOC_SIZESHIFT)
+        | (SECCOMP_IOC_MAGIC << IOC_TYPESHIFT)
+        | nr) as libc::c_ulong
+}
+
+#[cfg(target_os = "linux")]
+const SECCOMP_IOCTL_NOTIF_RECV_T079: libc::c_ulong =
+    t079_ioctl_iowr(0, std::mem::size_of::<T079SeccompNotif>() as u64);
+#[cfg(target_os = "linux")]
+const SECCOMP_IOCTL_NOTIF_SEND_T079: libc::c_ulong =
+    t079_ioctl_iowr(1, std::mem::size_of::<T079SeccompNotifResp>() as u64);
+
+#[cfg(target_os = "linux")]
+fn validate_t079_seccomp_user_notification_abi() -> ProofResult<()> {
+    const SECCOMP_GET_NOTIF_SIZES: libc::c_long = 3;
+    let mut sizes = T079SeccompNotifSizes {
+        seccomp_notif: 0,
+        seccomp_notif_resp: 0,
+        seccomp_data: 0,
+    };
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_seccomp,
+            SECCOMP_GET_NOTIF_SIZES,
+            0,
+            &mut sizes as *mut T079SeccompNotifSizes,
+        )
+    };
+    if result < 0 {
+        return Err(format!(
+            "T079 requires seccomp user-notification support: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let expected_notif = u16::try_from(std::mem::size_of::<T079SeccompNotif>())
+        .map_err(|_| "T079 seccomp notification layout exceeds u16".to_owned())?;
+    let expected_resp = u16::try_from(std::mem::size_of::<T079SeccompNotifResp>())
+        .map_err(|_| "T079 seccomp response layout exceeds u16".to_owned())?;
+    let expected_data = u16::try_from(std::mem::size_of::<T079SeccompData>())
+        .map_err(|_| "T079 seccomp data layout exceeds u16".to_owned())?;
+    if sizes.seccomp_notif != expected_notif
+        || sizes.seccomp_notif_resp != expected_resp
+        || sizes.seccomp_data != expected_data
+    {
+        return Err(format!(
+            "T079 seccomp user-notification ABI mismatch: kernel={}/{}/{} local={expected_notif}/{expected_resp}/{expected_data}",
+            sizes.seccomp_notif, sizes.seccomp_notif_resp, sizes.seccomp_data
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn send_t079_listener_fd(socket_fd: RawFd, listener_fd: RawFd) -> std::io::Result<()> {
+    let mut byte = *b"L";
+    let mut iov = libc::iovec {
+        iov_base: byte.as_mut_ptr().cast(),
+        iov_len: byte.len(),
+    };
+    let mut control = T079FdControlMessage {
+        header: libc::cmsghdr {
+            cmsg_len: std::mem::size_of::<libc::cmsghdr>() + std::mem::size_of::<RawFd>(),
+            cmsg_level: libc::SOL_SOCKET,
+            cmsg_type: libc::SCM_RIGHTS,
+        },
+        fd: listener_fd,
+        padding: [0; 4],
+    };
+    let message = libc::msghdr {
+        msg_name: std::ptr::null_mut(),
+        msg_namelen: 0,
+        msg_iov: &mut iov,
+        msg_iovlen: 1,
+        msg_control: (&mut control as *mut T079FdControlMessage).cast(),
+        msg_controllen: std::mem::size_of::<T079FdControlMessage>(),
+        msg_flags: 0,
+    };
+    let sent = unsafe { libc::sendmsg(socket_fd, &message, libc::MSG_NOSIGNAL) };
+    if sent == 1 {
+        Ok(())
+    } else if sent < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::WriteZero,
+            "T079 listener handoff did not send exactly one byte",
+        ))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn recv_t079_listener_fd(stream: &UnixStream) -> ProofResult<OwnedFd> {
+    let mut byte = [0_u8; 1];
+    let mut iov = libc::iovec {
+        iov_base: byte.as_mut_ptr().cast(),
+        iov_len: byte.len(),
+    };
+    let mut control = T079FdControlMessage {
+        header: libc::cmsghdr {
+            cmsg_len: 0,
+            cmsg_level: 0,
+            cmsg_type: 0,
+        },
+        fd: -1,
+        padding: [0; 4],
+    };
+    let mut message = libc::msghdr {
+        msg_name: std::ptr::null_mut(),
+        msg_namelen: 0,
+        msg_iov: &mut iov,
+        msg_iovlen: 1,
+        msg_control: (&mut control as *mut T079FdControlMessage).cast(),
+        msg_controllen: std::mem::size_of::<T079FdControlMessage>(),
+        msg_flags: 0,
+    };
+    let received =
+        unsafe { libc::recvmsg(stream.as_raw_fd(), &mut message, libc::MSG_CMSG_CLOEXEC) };
+    if received != 1 {
+        return Err(if received < 0 {
+            format!(
+                "T079 could not receive seccomp listener descriptor: {}",
+                std::io::Error::last_os_error()
+            )
+        } else {
+            "T079 seccomp listener handoff ended before one descriptor was received".to_owned()
+        });
+    }
+    if byte != *b"L"
+        || message.msg_flags & (libc::MSG_CTRUNC | libc::MSG_TRUNC) != 0
+        || control.header.cmsg_level != libc::SOL_SOCKET
+        || control.header.cmsg_type != libc::SCM_RIGHTS
+        || control.header.cmsg_len
+            != std::mem::size_of::<libc::cmsghdr>() + std::mem::size_of::<RawFd>()
+        || control.fd < 0
+    {
+        return Err("T079 received malformed seccomp listener handoff metadata".to_owned());
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(control.fd) })
+}
+
+#[cfg(target_os = "linux")]
+fn t079_poll_pair(first: RawFd, second: RawFd) -> ProofResult<(i16, i16)> {
+    let mut pollfds = [
+        libc::pollfd {
+            fd: first,
+            events: libc::POLLIN,
+            revents: 0,
+        },
+        libc::pollfd {
+            fd: second,
+            events: libc::POLLIN,
+            revents: 0,
+        },
+    ];
+    loop {
+        let result = unsafe { libc::poll(pollfds.as_mut_ptr(), pollfds.len() as libc::nfds_t, -1) };
+        if result > 0 {
+            return Ok((pollfds[0].revents, pollfds[1].revents));
+        }
+        if result < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        return Err(format!(
+            "T079 exec supervisor poll failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn run_t079_exec_supervisor(
+    handoff: UnixStream,
+    mut stop: UnixStream,
+) -> ProofResult<T079ExecSupervisorReport> {
+    let listener = loop {
+        let (handoff_events, stop_events) = t079_poll_pair(handoff.as_raw_fd(), stop.as_raw_fd())?;
+        if stop_events & libc::POLLIN != 0 {
+            let mut byte = [0_u8; 1];
+            let _ = stop.read(&mut byte);
+            return Err("T079 exec supervisor stopped before listener handoff".to_owned());
+        }
+        if handoff_events & libc::POLLIN != 0 {
+            break recv_t079_listener_fd(&handoff)?;
+        }
+        if handoff_events & (libc::POLLERR | libc::POLLNVAL) != 0 {
+            return Err("T079 exec supervisor listener handoff channel failed".to_owned());
+        }
+    };
+
+    let mut initial_pid = None;
+    let mut denied_execs = 0_u32;
+    loop {
+        let (listener_events, stop_events) =
+            t079_poll_pair(listener.as_raw_fd(), stop.as_raw_fd())?;
+        if listener_events & libc::POLLIN != 0 {
+            let mut notification: T079SeccompNotif = unsafe { std::mem::zeroed() };
+            let received = unsafe {
+                libc::ioctl(
+                    listener.as_raw_fd(),
+                    SECCOMP_IOCTL_NOTIF_RECV_T079,
+                    &mut notification as *mut T079SeccompNotif,
+                )
+            };
+            if received < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() == Some(libc::ENOENT)
+                    || error.kind() == std::io::ErrorKind::Interrupted
+                {
+                    continue;
+                }
+                return Err(format!(
+                    "T079 exec supervisor could not receive seccomp notification: {error}"
+                ));
+            }
+            let syscall = notification.data.nr;
+            if syscall != libc::SYS_execve as i32 && syscall != libc::SYS_execveat as i32 {
+                return Err(format!(
+                    "T079 exec supervisor received unexpected syscall {syscall}"
+                ));
+            }
+            let first = initial_pid.is_none();
+            let mut response = T079SeccompNotifResp {
+                id: notification.id,
+                val: 0,
+                error: if first { 0 } else { -libc::EPERM },
+                flags: if first { 1 } else { 0 },
+            };
+            let sent = unsafe {
+                libc::ioctl(
+                    listener.as_raw_fd(),
+                    SECCOMP_IOCTL_NOTIF_SEND_T079,
+                    &mut response as *mut T079SeccompNotifResp,
+                )
+            };
+            if sent < 0 {
+                return Err(format!(
+                    "T079 exec supervisor could not answer seccomp notification: {}",
+                    std::io::Error::last_os_error()
+                ));
+            }
+            if first {
+                initial_pid = Some(notification.pid);
+            } else {
+                denied_execs = denied_execs
+                    .checked_add(1)
+                    .ok_or_else(|| "T079 denied exec counter overflowed".to_owned())?;
+            }
+        }
+        if stop_events & libc::POLLIN != 0 {
+            let mut byte = [0_u8; 1];
+            let _ = stop.read(&mut byte);
+            return Ok(T079ExecSupervisorReport {
+                initial_pid: initial_pid.ok_or_else(|| {
+                    "T079 exec supervisor observed no initial executable launch".to_owned()
+                })?,
+                denied_execs,
+            });
+        }
+        if listener_events & (libc::POLLERR | libc::POLLNVAL) != 0 {
+            return Err("T079 seccomp listener failed before bounded cleanup".to_owned());
+        }
+    }
+}
+
 #[cfg(all(
     target_os = "linux",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
-fn install_t079_no_process_descendants_filter() -> std::io::Result<()> {
+fn install_t079_process_and_exec_filter(handoff_fd: RawFd) -> std::io::Result<()> {
     const BPF_LD_W_ABS: u16 = 0x20;
     const BPF_ALU_AND_K: u16 = 0x54;
     const BPF_JMP_JEQ_K: u16 = 0x15;
@@ -1206,9 +1595,10 @@ fn install_t079_no_process_descendants_filter() -> std::io::Result<()> {
 
     const SECCOMP_RET_KILL_THREAD: u32 = 0x0000_0000;
     const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
+    const SECCOMP_RET_USER_NOTIF: u32 = 0x7fc0_0000;
     const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
-    const SECCOMP_MODE_FILTER: libc::c_ulong = 2;
-    const PR_SET_SECCOMP: libc::c_int = 22;
+    const SECCOMP_SET_MODE_FILTER: libc::c_long = 1;
+    const SECCOMP_FILTER_FLAG_NEW_LISTENER: libc::c_ulong = 1 << 3;
     const PR_SET_NO_NEW_PRIVS: libc::c_int = 38;
 
     #[cfg(target_arch = "x86_64")]
@@ -1216,6 +1606,8 @@ fn install_t079_no_process_descendants_filter() -> std::io::Result<()> {
     #[cfg(target_arch = "aarch64")]
     const AUDIT_ARCH: u32 = 0xc000_00b7;
 
+    const SYS_EXECVE: u32 = libc::SYS_execve as u32;
+    const SYS_EXECVEAT: u32 = libc::SYS_execveat as u32;
     #[cfg(target_arch = "x86_64")]
     const SYS_CLONE: u32 = 56;
     #[cfg(target_arch = "x86_64")]
@@ -1257,6 +1649,10 @@ fn install_t079_no_process_descendants_filter() -> std::io::Result<()> {
         statement(BPF_RET_K, SECCOMP_RET_KILL_THREAD),
         statement(BPF_LD_W_ABS, SECCOMP_DATA_NR_OFFSET),
         statement(BPF_ALU_AND_K, X32_SYSCALL_BIT_CLEAR_MASK),
+        jump(BPF_JMP_JEQ_K, SYS_EXECVE, 0, 1),
+        statement(BPF_RET_K, SECCOMP_RET_USER_NOTIF),
+        jump(BPF_JMP_JEQ_K, SYS_EXECVEAT, 0, 1),
+        statement(BPF_RET_K, SECCOMP_RET_USER_NOTIF),
         jump(BPF_JMP_JEQ_K, SYS_FORK, 0, 1),
         statement(BPF_RET_K, deny_process),
         jump(BPF_JMP_JEQ_K, SYS_VFORK, 0, 1),
@@ -1278,42 +1674,82 @@ fn install_t079_no_process_descendants_filter() -> std::io::Result<()> {
     if unsafe { libc::prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } == -1 {
         return Err(std::io::Error::last_os_error());
     }
-    if unsafe {
-        libc::prctl(
-            PR_SET_SECCOMP,
-            SECCOMP_MODE_FILTER,
+    let listener_fd = unsafe {
+        libc::syscall(
+            libc::SYS_seccomp,
+            SECCOMP_SET_MODE_FILTER,
+            SECCOMP_FILTER_FLAG_NEW_LISTENER,
             &mut program as *mut libc::sock_fprog,
         )
-    } == -1
-    {
+    };
+    if listener_fd < 0 {
         return Err(std::io::Error::last_os_error());
     }
-    Ok(())
+    let listener_fd = listener_fd as RawFd;
+    let handoff = send_t079_listener_fd(handoff_fd, listener_fd);
+    unsafe {
+        libc::close(listener_fd);
+        libc::close(handoff_fd);
+    }
+    handoff
 }
 
 #[cfg(all(
     target_os = "linux",
     not(any(target_arch = "x86_64", target_arch = "aarch64"))
 ))]
-fn install_t079_no_process_descendants_filter() -> std::io::Result<()> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "T079 process-descendant denial is not implemented for this Linux architecture",
-    ))
+fn configure_t079_process_and_exec_denial(
+    _command: &mut Command,
+) -> ProofResult<T079ExecSupervisor> {
+    Err(
+        "T079 process-descendant/exec denial is not implemented for this Linux architecture"
+            .to_owned(),
+    )
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+fn configure_t079_process_and_exec_denial(
+    command: &mut Command,
+) -> ProofResult<T079ExecSupervisor> {
+    use std::os::unix::process::CommandExt;
+
+    validate_t079_seccomp_user_notification_abi()?;
+    let (handoff_parent, handoff_child) = UnixStream::pair()
+        .map_err(|error| format!("T079 could not create seccomp listener handoff: {error}"))?;
+    let (stop_parent, stop_worker) = UnixStream::pair()
+        .map_err(|error| format!("T079 could not create exec-supervisor stop channel: {error}"))?;
+    let handoff_fd = handoff_child.as_raw_fd();
+    let join = thread::Builder::new()
+        .name("winds-t079-exec-supervisor".to_owned())
+        .spawn(move || run_t079_exec_supervisor(handoff_parent, stop_worker))
+        .map_err(|error| format!("T079 could not start exec supervisor: {error}"))?;
+
+    // Registered before process_scope adds its independent owned-session hook.
+    // The child is single-threaded before its initial exec. The supervisor
+    // continues exactly that first launch and denies every later execve/execveat.
+    unsafe {
+        command.pre_exec(move || install_t079_process_and_exec_filter(handoff_fd));
+    }
+    Ok(T079ExecSupervisor {
+        handoff_child: Some(handoff_child),
+        stop: stop_parent,
+        join: Some(join),
+        expected_pid: None,
+    })
 }
 
 #[cfg(target_os = "linux")]
-fn configure_t079_process_descendant_denial(command: &mut Command) {
-    use std::os::unix::process::CommandExt;
-
-    // This hook is registered before process_scope::spawn_owned_process adds its
-    // own hook. It blocks process creation but deliberately permits setsid/prctl,
-    // so the later owned-scope hook can still establish the session boundary and
-    // its independent anti-escape filter. clone3 returns ENOSYS so libc thread
-    // creation can fall back to clone; clone is accepted only with CLONE_THREAD.
-    unsafe {
-        command.pre_exec(install_t079_no_process_descendants_filter);
+fn require_clean_t079_exec_boundary(report: T079ExecSupervisorReport) -> ProofResult<()> {
+    if report.denied_execs != 0 {
+        return Err(format!(
+            "T079 observed and denied {} post-launch executable replacement attempt(s)",
+            report.denied_execs
+        ));
     }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -1529,9 +1965,47 @@ fn finish_t079_process(
 }
 
 #[cfg(target_os = "linux")]
-fn cleanup_version_failure(child: OwnedProcess, message: String) -> String {
+fn finish_t079_guarded_process(
+    child: OwnedProcess,
+    exec_supervisor: T079ExecSupervisor,
+    cleanup_deadline: Instant,
+    label: &str,
+) -> ProofResult<CleanupEvidence> {
+    let cleanup = finish_t079_process(child, cleanup_deadline, label);
+    let exec_boundary = exec_supervisor
+        .finish()
+        .and_then(require_clean_t079_exec_boundary);
+    match (cleanup, exec_boundary) {
+        (Ok(cleanup), Ok(())) => Ok(cleanup),
+        (cleanup, exec_boundary) => {
+            let mut failures = Vec::new();
+            if let Err(error) = cleanup {
+                failures.push(format!("child={error}"));
+            }
+            if let Err(error) = exec_boundary {
+                failures.push(format!("exec_boundary={error}"));
+            }
+            Err(format!(
+                "T079 guarded process cleanup failure: {}",
+                failures.join("; ")
+            ))
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn cleanup_version_failure(
+    child: OwnedProcess,
+    exec_supervisor: T079ExecSupervisor,
+    message: String,
+) -> String {
     let cleanup_deadline = Instant::now() + CLEANUP_TIMEOUT;
-    match finish_t079_process(child, cleanup_deadline, "T079 Codex --version") {
+    match finish_t079_guarded_process(
+        child,
+        exec_supervisor,
+        cleanup_deadline,
+        "T079 Codex --version",
+    ) {
         Ok(_) => message,
         Err(cleanup) => format!("{message}; version cleanup evidence: {cleanup}"),
     }
@@ -1550,20 +2024,22 @@ fn observe_version_bounded(executable: &Path) -> ProofResult<String> {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
-        configure_t079_process_descendant_denial(&mut command);
+        let mut exec_supervisor = configure_t079_process_and_exec_denial(&mut command)?;
         let mut child = spawn_owned_process(&mut command, "T079 Codex --version")
             .map_err(|error| format!("T079 could not execute Codex --version: {error}"))?;
+        exec_supervisor.bind_child(child.direct_child_id_t079());
         let mut stdout = match child.take_stdout() {
             Some(stdout) => stdout,
             None => {
                 return Err(cleanup_version_failure(
                     child,
+                    exec_supervisor,
                     "T079 Codex --version stdout was unavailable".to_owned(),
                 ));
             }
         };
         if let Err(error) = set_nonblocking_stdout(&stdout) {
-            return Err(cleanup_version_failure(child, error));
+            return Err(cleanup_version_failure(child, exec_supervisor, error));
         }
 
         let deadline = Instant::now() + VERSION_TIMEOUT;
@@ -1586,6 +2062,7 @@ fn observe_version_bounded(executable: &Path) -> ProofResult<String> {
                                 None => {
                                     return Err(cleanup_version_failure(
                                         child,
+                                        exec_supervisor,
                                         "T079 Codex --version byte count overflowed".to_owned(),
                                     ));
                                 }
@@ -1593,6 +2070,7 @@ fn observe_version_bounded(executable: &Path) -> ProofResult<String> {
                             if new_len > MAX_VERSION_BYTES {
                                 return Err(cleanup_version_failure(
                                     child,
+                                    exec_supervisor,
                                     "T079 Codex --version output exceeded bounded size".to_owned(),
                                 ));
                             }
@@ -1603,6 +2081,7 @@ fn observe_version_bounded(executable: &Path) -> ProofResult<String> {
                         Err(error) => {
                             return Err(cleanup_version_failure(
                                 child,
+                                exec_supervisor,
                                 format!("T079 could not read Codex --version: {error}"),
                             ));
                         }
@@ -1617,6 +2096,7 @@ fn observe_version_bounded(executable: &Path) -> ProofResult<String> {
                     Err(error) => {
                         return Err(cleanup_version_failure(
                             child,
+                            exec_supervisor,
                             format!("T079 could not inspect Codex --version: {error}"),
                         ));
                     }
@@ -1629,6 +2109,7 @@ fn observe_version_bounded(executable: &Path) -> ProofResult<String> {
             if Instant::now() >= deadline {
                 return Err(cleanup_version_failure(
                     child,
+                    exec_supervisor,
                     "T079 Codex --version exceeded bounded timeout".to_owned(),
                 ));
             }
@@ -1637,8 +2118,18 @@ fn observe_version_bounded(executable: &Path) -> ProofResult<String> {
 
         let status = exit_status.expect("T079 version loop exits only with status");
         if !status.success() {
-            return Err(format!("T079 Codex --version failed with status {status}"));
+            return Err(cleanup_version_failure(
+                child,
+                exec_supervisor,
+                format!("T079 Codex --version failed with status {status}"),
+            ));
         }
+        finish_t079_guarded_process(
+            child,
+            exec_supervisor,
+            Instant::now() + CLEANUP_TIMEOUT,
+            "T079 Codex --version",
+        )?;
         let text = String::from_utf8(bytes)
             .map_err(|_| "T079 Codex --version output is not UTF-8".to_owned())?;
         let version = text.trim_end_matches(['\r', '\n']);
@@ -2066,9 +2557,19 @@ fn reconcile_proof_cleanup<T>(
 }
 
 #[cfg(target_os = "linux")]
-fn cleanup_setup_failure(child: OwnedProcess, root: &Path, message: &str) -> String {
+fn cleanup_setup_failure(
+    child: OwnedProcess,
+    exec_supervisor: T079ExecSupervisor,
+    root: &Path,
+    message: &str,
+) -> String {
     let cleanup_deadline = Instant::now() + CLEANUP_TIMEOUT;
-    let cleanup = finish_t079_process(child, cleanup_deadline, "T079 Codex App Server");
+    let cleanup = finish_t079_guarded_process(
+        child,
+        exec_supervisor,
+        cleanup_deadline,
+        "T079 Codex App Server",
+    );
     let root_check = ensure_disposable_root_unchanged(root);
     match (cleanup, root_check) {
         (Ok(_), Ok(())) => message.to_owned(),
@@ -2125,21 +2626,26 @@ fn run_connected_proof(
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     configure_bound_codex_home_inheritance(&mut command, &bound_codex_home)?;
-    configure_t079_process_descendant_denial(&mut command);
+    let mut exec_supervisor = configure_t079_process_and_exec_denial(&mut command)?;
     bound_codex_home.assert_stable()?;
     let mut child = spawn_owned_process(&mut command, "T079 Codex App Server")
         .map_err(|error| format!("T079 could not start owned Codex App Server: {error}"))?;
+    exec_supervisor.bind_child(child.direct_child_id_t079());
     if let Err(error) = bound_codex_home.assert_stable() {
         drop(stdin);
-        let message = cleanup_setup_failure(child, &root, &error);
+        let message = cleanup_setup_failure(child, exec_supervisor, &root, &error);
         return Err(message);
     }
     let stdout = match child.take_stdout() {
         Some(stdout) => stdout,
         None => {
             drop(stdin);
-            let message =
-                cleanup_setup_failure(child, &root, "T079 Codex child stdout unavailable");
+            let message = cleanup_setup_failure(
+                child,
+                exec_supervisor,
+                &root,
+                "T079 Codex child stdout unavailable",
+            );
             return Err(message);
         }
     };
@@ -2293,7 +2799,12 @@ fn run_connected_proof(
 
     drop(stdin);
     let cleanup_deadline = Instant::now() + CLEANUP_TIMEOUT;
-    let cleanup = finish_t079_process(child, cleanup_deadline, "T079 Codex App Server");
+    let cleanup = finish_t079_guarded_process(
+        child,
+        exec_supervisor,
+        cleanup_deadline,
+        "T079 Codex App Server",
+    );
     let (proof, reader_result) = match proof {
         Ok((native_thread_id, turn_id, status, mut client)) => {
             let reader_deadline = Instant::now() + CLEANUP_TIMEOUT;
@@ -3051,9 +3562,11 @@ fn t079_linux_seccomp_filter_denies_process_descendants() {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    configure_t079_process_descendant_denial(&mut command);
+    let mut exec_supervisor = configure_t079_process_and_exec_denial(&mut command)
+        .expect("configure T079 process/exec denial");
     let mut child = spawn_owned_process(&mut command, "T079 descendant-denial regression")
         .expect("spawn filter regression child");
+    exec_supervisor.bind_child(child.direct_child_id_t079());
     let deadline = Instant::now() + Duration::from_secs(2);
     let status = loop {
         match child.try_wait().expect("inspect filter regression child") {
@@ -3074,6 +3587,53 @@ fn t079_linux_seccomp_filter_denies_process_descendants() {
         !status.success(),
         "T079 seccomp filter unexpectedly allowed a shell background process"
     );
+    let report = exec_supervisor
+        .finish()
+        .expect("finish descendant regression supervisor");
+    assert_eq!(report.denied_execs, 0);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn t079_linux_seccomp_filter_denies_post_launch_exec_replacement() {
+    let mut command = Command::new("/bin/sh");
+    command
+        .args(["-c", "exec /bin/true"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut exec_supervisor = configure_t079_process_and_exec_denial(&mut command)
+        .expect("configure T079 process/exec denial");
+    let mut child = spawn_owned_process(&mut command, "T079 exec-denial regression")
+        .expect("spawn exec-denial regression child");
+    exec_supervisor.bind_child(child.direct_child_id_t079());
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let status = loop {
+        match child
+            .try_wait()
+            .expect("inspect exec-denial regression child")
+        {
+            Some(status) => break status,
+            None if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+            None => {
+                child
+                    .terminate_direct_t079(
+                        Instant::now() + CLEANUP_TIMEOUT,
+                        "T079 exec-denial regression",
+                    )
+                    .expect("terminate exec-denial regression child");
+                panic!("T079 exec-denial regression child did not exit");
+            }
+        }
+    };
+    assert!(
+        !status.success(),
+        "T079 seccomp supervisor unexpectedly allowed post-launch exec"
+    );
+    let report = exec_supervisor
+        .finish()
+        .expect("finish exec-denial regression supervisor");
+    assert_eq!(report.denied_execs, 1);
 }
 
 #[test]
@@ -3931,6 +4491,7 @@ fn t079_real_codex_one_bounded_prompt() {
             "launch_environment": "ENV_CLEAR_EXPLICIT_ALLOWLIST",
             "launch_executable": "LINUX_NATIVE_VERIFIED_OPEN_FD",
             "process_descendants": "KERNEL_DENIED_SECCOMP",
+            "post_launch_exec_replacement": "KERNEL_DENIED_SECCOMP_USER_NOTIFICATION",
             "codex_home": "PREEXISTING_ISOLATED_BOUND_OPEN_FD_NOT_READ_OR_COPIED_BY_WINDS",
             "environment_access": "disabled",
             "runtime_workspace_roots": 0,
