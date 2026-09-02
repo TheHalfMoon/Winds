@@ -1,0 +1,20 @@
+--- a/src/t079_codex_connected_tests.rs
++++ b/src/t079_codex_connected_tests.rs
+@@ -1373,7 +1373,7 @@
+ 
+ #[cfg(target_os = "linux")]
+ fn send_t079_listener_fd(socket_fd: RawFd, listener_fd: RawFd) -> std::io::Result<()> {
+-    let mut byte = [b'L'];
++    let mut byte = *b"L";
+     let mut iov = libc::iovec {
+         iov_base: byte.as_mut_ptr().cast(),
+         iov_len: byte.len(),
+@@ -1451,7 +1451,7 @@
+             "T079 seccomp listener handoff ended before one descriptor was received".to_owned()
+         });
+     }
+-    if byte != [b'L']
++    if byte != *b"L"
+         || message.msg_flags & (libc::MSG_CTRUNC | libc::MSG_TRUNC) != 0
+         || control.header.cmsg_level != libc::SOL_SOCKET
+         || control.header.cmsg_type != libc::SCM_RIGHTS
