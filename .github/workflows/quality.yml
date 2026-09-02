@@ -35,14 +35,16 @@ jobs:
         shell: bash
         run: |
           python3 - <<'PY'
-          import base64
+          import base64, gzip
           from pathlib import Path
-          parts = sorted(Path('.github/t079-exec-denial-patch').glob('part-*'))
-          if [p.name for p in parts] != [f'part-{i:02d}' for i in range(7)]:
-              raise SystemExit('unexpected T079 qualification patch parts')
+          parts = sorted(Path('.github/t079-exec-denial-patch-v2').glob('part-*'))
+          if [p.name for p in parts] != ['part-00', 'part-01']:
+              raise SystemExit('unexpected compressed T079 qualification patch parts')
           encoded = ''.join(p.read_text(encoding='utf-8') for p in parts)
-          Path('/tmp/t079-exec-denial.patch').write_bytes(base64.b64decode(encoded, validate=True))
+          compressed = base64.b64decode(encoded, validate=True)
+          Path('/tmp/t079-exec-denial.patch').write_bytes(gzip.decompress(compressed))
           PY
+          test "$(sha256sum /tmp/t079-exec-denial.patch | cut -d' ' -f1)" = "be64b8216d2692665394f3f6b2a28a9eed0739ec3bd0b8b926d7ddae3a245356"
           git apply --check /tmp/t079-exec-denial.patch
           git apply /tmp/t079-exec-denial.patch
           test "$(git diff --name-only | tr '\n' ' ')" = "src/t079_codex_connected_tests.rs "
