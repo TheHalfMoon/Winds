@@ -44,7 +44,7 @@ jobs:
           compressed = base64.b64decode(encoded, validate=True)
           Path('/tmp/t079-exec-denial.patch').write_bytes(gzip.decompress(compressed))
           PY
-          test "$(sha256sum /tmp/t079-exec-denial.patch | cut -d' ' -f1)" = "be64b8216d2692665394f3f6b2a28a9eed0739ec3bd0b8b926d7ddae3a245356"
+          test "$(sha256sum /tmp/t079-exec-denial.patch | cut -d' ' -f1)" = "05a8fdf694e214b78d35dd33fd5f3ad778f91829289be2f40f242a8fbb134bac"
           git apply --check /tmp/t079-exec-denial.patch
           git apply /tmp/t079-exec-denial.patch
           test "$(git diff --name-only | tr '\n' ' ')" = "src/t079_codex_connected_tests.rs "
