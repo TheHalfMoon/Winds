@@ -38,7 +38,7 @@ jobs:
           import base64
           from pathlib import Path
           parts = sorted(Path('.github/t079-exec-denial-patch').glob('part-*'))
-          if [p.name for p in parts] != [f'part-{i:02d}' for i in range(6)]:
+          if [p.name for p in parts] != [f'part-{i:02d}' for i in range(7)]:
               raise SystemExit('unexpected T079 qualification patch parts')
           encoded = ''.join(p.read_text(encoding='utf-8') for p in parts)
           Path('/tmp/t079-exec-denial.patch').write_bytes(base64.b64decode(encoded, validate=True))
@@ -46,6 +46,18 @@ jobs:
           git apply --check /tmp/t079-exec-denial.patch
           git apply /tmp/t079-exec-denial.patch
           test "$(git diff --name-only | tr '\n' ' ')" = "src/t079_codex_connected_tests.rs "
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('src/t079_codex_connected_tests.rs')
+          text = path.read_text(encoding='utf-8')
+          old_a = "let mut byte = [b'L'];"
+          old_b = "if byte != [b'L']"
+          if text.count(old_a) != 1 or text.count(old_b) != 1:
+              raise SystemExit('unexpected T079 clippy-fix anchors')
+          text = text.replace(old_a, 'let mut byte = *b"L";')
+          text = text.replace(old_b, 'if byte != *b"L"')
+          path.write_text(text, encoding='utf-8')
+          PY
           cargo fmt --all
       - name: Format
         run: cargo fmt --all -- --check
