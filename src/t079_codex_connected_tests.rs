@@ -936,6 +936,21 @@ fn completed_final_answer_text(params: &Value) -> ProofResult<Option<&str>> {
         .ok_or_else(|| "T079 completed final-answer agent message is missing text".to_owned())
 }
 
+fn record_completed_final_answer(
+    final_agent_message: &mut Option<String>,
+    params: &Value,
+) -> ProofResult<()> {
+    let Some(text) = completed_final_answer_text(params)? else {
+        return Ok(());
+    };
+    parse_structured_agent_message(text)?;
+    if final_agent_message.is_some() {
+        return Err("T079 received more than one completed final-answer agent message".to_owned());
+    }
+    *final_agent_message = Some(text.to_owned());
+    Ok(())
+}
+
 fn validate_exact_text(value: &str, label: &str) -> ProofResult<()> {
     if value.trim().is_empty()
         || value != value.trim()
@@ -1591,6 +1606,7 @@ fn install_t079_process_and_exec_filter(handoff_fd: RawFd) -> std::io::Result<()
     const BPF_LD_W_ABS: u16 = 0x20;
     const BPF_ALU_AND_K: u16 = 0x54;
     const BPF_JMP_JEQ_K: u16 = 0x15;
+    const BPF_JMP_JSET_K: u16 = 0x45;
     const BPF_RET_K: u16 = 0x06;
 
     const SECCOMP_RET_KILL_THREAD: u32 = 0x0000_0000;
@@ -1625,6 +1641,10 @@ fn install_t079_process_and_exec_filter(handoff_fd: RawFd) -> std::io::Result<()
     const SECCOMP_DATA_NR_OFFSET: u32 = 0;
     const SECCOMP_DATA_ARCH_OFFSET: u32 = 4;
     const SECCOMP_DATA_ARGS0_OFFSET: u32 = 16;
+    #[cfg(target_arch = "x86_64")]
+    const X32_SYSCALL_BIT: u32 = 0x4000_0000;
+    #[cfg(target_arch = "aarch64")]
+    const X32_SYSCALL_BIT: u32 = 0;
     const X32_SYSCALL_BIT_CLEAR_MASK: u32 = 0xbfff_ffff;
     const CLONE_THREAD_FLAG: u32 = 0x0001_0000;
 
@@ -1648,6 +1668,8 @@ fn install_t079_process_and_exec_filter(handoff_fd: RawFd) -> std::io::Result<()
         jump(BPF_JMP_JEQ_K, AUDIT_ARCH, 1, 0),
         statement(BPF_RET_K, SECCOMP_RET_KILL_THREAD),
         statement(BPF_LD_W_ABS, SECCOMP_DATA_NR_OFFSET),
+        jump(BPF_JMP_JSET_K, X32_SYSCALL_BIT, 0, 1),
+        statement(BPF_RET_K, deny_process),
         statement(BPF_ALU_AND_K, X32_SYSCALL_BIT_CLEAR_MASK),
         jump(BPF_JMP_JEQ_K, SYS_EXECVE, 0, 1),
         statement(BPF_RET_K, SECCOMP_RET_USER_NOTIF),
@@ -2750,10 +2772,8 @@ fn run_connected_proof(
                             "FORBIDDEN_RUNTIME_ACTIVITY",
                         ));
                     }
-                    if method == "item/completed"
-                        && let Some(text) = completed_final_answer_text(&params)?
-                    {
-                        final_agent_message = Some(text.to_owned());
+                    if method == "item/completed" {
+                        record_completed_final_answer(&mut final_agent_message, &params)?;
                     }
                     if method == "turn/completed" {
                         let turn = params
@@ -3636,6 +3656,96 @@ fn t079_linux_seccomp_filter_denies_post_launch_exec_replacement() {
     assert_eq!(report.denied_execs, 1);
 }
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn t079_x32_exec_syscall_probe_child() {
+    if env::var_os("WINDS_T079_X32_EXEC_PROBE").is_none() {
+        return;
+    }
+
+    const X32_SYSCALL_BIT: libc::c_long = 0x4000_0000;
+    const X32_EXECVE: libc::c_long = X32_SYSCALL_BIT | 520;
+    const X32_EXECVEAT: libc::c_long = X32_SYSCALL_BIT | 545;
+
+    let execve_result = unsafe {
+        libc::syscall(
+            X32_EXECVE,
+            std::ptr::null::<libc::c_char>(),
+            std::ptr::null::<*const libc::c_char>(),
+            std::ptr::null::<*const libc::c_char>(),
+        )
+    };
+    assert_eq!(execve_result, -1);
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::EPERM),
+        "x32 execve must be rejected by seccomp before syscall-number normalization"
+    );
+
+    let execveat_result = unsafe {
+        libc::syscall(
+            X32_EXECVEAT,
+            libc::AT_FDCWD,
+            std::ptr::null::<libc::c_char>(),
+            std::ptr::null::<*const libc::c_char>(),
+            std::ptr::null::<*const libc::c_char>(),
+            0,
+        )
+    };
+    assert_eq!(execveat_result, -1);
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::EPERM),
+        "x32 execveat must be rejected by seccomp before syscall-number normalization"
+    );
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn t079_linux_seccomp_filter_rejects_x32_exec_before_allow() {
+    let executable = env::current_exe().expect("current T079 test executable");
+    let mut command = Command::new(executable);
+    command
+        .args([
+            "--exact",
+            "agentic_codex::t079_codex_connected_tests::t079_x32_exec_syscall_probe_child",
+        ])
+        .env("WINDS_T079_X32_EXEC_PROBE", "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    let mut exec_supervisor = configure_t079_process_and_exec_denial(&mut command)
+        .expect("configure T079 x32 exec denial");
+    let mut child = spawn_owned_process(&mut command, "T079 x32 exec-denial regression")
+        .expect("spawn x32 exec-denial regression child");
+    exec_supervisor.bind_child(child.direct_child_id_t079());
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let status = loop {
+        match child.try_wait().expect("inspect x32 regression child") {
+            Some(status) => break status,
+            None if Instant::now() < deadline => thread::sleep(Duration::from_millis(10)),
+            None => {
+                child
+                    .terminate_direct_t079(
+                        Instant::now() + CLEANUP_TIMEOUT,
+                        "T079 x32 exec-denial regression",
+                    )
+                    .expect("terminate x32 regression child");
+                panic!("T079 x32 exec-denial regression child did not exit");
+            }
+        }
+    };
+    assert!(
+        status.success(),
+        "T079 seccomp filter allowed an x32-form exec syscall to escape EPERM denial"
+    );
+    let report = exec_supervisor
+        .finish()
+        .expect("finish x32 regression supervisor");
+    assert_eq!(report.denied_execs, 0);
+}
+
 #[test]
 fn thread_and_result_validation_preserve_exact_provenance_and_non_authority() {
     let cwd = "/tmp/winds-t079-fixture";
@@ -3740,6 +3850,57 @@ fn t079_only_final_answer_phase_can_populate_structured_proof_result() {
     });
     assert_eq!(
         completed_final_answer_text(&params).unwrap(),
+        Some("{\"status\":\"WINDS_T079_OK\"}")
+    );
+}
+
+#[test]
+fn t079_invalid_first_final_answer_fails_before_later_valid_answer_can_replace_it() {
+    let invalid = json!({
+        "item": {
+            "type": "agentMessage",
+            "phase": "final_answer",
+            "text": "{\"status\":\"OTHER\"}"
+        }
+    });
+    let valid = json!({
+        "item": {
+            "type": "agentMessage",
+            "phase": "final_answer",
+            "text": "{\"status\":\"WINDS_T079_OK\"}"
+        }
+    });
+    let mut final_agent_message = None;
+    let result: ProofResult<()> = (|| {
+        record_completed_final_answer(&mut final_agent_message, &invalid)?;
+        record_completed_final_answer(&mut final_agent_message, &valid)?;
+        Ok(())
+    })();
+
+    let error = result.expect_err("invalid first final answer must fail immediately");
+    assert!(error.contains("fixed output contract"));
+    assert_eq!(final_agent_message, None);
+}
+
+#[test]
+fn t079_duplicate_valid_final_answers_fail_closed_without_overwrite() {
+    let first = json!({
+        "item": {
+            "type": "agentMessage",
+            "phase": "final_answer",
+            "text": "{\"status\":\"WINDS_T079_OK\"}"
+        }
+    });
+    let second = first.clone();
+    let mut final_agent_message = None;
+    record_completed_final_answer(&mut final_agent_message, &first)
+        .expect("first valid final answer");
+    let error = record_completed_final_answer(&mut final_agent_message, &second)
+        .expect_err("duplicate valid final answer must fail closed");
+
+    assert!(error.contains("more than one completed final-answer"));
+    assert_eq!(
+        final_agent_message.as_deref(),
         Some("{\"status\":\"WINDS_T079_OK\"}")
     );
 }
