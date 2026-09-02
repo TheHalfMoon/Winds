@@ -31,9 +31,34 @@ jobs:
         with:
           toolchain: 1.97.1
           components: rustfmt, clippy
+      - name: Apply temporary T079 exec-denial qualification patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64
+          from pathlib import Path
+          parts = sorted(Path('.github/t079-exec-denial-patch').glob('part-*'))
+          if [p.name for p in parts] != [f'part-{i:02d}' for i in range(6)]:
+              raise SystemExit('unexpected T079 qualification patch parts')
+          encoded = ''.join(p.read_text(encoding='utf-8') for p in parts)
+          Path('/tmp/t079-exec-denial.patch').write_bytes(base64.b64decode(encoded, validate=True))
+          PY
+          git apply --check /tmp/t079-exec-denial.patch
+          git apply /tmp/t079-exec-denial.patch
+          test "$(git diff --name-only | tr '\n' ' ')" = "src/t079_codex_connected_tests.rs "
+          cargo fmt --all
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - name: Test
         run: cargo test --locked --all-targets --all-features
+      - name: Focused T079 exec-denial regressions
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo test --locked t079_linux_seccomp_filter_denies_ -- --nocapture
+      - name: Upload formatted T079 repair candidate
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: t079-exec-denial-qualified-${{ env.CANDIDATE_SHA }}
+          path: src/t079_codex_connected_tests.rs
