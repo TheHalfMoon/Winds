@@ -3,7 +3,7 @@ name: quality
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, tmp/t079-exact-source-export-4e4731d]
 
 permissions:
   contents: read
@@ -37,3 +37,20 @@ jobs:
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - name: Test
         run: cargo test --locked --all-targets --all-features
+      - name: Record source identity
+        if: runner.os == 'Linux' && github.ref == 'refs/heads/tmp/t079-exact-source-export-4e4731d'
+        shell: bash
+        run: git rev-parse HEAD > SOURCE_SHA.txt
+      - name: Upload exact Rust source snapshot
+        if: runner.os == 'Linux' && github.ref == 'refs/heads/tmp/t079-exact-source-export-4e4731d'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: t079-exact-source-${{ github.sha }}
+          if-no-files-found: error
+          include-hidden-files: false
+          path: |
+            SOURCE_SHA.txt
+            Cargo.toml
+            Cargo.lock
+            src
+            migrations
