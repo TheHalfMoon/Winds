@@ -1012,13 +1012,13 @@ fn t079_user_input_allowed(value: &Value) -> bool {
     let Some(input) = value.as_object() else {
         return false;
     };
-    exact_object_keys(input, &["text", "textElements", "type"])
+    exact_object_keys(input, &["text", "text_elements", "type"])
         && input.get("type").and_then(Value::as_str) == Some("text")
         && input
             .get("text")
             .is_some_and(|text| t079_string_allowed(text, true))
         && input
-            .get("textElements")
+            .get("text_elements")
             .and_then(Value::as_array)
             .is_some_and(|elements| elements.iter().all(t079_text_element_allowed))
 }
@@ -2054,6 +2054,12 @@ mod t079_notification_regression_tests {
             "content":[{"type":"image","url":"https://example.invalid/image.png"}]
         })));
         assert!(!t079_passive_item(&json!({
+            "type":"userMessage",
+            "id":"item-1",
+            "clientId":null,
+            "content":[{"type":"text","text":T079_PROOF_PROMPT,"textElements":[]}]
+        })));
+        assert!(!t079_passive_item(&json!({
             "type":"agentMessage",
             "id":"item-1",
             "text":"bad\u{0007}text",
@@ -2073,7 +2079,7 @@ mod t079_notification_regression_tests {
             "type":"userMessage",
             "id":"item-1",
             "clientId":null,
-            "content":[{"type":"text","text":T079_PROOF_PROMPT,"textElements":[]}]
+            "content":[{"type":"text","text":T079_PROOF_PROMPT,"text_elements":[]}]
         })));
     }
 
