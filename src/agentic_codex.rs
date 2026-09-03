@@ -227,7 +227,7 @@ impl CodexProtocolClient {
 
     #[cfg(test)]
     /// T079 opts into the experimental API for explicit empty environment/tool roots and
-    /// separately opts out only the pinned remote-control status notification.
+    /// separately opts out only the two pinned remote-control and warning notifications.
     pub(super) fn t079_initialize_request(
         &mut self,
         client_name: &str,
@@ -239,7 +239,7 @@ impl CodexProtocolClient {
             client_title,
             client_version,
             true,
-            Some(&["remoteControl/status/changed"]),
+            Some(&["remoteControl/status/changed", "warning"]),
         )?;
         self.t079_mode = true;
         Ok(request)
