@@ -2952,7 +2952,7 @@ fn t079_requests_are_fixed_ephemeral_read_only_and_non_authorizing() {
     );
     assert_eq!(
         initialize["params"]["capabilities"]["optOutNotificationMethods"],
-        json!(["remoteControl/status/changed"])
+        json!(["remoteControl/status/changed", "warning"])
     );
     assert_eq!(
         initialize["params"]["capabilities"]
