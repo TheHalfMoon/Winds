@@ -353,8 +353,8 @@ pub struct PromotionReport {
 )]
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CandidateIdentity {
-    pub oid: String,
-    pub tree: String,
+    oid: String,
+    tree: String,
 }
 
 #[allow(
@@ -387,8 +387,8 @@ pub enum CandidateBindingStatus {
 )]
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct VerificationEvidenceReference {
-    pub run_id: String,
-    pub candidate: CandidateIdentity,
+    run_id: String,
+    candidate: CandidateIdentity,
 }
 
 #[allow(
