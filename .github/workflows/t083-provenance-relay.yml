@@ -1,0 +1,244 @@
+name: T083 opaque evidence provenance relay
+
+on:
+  push:
+    branches:
+      - impl/006-t083-candidate-evidence
+    paths:
+      - .github/workflows/t083-provenance-relay.yml
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact relay head
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+      - name: Set up pinned Rust
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+      - name: Apply bounded T083 provenance repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          store_path = Path('src/store.rs')
+          store = store_path.read_text()
+
+          marker = '''pub struct RecoverableRun {
+              pub run_id: String,
+              pub candidate_oid: String,
+              pub worktree_path: String,
+              pub state: String,
+          }
+'''
+          replacement = marker + '''
+          #[derive(Debug)]
+          pub(crate) struct WindsObservedVerificationEvidence(EvidenceReport);
+
+          impl WindsObservedVerificationEvidence {
+              pub(crate) fn report(&self) -> &EvidenceReport {
+                  &self.0
+              }
+          }
+'''
+          assert store.count(marker) == 1, 'RecoverableRun insertion marker drifted'
+          store = store.replace(marker, replacement, 1)
+
+          save_marker = '''    pub fn save_evidence(&mut self, report: &EvidenceReport, now_ms: i64) -> Result<()> {
+'''
+          assert store.count(save_marker) == 1, 'save_evidence marker drifted'
+          collect = '''    pub(crate) fn collect_winds_observed_evidence(
+              &self,
+              repo: &crate::git::Repo,
+              run_id: &str,
+          ) -> Result<WindsObservedVerificationEvidence> {
+              let persisted = self
+                  .connection
+                  .query_row(
+                      "SELECT repo_path, base_oid, candidate_ref, candidate_oid, candidate_tree,\n\
+                              worktree_path, check_command, timeout_secs, state\n\
+                       FROM candidate_runs WHERE run_id = ?1",
+                      params![run_id],
+                      |row| {
+                          Ok((
+                              row.get::<_, String>(0)?,
+                              row.get::<_, String>(1)?,
+                              row.get::<_, String>(2)?,
+                              row.get::<_, String>(3)?,
+                              row.get::<_, String>(4)?,
+                              row.get::<_, String>(5)?,
+                              row.get::<_, String>(6)?,
+                              row.get::<_, i64>(7)?,
+                              row.get::<_, String>(8)?,
+                          ))
+                      },
+                  )
+                  .optional()?
+                  .ok_or_else(|| format!("unknown Winds run for evidence collection: {run_id}"))?;
+
+              if persisted.8 != "READY" {
+                  return Err(format!(
+                      "verification evidence collection requires READY candidate state, found {}",
+                      persisted.8
+                  )
+                  .into());
+              }
+              let observed_repo_path = repo
+                  .root()
+                  .to_str()
+                  .ok_or("verification repository path is not valid UTF-8")?;
+              if observed_repo_path != persisted.0 {
+                  return Err("verification repository does not match persisted candidate run".into());
+              }
+
+              let worktree = PathBuf::from(&persisted.5);
+              let timeout_secs = u64::try_from(persisted.7)?;
+              let check_run = crate::check::run_check(
+                  &worktree,
+                  &persisted.6,
+                  std::time::Duration::from_secs(timeout_secs),
+              )
+              .map_err(|error| format!("required check failed to execute: {error}"))?;
+              let head_after = repo.worktree_head(&worktree)?;
+              let clean_after = repo.worktree_is_clean(&worktree)?;
+              let mut warnings = Vec::new();
+
+              if head_after != persisted.3 {
+                  warnings.push("candidate HEAD changed while evidence was being collected".to_owned());
+              }
+              if !clean_after {
+                  warnings.push("required check mutated candidate worktree state".to_owned());
+              }
+              if check_run.stdout.truncated || check_run.stderr.truncated {
+                  warnings.push(
+                      "required check output exceeded the capture cap; evidence is incomplete"
+                          .to_owned(),
+                  );
+              }
+
+              let eligibility = if check_run.status != crate::domain::CheckStatus::Pass
+                  || head_after != persisted.3
+                  || !clean_after
+              {
+                  Eligibility::Blocked
+              } else if check_run.stdout.truncated || check_run.stderr.truncated {
+                  Eligibility::Warning
+              } else {
+                  Eligibility::Eligible
+              };
+
+              let stdout = self.write_blob(
+                  run_id,
+                  "check.stdout",
+                  &check_run.stdout.bytes,
+                  check_run.stdout.truncated,
+              )?;
+              let stderr = self.write_blob(
+                  run_id,
+                  "check.stderr",
+                  &check_run.stderr.bytes,
+                  check_run.stderr.truncated,
+              )?;
+
+              Ok(WindsObservedVerificationEvidence(EvidenceReport {
+                  schema_version: 1,
+                  run_id: run_id.to_owned(),
+                  authority: "WINDS_OBSERVED",
+                  repo_path: persisted.0,
+                  base_oid: persisted.1,
+                  candidate_ref: persisted.2,
+                  candidate_oid: persisted.3,
+                  candidate_tree: persisted.4,
+                  worktree_path: persisted.5,
+                  check: CheckEvidence {
+                      authority: "WINDS_OBSERVED",
+                      command: persisted.6,
+                      status: check_run.status,
+                      exit_code: check_run.exit_code,
+                      duration_ms: check_run.duration_ms,
+                      stdout,
+                      stderr,
+                  },
+                  eligibility,
+                  warnings,
+              }))
+          }
+
+          '''
+          store = store.replace(save_marker, collect + '''    pub(crate) fn save_evidence(
+              &mut self,
+              observed: &WindsObservedVerificationEvidence,
+              now_ms: i64,
+          ) -> Result<()> {
+              let report = observed.report();
+''', 1)
+
+          load_marker = '''    pub fn load_run(&self, run_id: &str) -> Result<StoredRun> {
+'''
+          assert store.count(load_marker) == 1, 'load_run marker drifted'
+          test_bridge = '''    #[cfg(test)]
+              pub(crate) fn save_evidence_for_test(
+                  &mut self,
+                  report: &EvidenceReport,
+                  now_ms: i64,
+              ) -> Result<()> {
+                  let observed = WindsObservedVerificationEvidence(report.clone());
+                  self.save_evidence(&observed, now_ms)
+              }
+
+          '''
+          store = store.replace(load_marker, test_bridge + load_marker, 1)
+          store_path.write_text(store)
+
+          main_path = Path('src/main.rs')
+          main = main_path.read_text()
+          main = main.replace(
+              'use crate::domain::{CheckEvidence, CheckStatus, Eligibility, EvidenceReport, PromotionReport};',
+              'use crate::domain::{CheckEvidence, CheckStatus, Eligibility, PromotionReport};',
+              1,
+          )
+          start_token = '    let check_run = run_check(&worktree, check_command, Duration::from_secs(timeout_secs))'
+          end_token = '    store.save_evidence(&report, unix_ms()?)?;'
+          assert main.count(start_token) == 1, 'verify evidence start marker drifted'
+          start = main.index(start_token)
+          end = main.index(end_token, start) + len(end_token)
+          main = main[:start] + '''    let observed = store.collect_winds_observed_evidence(&repo, &run_id)?;
+              store.save_evidence(&observed, unix_ms()?)?;
+              let report = observed.report();''' + main[end:]
+          main_path.write_text(main)
+
+          tests_path = Path('src/t083_agentic_candidate_evidence_tests.rs')
+          tests = tests_path.read_text()
+          occurrences = tests.count('.save_evidence(')
+          assert occurrences == 3, f'unexpected save_evidence test call count: {occurrences}'
+          tests = tests.replace('.save_evidence(', '.save_evidence_for_test(')
+          tests_path.write_text(tests)
+          PY
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo test --locked t083_agentic_candidate_evidence_tests
+          test -z "$(git diff --name-only | grep -v -E '^(src/domain.rs|src/store.rs|src/main.rs|src/t083_agentic_candidate_evidence_tests.rs)$' || true)"
+      - name: Commit exact repaired head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin impl/006-t083-candidate-evidence
+          test "$(git rev-parse origin/impl/006-t083-candidate-evidence)" = "$GITHUB_SHA"
+          git rm .github/workflows/t083-provenance-relay.yml
+          git add src/domain.rs src/store.rs src/main.rs src/t083_agentic_candidate_evidence_tests.rs
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(006): seal T083 Winds-observed evidence persistence'
+          git push origin HEAD:impl/006-t083-candidate-evidence
