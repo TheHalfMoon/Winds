@@ -246,8 +246,8 @@ pub(crate) fn build_cross_runtime_handoff(
     let contract = input.delegation_contract;
     let request = input.authority_request;
 
-    let (normalized_contract_json, normalized_contract_sha256) =
-        approval_json_and_digest(approval).map_err(|error| {
+    let (normalized_contract_json, normalized_contract_sha256) = approval_json_and_digest(approval)
+        .map_err(|error| {
             ContextCapsuleError(format!("T081 approval contract is invalid: {error}"))
         })?;
 
@@ -330,7 +330,9 @@ pub(crate) fn revalidate_handoff_content(
     current_content: &ApprovalContent,
 ) -> ContextResult<HandoffContractMatch> {
     let (_, current_digest) = approval_json_and_digest(current_content).map_err(|error| {
-        ContextCapsuleError(format!("T081 current approval contract is invalid: {error}"))
+        ContextCapsuleError(format!(
+            "T081 current approval contract is invalid: {error}"
+        ))
     })?;
     Ok(if current_digest == handoff.normalized_contract_sha256 {
         HandoffContractMatch::Exact
