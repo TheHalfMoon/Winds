@@ -1,6 +1,4 @@
-use crate::agentic_runtime::{
-    RuntimeIdentityRevalidation, RuntimeKind, RuntimeResumeResolution,
-};
+use crate::agentic_runtime::{RuntimeIdentityRevalidation, RuntimeKind, RuntimeResumeResolution};
 use serde_json::Value;
 use std::error::Error;
 use std::fmt;
@@ -129,9 +127,7 @@ impl fmt::Display for ClaudeStructuredError {
             Self::RuntimeIdentityUnavailable => {
                 "Claude executable identity is unavailable at launch revalidation"
             }
-            Self::InvalidPlannerConfigPath => {
-                "Claude T080 empty MCP configuration path is invalid"
-            }
+            Self::InvalidPlannerConfigPath => "Claude T080 empty MCP configuration path is invalid",
             Self::UnsafeConstruction => "Claude invocation construction is not accepted",
             Self::MalformedOutput => "Claude structured output is malformed",
             Self::TruncatedOutput => "Claude structured output is truncated",
@@ -214,8 +210,7 @@ pub(super) fn build_t080_planner_invocation(
     }
     validate_t080_config_path(empty_mcp_config_path)?;
 
-    let mut invocation =
-        build_claude_structured_invocation(ClaudeOutputFormat::Json, selection)?;
+    let mut invocation = build_claude_structured_invocation(ClaudeOutputFormat::Json, selection)?;
     invocation.args.extend([
         "--restricted".to_owned(),
         "--permission-mode".to_owned(),
