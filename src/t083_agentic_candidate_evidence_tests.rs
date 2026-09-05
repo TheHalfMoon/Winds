@@ -1,7 +1,7 @@
 use super::{
-    BlobEvidence, CandidateBindingStatus, CandidateIdentity, CheckEvidence, CheckStatus, Eligibility,
-    EvidenceReport, IndependentReviewContext, IndependentReviewContextInput, StoredRun,
-    VerificationEvidenceReference,
+    BlobEvidence, CandidateBindingStatus, CandidateIdentity, CheckEvidence, CheckStatus,
+    Eligibility, EvidenceReport, IndependentReviewContext, IndependentReviewContextInput,
+    StoredRun, VerificationEvidenceReference,
 };
 use crate::store::{NewRun, Store};
 use std::path::{Path, PathBuf};
