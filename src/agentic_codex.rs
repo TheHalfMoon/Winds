@@ -1014,9 +1014,7 @@ fn t079_user_input_allowed(value: &Value) -> bool {
     };
     exact_object_keys(input, &["text", "text_elements", "type"])
         && input.get("type").and_then(Value::as_str) == Some("text")
-        && input
-            .get("text")
-            .is_some_and(|text| t079_string_allowed(text, true))
+        && input.get("text").and_then(Value::as_str) == Some(T079_PROOF_PROMPT)
         && input
             .get("text_elements")
             .and_then(Value::as_array)
@@ -1264,7 +1262,10 @@ fn t079_passive_item(value: &Value) -> bool {
                 && item
                     .get("content")
                     .and_then(Value::as_array)
-                    .is_some_and(|content| content.iter().all(t079_user_input_allowed))
+                    .is_some_and(|content| {
+                        content.len() == 1
+                            && content.first().is_some_and(t079_user_input_allowed)
+                    })
         }
         "agentMessage" => {
             exact_object_keys(
@@ -2046,6 +2047,27 @@ mod t079_notification_regression_tests {
             "phase":null,
             "memoryCitation":null,
             "delivery":null
+        })));
+        assert!(!t079_passive_item(&json!({
+            "type":"userMessage",
+            "id":"item-1",
+            "clientId":null,
+            "content":[]
+        })));
+        assert!(!t079_passive_item(&json!({
+            "type":"userMessage",
+            "id":"item-1",
+            "clientId":null,
+            "content":[{"type":"text","text":"not the fixed T079 prompt","text_elements":[]}]
+        })));
+        assert!(!t079_passive_item(&json!({
+            "type":"userMessage",
+            "id":"item-1",
+            "clientId":null,
+            "content":[
+                {"type":"text","text":T079_PROOF_PROMPT,"text_elements":[]},
+                {"type":"text","text":T079_PROOF_PROMPT,"text_elements":[]}
+            ]
         })));
         assert!(!t079_passive_item(&json!({
             "type":"userMessage",
