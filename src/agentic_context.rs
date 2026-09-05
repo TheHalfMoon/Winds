@@ -3,7 +3,7 @@ use crate::agentic_authority::{
     approval_json_and_digest, evaluate_delegation,
 };
 use crate::agentic_claude::ClaudeEvidenceClass;
-use crate::agentic_runtime::RuntimeKind;
+use crate::agentic_runtime::{RuntimeKind, RuntimeSessionBinding};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -201,8 +201,8 @@ pub(crate) struct CrossRuntimeTransferReport {
 
 pub(crate) struct CrossRuntimeHandoffInput<'a> {
     pub capsule: &'a ContextCapsule,
-    pub source_runtime: RuntimeKind,
-    pub destination_runtime: RuntimeKind,
+    pub source_binding: &'a RuntimeSessionBinding,
+    pub destination_binding: &'a RuntimeSessionBinding,
     pub planner_worker_proposal: &'a str,
     pub approval_content: &'a ApprovalContent,
     pub delegation_contract: &'a DelegationContract,
@@ -232,11 +232,16 @@ pub(crate) enum HandoffContractMatch {
 pub(crate) fn build_cross_runtime_handoff(
     input: CrossRuntimeHandoffInput<'_>,
 ) -> ContextResult<CrossRuntimeHandoffContract> {
-    if input.source_runtime != RuntimeKind::Claude
-        || input.destination_runtime != RuntimeKind::Codex
+    if input.source_binding.runtime != RuntimeKind::Claude
+        || input.destination_binding.runtime != RuntimeKind::Codex
     {
         return Err(ContextCapsuleError(
             "T081 requires the exact Claude-Planner to Codex-Worker runtime direction".to_owned(),
+        ));
+    }
+    if input.source_binding.session_id != input.capsule.payload.session_id {
+        return Err(ContextCapsuleError(
+            "T081 source runtime binding does not match the canonical Planner session".to_owned(),
         ));
     }
 
@@ -245,6 +250,12 @@ pub(crate) fn build_cross_runtime_handoff(
     let approval = input.approval_content;
     let contract = input.delegation_contract;
     let request = input.authority_request;
+
+    if input.destination_binding.session_id != approval.session_id {
+        return Err(ContextCapsuleError(
+            "T081 destination runtime binding does not match the approved Worker session".to_owned(),
+        ));
+    }
 
     let (normalized_contract_json, normalized_contract_sha256) = approval_json_and_digest(approval)
         .map_err(|error| {
@@ -310,10 +321,10 @@ pub(crate) fn build_cross_runtime_handoff(
         planner_worker_proposal,
         proposal_evidence: ClaudeEvidenceClass::AgentReported,
         transfer_report: CrossRuntimeTransferReport {
-            source_runtime: input.source_runtime,
-            destination_runtime: input.destination_runtime,
-            source_session_id: input.capsule.payload.session_id.clone(),
-            destination_session_id: approval.session_id.clone(),
+            source_runtime: input.source_binding.runtime,
+            destination_runtime: input.destination_binding.runtime,
+            source_session_id: input.source_binding.session_id.clone(),
+            destination_session_id: input.destination_binding.session_id.clone(),
             canonical_workstream_id: input.capsule.payload.workstream_id.clone(),
             context: input.capsule.transfer_report.clone(),
         },
