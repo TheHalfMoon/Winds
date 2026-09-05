@@ -5,9 +5,9 @@ use super::{
     parse_claude_structured_output,
 };
 use crate::agentic_runtime::{
-    EvidenceSource, RuntimeBindingOwnership, RuntimeExecutableIdentity, RuntimeIdentityRevalidation,
-    RuntimeKind, RuntimeResumeResolution, RuntimeSessionBinding, RuntimeVersionEvidence,
-    RuntimeVersionState, revalidate_runtime_identity,
+    EvidenceSource, RuntimeBindingOwnership, RuntimeExecutableIdentity,
+    RuntimeIdentityRevalidation, RuntimeKind, RuntimeResumeResolution, RuntimeSessionBinding,
+    RuntimeVersionEvidence, RuntimeVersionState, revalidate_runtime_identity,
 };
 use std::collections::BTreeSet;
 use std::env;
@@ -378,8 +378,7 @@ fn t080_live_planner_read_plan_proof() {
     fs::remove_dir_all(&fixture).expect("remove disposable T080 fixture");
 }
 
-const T080_FIXTURE_TEXT: &str =
-    "# T080 fixture\n\nGoal: propose a read-only plan for adding a deterministic status command.\nConstraints: no edits, no shell, no network, no MCP, no acceptance claim.\n";
+const T080_FIXTURE_TEXT: &str = "# T080 fixture\n\nGoal: propose a read-only plan for adding a deterministic status command.\nConstraints: no edits, no shell, no network, no MCP, no acceptance claim.\n";
 
 fn create_t080_fixture() -> PathBuf {
     let primary = env::current_dir()
@@ -478,9 +477,8 @@ fn run_bounded(
 
 fn first_semver_triplet(value: &str) -> Option<(u64, u64, u64)> {
     value.split_whitespace().find_map(|token| {
-        let token = token.trim_matches(|character: char| {
-            !character.is_ascii_digit() && character != '.'
-        });
+        let token =
+            token.trim_matches(|character: char| !character.is_ascii_digit() && character != '.');
         let mut parts = token.split('.');
         let major = parts.next()?.parse().ok()?;
         let minor = parts.next()?.parse().ok()?;
