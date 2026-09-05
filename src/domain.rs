@@ -222,22 +222,6 @@ pub struct ExecutionEventRecord {
     pub created_unix_ms: i64,
 }
 
-#[allow(
-    dead_code,
-    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
-)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TerminalSessionRecord {
-    pub execution_id: String,
-    pub profile_id: String,
-    pub shell_executable: String,
-    pub shell_arguments: Vec<String>,
-    pub requested_cwd: String,
-    pub initial_cols: Option<u16>,
-    pub initial_rows: Option<u16>,
-    pub close_reason: Option<TerminalCloseReason>,
-}
-
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum TerminalCloseReason {
@@ -272,6 +256,22 @@ impl TerminalCloseReason {
             _ => None,
         }
     }
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 003 T044 persistence substrate; runtime callers land in later slices"
+)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalSessionRecord {
+    pub execution_id: String,
+    pub profile_id: String,
+    pub shell_executable: String,
+    pub shell_arguments: Vec<String>,
+    pub requested_cwd: String,
+    pub initial_cols: Option<u16>,
+    pub initial_rows: Option<u16>,
+    pub close_reason: Option<TerminalCloseReason>,
 }
 
 #[allow(
@@ -378,7 +378,9 @@ pub struct VerificationEvidenceReference {
 impl VerificationEvidenceReference {
     pub fn from_verified_run(run: &StoredRun) -> Result<Self, String> {
         if run.eligibility != Eligibility::Eligible {
-            return Err("T083 accepts only ELIGIBLE winds verify runs as verification evidence".to_owned());
+            return Err(
+                "T083 accepts only ELIGIBLE winds verify runs as verification evidence".to_owned(),
+            );
         }
         let run_id = normalize_nonempty(&run.run_id, "verification run id")?;
         Ok(Self {
@@ -417,8 +419,13 @@ impl IndependentReviewContext {
     pub fn build(input: IndependentReviewContextInput<'_>) -> Result<Self, String> {
         let base_oid = normalize_git_object_id(input.base_oid, "review base OID")?;
         let diff_identity = normalize_nonempty(input.diff_identity, "review diff identity")?;
-        let acceptance_criteria = normalize_review_items(input.acceptance_criteria, "acceptance criterion")?;
-        let canonical_constraints = normalize_review_items(input.canonical_constraints, "canonical constraint")?;
+        let acceptance_criteria =
+            normalize_review_items(input.acceptance_criteria, "acceptance criterion")?;
+        let canonical_constraints =
+            normalize_review_items(input.canonical_constraints, "canonical constraint")?;
+        if input.verification_evidence.is_empty() {
+            return Err("T083 review context requires winds verify evidence".to_owned());
+        }
 
         for evidence in &input.verification_evidence {
             if evidence.applicability(&input.candidate) != CandidateBindingStatus::Current {
@@ -458,7 +465,9 @@ fn normalize_git_object_id(value: &str, label: &str) -> Result<String, String> {
     if !matches!(normalized.len(), 40 | 64)
         || !normalized.bytes().all(|byte| byte.is_ascii_hexdigit())
     {
-        return Err(format!("{label} must be an exact 40- or 64-hex Git object id"));
+        return Err(format!(
+            "{label} must be an exact 40- or 64-hex Git object id"
+        ));
     }
     Ok(normalized)
 }
