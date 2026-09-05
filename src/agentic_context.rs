@@ -13,6 +13,9 @@ use std::fmt::{Display, Formatter};
 #[cfg(test)]
 #[path = "t081_cross_runtime_handoff_tests.rs"]
 mod t081_cross_runtime_handoff_tests;
+#[cfg(test)]
+#[path = "t082_worker_worktree_tests.rs"]
+mod t082_worker_worktree_tests;
 
 const CONTEXT_CAPSULE_VERSION: &str = "winds.context.v1";
 const CONTEXT_POLICY_VERSION: &str = "winds.context.policy.v1";
@@ -557,7 +560,7 @@ fn canonicalize_facts(
             },
             detail: format!(
                 "Canonical fact retained with {:?} provenance.",
-                fact.provenance
+                fact.provenance, existing.provenance
             ),
         });
     }
