@@ -397,7 +397,6 @@ After direct selection is proven, Winds may support explicit routing policies su
 Automatic routing MUST remain observable, explainable, budget-bounded, and reversible. Provider selection must never silently weaken an authority/privacy policy.
 
 ### 5.5 Provider credential model
-
 Future design should prefer:
 
 1. provider-native OAuth/subscription paths where legitimately supported;
@@ -867,6 +866,10 @@ The UI must never become the only persistence authority.
 ## 12. Candidate formalization sequence after current authorized work
 
 Do not start these merely because this document exists. The sequence is a research recommendation for future Spec Kit formalization after current canonical dependencies are satisfied.
+
+### 12.1 Roadmap reconciliation rule
+
+Before any `N0`–`N8` phase is formalized, the next formal program MUST reconcile the learning-roadmap `L0`–`L3` sequence, the Herdr-roadmap `H0` entry gate, and this `N0`–`N8` sequence against then-canonical repository truth. No `N` phase supersedes, bypasses, or reorders `L0`–`L3` or `H0` merely because this research document exists. Any different ordering or replacement requires a later accepted specification/governance decision that states the dependency change explicitly.
 
 ### N0 — Product kernel and UI architecture decision
 
