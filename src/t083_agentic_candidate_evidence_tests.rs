@@ -202,10 +202,7 @@ fn invented_eligible_report_with_blocked_check_cannot_be_persisted() {
 
 #[test]
 fn persisted_evidence_candidate_oid_or_tree_mismatch_fails_closed() {
-    for (name, mutate) in [
-        ("oid-mismatch", true),
-        ("tree-mismatch", false),
-    ] {
+    for (name, mutate) in [("oid-mismatch", true), ("tree-mismatch", false)] {
         let candidate = CandidateIdentity::new(&oid('a'), &oid('b')).unwrap();
         let (_home, mut store) = ready_store(name, name, &candidate);
         let mut report = evidence_report(name, &candidate, Eligibility::Eligible);
@@ -216,7 +213,10 @@ fn persisted_evidence_candidate_oid_or_tree_mismatch_fails_closed() {
         }
 
         assert!(store.save_evidence(&report, 3).is_err());
-        assert_eq!(store.load_run(name).unwrap().eligibility, Eligibility::Blocked);
+        assert_eq!(
+            store.load_run(name).unwrap().eligibility,
+            Eligibility::Blocked
+        );
     }
 }
 
