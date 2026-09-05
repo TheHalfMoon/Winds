@@ -75,9 +75,18 @@ fn candidate_movement_makes_old_review_and_evidence_stale_but_traceable() {
     })
     .unwrap();
 
-    assert_eq!(review_a.applicability(&candidate_a), CandidateBindingStatus::Current);
-    assert_eq!(review_a.applicability(&candidate_b), CandidateBindingStatus::Stale);
-    assert_eq!(evidence_a.applicability(&candidate_b), CandidateBindingStatus::Stale);
+    assert_eq!(
+        review_a.applicability(&candidate_a),
+        CandidateBindingStatus::Current
+    );
+    assert_eq!(
+        review_a.applicability(&candidate_b),
+        CandidateBindingStatus::Stale
+    );
+    assert_eq!(
+        evidence_a.applicability(&candidate_b),
+        CandidateBindingStatus::Stale
+    );
     assert_eq!(evidence_a.run_id, "verify-run-a");
     assert_eq!(evidence_a.candidate, candidate_a);
 }
@@ -140,6 +149,22 @@ fn stale_verification_evidence_cannot_be_reused_for_a_new_candidate_review() {
         acceptance_criteria: vec!["exact candidate verification".to_owned()],
         canonical_constraints: vec!["stale evidence never becomes current".to_owned()],
         verification_evidence: vec![evidence_a],
+        builder_persuasion: &["done; tests passed".to_owned()],
+    });
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn builder_persuasion_cannot_replace_missing_verification_evidence() {
+    let candidate = CandidateIdentity::new(&oid('a'), &oid('b')).unwrap();
+    let result = IndependentReviewContext::build(IndependentReviewContextInput {
+        base_oid: &oid('e'),
+        candidate,
+        diff_identity: "base...candidate-a",
+        acceptance_criteria: vec!["exact candidate verification".to_owned()],
+        canonical_constraints: vec!["Agent completion is not verification".to_owned()],
+        verification_evidence: vec![],
         builder_persuasion: &["done; tests passed".to_owned()],
     });
 
