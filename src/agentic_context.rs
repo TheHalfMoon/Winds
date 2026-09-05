@@ -1,8 +1,18 @@
+use crate::agentic_authority::{
+    ApprovalContent, AuthorityEvaluation, AuthorityRequest, DelegationContract,
+    approval_json_and_digest, evaluate_delegation,
+};
+use crate::agentic_claude::ClaudeEvidenceClass;
+use crate::agentic_runtime::RuntimeKind;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+
+#[cfg(test)]
+#[path = "t081_cross_runtime_handoff_tests.rs"]
+mod t081_cross_runtime_handoff_tests;
 
 const CONTEXT_CAPSULE_VERSION: &str = "winds.context.v1";
 const CONTEXT_POLICY_VERSION: &str = "winds.context.policy.v1";
@@ -177,6 +187,156 @@ pub(crate) struct CompactedContextView {
     pub candidate_references: Vec<CanonicalContextReference>,
     pub evidence_references: Vec<CanonicalContextReference>,
     pub transfer_report: ContextTransferReport,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CrossRuntimeTransferReport {
+    pub source_runtime: RuntimeKind,
+    pub destination_runtime: RuntimeKind,
+    pub source_session_id: String,
+    pub destination_session_id: String,
+    pub canonical_workstream_id: String,
+    pub context: ContextTransferReport,
+}
+
+pub(crate) struct CrossRuntimeHandoffInput<'a> {
+    pub capsule: &'a ContextCapsule,
+    pub source_runtime: RuntimeKind,
+    pub destination_runtime: RuntimeKind,
+    pub planner_worker_proposal: &'a str,
+    pub approval_content: &'a ApprovalContent,
+    pub delegation_contract: &'a DelegationContract,
+    pub authority_request: &'a AuthorityRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CrossRuntimeHandoffContract {
+    pub workspace_id: String,
+    pub workstream_id: String,
+    pub planner_worker_proposal: String,
+    pub proposal_evidence: ClaudeEvidenceClass,
+    pub transfer_report: CrossRuntimeTransferReport,
+    pub normalized_contract_json: String,
+    pub normalized_contract_sha256: String,
+    pub authority_evaluation: AuthorityEvaluation,
+    pub human_approval_required: bool,
+    pub worker_execution_authorized: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HandoffContractMatch {
+    Exact,
+    Changed,
+}
+
+pub(crate) fn build_cross_runtime_handoff(
+    input: CrossRuntimeHandoffInput<'_>,
+) -> ContextResult<CrossRuntimeHandoffContract> {
+    if input.source_runtime != RuntimeKind::Claude
+        || input.destination_runtime != RuntimeKind::Codex
+    {
+        return Err(ContextCapsuleError(
+            "T081 requires the exact Claude-Planner to Codex-Worker runtime direction".to_owned(),
+        ));
+    }
+
+    let planner_worker_proposal =
+        normalize_required(input.planner_worker_proposal, "Planner Worker proposal")?;
+    let approval = input.approval_content;
+    let contract = input.delegation_contract;
+    let request = input.authority_request;
+
+    let (normalized_contract_json, normalized_contract_sha256) =
+        approval_json_and_digest(approval).map_err(|error| {
+            ContextCapsuleError(format!("T081 approval contract is invalid: {error}"))
+        })?;
+
+    if approval.workspace_id != input.capsule.payload.workspace_id {
+        return Err(ContextCapsuleError(
+            "T081 approval workspace does not match the canonical context capsule".to_owned(),
+        ));
+    }
+    if approval.workstream_id != input.capsule.payload.workstream_id {
+        return Err(ContextCapsuleError(
+            "T081 approval workstream does not match the canonical context capsule".to_owned(),
+        ));
+    }
+    if approval.context_digest.trim().to_ascii_lowercase() != input.capsule.sha256 {
+        return Err(ContextCapsuleError(
+            "T081 approval context digest does not match the exact canonical capsule".to_owned(),
+        ));
+    }
+    if approval.runtime_kind.trim() != "CODEX" {
+        return Err(ContextCapsuleError(
+            "T081 destination approval must bind the Codex runtime".to_owned(),
+        ));
+    }
+    if contract.planner_id != approval.planner_id || contract.workers.len() != 1 {
+        return Err(ContextCapsuleError(
+            "T081 requires exactly one Planner and one directly delegated Worker".to_owned(),
+        ));
+    }
+
+    let worker = &contract.workers[0];
+    if worker.worker_id != approval.worker_id
+        || worker.parent_planner_id != approval.worker_parent_planner_id
+        || worker.parent_planner_id != contract.planner_id
+        || worker.worker_id == contract.planner_id
+    {
+        return Err(ContextCapsuleError(
+            "T081 Worker topology does not match the exact approval contract".to_owned(),
+        ));
+    }
+    if request.worker_id != approval.worker_id || request.target != approval.target {
+        return Err(ContextCapsuleError(
+            "T081 authority request does not match the exact approved Worker target".to_owned(),
+        ));
+    }
+    if contract.planner_delegation_ceiling != approval.planner_delegation_ceiling
+        || worker.authority != approval.worker_grant
+        || contract.team_policy != approval.team_policy
+        || contract.human_ceiling != approval.human_ceiling
+        || contract.enforcement != approval.enforcement
+    {
+        return Err(ContextCapsuleError(
+            "T081 delegation policy differs from the normalized approval contract".to_owned(),
+        ));
+    }
+
+    let authority_evaluation = evaluate_delegation(contract, request);
+    Ok(CrossRuntimeHandoffContract {
+        workspace_id: input.capsule.payload.workspace_id.clone(),
+        workstream_id: input.capsule.payload.workstream_id.clone(),
+        planner_worker_proposal,
+        proposal_evidence: ClaudeEvidenceClass::AgentReported,
+        transfer_report: CrossRuntimeTransferReport {
+            source_runtime: input.source_runtime,
+            destination_runtime: input.destination_runtime,
+            source_session_id: input.capsule.payload.session_id.clone(),
+            destination_session_id: approval.session_id.clone(),
+            canonical_workstream_id: input.capsule.payload.workstream_id.clone(),
+            context: input.capsule.transfer_report.clone(),
+        },
+        normalized_contract_json,
+        normalized_contract_sha256,
+        authority_evaluation,
+        human_approval_required: true,
+        worker_execution_authorized: false,
+    })
+}
+
+pub(crate) fn revalidate_handoff_content(
+    handoff: &CrossRuntimeHandoffContract,
+    current_content: &ApprovalContent,
+) -> ContextResult<HandoffContractMatch> {
+    let (_, current_digest) = approval_json_and_digest(current_content).map_err(|error| {
+        ContextCapsuleError(format!("T081 current approval contract is invalid: {error}"))
+    })?;
+    Ok(if current_digest == handoff.normalized_contract_sha256 {
+        HandoffContractMatch::Exact
+    } else {
+        HandoffContractMatch::Changed
+    })
 }
 
 pub(crate) fn build_context_capsule(input: ContextCapsuleInput) -> ContextResult<ContextCapsule> {
