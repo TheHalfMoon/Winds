@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_HOME: AtomicU64 = AtomicU64::new(1);
+const OUTPUT_TRUNCATED: &str =
+    "required check output exceeded the capture cap; evidence is incomplete";
 
 struct TestHome {
     path: PathBuf,
@@ -57,12 +59,57 @@ fn stored_run(
     }
 }
 
-fn persisted_store(
-    name: &str,
+fn evidence_report(
     run_id: &str,
     candidate: &CandidateIdentity,
     eligibility: Eligibility,
-) -> (TestHome, Store) {
+) -> EvidenceReport {
+    let (status, exit_code, stdout_truncated, warnings) = match &eligibility {
+        Eligibility::Eligible => (CheckStatus::Pass, Some(0), false, Vec::new()),
+        Eligibility::Warning => (
+            CheckStatus::Pass,
+            Some(0),
+            true,
+            vec![OUTPUT_TRUNCATED.to_owned()],
+        ),
+        Eligibility::Blocked => (CheckStatus::Fail, Some(1), false, Vec::new()),
+    };
+
+    EvidenceReport {
+        schema_version: 1,
+        run_id: run_id.to_owned(),
+        authority: "WINDS_OBSERVED",
+        repo_path: "/fixture/repo".to_owned(),
+        base_oid: oid('e'),
+        candidate_ref: "refs/heads/t083-fixture".to_owned(),
+        candidate_oid: candidate.oid.clone(),
+        candidate_tree: candidate.tree.clone(),
+        worktree_path: "/fixture/worktree".to_owned(),
+        check: CheckEvidence {
+            authority: "WINDS_OBSERVED",
+            command: "cargo test --locked".to_owned(),
+            status,
+            exit_code,
+            duration_ms: 1,
+            stdout: BlobEvidence {
+                relative_path: "fixture/stdout".to_owned(),
+                sha256: "0".repeat(64),
+                captured_bytes: 0,
+                truncated: stdout_truncated,
+            },
+            stderr: BlobEvidence {
+                relative_path: "fixture/stderr".to_owned(),
+                sha256: "1".repeat(64),
+                captured_bytes: 0,
+                truncated: false,
+            },
+        },
+        eligibility,
+        warnings,
+    }
+}
+
+fn ready_store(name: &str, run_id: &str, candidate: &CandidateIdentity) -> (TestHome, Store) {
     let home = TestHome::new(name);
     let mut store = Store::open(home.path()).expect("open T083 fixture store");
     let base_oid = oid('e');
@@ -82,41 +129,22 @@ fn persisted_store(
             1,
         )
         .expect("persist T083 candidate run");
-
-    let report = EvidenceReport {
-        schema_version: 1,
-        run_id: run_id.to_owned(),
-        authority: "WINDS_OBSERVED",
-        repo_path: "/fixture/repo".to_owned(),
-        base_oid,
-        candidate_ref: "refs/heads/t083-fixture".to_owned(),
-        candidate_oid: candidate.oid.clone(),
-        candidate_tree: candidate.tree.clone(),
-        worktree_path: "/fixture/worktree".to_owned(),
-        check: CheckEvidence {
-            authority: "WINDS_OBSERVED",
-            command: "cargo test --locked".to_owned(),
-            status: CheckStatus::Pass,
-            exit_code: Some(0),
-            duration_ms: 1,
-            stdout: BlobEvidence {
-                relative_path: "fixture/stdout".to_owned(),
-                sha256: "0".repeat(64),
-                captured_bytes: 0,
-                truncated: false,
-            },
-            stderr: BlobEvidence {
-                relative_path: "fixture/stderr".to_owned(),
-                sha256: "1".repeat(64),
-                captured_bytes: 0,
-                truncated: false,
-            },
-        },
-        eligibility,
-        warnings: Vec::new(),
-    };
     store
-        .save_evidence(&report, 2)
+        .mark_workspace_ready(run_id, 2)
+        .expect("mark T083 fixture worktree ready");
+    (home, store)
+}
+
+fn persisted_store(
+    name: &str,
+    run_id: &str,
+    candidate: &CandidateIdentity,
+    eligibility: Eligibility,
+) -> (TestHome, Store) {
+    let (home, mut store) = ready_store(name, run_id, candidate);
+    let report = evidence_report(run_id, candidate, eligibility);
+    store
+        .save_evidence(&report, 3)
         .expect("persist T083 verification evidence");
     (home, store)
 }
@@ -155,6 +183,40 @@ fn only_persisted_eligible_winds_verify_runs_become_verification_references() {
     ] {
         let (_home, store) = persisted_store(name, "not-eligible", &candidate, eligibility);
         assert!(VerificationEvidenceReference::from_store(&store, "not-eligible").is_err());
+    }
+}
+
+#[test]
+fn invented_eligible_report_with_blocked_check_cannot_be_persisted() {
+    let candidate = CandidateIdentity::new(&oid('a'), &oid('b')).unwrap();
+    let (_home, mut store) = ready_store("invented-eligible", "invented-eligible", &candidate);
+    let mut report = evidence_report("invented-eligible", &candidate, Eligibility::Blocked);
+    report.eligibility = Eligibility::Eligible;
+
+    assert!(store.save_evidence(&report, 3).is_err());
+    assert_eq!(
+        store.load_run("invented-eligible").unwrap().eligibility,
+        Eligibility::Blocked
+    );
+}
+
+#[test]
+fn persisted_evidence_candidate_oid_or_tree_mismatch_fails_closed() {
+    for (name, mutate) in [
+        ("oid-mismatch", true),
+        ("tree-mismatch", false),
+    ] {
+        let candidate = CandidateIdentity::new(&oid('a'), &oid('b')).unwrap();
+        let (_home, mut store) = ready_store(name, name, &candidate);
+        let mut report = evidence_report(name, &candidate, Eligibility::Eligible);
+        if mutate {
+            report.candidate_oid = oid('c');
+        } else {
+            report.candidate_tree = oid('d');
+        }
+
+        assert!(store.save_evidence(&report, 3).is_err());
+        assert_eq!(store.load_run(name).unwrap().eligibility, Eligibility::Blocked);
     }
 }
 
