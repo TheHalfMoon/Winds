@@ -131,20 +131,39 @@ fn exact_claude_to_codex_handoff_preserves_workstream_and_reports_transfer() {
 
     assert_eq!(handoff.workspace_id, capsule.payload.workspace_id);
     assert_eq!(handoff.workstream_id, capsule.payload.workstream_id);
-    assert_eq!(handoff.transfer_report.source_session_id, capsule.payload.session_id);
-    assert_eq!(handoff.transfer_report.destination_session_id, approval.session_id);
+    assert_eq!(
+        handoff.transfer_report.source_session_id,
+        capsule.payload.session_id
+    );
+    assert_eq!(
+        handoff.transfer_report.destination_session_id,
+        approval.session_id
+    );
     assert_eq!(handoff.transfer_report.source_runtime, RuntimeKind::Claude);
-    assert_eq!(handoff.transfer_report.destination_runtime, RuntimeKind::Codex);
+    assert_eq!(
+        handoff.transfer_report.destination_runtime,
+        RuntimeKind::Codex
+    );
     assert_eq!(handoff.transfer_report.context, capsule.transfer_report);
     assert!(handoff.transfer_report.context.entries.iter().any(|entry| {
         entry.item_id == "private_hidden_state_reasoning"
             && entry.disposition == TransferDisposition::Unavailable
     }));
-    assert_eq!(handoff.proposal_evidence, ClaudeEvidenceClass::AgentReported);
-    assert_eq!(handoff.authority_evaluation.decision, AuthorityDecision::Allow);
+    assert_eq!(
+        handoff.proposal_evidence,
+        ClaudeEvidenceClass::AgentReported
+    );
+    assert_eq!(
+        handoff.authority_evaluation.decision,
+        AuthorityDecision::Allow
+    );
     assert!(handoff.human_approval_required);
     assert!(!handoff.worker_execution_authorized);
-    assert!(handoff.normalized_contract_json.contains("\"runtime_kind\":\"CODEX\""));
+    assert!(
+        handoff
+            .normalized_contract_json
+            .contains("\"runtime_kind\":\"CODEX\"")
+    );
     assert_eq!(handoff.normalized_contract_sha256.len(), 64);
 }
 
@@ -166,8 +185,14 @@ fn planner_prose_never_starts_worker_even_when_all_policy_planes_allow() {
     })
     .unwrap();
 
-    assert_eq!(handoff.proposal_evidence, ClaudeEvidenceClass::AgentReported);
-    assert_eq!(handoff.authority_evaluation.decision, AuthorityDecision::Allow);
+    assert_eq!(
+        handoff.proposal_evidence,
+        ClaudeEvidenceClass::AgentReported
+    );
+    assert_eq!(
+        handoff.authority_evaluation.decision,
+        AuthorityDecision::Allow
+    );
     assert!(handoff.human_approval_required);
     assert!(!handoff.worker_execution_authorized);
     assert!(handoff.planner_worker_proposal.contains("EXECUTE NOW"));
@@ -191,8 +216,14 @@ fn over_ceiling_request_is_explicitly_denied_and_never_execution_ready() {
     })
     .unwrap();
 
-    assert_eq!(handoff.authority_evaluation.decision, AuthorityDecision::Deny);
-    assert_eq!(handoff.authority_evaluation.reason, AuthorityReason::ExplicitDeny);
+    assert_eq!(
+        handoff.authority_evaluation.decision,
+        AuthorityDecision::Deny
+    );
+    assert_eq!(
+        handoff.authority_evaluation.reason,
+        AuthorityReason::ExplicitDeny
+    );
     assert!(!handoff.worker_execution_authorized);
 }
 
