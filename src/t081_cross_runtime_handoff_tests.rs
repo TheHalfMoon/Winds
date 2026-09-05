@@ -96,7 +96,10 @@ fn runtime_binding(session_id: &str, runtime: RuntimeKind) -> RuntimeSessionBind
         RuntimeKind::Codex => "/opt/winds-test/codex",
     };
     RuntimeSessionBinding {
-        binding_id: format!("binding-{}-{session_id}", runtime.as_str().to_ascii_lowercase()),
+        binding_id: format!(
+            "binding-{}-{session_id}",
+            runtime.as_str().to_ascii_lowercase()
+        ),
         session_id: session_id.to_owned(),
         runtime,
         executable: RuntimeExecutableIdentity {
