@@ -3,6 +3,9 @@ use serde::Serialize;
 #[cfg(test)]
 #[path = "t070_agentic_identity_tests.rs"]
 mod t070_agentic_identity_tests;
+#[cfg(test)]
+#[path = "t083_agentic_candidate_evidence_tests.rs"]
+mod t083_agentic_candidate_evidence_tests;
 
 #[cfg_attr(
     not(unix),
@@ -342,4 +345,154 @@ pub struct PromotionReport {
     pub branch: String,
     pub commit_oid: String,
     pub candidate_tree: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CandidateIdentity {
+    pub oid: String,
+    pub tree: String,
+}
+
+impl CandidateIdentity {
+    pub fn new(oid: &str, tree: &str) -> Result<Self, String> {
+        Ok(Self {
+            oid: normalize_git_object_id(oid, "candidate OID")?,
+            tree: normalize_git_object_id(tree, "candidate tree")?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum CandidateBindingStatus {
+    Current,
+    Stale,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct VerificationEvidenceReference {
+    pub run_id: String,
+    pub candidate: CandidateIdentity,
+}
+
+impl VerificationEvidenceReference {
+    pub fn from_verified_run(run: &StoredRun) -> Result<Self, String> {
+        if run.eligibility != Eligibility::Eligible {
+            return Err(
+                "T083 accepts only ELIGIBLE winds verify runs as verification evidence".to_owned(),
+            );
+        }
+        let run_id = normalize_nonempty(&run.run_id, "verification run id")?;
+        Ok(Self {
+            run_id,
+            candidate: CandidateIdentity::new(&run.candidate_oid, &run.candidate_tree)?,
+        })
+    }
+
+    pub fn applicability(&self, current: &CandidateIdentity) -> CandidateBindingStatus {
+        candidate_binding_status(&self.candidate, current)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct IndependentReviewContext {
+    pub base_oid: String,
+    pub candidate: CandidateIdentity,
+    pub diff_identity: String,
+    pub acceptance_criteria: Vec<String>,
+    pub canonical_constraints: Vec<String>,
+    pub verification_evidence: Vec<VerificationEvidenceReference>,
+    pub excluded_builder_persuasion_count: usize,
+}
+
+pub struct IndependentReviewContextInput<'a> {
+    pub base_oid: &'a str,
+    pub candidate: CandidateIdentity,
+    pub diff_identity: &'a str,
+    pub acceptance_criteria: Vec<String>,
+    pub canonical_constraints: Vec<String>,
+    pub verification_evidence: Vec<VerificationEvidenceReference>,
+    pub builder_persuasion: &'a [String],
+}
+
+impl IndependentReviewContext {
+    pub fn build(input: IndependentReviewContextInput<'_>) -> Result<Self, String> {
+        let base_oid = normalize_git_object_id(input.base_oid, "review base OID")?;
+        let diff_identity = normalize_nonempty(input.diff_identity, "review diff identity")?;
+        let acceptance_criteria =
+            normalize_review_items(input.acceptance_criteria, "acceptance criterion")?;
+        let canonical_constraints =
+            normalize_review_items(input.canonical_constraints, "canonical constraint")?;
+        if input.verification_evidence.is_empty() {
+            return Err("T083 review context requires winds verify evidence".to_owned());
+        }
+
+        for evidence in &input.verification_evidence {
+            if evidence.applicability(&input.candidate) != CandidateBindingStatus::Current {
+                return Err("T083 review context rejects verification evidence bound to a different candidate".to_owned());
+            }
+        }
+
+        Ok(Self {
+            base_oid,
+            candidate: input.candidate,
+            diff_identity,
+            acceptance_criteria,
+            canonical_constraints,
+            verification_evidence: input.verification_evidence,
+            excluded_builder_persuasion_count: input.builder_persuasion.len(),
+        })
+    }
+
+    pub fn applicability(&self, current: &CandidateIdentity) -> CandidateBindingStatus {
+        candidate_binding_status(&self.candidate, current)
+    }
+}
+
+fn candidate_binding_status(
+    bound: &CandidateIdentity,
+    current: &CandidateIdentity,
+) -> CandidateBindingStatus {
+    if bound == current {
+        CandidateBindingStatus::Current
+    } else {
+        CandidateBindingStatus::Stale
+    }
+}
+
+fn normalize_git_object_id(value: &str, label: &str) -> Result<String, String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if !matches!(normalized.len(), 40 | 64)
+        || !normalized.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(format!(
+            "{label} must be an exact 40- or 64-hex Git object id"
+        ));
+    }
+    Ok(normalized)
+}
+
+fn normalize_nonempty(value: &str, label: &str) -> Result<String, String> {
+    if value.contains('\0') {
+        return Err(format!("{label} must not contain NUL"));
+    }
+    let normalized = value.replace("\r\n", "\n").replace('\r', "\n");
+    let normalized = normalized.trim().to_owned();
+    if normalized.is_empty() {
+        return Err(format!("{label} must not be empty"));
+    }
+    Ok(normalized)
+}
+
+fn normalize_review_items(values: Vec<String>, label: &str) -> Result<Vec<String>, String> {
+    let mut normalized = values
+        .into_iter()
+        .map(|value| normalize_nonempty(&value, label))
+        .collect::<Result<Vec<_>, _>>()?;
+    normalized.sort();
+    normalized.dedup();
+    if normalized.is_empty() {
+        return Err(format!("T083 requires at least one {label}"));
+    }
+    Ok(normalized)
 }
