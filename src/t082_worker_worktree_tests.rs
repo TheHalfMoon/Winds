@@ -231,12 +231,9 @@ fn exact_base_worker_worktree_is_detached_identity_bound_and_primary_safe() {
     assert_eq!(worker_repo.common_dir(), repo.common_dir());
     assert_eq!(repo.worktree_head(&canonical_worker).unwrap(), exact_base);
     assert!(repo.worktree_is_clean(&canonical_worker).unwrap());
-    assert!(
-        repo.worktree_paths()
-            .unwrap()
-            .iter()
-            .any(|path| path == &canonical_worker)
-    );
+    assert!(repo.worktree_paths().unwrap().iter().any(|path| {
+        fs::canonicalize(path).ok().as_deref() == Some(canonical_worker.as_path())
+    }));
     assert_eq!(fixture.status(), primary_status);
     assert_eq!(fixture.head_refs(), primary_refs);
 }
