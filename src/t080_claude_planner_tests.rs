@@ -9,7 +9,7 @@ use crate::agentic_runtime::{
     RuntimeIdentityRevalidation, RuntimeKind, RuntimeResumeResolution, RuntimeSessionBinding,
     RuntimeVersionEvidence, RuntimeVersionState, revalidate_runtime_identity,
 };
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::io::Read;
@@ -22,6 +22,36 @@ const LIVE_TIMEOUT: Duration = Duration::from_secs(120);
 const VERSION_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_VERSION_BYTES: usize = 256;
 const MIN_RESTRICTED_VERSION: (u64, u64, u64) = (2, 1, 248);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FixtureEntrySnapshot {
+    Directory,
+    File(Vec<u8>),
+}
+
+#[derive(Debug)]
+struct T080Fixture {
+    path: PathBuf,
+}
+
+impl T080Fixture {
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for T080Fixture {
+    fn drop(&mut self) {
+        match fs::remove_dir_all(&self.path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => eprintln!(
+                "T080 disposable fixture cleanup failed for {}: {error}",
+                self.path.display()
+            ),
+        }
+    }
+}
 
 fn fixture_binding(runtime: RuntimeKind, native_session_id: Option<&str>) -> RuntimeSessionBinding {
     RuntimeSessionBinding {
@@ -269,6 +299,34 @@ fn t080_contract_denies_ambient_extension_and_write_surfaces() {
 }
 
 #[test]
+fn t080_fixture_guard_cleans_up_on_drop() {
+    let fixture = create_t080_fixture();
+    let path = fixture.path().to_owned();
+    assert!(path.exists());
+    drop(fixture);
+    assert!(!path.exists(), "T080 fixture must be removed on guard drop");
+}
+
+#[test]
+fn t080_fixture_snapshot_detects_existing_file_and_nested_mutation() {
+    let fixture = create_t080_fixture();
+    let before = fixture_snapshot(fixture.path()).expect("initial T080 fixture snapshot");
+
+    fs::write(fixture.path().join("empty-mcp.json"), b"{\"mcpServers\":{\"changed\":{}}}\n")
+        .expect("mutate T080 MCP fixture for regression proof");
+    let changed_file = fixture_snapshot(fixture.path()).expect("changed-file T080 snapshot");
+    assert_ne!(changed_file, before);
+
+    fs::write(fixture.path().join("empty-mcp.json"), b"{\"mcpServers\":{}}\n")
+        .expect("restore T080 MCP fixture");
+    fs::create_dir(fixture.path().join("nested")).expect("create nested T080 fixture directory");
+    fs::write(fixture.path().join("nested/new.txt"), b"unexpected")
+        .expect("create nested T080 mutation");
+    let nested = fixture_snapshot(fixture.path()).expect("nested-mutation T080 snapshot");
+    assert_ne!(nested, before);
+}
+
+#[test]
 #[ignore = "requires an explicitly governed real Claude Code runtime and sends one real T080 Planner prompt"]
 fn t080_live_planner_read_plan_proof() {
     assert_eq!(
@@ -316,7 +374,7 @@ fn t080_live_planner_read_plan_proof() {
     let fixture = create_t080_fixture();
     let version_output = run_bounded(
         Command::new(&canonical_executable).arg("--version"),
-        &fixture,
+        fixture.path(),
         VERSION_TIMEOUT,
         MAX_VERSION_BYTES,
     )
@@ -335,7 +393,7 @@ fn t080_live_planner_read_plan_proof() {
         "T080 live proof requires Claude Code >= 2.1.248 for --restricted"
     );
 
-    let empty_mcp = fixture.join("empty-mcp.json");
+    let empty_mcp = fixture.path().join("empty-mcp.json");
     let planner = build_t080_planner_invocation(
         ClaudeSessionSelection::New,
         RuntimeIdentityRevalidation::Match,
@@ -345,12 +403,12 @@ fn t080_live_planner_read_plan_proof() {
     )
     .expect("T080 planner invocation must be accepted");
 
-    let before = fixture_entries(&fixture);
+    let before = fixture_snapshot(fixture.path()).expect("pre-run T080 fixture snapshot");
     let mut command = Command::new(&canonical_executable);
     command.args(&planner.invocation.args).arg(planner.prompt);
     let output = run_bounded(
         &mut command,
-        &fixture,
+        fixture.path(),
         LIVE_TIMEOUT,
         MAX_CLAUDE_STRUCTURED_OUTPUT_BYTES,
     )
@@ -365,22 +423,15 @@ fn t080_live_planner_read_plan_proof() {
         ClaudeRestrictionEnforcement::AgentNativeEnforced
     );
     assert_eq!(
-        fs::read(fixture.join("PLANNING.md")).expect("read T080 fixture after proof"),
-        T080_FIXTURE_TEXT.as_bytes(),
-        "T080 Planner must not mutate the planning fixture"
-    );
-    assert_eq!(
-        fixture_entries(&fixture),
+        fixture_snapshot(fixture.path()).expect("post-run T080 fixture snapshot"),
         before,
-        "T080 Planner must not add or remove fixture-root entries"
+        "T080 Planner must not mutate fixture files, directories, or bytes"
     );
-
-    fs::remove_dir_all(&fixture).expect("remove disposable T080 fixture");
 }
 
 const T080_FIXTURE_TEXT: &str = "# T080 fixture\n\nGoal: propose a read-only plan for adding a deterministic status command.\nConstraints: no edits, no shell, no network, no MCP, no acceptance claim.\n";
 
-fn create_t080_fixture() -> PathBuf {
+fn create_t080_fixture() -> T080Fixture {
     let primary = env::current_dir()
         .expect("current directory")
         .canonicalize()
@@ -389,30 +440,78 @@ fn create_t080_fixture() -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .expect("system clock")
         .as_nanos();
-    let fixture = env::temp_dir().join(format!("winds-t080-{}-{nonce}", std::process::id()));
-    fs::create_dir(&fixture).expect("create disposable T080 fixture");
-    let fixture = fixture.canonicalize().expect("canonical T080 fixture");
+    let path = env::temp_dir().join(format!("winds-t080-{}-{nonce}", std::process::id()));
+    fs::create_dir(&path).expect("create disposable T080 fixture");
+    let path = path.canonicalize().expect("canonical T080 fixture");
+    let fixture = T080Fixture { path };
     assert!(
-        !fixture.starts_with(&primary) && !primary.starts_with(&fixture),
+        !fixture.path().starts_with(&primary) && !primary.starts_with(fixture.path()),
         "T080 disposable fixture must be outside the primary checkout tree"
     );
-    fs::write(fixture.join("PLANNING.md"), T080_FIXTURE_TEXT).expect("write T080 planning fixture");
-    fs::write(fixture.join("empty-mcp.json"), b"{\"mcpServers\":{}}\n")
-        .expect("write exact empty T080 MCP config");
+    fs::write(fixture.path().join("PLANNING.md"), T080_FIXTURE_TEXT)
+        .expect("write T080 planning fixture");
+    fs::write(
+        fixture.path().join("empty-mcp.json"),
+        b"{\"mcpServers\":{}}\n",
+    )
+    .expect("write exact empty T080 MCP config");
     fixture
 }
 
-fn fixture_entries(root: &Path) -> BTreeSet<String> {
-    fs::read_dir(root)
-        .expect("read T080 fixture directory")
-        .map(|entry| {
-            entry
-                .expect("T080 fixture entry")
-                .file_name()
-                .to_string_lossy()
-                .into_owned()
-        })
-        .collect()
+fn fixture_snapshot(root: &Path) -> Result<BTreeMap<PathBuf, FixtureEntrySnapshot>, String> {
+    let mut snapshot = BTreeMap::new();
+    snapshot_fixture_directory(root, root, &mut snapshot)?;
+    Ok(snapshot)
+}
+
+fn snapshot_fixture_directory(
+    root: &Path,
+    directory: &Path,
+    snapshot: &mut BTreeMap<PathBuf, FixtureEntrySnapshot>,
+) -> Result<(), String> {
+    let entries = fs::read_dir(directory)
+        .map_err(|error| format!("T080 fixture read failed at {}: {error}", directory.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("T080 fixture entry read failed: {error}"))?;
+        let path = entry.path();
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| "T080 fixture entry escaped its canonical root".to_owned())?
+            .to_owned();
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            format!(
+                "T080 fixture metadata read failed at {}: {error}",
+                path.display()
+            )
+        })?;
+        let file_type = metadata.file_type();
+        if file_type.is_symlink() {
+            return Err(format!(
+                "T080 fixture contains a symlink after execution: {}",
+                relative.display()
+            ));
+        }
+        if file_type.is_dir() {
+            snapshot.insert(relative, FixtureEntrySnapshot::Directory);
+            snapshot_fixture_directory(root, &path, snapshot)?;
+            continue;
+        }
+        if file_type.is_file() {
+            let bytes = fs::read(&path).map_err(|error| {
+                format!(
+                    "T080 fixture file read failed at {}: {error}",
+                    path.display()
+                )
+            })?;
+            snapshot.insert(relative, FixtureEntrySnapshot::File(bytes));
+            continue;
+        }
+        return Err(format!(
+            "T080 fixture contains an unsupported filesystem entry: {}",
+            relative.display()
+        ));
+    }
+    Ok(())
 }
 
 fn run_bounded(
