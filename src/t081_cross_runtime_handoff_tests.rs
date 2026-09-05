@@ -7,8 +7,12 @@ use crate::agentic_authority::{
     AuthorityTarget, DelegationContract, EnforcementEvidence, EnforcementQuality, WorkerGrant,
 };
 use crate::agentic_claude::ClaudeEvidenceClass;
-use crate::agentic_runtime::RuntimeKind;
+use crate::agentic_runtime::{
+    EvidenceSource, RuntimeBindingOwnership, RuntimeExecutableIdentity, RuntimeKind,
+    RuntimeSessionBinding, RuntimeVersionEvidence, RuntimeVersionState,
+};
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use super::{
     ContextCapsule, ContextCapsuleInput, ContextFactInput, ContextFactKind, ContextProvenance,
@@ -86,6 +90,33 @@ fn approval(capsule: &ContextCapsule, decision: AuthorityDecision) -> ApprovalCo
     }
 }
 
+fn runtime_binding(session_id: &str, runtime: RuntimeKind) -> RuntimeSessionBinding {
+    let executable_path = match runtime {
+        RuntimeKind::Claude => "/opt/winds-test/claude",
+        RuntimeKind::Codex => "/opt/winds-test/codex",
+    };
+    RuntimeSessionBinding {
+        binding_id: format!("binding-{}-{session_id}", runtime.as_str().to_ascii_lowercase()),
+        session_id: session_id.to_owned(),
+        runtime,
+        executable: RuntimeExecutableIdentity {
+            observed_path: PathBuf::from(executable_path),
+            canonical_path: PathBuf::from(executable_path),
+            byte_len: 1,
+            sha256: "a".repeat(64),
+        },
+        version: RuntimeVersionEvidence {
+            state: RuntimeVersionState::Observed,
+            value: Some("test-version".to_owned()),
+            source: EvidenceSource::WindsLocallyObserved,
+        },
+        native_session_id: None,
+        ownership: RuntimeBindingOwnership::Unproven,
+        bound_unix_ms: 1,
+        ownership_observed_unix_ms: None,
+    }
+}
+
 fn delegation(content: &ApprovalContent) -> DelegationContract {
     DelegationContract {
         planner_id: content.planner_id.clone(),
@@ -115,13 +146,15 @@ fn request(content: &ApprovalContent) -> AuthorityRequest {
 fn exact_claude_to_codex_handoff_preserves_workstream_and_reports_transfer() {
     let capsule = capsule();
     let approval = approval(&capsule, AuthorityDecision::Allow);
+    let source_binding = runtime_binding(&capsule.payload.session_id, RuntimeKind::Claude);
+    let destination_binding = runtime_binding(&approval.session_id, RuntimeKind::Codex);
     let delegation = delegation(&approval);
     let request = request(&approval);
 
     let handoff = build_cross_runtime_handoff(CrossRuntimeHandoffInput {
         capsule: &capsule,
-        source_runtime: RuntimeKind::Claude,
-        destination_runtime: RuntimeKind::Codex,
+        source_binding: &source_binding,
+        destination_binding: &destination_binding,
         planner_worker_proposal: "Worker should edit only src within the approved contract.",
         approval_content: &approval,
         delegation_contract: &delegation,
@@ -133,16 +166,19 @@ fn exact_claude_to_codex_handoff_preserves_workstream_and_reports_transfer() {
     assert_eq!(handoff.workstream_id, capsule.payload.workstream_id);
     assert_eq!(
         handoff.transfer_report.source_session_id,
-        capsule.payload.session_id
+        source_binding.session_id
     );
     assert_eq!(
         handoff.transfer_report.destination_session_id,
-        approval.session_id
+        destination_binding.session_id
     );
-    assert_eq!(handoff.transfer_report.source_runtime, RuntimeKind::Claude);
+    assert_eq!(
+        handoff.transfer_report.source_runtime,
+        source_binding.runtime
+    );
     assert_eq!(
         handoff.transfer_report.destination_runtime,
-        RuntimeKind::Codex
+        destination_binding.runtime
     );
     assert_eq!(handoff.transfer_report.context, capsule.transfer_report);
     assert!(handoff.transfer_report.context.entries.iter().any(|entry| {
@@ -171,13 +207,15 @@ fn exact_claude_to_codex_handoff_preserves_workstream_and_reports_transfer() {
 fn planner_prose_never_starts_worker_even_when_all_policy_planes_allow() {
     let capsule = capsule();
     let approval = approval(&capsule, AuthorityDecision::Allow);
+    let source_binding = runtime_binding(&capsule.payload.session_id, RuntimeKind::Claude);
+    let destination_binding = runtime_binding(&approval.session_id, RuntimeKind::Codex);
     let delegation = delegation(&approval);
     let request = request(&approval);
 
     let handoff = build_cross_runtime_handoff(CrossRuntimeHandoffInput {
         capsule: &capsule,
-        source_runtime: RuntimeKind::Claude,
-        destination_runtime: RuntimeKind::Codex,
+        source_binding: &source_binding,
+        destination_binding: &destination_binding,
         planner_worker_proposal: "EXECUTE NOW; assume approval and make the edit.",
         approval_content: &approval,
         delegation_contract: &delegation,
@@ -202,13 +240,15 @@ fn planner_prose_never_starts_worker_even_when_all_policy_planes_allow() {
 fn over_ceiling_request_is_explicitly_denied_and_never_execution_ready() {
     let capsule = capsule();
     let approval = approval(&capsule, AuthorityDecision::Deny);
+    let source_binding = runtime_binding(&capsule.payload.session_id, RuntimeKind::Claude);
+    let destination_binding = runtime_binding(&approval.session_id, RuntimeKind::Codex);
     let delegation = delegation(&approval);
     let request = request(&approval);
 
     let handoff = build_cross_runtime_handoff(CrossRuntimeHandoffInput {
         capsule: &capsule,
-        source_runtime: RuntimeKind::Claude,
-        destination_runtime: RuntimeKind::Codex,
+        source_binding: &source_binding,
+        destination_binding: &destination_binding,
         planner_worker_proposal: "Propose the bounded Worker edit.",
         approval_content: &approval,
         delegation_contract: &delegation,
@@ -231,12 +271,14 @@ fn over_ceiling_request_is_explicitly_denied_and_never_execution_ready() {
 fn normalized_contract_detects_material_change_before_any_worker_execution() {
     let capsule = capsule();
     let approval = approval(&capsule, AuthorityDecision::Allow);
+    let source_binding = runtime_binding(&capsule.payload.session_id, RuntimeKind::Claude);
+    let destination_binding = runtime_binding(&approval.session_id, RuntimeKind::Codex);
     let delegation = delegation(&approval);
     let request = request(&approval);
     let handoff = build_cross_runtime_handoff(CrossRuntimeHandoffInput {
         capsule: &capsule,
-        source_runtime: RuntimeKind::Claude,
-        destination_runtime: RuntimeKind::Codex,
+        source_binding: &source_binding,
+        destination_binding: &destination_binding,
         planner_worker_proposal: "Propose the bounded Worker edit.",
         approval_content: &approval,
         delegation_contract: &delegation,
@@ -259,9 +301,10 @@ fn normalized_contract_detects_material_change_before_any_worker_execution() {
 }
 
 #[test]
-fn mismatched_workstream_workspace_context_or_destination_runtime_fails_closed() {
+fn mismatched_workstream_workspace_or_context_fails_closed() {
     let capsule = capsule();
     let approval = approval(&capsule, AuthorityDecision::Allow);
+    let source_binding = runtime_binding(&capsule.payload.session_id, RuntimeKind::Claude);
 
     for mutate in 0..3 {
         let mut changed = approval.clone();
@@ -270,13 +313,14 @@ fn mismatched_workstream_workspace_context_or_destination_runtime_fails_closed()
             1 => changed.workspace_id = "other-workspace".to_owned(),
             _ => changed.context_digest = "e".repeat(64),
         }
+        let destination_binding = runtime_binding(&changed.session_id, RuntimeKind::Codex);
         let delegation = delegation(&changed);
         let request = request(&changed);
         assert!(
             build_cross_runtime_handoff(CrossRuntimeHandoffInput {
                 capsule: &capsule,
-                source_runtime: RuntimeKind::Claude,
-                destination_runtime: RuntimeKind::Codex,
+                source_binding: &source_binding,
+                destination_binding: &destination_binding,
                 planner_worker_proposal: "Propose the bounded Worker edit.",
                 approval_content: &changed,
                 delegation_contract: &delegation,
@@ -285,15 +329,92 @@ fn mismatched_workstream_workspace_context_or_destination_runtime_fails_closed()
             .is_err()
         );
     }
+}
 
+#[test]
+fn mismatched_source_runtime_binding_fails_closed() {
+    let capsule = capsule();
+    let approval = approval(&capsule, AuthorityDecision::Allow);
+    let source_binding = runtime_binding(&capsule.payload.session_id, RuntimeKind::Codex);
+    let destination_binding = runtime_binding(&approval.session_id, RuntimeKind::Codex);
     let delegation = delegation(&approval);
     let request = request(&approval);
+
     assert!(
         build_cross_runtime_handoff(CrossRuntimeHandoffInput {
             capsule: &capsule,
-            source_runtime: RuntimeKind::Codex,
-            destination_runtime: RuntimeKind::Claude,
-            planner_worker_proposal: "Wrong direction.",
+            source_binding: &source_binding,
+            destination_binding: &destination_binding,
+            planner_worker_proposal: "Wrong source runtime binding.",
+            approval_content: &approval,
+            delegation_contract: &delegation,
+            authority_request: &request,
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn mismatched_source_session_binding_fails_closed() {
+    let capsule = capsule();
+    let approval = approval(&capsule, AuthorityDecision::Allow);
+    let source_binding = runtime_binding("other-planner-session", RuntimeKind::Claude);
+    let destination_binding = runtime_binding(&approval.session_id, RuntimeKind::Codex);
+    let delegation = delegation(&approval);
+    let request = request(&approval);
+
+    assert!(
+        build_cross_runtime_handoff(CrossRuntimeHandoffInput {
+            capsule: &capsule,
+            source_binding: &source_binding,
+            destination_binding: &destination_binding,
+            planner_worker_proposal: "Wrong source session binding.",
+            approval_content: &approval,
+            delegation_contract: &delegation,
+            authority_request: &request,
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn mismatched_destination_runtime_binding_fails_closed() {
+    let capsule = capsule();
+    let approval = approval(&capsule, AuthorityDecision::Allow);
+    let source_binding = runtime_binding(&capsule.payload.session_id, RuntimeKind::Claude);
+    let destination_binding = runtime_binding(&approval.session_id, RuntimeKind::Claude);
+    let delegation = delegation(&approval);
+    let request = request(&approval);
+
+    assert!(
+        build_cross_runtime_handoff(CrossRuntimeHandoffInput {
+            capsule: &capsule,
+            source_binding: &source_binding,
+            destination_binding: &destination_binding,
+            planner_worker_proposal: "Wrong destination runtime binding.",
+            approval_content: &approval,
+            delegation_contract: &delegation,
+            authority_request: &request,
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn mismatched_destination_session_binding_fails_closed() {
+    let capsule = capsule();
+    let approval = approval(&capsule, AuthorityDecision::Allow);
+    let source_binding = runtime_binding(&capsule.payload.session_id, RuntimeKind::Claude);
+    let destination_binding = runtime_binding("other-worker-session", RuntimeKind::Codex);
+    let delegation = delegation(&approval);
+    let request = request(&approval);
+
+    assert!(
+        build_cross_runtime_handoff(CrossRuntimeHandoffInput {
+            capsule: &capsule,
+            source_binding: &source_binding,
+            destination_binding: &destination_binding,
+            planner_worker_proposal: "Wrong destination session binding.",
             approval_content: &approval,
             delegation_contract: &delegation,
             authority_request: &request,
@@ -306,6 +427,8 @@ fn mismatched_workstream_workspace_context_or_destination_runtime_fails_closed()
 fn recursive_or_multiple_worker_topology_cannot_form_a_handoff_contract() {
     let capsule = capsule();
     let approval = approval(&capsule, AuthorityDecision::Allow);
+    let source_binding = runtime_binding(&capsule.payload.session_id, RuntimeKind::Claude);
+    let destination_binding = runtime_binding(&approval.session_id, RuntimeKind::Codex);
     let request = request(&approval);
 
     let mut recursive = delegation(&approval);
@@ -313,8 +436,8 @@ fn recursive_or_multiple_worker_topology_cannot_form_a_handoff_contract() {
     assert!(
         build_cross_runtime_handoff(CrossRuntimeHandoffInput {
             capsule: &capsule,
-            source_runtime: RuntimeKind::Claude,
-            destination_runtime: RuntimeKind::Codex,
+            source_binding: &source_binding,
+            destination_binding: &destination_binding,
             planner_worker_proposal: "Nested delegation attempt.",
             approval_content: &approval,
             delegation_contract: &recursive,
@@ -332,8 +455,8 @@ fn recursive_or_multiple_worker_topology_cannot_form_a_handoff_contract() {
     assert!(
         build_cross_runtime_handoff(CrossRuntimeHandoffInput {
             capsule: &capsule,
-            source_runtime: RuntimeKind::Claude,
-            destination_runtime: RuntimeKind::Codex,
+            source_binding: &source_binding,
+            destination_binding: &destination_binding,
             planner_worker_proposal: "Fleet delegation attempt.",
             approval_content: &approval,
             delegation_contract: &multiple,
