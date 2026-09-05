@@ -396,15 +396,23 @@ pub struct VerificationEvidenceReference {
     reason = "Spec 006 T083 verify-evidence reference seam precedes later product callers"
 )]
 impl VerificationEvidenceReference {
-    pub fn from_verified_run(run: &StoredRun) -> Result<Self, String> {
+    pub fn from_store(store: &crate::store::Store, run_id: &str) -> Result<Self, String> {
+        let requested_run_id = normalize_nonempty(run_id, "verification run id")?;
+        let run = store
+            .load_run(&requested_run_id)
+            .map_err(|error| format!("T083 could not load persisted winds verify run: {error}"))?;
         if run.eligibility != Eligibility::Eligible {
             return Err(
-                "T083 accepts only ELIGIBLE winds verify runs as verification evidence".to_owned(),
+                "T083 accepts only persisted ELIGIBLE winds verify runs as verification evidence"
+                    .to_owned(),
             );
         }
-        let run_id = normalize_nonempty(&run.run_id, "verification run id")?;
+        let persisted_run_id = normalize_nonempty(&run.run_id, "persisted verification run id")?;
+        if persisted_run_id != requested_run_id {
+            return Err("T083 persisted verification run identity mismatch".to_owned());
+        }
         Ok(Self {
-            run_id,
+            run_id: persisted_run_id,
             candidate: CandidateIdentity::new(&run.candidate_oid, &run.candidate_tree)?,
         })
     }
