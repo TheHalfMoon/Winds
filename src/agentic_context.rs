@@ -560,7 +560,7 @@ fn canonicalize_facts(
             },
             detail: format!(
                 "Canonical fact retained with {:?} provenance.",
-                fact.provenance, existing.provenance
+                fact.provenance
             ),
         });
     }
