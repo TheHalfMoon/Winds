@@ -312,13 +312,19 @@ fn t080_fixture_snapshot_detects_existing_file_and_nested_mutation() {
     let fixture = create_t080_fixture();
     let before = fixture_snapshot(fixture.path()).expect("initial T080 fixture snapshot");
 
-    fs::write(fixture.path().join("empty-mcp.json"), b"{\"mcpServers\":{\"changed\":{}}}\n")
-        .expect("mutate T080 MCP fixture for regression proof");
+    fs::write(
+        fixture.path().join("empty-mcp.json"),
+        b"{\"mcpServers\":{\"changed\":{}}}\n",
+    )
+    .expect("mutate T080 MCP fixture for regression proof");
     let changed_file = fixture_snapshot(fixture.path()).expect("changed-file T080 snapshot");
     assert_ne!(changed_file, before);
 
-    fs::write(fixture.path().join("empty-mcp.json"), b"{\"mcpServers\":{}}\n")
-        .expect("restore T080 MCP fixture");
+    fs::write(
+        fixture.path().join("empty-mcp.json"),
+        b"{\"mcpServers\":{}}\n",
+    )
+    .expect("restore T080 MCP fixture");
     fs::create_dir(fixture.path().join("nested")).expect("create nested T080 fixture directory");
     fs::write(fixture.path().join("nested/new.txt"), b"unexpected")
         .expect("create nested T080 mutation");
@@ -469,8 +475,12 @@ fn snapshot_fixture_directory(
     directory: &Path,
     snapshot: &mut BTreeMap<PathBuf, FixtureEntrySnapshot>,
 ) -> Result<(), String> {
-    let entries = fs::read_dir(directory)
-        .map_err(|error| format!("T080 fixture read failed at {}: {error}", directory.display()))?;
+    let entries = fs::read_dir(directory).map_err(|error| {
+        format!(
+            "T080 fixture read failed at {}: {error}",
+            directory.display()
+        )
+    })?;
     for entry in entries {
         let entry = entry.map_err(|error| format!("T080 fixture entry read failed: {error}"))?;
         let path = entry.path();
