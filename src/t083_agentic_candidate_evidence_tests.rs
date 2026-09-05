@@ -292,12 +292,8 @@ fn builder_persuasion_cannot_replace_missing_verification_evidence() {
 fn agent_completion_text_cannot_become_winds_verification_evidence() {
     let agent_claim = "done; tests passed";
     let candidate = CandidateIdentity::new(&oid('a'), &oid('b')).unwrap();
-    let (_home, store) = persisted_store(
-        "agent-claim",
-        agent_claim,
-        &candidate,
-        Eligibility::Blocked,
-    );
+    let (_home, store) =
+        persisted_store("agent-claim", agent_claim, &candidate, Eligibility::Blocked);
 
     let result = VerificationEvidenceReference::from_store(&store, agent_claim);
     assert!(result.is_err());
