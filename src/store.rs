@@ -1372,7 +1372,7 @@ impl Store {
             params![
                 session.execution_id,
                 session.profile_id,
-                session.shell_executable,
+                shell_executable,
                 shell_arguments_json,
                 session.requested_cwd,
                 session.initial_cols.map(i64::from),
@@ -1585,13 +1585,135 @@ impl Store {
         })
     }
 
-    pub fn save_evidence(&mut self, report: &EvidenceReport, now_ms: i64) -> Result<()> {
-        let json = serde_json::to_string(report)?;
+    pub(crate) fn save_evidence(&mut self, report: &EvidenceReport, now_ms: i64) -> Result<()> {
         let tx = self.connection.transaction()?;
-        tx.execute(
-            "UPDATE candidate_runs SET state = 'VERIFIED' WHERE run_id = ?1",
+        let persisted = tx
+            .query_row(
+                "SELECT repo_path, base_oid, candidate_ref, candidate_oid, candidate_tree,
+                        worktree_path, check_command, state
+                 FROM candidate_runs WHERE run_id = ?1",
+                params![report.run_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| format!("unknown Winds run for evidence: {}", report.run_id))?;
+
+        if persisted.7 != "READY" {
+            return Err(format!(
+                "verification evidence requires READY candidate state, found {}",
+                persisted.7
+            )
+            .into());
+        }
+        if report.schema_version != 1 {
+            return Err("unsupported verification evidence schema version".into());
+        }
+        if report.authority != "WINDS_OBSERVED" || report.check.authority != "WINDS_OBSERVED" {
+            return Err("verification evidence authority must be WINDS_OBSERVED".into());
+        }
+
+        let bindings = [
+            ("repository path", report.repo_path.as_str(), persisted.0.as_str()),
+            ("base OID", report.base_oid.as_str(), persisted.1.as_str()),
+            ("candidate ref", report.candidate_ref.as_str(), persisted.2.as_str()),
+            ("candidate OID", report.candidate_oid.as_str(), persisted.3.as_str()),
+            ("candidate tree", report.candidate_tree.as_str(), persisted.4.as_str()),
+            ("worktree path", report.worktree_path.as_str(), persisted.5.as_str()),
+            ("check command", report.check.command.as_str(), persisted.6.as_str()),
+        ];
+        for (label, reported, expected) in bindings {
+            if reported != expected {
+                return Err(format!(
+                    "verification evidence {label} does not match persisted candidate run"
+                )
+                .into());
+            }
+        }
+
+        const HEAD_CHANGED: &str = "candidate HEAD changed while evidence was being collected";
+        const WORKTREE_MUTATED: &str = "required check mutated candidate worktree state";
+        const OUTPUT_TRUNCATED: &str =
+            "required check output exceeded the capture cap; evidence is incomplete";
+
+        if report.warnings.iter().any(|warning| {
+            !matches!(
+                warning.as_str(),
+                HEAD_CHANGED | WORKTREE_MUTATED | OUTPUT_TRUNCATED
+            )
+        }) {
+            return Err("verification evidence contains an unknown warning".into());
+        }
+        if report
+            .warnings
+            .iter()
+            .enumerate()
+            .any(|(index, warning)| report.warnings[..index].contains(warning))
+        {
+            return Err("verification evidence contains duplicate warnings".into());
+        }
+
+        let head_changed = report.warnings.iter().any(|warning| warning == HEAD_CHANGED);
+        let worktree_mutated = report
+            .warnings
+            .iter()
+            .any(|warning| warning == WORKTREE_MUTATED);
+        let output_truncated = report.check.stdout.truncated || report.check.stderr.truncated;
+        let truncation_warning = report
+            .warnings
+            .iter()
+            .any(|warning| warning == OUTPUT_TRUNCATED);
+        if output_truncated != truncation_warning {
+            return Err("verification evidence truncation warning is inconsistent".into());
+        }
+        if report.check.status == crate::domain::CheckStatus::Pass
+            && report.check.exit_code != Some(0)
+        {
+            return Err("PASS verification evidence requires exit code 0".into());
+        }
+        if report.check.status == crate::domain::CheckStatus::Fail
+            && report.check.exit_code == Some(0)
+        {
+            return Err("FAIL verification evidence cannot carry exit code 0".into());
+        }
+
+        let expected_eligibility = if report.check.status != crate::domain::CheckStatus::Pass
+            || head_changed
+            || worktree_mutated
+        {
+            Eligibility::Blocked
+        } else if output_truncated {
+            Eligibility::Warning
+        } else {
+            Eligibility::Eligible
+        };
+        if report.eligibility != expected_eligibility {
+            return Err(format!(
+                "verification evidence eligibility {} is inconsistent with observed report state {}",
+                report.eligibility.as_str(),
+                expected_eligibility.as_str()
+            )
+            .into());
+        }
+
+        let json = serde_json::to_string(report)?;
+        let updated = tx.execute(
+            "UPDATE candidate_runs SET state = 'VERIFIED' WHERE run_id = ?1 AND state = 'READY'",
             params![report.run_id],
         )?;
+        if updated != 1 {
+            return Err("verification evidence lost its expected READY candidate row".into());
+        }
         tx.execute(
             "INSERT INTO evidence_reports(run_id, eligibility, report_json, created_unix_ms)
              VALUES (?1, ?2, ?3, ?4)",
