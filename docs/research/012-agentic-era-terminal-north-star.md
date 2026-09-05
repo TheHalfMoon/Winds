@@ -397,6 +397,7 @@ After direct selection is proven, Winds may support explicit routing policies su
 Automatic routing MUST remain observable, explainable, budget-bounded, and reversible. Provider selection must never silently weaken an authority/privacy policy.
 
 ### 5.5 Provider credential model
+
 Future design should prefer:
 
 1. provider-native OAuth/subscription paths where legitimately supported;
