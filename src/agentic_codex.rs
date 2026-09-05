@@ -1263,8 +1263,7 @@ fn t079_passive_item(value: &Value) -> bool {
                     .get("content")
                     .and_then(Value::as_array)
                     .is_some_and(|content| {
-                        content.len() == 1
-                            && content.first().is_some_and(t079_user_input_allowed)
+                        content.len() == 1 && content.first().is_some_and(t079_user_input_allowed)
                     })
         }
         "agentMessage" => {
