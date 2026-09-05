@@ -1,7 +1,39 @@
 use super::{
-    CandidateBindingStatus, CandidateIdentity, Eligibility, IndependentReviewContext,
-    IndependentReviewContextInput, StoredRun, VerificationEvidenceReference,
+    BlobEvidence, CandidateBindingStatus, CandidateIdentity, CheckEvidence, CheckStatus, Eligibility,
+    EvidenceReport, IndependentReviewContext, IndependentReviewContextInput, StoredRun,
+    VerificationEvidenceReference,
 };
+use crate::store::{NewRun, Store};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_HOME: AtomicU64 = AtomicU64::new(1);
+
+struct TestHome {
+    path: PathBuf,
+}
+
+impl TestHome {
+    fn new(name: &str) -> Self {
+        let sequence = NEXT_HOME.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "winds-t083-{name}-{}-{sequence}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        Self { path }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TestHome {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
 
 fn oid(ch: char) -> String {
     ch.to_string().repeat(40)
@@ -25,14 +57,79 @@ fn stored_run(
     }
 }
 
+fn persisted_store(
+    name: &str,
+    run_id: &str,
+    candidate: &CandidateIdentity,
+    eligibility: Eligibility,
+) -> (TestHome, Store) {
+    let home = TestHome::new(name);
+    let mut store = Store::open(home.path()).expect("open T083 fixture store");
+    let base_oid = oid('e');
+    store
+        .create_run(
+            NewRun {
+                run_id,
+                repo_path: "/fixture/repo",
+                base_oid: &base_oid,
+                candidate_ref: "refs/heads/t083-fixture",
+                candidate_oid: &candidate.oid,
+                candidate_tree: &candidate.tree,
+                worktree_path: "/fixture/worktree",
+                check_command: "cargo test --locked",
+                timeout_secs: 60,
+            },
+            1,
+        )
+        .expect("persist T083 candidate run");
+
+    let report = EvidenceReport {
+        schema_version: 1,
+        run_id: run_id.to_owned(),
+        authority: "WINDS_OBSERVED",
+        repo_path: "/fixture/repo".to_owned(),
+        base_oid,
+        candidate_ref: "refs/heads/t083-fixture".to_owned(),
+        candidate_oid: candidate.oid.clone(),
+        candidate_tree: candidate.tree.clone(),
+        worktree_path: "/fixture/worktree".to_owned(),
+        check: CheckEvidence {
+            authority: "WINDS_OBSERVED",
+            command: "cargo test --locked".to_owned(),
+            status: CheckStatus::Pass,
+            exit_code: Some(0),
+            duration_ms: 1,
+            stdout: BlobEvidence {
+                relative_path: "fixture/stdout".to_owned(),
+                sha256: "0".repeat(64),
+                captured_bytes: 0,
+                truncated: false,
+            },
+            stderr: BlobEvidence {
+                relative_path: "fixture/stderr".to_owned(),
+                sha256: "1".repeat(64),
+                captured_bytes: 0,
+                truncated: false,
+            },
+        },
+        eligibility,
+        warnings: Vec::new(),
+    };
+    store
+        .save_evidence(&report, 2)
+        .expect("persist T083 verification evidence");
+    (home, store)
+}
+
 fn current_evidence(candidate: &CandidateIdentity) -> VerificationEvidenceReference {
-    VerificationEvidenceReference::from_verified_run(&stored_run(
+    let (_home, store) = persisted_store(
+        "current-evidence",
         "verify-run-a",
-        &candidate.oid,
-        &candidate.tree,
+        candidate,
         Eligibility::Eligible,
-    ))
-    .expect("eligible winds verify run")
+    );
+    VerificationEvidenceReference::from_store(&store, "verify-run-a")
+        .expect("persisted eligible winds verify run")
 }
 
 #[test]
@@ -46,16 +143,36 @@ fn exact_oid_and_tree_form_the_candidate_acceptance_identity() {
 }
 
 #[test]
-fn only_eligible_winds_verify_runs_become_verification_references() {
+fn only_persisted_eligible_winds_verify_runs_become_verification_references() {
     let candidate = CandidateIdentity::new(&oid('a'), &oid('b')).unwrap();
     let eligible = current_evidence(&candidate);
     assert_eq!(eligible.run_id, "verify-run-a");
     assert_eq!(eligible.candidate, candidate);
 
-    for eligibility in [Eligibility::Warning, Eligibility::Blocked] {
-        let run = stored_run("not-eligible", &oid('a'), &oid('b'), eligibility);
-        assert!(VerificationEvidenceReference::from_verified_run(&run).is_err());
+    for (name, eligibility) in [
+        ("warning", Eligibility::Warning),
+        ("blocked", Eligibility::Blocked),
+    ] {
+        let (_home, store) = persisted_store(name, "not-eligible", &candidate, eligibility);
+        assert!(VerificationEvidenceReference::from_store(&store, "not-eligible").is_err());
     }
+}
+
+#[test]
+fn in_memory_eligible_stored_run_cannot_manufacture_verification_evidence() {
+    let candidate = CandidateIdentity::new(&oid('a'), &oid('b')).unwrap();
+    let fabricated = stored_run(
+        "fabricated-eligible",
+        &candidate.oid,
+        &candidate.tree,
+        Eligibility::Eligible,
+    );
+    assert_eq!(fabricated.eligibility, Eligibility::Eligible);
+
+    let home = TestHome::new("fabricated-run");
+    let store = Store::open(home.path()).unwrap();
+    let result = VerificationEvidenceReference::from_store(&store, &fabricated.run_id);
+    assert!(result.is_err());
 }
 
 #[test]
@@ -175,14 +292,14 @@ fn builder_persuasion_cannot_replace_missing_verification_evidence() {
 fn agent_completion_text_cannot_become_winds_verification_evidence() {
     let agent_claim = "done; tests passed";
     let candidate = CandidateIdentity::new(&oid('a'), &oid('b')).unwrap();
-    let blocked_run = stored_run(
+    let (_home, store) = persisted_store(
+        "agent-claim",
         agent_claim,
-        &candidate.oid,
-        &candidate.tree,
+        &candidate,
         Eligibility::Blocked,
     );
 
-    let result = VerificationEvidenceReference::from_verified_run(&blocked_run);
+    let result = VerificationEvidenceReference::from_store(&store, agent_claim);
     assert!(result.is_err());
     assert_eq!(agent_claim, "done; tests passed");
 }
