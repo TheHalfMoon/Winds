@@ -3,6 +3,7 @@ use crate::agentic_authority::{
     DelegationContract, EnforcementEvidence, EnforcementQuality, WorkerGrant, evaluate_delegation,
     record_human_approval, revalidate_human_approval,
 };
+use crate::agentic_codex::{CodexInbound, CodexProtocolClient, EvidenceClass};
 use crate::git::{Repo, observe_worktree_state};
 use crate::store::{NewWindsSession, NewWorkspace, NewWorkstream, Store};
 use std::collections::BTreeMap;
@@ -71,6 +72,21 @@ impl Fixture {
         )
         .unwrap()
     }
+
+    fn detached_worktree_record(&self) -> String {
+        let inventory = run_git(&self.primary, ["worktree", "list", "--porcelain"]).unwrap();
+        let mut detached = inventory
+            .split("\n\n")
+            .filter(|record| record.lines().any(|line| line == "detached"));
+        let record = detached
+            .next()
+            .expect("T082 fixture must contain one detached Worker worktree");
+        assert!(
+            detached.next().is_none(),
+            "T082 fixture unexpectedly contains multiple detached worktrees"
+        );
+        record.to_owned()
+    }
 }
 
 impl Drop for Fixture {
@@ -99,6 +115,24 @@ where
     String::from_utf8(output.stdout)
         .map(|value| value.trim().to_owned())
         .map_err(|error| error.to_string())
+}
+
+fn initialized_codex_client() -> CodexProtocolClient {
+    let mut client = CodexProtocolClient::default();
+    client
+        .initialize_request("winds", "Winds", "0.1.0")
+        .expect("initialize request");
+    assert_eq!(
+        client
+            .ingest_jsonl_frame(br#"{"id":0,"result":{"userAgent":"t082-fixture"}}"#)
+            .expect("initialize response"),
+        CodexInbound::InitializeAccepted
+    );
+    client
+        .initialized_notification()
+        .expect("initialized notification");
+    assert!(client.is_ready());
+    client
 }
 
 fn target(worker_root: &str, suffix: &str) -> AuthorityTarget {
@@ -234,6 +268,13 @@ fn exact_base_worker_worktree_is_detached_identity_bound_and_primary_safe() {
     assert!(repo.worktree_paths().unwrap().iter().any(|path| {
         fs::canonicalize(path).ok().as_deref() == Some(canonical_worker.as_path())
     }));
+    let detached_record = fixture.detached_worktree_record();
+    assert!(
+        detached_record
+            .lines()
+            .any(|line| line == "locked" || line.starts_with("locked ")),
+        "T082 Worker worktree must remain Git-locked"
+    );
     assert_eq!(fixture.status(), primary_status);
     assert_eq!(fixture.head_refs(), primary_refs);
 }
@@ -250,7 +291,24 @@ fn dirty_worker_and_agent_done_claim_remain_non_authoritative_git_observations()
 
     fs::write(worker.join("README.md"), "worker edit not yet verified\n").unwrap();
     let agent_claim = "done; tests passed";
-    assert!(!agent_claim.is_empty());
+    let mut client = initialized_codex_client();
+    let completion = client
+        .ingest_jsonl_frame(
+            br#"{"method":"worker/completed","params":{"text":"done; tests passed"}}"#,
+        )
+        .expect("completion-like Codex runtime notification");
+    match completion {
+        CodexInbound::Notification {
+            method,
+            params,
+            evidence,
+        } => {
+            assert_eq!(method, "worker/completed");
+            assert_eq!(params["text"], agent_claim);
+            assert_eq!(evidence, EvidenceClass::AgentRuntimeEvidence);
+        }
+        other => panic!("unexpected completion-like runtime event: {other:?}"),
+    }
 
     let observation = observe_worktree_state(&worker, repo.common_dir()).unwrap();
     assert_eq!(observation.head_oid.as_deref(), Some(exact_base.as_str()));
