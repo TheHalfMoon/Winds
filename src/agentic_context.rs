@@ -253,7 +253,8 @@ pub(crate) fn build_cross_runtime_handoff(
 
     if input.destination_binding.session_id != approval.session_id {
         return Err(ContextCapsuleError(
-            "T081 destination runtime binding does not match the approved Worker session".to_owned(),
+            "T081 destination runtime binding does not match the approved Worker session"
+                .to_owned(),
         ));
     }
 
