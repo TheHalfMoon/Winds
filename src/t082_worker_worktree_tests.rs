@@ -55,7 +55,11 @@ impl Fixture {
     fn head_refs(&self) -> String {
         run_git(
             &self.primary,
-            ["for-each-ref", "--format=%(refname):%(objectname)", "refs/heads"],
+            [
+                "for-each-ref",
+                "--format=%(refname):%(objectname)",
+                "refs/heads",
+            ],
         )
         .unwrap()
     }
@@ -170,11 +174,7 @@ fn delegation(content: &ApprovalContent) -> DelegationContract {
     }
 }
 
-fn seed_approval_store(
-    fixture: &Fixture,
-    worker_root: &str,
-    git_common_dir: &str,
-) -> Store {
+fn seed_approval_store(fixture: &Fixture, worker_root: &str, git_common_dir: &str) -> Store {
     let store = Store::open(&fixture.state).unwrap();
     store
         .create_workspace(
@@ -218,8 +218,12 @@ fn exact_base_worker_worktree_is_detached_identity_bound_and_primary_safe() {
     let primary_refs = fixture.head_refs();
     let worker = fixture.worker("worker-1");
 
-    repo.add_locked_worktree(&worker, &exact_base, "Winds T082 deterministic Worker fixture")
-        .unwrap();
+    repo.add_locked_worktree(
+        &worker,
+        &exact_base,
+        "Winds T082 deterministic Worker fixture",
+    )
+    .unwrap();
 
     let canonical_worker = fs::canonicalize(&worker).unwrap();
     let worker_repo = Repo::open(&canonical_worker).unwrap();
@@ -254,7 +258,10 @@ fn dirty_worker_and_agent_done_claim_remain_non_authoritative_git_observations()
     let observation = observe_worktree_state(&worker, repo.common_dir()).unwrap();
     assert_eq!(observation.head_oid.as_deref(), Some(exact_base.as_str()));
     assert!(observation.dirty);
-    assert_eq!(fs::read_to_string(worker.join("README.md")).unwrap(), "worker edit not yet verified\n");
+    assert_eq!(
+        fs::read_to_string(worker.join("README.md")).unwrap(),
+        "worker edit not yet verified\n"
+    );
     assert_eq!(fixture.status(), "");
 }
 
