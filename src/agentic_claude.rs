@@ -1,11 +1,20 @@
-use crate::agentic_runtime::{RuntimeKind, RuntimeResumeResolution};
+use crate::agentic_runtime::{RuntimeIdentityRevalidation, RuntimeKind, RuntimeResumeResolution};
 use serde_json::Value;
 use std::error::Error;
 use std::fmt;
 
+#[cfg(test)]
+#[path = "t080_claude_planner_tests.rs"]
+mod t080_claude_planner_tests;
+
 pub(super) const MAX_CLAUDE_STRUCTURED_OUTPUT_BYTES: usize = 1024 * 1024;
 pub(super) const MAX_CLAUDE_STREAM_LINE_BYTES: usize = 64 * 1024;
 const MAX_NATIVE_SESSION_ID_BYTES: usize = 1024;
+const MAX_T080_CONFIG_PATH_BYTES: usize = 4096;
+pub(super) const T080_MAX_AGENTIC_TURNS: u8 = 4;
+pub(super) const T080_PLANNER_TOOLS: &str = "Read,Glob,Grep";
+pub(super) const T080_MCP_DENY_RULE: &str = "mcp__*";
+pub(super) const T080_PLANNER_PROMPT: &str = "Inspect only the provided fixture planning context and return a concise read-only implementation plan. Do not modify files, run shell commands, use network or browser access, use MCP, delegate to subagents, request permission escalation, or claim that any proposed work is verified or accepted.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ClaudeOutputFormat {
@@ -31,12 +40,14 @@ pub(super) enum ClaudeContinuity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ClaudeRestrictionEnforcement {
     Unavailable,
+    AgentNativeEnforced,
 }
 
 impl ClaudeRestrictionEnforcement {
     pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::Unavailable => "UNAVAILABLE",
+            Self::AgentNativeEnforced => "AGENT_NATIVE_ENFORCED",
         }
     }
 }
@@ -62,6 +73,12 @@ pub(super) struct ClaudeInvocation {
     pub restriction_enforcement: ClaudeRestrictionEnforcement,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ClaudePlannerInvocation {
+    pub invocation: ClaudeInvocation,
+    pub prompt: &'static str,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct ClaudeStructuredOutput {
     pub native_session_id: String,
@@ -80,6 +97,9 @@ pub(super) enum ClaudeStructuredError {
     ResumeRuntimeMismatch,
     ResumeMissingNativeSessionId,
     InvalidNativeSessionId,
+    RuntimeIdentityChanged,
+    RuntimeIdentityUnavailable,
+    InvalidPlannerConfigPath,
     UnsafeConstruction,
     MalformedOutput,
     TruncatedOutput,
@@ -101,6 +121,13 @@ impl fmt::Display for ClaudeStructuredError {
                 "Claude resume binding is missing an exact native session id"
             }
             Self::InvalidNativeSessionId => "Claude native session id is invalid",
+            Self::RuntimeIdentityChanged => {
+                "Claude executable identity changed after its accepted observation"
+            }
+            Self::RuntimeIdentityUnavailable => {
+                "Claude executable identity is unavailable at launch revalidation"
+            }
+            Self::InvalidPlannerConfigPath => "Claude T080 empty MCP configuration path is invalid",
             Self::UnsafeConstruction => "Claude invocation construction is not accepted",
             Self::MalformedOutput => "Claude structured output is malformed",
             Self::TruncatedOutput => "Claude structured output is truncated",
@@ -164,6 +191,48 @@ pub(super) fn build_claude_structured_invocation(
         continuity,
         expected_native_session_id,
         restriction_enforcement: ClaudeRestrictionEnforcement::Unavailable,
+    })
+}
+
+pub(super) fn build_t080_planner_invocation(
+    selection: ClaudeSessionSelection<'_>,
+    runtime_identity: RuntimeIdentityRevalidation,
+    empty_mcp_config_path: &str,
+) -> Result<ClaudePlannerInvocation, ClaudeStructuredError> {
+    match runtime_identity {
+        RuntimeIdentityRevalidation::Match => {}
+        RuntimeIdentityRevalidation::Changed => {
+            return Err(ClaudeStructuredError::RuntimeIdentityChanged);
+        }
+        RuntimeIdentityRevalidation::Unavailable => {
+            return Err(ClaudeStructuredError::RuntimeIdentityUnavailable);
+        }
+    }
+    validate_t080_config_path(empty_mcp_config_path)?;
+
+    let mut invocation = build_claude_structured_invocation(ClaudeOutputFormat::Json, selection)?;
+    invocation.args.extend([
+        "--restricted".to_owned(),
+        "--permission-mode".to_owned(),
+        "plan".to_owned(),
+        "--tools".to_owned(),
+        T080_PLANNER_TOOLS.to_owned(),
+        "--disallowedTools".to_owned(),
+        T080_MCP_DENY_RULE.to_owned(),
+        "--strict-mcp-config".to_owned(),
+        "--mcp-config".to_owned(),
+        empty_mcp_config_path.to_owned(),
+        "--disable-slash-commands".to_owned(),
+        "--no-chrome".to_owned(),
+        "--max-turns".to_owned(),
+        T080_MAX_AGENTIC_TURNS.to_string(),
+    ]);
+    invocation.restriction_enforcement = ClaudeRestrictionEnforcement::AgentNativeEnforced;
+    validate_accepted_args(&invocation.args)?;
+
+    Ok(ClaudePlannerInvocation {
+        invocation,
+        prompt: T080_PLANNER_PROMPT,
     })
 }
 
@@ -312,6 +381,18 @@ fn validate_native_session_id(value: &str) -> Result<(), ClaudeStructuredError> 
     Ok(())
 }
 
+fn validate_t080_config_path(value: &str) -> Result<(), ClaudeStructuredError> {
+    if value.is_empty()
+        || value.len() > MAX_T080_CONFIG_PATH_BYTES
+        || value.trim() != value
+        || value.starts_with('-')
+        || value.chars().any(char::is_control)
+    {
+        return Err(ClaudeStructuredError::InvalidPlannerConfigPath);
+    }
+    Ok(())
+}
+
 fn validate_accepted_args(args: &[String]) -> Result<(), ClaudeStructuredError> {
     for (index, arg) in args.iter().enumerate() {
         if matches!(
@@ -320,6 +401,14 @@ fn validate_accepted_args(args: &[String]) -> Result<(), ClaudeStructuredError> 
                 | "--allow-dangerously-skip-permissions"
                 | "--continue"
                 | "-c"
+                | "--remote"
+                | "--cloud"
+                | "--remote-control"
+                | "--rc"
+                | "--chrome"
+                | "--bg"
+                | "--background"
+                | "--exec"
         ) {
             return Err(ClaudeStructuredError::UnsafeConstruction);
         }
