@@ -1623,13 +1623,37 @@ impl Store {
         }
 
         let bindings = [
-            ("repository path", report.repo_path.as_str(), persisted.0.as_str()),
+            (
+                "repository path",
+                report.repo_path.as_str(),
+                persisted.0.as_str(),
+            ),
             ("base OID", report.base_oid.as_str(), persisted.1.as_str()),
-            ("candidate ref", report.candidate_ref.as_str(), persisted.2.as_str()),
-            ("candidate OID", report.candidate_oid.as_str(), persisted.3.as_str()),
-            ("candidate tree", report.candidate_tree.as_str(), persisted.4.as_str()),
-            ("worktree path", report.worktree_path.as_str(), persisted.5.as_str()),
-            ("check command", report.check.command.as_str(), persisted.6.as_str()),
+            (
+                "candidate ref",
+                report.candidate_ref.as_str(),
+                persisted.2.as_str(),
+            ),
+            (
+                "candidate OID",
+                report.candidate_oid.as_str(),
+                persisted.3.as_str(),
+            ),
+            (
+                "candidate tree",
+                report.candidate_tree.as_str(),
+                persisted.4.as_str(),
+            ),
+            (
+                "worktree path",
+                report.worktree_path.as_str(),
+                persisted.5.as_str(),
+            ),
+            (
+                "check command",
+                report.check.command.as_str(),
+                persisted.6.as_str(),
+            ),
         ];
         for (label, reported, expected) in bindings {
             if reported != expected {
@@ -1662,7 +1686,10 @@ impl Store {
             return Err("verification evidence contains duplicate warnings".into());
         }
 
-        let head_changed = report.warnings.iter().any(|warning| warning == HEAD_CHANGED);
+        let head_changed = report
+            .warnings
+            .iter()
+            .any(|warning| warning == HEAD_CHANGED);
         let worktree_mutated = report
             .warnings
             .iter()
