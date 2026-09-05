@@ -347,12 +347,20 @@ pub struct PromotionReport {
     pub candidate_tree: String,
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 006 T083 candidate identity seam precedes later product callers"
+)]
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CandidateIdentity {
     pub oid: String,
     pub tree: String,
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 006 T083 candidate identity seam precedes later product callers"
+)]
 impl CandidateIdentity {
     pub fn new(oid: &str, tree: &str) -> Result<Self, String> {
         Ok(Self {
@@ -362,6 +370,10 @@ impl CandidateIdentity {
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 006 T083 candidate staleness seam precedes later product callers"
+)]
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum CandidateBindingStatus {
@@ -369,12 +381,20 @@ pub enum CandidateBindingStatus {
     Stale,
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 006 T083 verify-evidence reference seam precedes later product callers"
+)]
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct VerificationEvidenceReference {
     pub run_id: String,
     pub candidate: CandidateIdentity,
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 006 T083 verify-evidence reference seam precedes later product callers"
+)]
 impl VerificationEvidenceReference {
     pub fn from_verified_run(run: &StoredRun) -> Result<Self, String> {
         if run.eligibility != Eligibility::Eligible {
@@ -394,6 +414,10 @@ impl VerificationEvidenceReference {
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 006 T083 independent-review context seam precedes later product callers"
+)]
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct IndependentReviewContext {
     pub base_oid: String,
@@ -405,6 +429,10 @@ pub struct IndependentReviewContext {
     pub excluded_builder_persuasion_count: usize,
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 006 T083 independent-review context seam precedes later product callers"
+)]
 pub struct IndependentReviewContextInput<'a> {
     pub base_oid: &'a str,
     pub candidate: CandidateIdentity,
@@ -415,6 +443,10 @@ pub struct IndependentReviewContextInput<'a> {
     pub builder_persuasion: &'a [String],
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 006 T083 independent-review context seam precedes later product callers"
+)]
 impl IndependentReviewContext {
     pub fn build(input: IndependentReviewContextInput<'_>) -> Result<Self, String> {
         let base_oid = normalize_git_object_id(input.base_oid, "review base OID")?;
@@ -449,6 +481,10 @@ impl IndependentReviewContext {
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 006 T083 candidate staleness seam precedes later product callers"
+)]
 fn candidate_binding_status(
     bound: &CandidateIdentity,
     current: &CandidateIdentity,
@@ -460,6 +496,10 @@ fn candidate_binding_status(
     }
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 006 T083 normalization seam precedes later product callers"
+)]
 fn normalize_git_object_id(value: &str, label: &str) -> Result<String, String> {
     let normalized = value.trim().to_ascii_lowercase();
     if !matches!(normalized.len(), 40 | 64)
@@ -472,6 +512,10 @@ fn normalize_git_object_id(value: &str, label: &str) -> Result<String, String> {
     Ok(normalized)
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 006 T083 normalization seam precedes later product callers"
+)]
 fn normalize_nonempty(value: &str, label: &str) -> Result<String, String> {
     if value.contains('\0') {
         return Err(format!("{label} must not contain NUL"));
@@ -484,6 +528,10 @@ fn normalize_nonempty(value: &str, label: &str) -> Result<String, String> {
     Ok(normalized)
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 006 T083 normalization seam precedes later product callers"
+)]
 fn normalize_review_items(values: Vec<String>, label: &str) -> Result<Vec<String>, String> {
     let mut normalized = values
         .into_iter()
