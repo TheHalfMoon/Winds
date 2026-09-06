@@ -1,4 +1,3 @@
-use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -66,11 +65,8 @@ pub(crate) fn rank_sessions(
         .filter_map(|session| {
             let normalized_name = normalize(&session.display_name);
             let normalized_id = normalize(&session.session_id);
-            let (score, mut provenance) = name_score(
-                &normalized_query,
-                &normalized_name,
-                &normalized_id,
-            )?;
+            let (score, mut provenance) =
+                name_score(&normalized_query, &normalized_name, &normalized_id)?;
             if session.changed {
                 provenance.push(FindProvenance::Changed);
             }
@@ -156,11 +152,6 @@ fn normalize(value: &str) -> String {
     value.chars().flat_map(char::to_lowercase).collect()
 }
 
-#[allow(dead_code)]
-fn _stable_ordering_proof(left: &SessionFindCandidate, right: &SessionFindCandidate) -> Ordering {
-    right
-        .score
-        .cmp(&left.score)
-        .then_with(|| normalize(&left.display_name).cmp(&normalize(&right.display_name)))
-        .then_with(|| left.session_id.cmp(&right.session_id))
-}
+#[cfg(test)]
+#[path = "t084_agentic_findability_tests.rs"]
+mod tests;
