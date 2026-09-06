@@ -396,6 +396,7 @@ impl Store {
                 ranked.sort_by(|(left_rank, left), (right_rank, right)| {
                     left_rank
                         .cmp(right_rank)
+                        .then_with(|| left.created_unix_ms.cmp(&right.created_unix_ms))
                         .then_with(|| left.session_id.cmp(&right.session_id))
                         .then_with(|| left.display_name.cmp(&right.display_name))
                 });
