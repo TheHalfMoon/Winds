@@ -3,8 +3,13 @@ use std::collections::VecDeque;
 
 pub(crate) const MAX_TRANSCRIPT_LINES: usize = 100_000;
 pub(crate) const MAX_TRANSCRIPT_BYTES: usize = 32 * 1024 * 1024;
+pub(crate) const MAX_OSC_INPUT_BYTES: usize = 8 * 1024;
 const VT100_SCROLLBACK_LINES: usize = 0;
 const TERMINAL_DATA_AUTHORITY: &str = "TERMINAL_DATA_ONLY";
+const ESCAPE: u8 = 0x1b;
+const BELL: u8 = 0x07;
+const CANCEL: u8 = 0x18;
+const SUBSTITUTE: u8 = 0x1a;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct TerminalCallbackSummary {
@@ -26,6 +31,7 @@ pub(crate) struct TerminalCallbackSummary {
 #[derive(Debug, Default)]
 struct FailClosedCallbacks {
     summary: TerminalCallbackSummary,
+    suppressed: bool,
 }
 
 impl FailClosedCallbacks {
@@ -37,6 +43,9 @@ impl FailClosedCallbacks {
 
 impl vt100::Callbacks for FailClosedCallbacks {
     fn audible_bell(&mut self, _: &mut vt100::Screen) {
+        if self.suppressed {
+            return;
+        }
         Self::record(
             &mut self.summary.audible_bell_requests,
             &mut self.summary.total_requests,
@@ -44,6 +53,9 @@ impl vt100::Callbacks for FailClosedCallbacks {
     }
 
     fn visual_bell(&mut self, _: &mut vt100::Screen) {
+        if self.suppressed {
+            return;
+        }
         Self::record(
             &mut self.summary.visual_bell_requests,
             &mut self.summary.total_requests,
@@ -51,6 +63,9 @@ impl vt100::Callbacks for FailClosedCallbacks {
     }
 
     fn resize(&mut self, _: &mut vt100::Screen, _: (u16, u16)) {
+        if self.suppressed {
+            return;
+        }
         Self::record(
             &mut self.summary.resize_requests,
             &mut self.summary.total_requests,
@@ -58,6 +73,9 @@ impl vt100::Callbacks for FailClosedCallbacks {
     }
 
     fn set_window_icon_name(&mut self, _: &mut vt100::Screen, _: &[u8]) {
+        if self.suppressed {
+            return;
+        }
         Self::record(
             &mut self.summary.icon_name_requests,
             &mut self.summary.total_requests,
@@ -65,6 +83,9 @@ impl vt100::Callbacks for FailClosedCallbacks {
     }
 
     fn set_window_title(&mut self, _: &mut vt100::Screen, _: &[u8]) {
+        if self.suppressed {
+            return;
+        }
         Self::record(
             &mut self.summary.title_requests,
             &mut self.summary.total_requests,
@@ -72,6 +93,9 @@ impl vt100::Callbacks for FailClosedCallbacks {
     }
 
     fn copy_to_clipboard(&mut self, _: &mut vt100::Screen, _: &[u8], _: &[u8]) {
+        if self.suppressed {
+            return;
+        }
         Self::record(
             &mut self.summary.clipboard_copy_requests,
             &mut self.summary.total_requests,
@@ -79,6 +103,9 @@ impl vt100::Callbacks for FailClosedCallbacks {
     }
 
     fn paste_from_clipboard(&mut self, _: &mut vt100::Screen, _: &[u8]) {
+        if self.suppressed {
+            return;
+        }
         Self::record(
             &mut self.summary.clipboard_paste_requests,
             &mut self.summary.total_requests,
@@ -86,6 +113,9 @@ impl vt100::Callbacks for FailClosedCallbacks {
     }
 
     fn unhandled_char(&mut self, _: &mut vt100::Screen, _: char) {
+        if self.suppressed {
+            return;
+        }
         Self::record(
             &mut self.summary.unhandled_char_requests,
             &mut self.summary.total_requests,
@@ -93,6 +123,9 @@ impl vt100::Callbacks for FailClosedCallbacks {
     }
 
     fn unhandled_control(&mut self, _: &mut vt100::Screen, _: u8) {
+        if self.suppressed {
+            return;
+        }
         Self::record(
             &mut self.summary.unhandled_control_requests,
             &mut self.summary.total_requests,
@@ -100,6 +133,9 @@ impl vt100::Callbacks for FailClosedCallbacks {
     }
 
     fn unhandled_escape(&mut self, _: &mut vt100::Screen, _: Option<u8>, _: Option<u8>, _: u8) {
+        if self.suppressed {
+            return;
+        }
         Self::record(
             &mut self.summary.unhandled_escape_requests,
             &mut self.summary.total_requests,
@@ -114,6 +150,9 @@ impl vt100::Callbacks for FailClosedCallbacks {
         _: &[&[u16]],
         _: char,
     ) {
+        if self.suppressed {
+            return;
+        }
         Self::record(
             &mut self.summary.unhandled_csi_requests,
             &mut self.summary.total_requests,
@@ -121,10 +160,64 @@ impl vt100::Callbacks for FailClosedCallbacks {
     }
 
     fn unhandled_osc(&mut self, _: &mut vt100::Screen, _: &[&[u8]]) {
+        if self.suppressed {
+            return;
+        }
         Self::record(
             &mut self.summary.unhandled_osc_requests,
             &mut self.summary.total_requests,
         );
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct TerminalInputGuardSummary {
+    pub(crate) dropped_oversized_osc_sequences: u64,
+}
+
+#[derive(Debug, Default)]
+struct OscInputGuard {
+    escape_pending: bool,
+    in_osc: bool,
+    dropping_oversized_osc: bool,
+    osc_input_bytes: usize,
+    summary: TerminalInputGuardSummary,
+}
+
+impl OscInputGuard {
+    fn observe_non_osc_byte(&mut self, byte: u8) {
+        if self.escape_pending && byte == b']' {
+            self.escape_pending = false;
+            self.in_osc = true;
+            self.osc_input_bytes = 0;
+            return;
+        }
+
+        if byte == ESCAPE {
+            self.escape_pending = true;
+        } else if self.escape_pending && is_escape_ignored_control(byte) {
+            // VTE executes these C0 controls without leaving Escape state.
+        } else {
+            self.escape_pending = false;
+        }
+    }
+
+    fn observe_osc_terminator(&mut self, byte: u8) {
+        self.in_osc = false;
+        self.dropping_oversized_osc = false;
+        self.osc_input_bytes = 0;
+        self.escape_pending = byte == ESCAPE;
+    }
+
+    fn record_oversized_osc(&mut self) {
+        self.in_osc = false;
+        self.dropping_oversized_osc = true;
+        self.osc_input_bytes = 0;
+        self.escape_pending = false;
+        self.summary.dropped_oversized_osc_sequences = self
+            .summary
+            .dropped_oversized_osc_sequences
+            .saturating_add(1);
     }
 }
 
@@ -246,6 +339,7 @@ impl BoundedTranscript {
 pub(crate) struct WorkbenchScreen {
     parser: vt100::Parser<FailClosedCallbacks>,
     transcript: BoundedTranscript,
+    osc_guard: OscInputGuard,
 }
 
 impl WorkbenchScreen {
@@ -267,6 +361,7 @@ impl WorkbenchScreen {
                 FailClosedCallbacks::default(),
             ),
             transcript: BoundedTranscript::new(max_lines, max_bytes)?,
+            osc_guard: OscInputGuard::default(),
         })
     }
 
@@ -281,7 +376,46 @@ impl WorkbenchScreen {
 
     pub(crate) fn process_observed_bytes(&mut self, bytes: &[u8]) {
         self.transcript.push(bytes);
-        self.parser.process(bytes);
+        for &byte in bytes {
+            self.process_guarded_byte(byte);
+        }
+    }
+
+    fn process_guarded_byte(&mut self, byte: u8) {
+        if self.osc_guard.dropping_oversized_osc {
+            if is_osc_terminator(byte) {
+                self.process_parser_byte_suppressed(byte);
+                self.osc_guard.observe_osc_terminator(byte);
+            }
+            return;
+        }
+
+        if self.osc_guard.in_osc {
+            if is_osc_terminator(byte) {
+                self.parser.process(&[byte]);
+                self.osc_guard.observe_osc_terminator(byte);
+                return;
+            }
+
+            if self.osc_guard.osc_input_bytes >= MAX_OSC_INPUT_BYTES {
+                self.process_parser_byte_suppressed(BELL);
+                self.osc_guard.record_oversized_osc();
+                return;
+            }
+
+            self.parser.process(&[byte]);
+            self.osc_guard.osc_input_bytes += 1;
+            return;
+        }
+
+        self.parser.process(&[byte]);
+        self.osc_guard.observe_non_osc_byte(byte);
+    }
+
+    fn process_parser_byte_suppressed(&mut self, byte: u8) {
+        self.parser.callbacks_mut().suppressed = true;
+        self.parser.process(&[byte]);
+        self.parser.callbacks_mut().suppressed = false;
     }
 
     pub(crate) fn explicit_resize(&mut self, size: PaneSize) -> Result<(), &'static str> {
@@ -302,6 +436,10 @@ impl WorkbenchScreen {
         self.parser.callbacks().summary
     }
 
+    pub(crate) fn input_guard_summary(&self) -> TerminalInputGuardSummary {
+        self.osc_guard.summary
+    }
+
     pub(crate) fn transcript_snapshot(&self) -> TranscriptSnapshot {
         self.transcript.snapshot()
     }
@@ -309,6 +447,14 @@ impl WorkbenchScreen {
     pub(crate) const fn presentation_authority(&self) -> &'static str {
         TERMINAL_DATA_AUTHORITY
     }
+}
+
+fn is_osc_terminator(byte: u8) -> bool {
+    matches!(byte, BELL | CANCEL | SUBSTITUTE | ESCAPE)
+}
+
+fn is_escape_ignored_control(byte: u8) -> bool {
+    matches!(byte, 0x00..=0x17 | 0x19 | 0x1c..=0x1f)
 }
 
 fn validate_size(size: PaneSize) -> Result<(), &'static str> {
