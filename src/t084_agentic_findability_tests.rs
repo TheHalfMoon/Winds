@@ -85,6 +85,28 @@ fn t084_unicode_names_match_without_destroying_original_identity() {
 }
 
 #[test]
+fn t084_unicode_casefold_expansion_is_deterministic() {
+    let sessions = vec![
+        session("session-b", "Straße", false, false, false, false),
+        session("session-a", "STRASSE", false, false, false, false),
+    ];
+
+    let candidates = rank_sessions("strasse", &sessions);
+    assert_eq!(
+        candidates
+            .iter()
+            .map(|candidate| candidate.session_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["session-a", "session-b"]
+    );
+    assert!(
+        candidates
+            .iter()
+            .all(|candidate| candidate.provenance.contains(&FindProvenance::ExactName))
+    );
+}
+
+#[test]
 fn t084_path_selection_returns_exact_canonical_identity_and_blocks_escape() {
     let root = temp_root("canonical-path");
     let child = root.join("folder");
