@@ -4,6 +4,7 @@ use ratatui::widgets::{Block, Paragraph};
 
 const EMPTY_WORKBENCH_MESSAGE: &str = "No terminal panes are active.";
 
+/// Render the inert T087 workbench shell without owning terminal runtime state.
 pub(crate) fn render_inert_workbench(frame: &mut Frame<'_>) {
     let area = frame.area();
     let block = Block::bordered().title(" Winds Workbench ");
