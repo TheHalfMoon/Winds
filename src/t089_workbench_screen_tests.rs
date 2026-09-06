@@ -1,4 +1,4 @@
-use super::{MAX_TRANSCRIPT_BYTES, MAX_TRANSCRIPT_LINES, WorkbenchScreen};
+use super::{MAX_OSC_INPUT_BYTES, MAX_TRANSCRIPT_BYTES, MAX_TRANSCRIPT_LINES, WorkbenchScreen};
 use crate::workbench::PaneSize;
 
 fn size(columns: u16, rows: u16) -> PaneSize {
@@ -60,6 +60,17 @@ fn terminal_callbacks_are_counted_but_never_grant_host_actions_or_resize() {
 }
 
 #[test]
+fn normal_bell_and_st_terminated_osc_sequences_remain_supported() {
+    let mut projection = WorkbenchScreen::new(size(80, 24)).expect("valid screen");
+    projection.process_observed_bytes(b"\x1b]2;bell-title\x07");
+    projection.process_observed_bytes(b"\x1b]2;st-title\x1b\\");
+
+    let callbacks = projection.callback_summary();
+    assert_eq!(callbacks.title_requests, 2);
+    assert_eq!(projection.input_guard_summary().dropped_oversized_osc_sequences, 0);
+}
+
+#[test]
 fn only_explicit_accepted_pane_size_updates_resize_the_screen() {
     let mut projection = WorkbenchScreen::new(size(80, 24)).expect("valid screen");
     projection.process_observed_bytes(b"\x1b[8;70;140t");
@@ -107,6 +118,32 @@ fn completed_line_prefix_eviction_preserves_bounds_and_accounting() {
 }
 
 #[test]
+fn oversized_unterminated_osc_is_dropped_bounded_and_resynchronizes() {
+    let mut projection = WorkbenchScreen::with_test_limits(size(30, 5), 8, 32 * 1024)
+        .expect("bounded screen");
+    projection.process_observed_bytes(b"\x1b]52;c;");
+    for _ in 0..4 {
+        projection.process_observed_bytes(&vec![b'A'; MAX_OSC_INPUT_BYTES / 2]);
+    }
+
+    assert_eq!(
+        projection.input_guard_summary().dropped_oversized_osc_sequences,
+        1
+    );
+    assert_eq!(projection.callback_summary().clipboard_copy_requests, 0);
+
+    projection.process_observed_bytes(b"\x07OK");
+    assert!(projection.screen_contents().contains("OK"));
+
+    projection.process_observed_bytes(b"\x1b]2;after-overflow\x07");
+    assert_eq!(projection.callback_summary().title_requests, 1);
+    assert_eq!(
+        projection.input_guard_summary().dropped_oversized_osc_sequences,
+        1
+    );
+}
+
+#[test]
 fn oversized_and_truncated_escape_sequences_stay_bounded_and_non_authoritative() {
     let mut projection =
         WorkbenchScreen::with_test_limits(size(30, 5), 4, 1024).expect("bounded screen");
@@ -118,6 +155,11 @@ fn oversized_and_truncated_escape_sequences_stay_bounded_and_non_authoritative()
     let transcript = projection.transcript_snapshot();
     assert!(transcript.retained_bytes <= 1024);
     assert!(transcript.truncated);
+    assert_eq!(
+        projection.input_guard_summary().dropped_oversized_osc_sequences,
+        1
+    );
+    assert_eq!(projection.callback_summary().clipboard_copy_requests, 0);
     assert_eq!(projection.screen().size(), (5, 30));
     assert_eq!(projection.presentation_authority(), "TERMINAL_DATA_ONLY");
 }
@@ -141,4 +183,5 @@ fn winds_looking_markers_and_forged_json_are_only_rendered_terminal_text() {
 fn production_transcript_limits_match_or_tighten_fr_050() {
     assert_eq!(MAX_TRANSCRIPT_LINES, 100_000);
     assert_eq!(MAX_TRANSCRIPT_BYTES, 32 * 1024 * 1024);
+    assert_eq!(MAX_OSC_INPUT_BYTES, 8 * 1024);
 }
