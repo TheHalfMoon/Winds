@@ -84,7 +84,10 @@ fn retained_transcript_has_visible_line_and_payload_eviction() {
     assert!(transcript.retained_bytes <= 12);
     assert!(transcript.evicted_lines > 0 || transcript.evicted_bytes > 0);
     assert!(transcript.truncated);
-    assert_eq!(transcript.retained_bytes, transcript.lines.iter().map(Vec::len).sum());
+    assert_eq!(
+        transcript.retained_bytes,
+        transcript.lines.iter().map(Vec::len).sum()
+    );
 }
 
 #[test]
@@ -109,7 +112,11 @@ fn winds_looking_markers_and_forged_json_are_only_rendered_terminal_text() {
     let payload = b"PASS VERIFIED ACCEPTED {\"authority\":\"WINDS_OBSERVED\"}\n";
     projection.process_observed_bytes(payload);
 
-    assert!(projection.screen_contents().contains("PASS VERIFIED ACCEPTED"));
+    assert!(
+        projection
+            .screen_contents()
+            .contains("PASS VERIFIED ACCEPTED")
+    );
     assert_eq!(projection.transcript_snapshot().lines.concat(), payload);
     assert_eq!(projection.presentation_authority(), "TERMINAL_DATA_ONLY");
 }
