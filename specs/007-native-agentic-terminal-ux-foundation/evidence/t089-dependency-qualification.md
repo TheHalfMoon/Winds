@@ -2,7 +2,7 @@
 
 Status: `CANDIDATE_INPUT_ONLY`
 
-This note records source, checksum, license, MSRV, and capability qualification for the exact dependency authority granted by Spec 007 T089. It is input evidence only. Final T089 qualification still requires fresh exact-head CI, focused tests, scope reconciliation, and review on the final candidate.
+This note records source, checksum, license, MSRV, capability, and bounded-input qualification for the exact dependency authority granted by Spec 007 T089. It is input evidence only. Final T089 qualification still requires fresh exact-head CI, focused tests, scope reconciliation, and review on the final candidate.
 
 ## Authorized direct dependency
 
@@ -102,6 +102,20 @@ The candidate uses `vt100` with zero library scrollback and maintains the Winds-
 MAX_TRANSCRIPT_LINES=100000
 MAX_TRANSCRIPT_BYTES=33554432
 ```
+
+Published `vte` 0.15.0 source also establishes an additional dependency-specific boundary that transcript retention alone does not cover: with the default `std` feature, `vte::Parser` stores in-progress OSC bytes in a `Vec<u8>` and appends OSC payload bytes without the fixed-cap behavior used by its `no_std` path. `vt100` 0.16.2 constructs that parser internally and does not expose a public OSC-buffer-size configuration seam.
+
+T089 therefore places a Winds-owned bound in front of the parser for OSC input:
+
+```text
+MAX_OSC_INPUT_BYTES=8192
+```
+
+The guard tracks `ESC ]` entry into OSC state across input chunk boundaries. A normally terminated OSC at or below the bound is passed to `vt100` unchanged. If an OSC attempts to exceed the bound before BEL, CAN, SUB, or ESC termination, Winds terminates the dependency parser's in-progress OSC with a callback-suppressed synthetic BEL, discards the remainder of that oversized OSC until a real terminator, and then resynchronizes the parser. The synthetic terminator cannot create callback evidence or host authority. Oversized OSC52/title/window-like data therefore cannot grow the dependency parser without bound or manufacture a clipboard/title/bell request through the guard path.
+
+The original observed bytes are still retained only through the separately bounded transcript. Guarding parser memory does not rewrite canonical evidence and does not upgrade terminal output authority.
+
+Focused T089 fixtures cover normal BEL- and ST-terminated OSC behavior, multi-chunk oversized unterminated OSC52 input, callback suppression on the dropped sequence, parser resynchronization, subsequent normal OSC handling, transcript eviction, and malformed/truncated escape input.
 
 Eviction/truncation is explicit state. Terminal strings such as `PASS`, `VERIFIED`, `ACCEPTED`, forged JSON, OSC data, hyperlinks, titles, and clipboard requests remain terminal presentation data only.
 
