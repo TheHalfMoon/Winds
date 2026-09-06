@@ -246,6 +246,9 @@ pub(crate) fn render_inert_workbench(frame: &mut Frame<'_>) {
     }
 }
 
+#[path = "workbench_screen.rs"]
+pub(crate) mod screen;
+
 #[cfg(test)]
 #[path = "t088_workbench_topology_tests.rs"]
 mod t088_workbench_topology_tests;
