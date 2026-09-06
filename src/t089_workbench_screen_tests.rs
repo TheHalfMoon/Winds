@@ -91,6 +91,19 @@ fn retained_transcript_has_visible_line_and_payload_eviction() {
 }
 
 #[test]
+fn completed_line_prefix_eviction_preserves_bounds_and_accounting() {
+    let mut projection =
+        WorkbenchScreen::with_test_limits(size(20, 4), 4, 8).expect("bounded screen");
+    projection.process_observed_bytes(b"12345678\nabcdef");
+
+    let transcript = projection.transcript_snapshot();
+    assert_eq!(transcript.retained_bytes, 8);
+    assert_eq!(transcript.retained_bytes, transcript.lines.iter().map(Vec::len).sum::<usize>());
+    assert!(transcript.evicted_bytes >= 7);
+    assert!(transcript.truncated);
+}
+
+#[test]
 fn oversized_and_truncated_escape_sequences_stay_bounded_and_non_authoritative() {
     let mut projection =
         WorkbenchScreen::with_test_limits(size(30, 5), 4, 1024).expect("bounded screen");
