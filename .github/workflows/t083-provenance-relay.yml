@@ -30,6 +30,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 .github/t083_provenance_patch.py
+          sed -i 's/use crate::domain::{CheckStatus, Eligibility, PromotionReport};/use crate::domain::{CheckEvidence, CheckStatus, Eligibility, PromotionReport};/' src/main.rs
           cargo fmt --all
           cargo fmt --all -- --check
           cargo clippy --all-targets --all-features -- -D warnings
