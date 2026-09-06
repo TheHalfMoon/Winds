@@ -99,13 +99,7 @@ impl vt100::Callbacks for FailClosedCallbacks {
         );
     }
 
-    fn unhandled_escape(
-        &mut self,
-        _: &mut vt100::Screen,
-        _: Option<u8>,
-        _: Option<u8>,
-        _: u8,
-    ) {
+    fn unhandled_escape(&mut self, _: &mut vt100::Screen, _: Option<u8>, _: Option<u8>, _: u8) {
         Self::record(
             &mut self.summary.unhandled_escape_requests,
             &mut self.summary.total_requests,
