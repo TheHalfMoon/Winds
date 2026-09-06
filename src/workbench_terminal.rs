@@ -168,7 +168,6 @@ impl WorkbenchTerminals {
             .read(buffer);
 
         match read {
-            Ok(count) if count > 0 => Ok(count),
             Ok(0) => match self.poll_exit(state, pane_id) {
                 Ok(Some(_)) => Ok(0),
                 Ok(None) => {
@@ -177,6 +176,7 @@ impl WorkbenchTerminals {
                 }
                 Err(error) => Err(error),
             },
+            Ok(count) => Ok(count),
             Err(read_error) => match self.poll_exit(state, pane_id) {
                 Ok(Some(_)) => Err(format!(
                     "terminal output reader failed before the owned child exit was observed: {read_error}"
