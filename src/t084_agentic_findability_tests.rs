@@ -36,7 +36,10 @@ fn t084_session_ranking_is_deterministic_and_case_insensitive() {
     let second = rank_sessions("alp", &sessions);
     assert_eq!(first, second);
     assert_eq!(
-        first.iter().map(|candidate| candidate.session_id.as_str()).collect::<Vec<_>>(),
+        first
+            .iter()
+            .map(|candidate| candidate.session_id.as_str())
+            .collect::<Vec<_>>(),
         vec!["s-01", "s-02"]
     );
     assert!(first[0].provenance.contains(&FindProvenance::PrefixName));
@@ -111,10 +114,8 @@ fn temp_root(label: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let path = std::env::temp_dir().join(format!(
-        "winds-t084-{label}-{}-{nonce}",
-        std::process::id()
-    ));
+    let path =
+        std::env::temp_dir().join(format!("winds-t084-{label}-{}-{nonce}", std::process::id()));
     fs::create_dir_all(&path).unwrap();
     path
 }
