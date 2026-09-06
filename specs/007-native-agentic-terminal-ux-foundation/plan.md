@@ -280,7 +280,7 @@ Evidence revalidated 2026-09-06:
 - license: MIT;
 - Rust MSRV: `1.70`;
 - dependencies are small (`itoa`, `unicode-width`, `vte`);
-- `Parser::process_cb` exposes callbacks for non-screen escape sequences including OSC52/window-size related requests.
+- `Parser::new_with_callbacks(...)` installs a `Callbacks` implementation retained by the parser, and subsequent `process(...)` calls invoke it for non-screen escape requests including OSC52 clipboard and terminal resize requests.
 
 Primary evidence:
 
