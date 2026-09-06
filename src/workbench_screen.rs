@@ -139,7 +139,7 @@ pub(crate) struct TranscriptSnapshot {
 
 #[derive(Debug)]
 struct BoundedTranscript {
-    completed_lines: VecDeque<Vec<u8>>,
+    completed_lines: VecDeque<VecDeque<u8>>,
     partial_line: VecDeque<u8>,
     retained_bytes: usize,
     evicted_lines: u64,
@@ -225,7 +225,11 @@ impl BoundedTranscript {
     }
 
     fn snapshot(&self) -> TranscriptSnapshot {
-        let mut lines: Vec<Vec<u8>> = self.completed_lines.iter().cloned().collect();
+        let mut lines: Vec<Vec<u8>> = self
+            .completed_lines
+            .iter()
+            .map(|line| line.iter().copied().collect())
+            .collect();
         if !self.partial_line.is_empty() {
             lines.push(self.partial_line.iter().copied().collect());
         }
