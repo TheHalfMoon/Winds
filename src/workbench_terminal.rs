@@ -1,7 +1,9 @@
 use super::{PaneId, PaneLifecycleView, PaneSize, WorkbenchState};
 use crate::git::Result;
 use crate::git::shell_profiles::ShellProfile;
-use crate::git::terminal::{TerminalDropCleanupOutcome, TerminalExit, TerminalSession, TerminalSize};
+use crate::git::terminal::{
+    TerminalDropCleanupOutcome, TerminalExit, TerminalSession, TerminalSize,
+};
 #[cfg(windows)]
 use crate::git::wsl_launch::{WslTerminalLaunchPlan, launch_wsl_terminal};
 use std::collections::HashMap;
@@ -139,8 +141,10 @@ impl WorkbenchTerminals {
             }
             Err(error) => {
                 self.revoke_unproven_ownership(state, pane_id);
-                Err(format!("terminal exit observation failed; workbench ownership is lost: {error}")
-                    .into())
+                Err(format!(
+                    "terminal exit observation failed; workbench ownership is lost: {error}"
+                )
+                .into())
             }
         }
     }
@@ -219,11 +223,7 @@ impl WorkbenchTerminals {
         }
     }
 
-    pub(crate) fn interrupt(
-        &mut self,
-        state: &mut WorkbenchState,
-        pane_id: PaneId,
-    ) -> Result<()> {
+    pub(crate) fn interrupt(&mut self, state: &mut WorkbenchState, pane_id: PaneId) -> Result<()> {
         self.require_live_owned(state, pane_id)?;
         let interrupt = self
             .terminals
@@ -287,7 +287,9 @@ impl WorkbenchTerminals {
                 Ok(exit)
             }
             Ok(TerminalDropCleanupOutcome::Unproven) => {
-                terminal.session.suppress_drop_cleanup_after_ownership_loss();
+                terminal
+                    .session
+                    .suppress_drop_cleanup_after_ownership_loss();
                 state.set_pane_lifecycle(pane_id, PaneLifecycleView::OwnershipLost);
                 Err(format!(
                     "terminal {operation} could not prove owned child exit inside bounded cleanup window"
@@ -295,7 +297,9 @@ impl WorkbenchTerminals {
                 .into())
             }
             Err(error) => {
-                terminal.session.suppress_drop_cleanup_after_ownership_loss();
+                terminal
+                    .session
+                    .suppress_drop_cleanup_after_ownership_loss();
                 state.set_pane_lifecycle(pane_id, PaneLifecycleView::OwnershipLost);
                 Err(format!(
                     "terminal {operation} cleanup failed and workbench ownership is lost: {error}"
@@ -307,7 +311,9 @@ impl WorkbenchTerminals {
 
     fn revoke_unproven_ownership(&mut self, state: &mut WorkbenchState, pane_id: PaneId) {
         if let Some(mut terminal) = self.terminals.remove(&pane_id) {
-            terminal.session.suppress_drop_cleanup_after_ownership_loss();
+            terminal
+                .session
+                .suppress_drop_cleanup_after_ownership_loss();
         }
         state.set_pane_lifecycle(pane_id, PaneLifecycleView::OwnershipLost);
     }
