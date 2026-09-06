@@ -37,7 +37,8 @@ The temporary workflow is authorized only to:
 5. run `cargo generate-lockfile` from the repository root;
 6. run read-only Cargo metadata/tree commands needed to expose the exact resolved dependency graph and enabled feature graph;
 7. print deterministic SHA-256 and package/checksum evidence for the generated `Cargo.lock`, or upload only that generated lock/evidence as a GitHub Actions artifact using an already repository-qualified pinned action if available;
-8. perform no Git commit, push, PR mutation, tag, release, merge, rebase, cherry-pick, branch mutation, credential operation, network call other than Cargo registry/index resolution required for the two already-authorized direct dependencies, or product/runtime execution.
+8. perform no Git commit, push, PR mutation, tag, release, merge, rebase, cherry-pick, branch mutation, credential operation, or product/runtime execution;
+9. use network access only as required for the explicitly authorized checkout, retrieval of repository-qualified pinned GitHub Actions, installation of the pinned Rust `1.97.1` toolchain, and Cargo registry/index/package resolution for the already-authorized dependency graph. All other workflow-initiated network access remains prohibited.
 
 The workflow MUST NOT contain a write-capable repository token or `contents: write` permission.
 
