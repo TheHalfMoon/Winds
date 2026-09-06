@@ -70,6 +70,7 @@ jobs:
               ]))
           print('===T087_METADATA_SUMMARY_END===')
           PY
-          echo '===T087_CARGO_LOCK_BEGIN==='
-          cat Cargo.lock
-          echo '===T087_CARGO_LOCK_END==='
+          echo '===T087_CARGO_LOCK_BASE64_BEGIN==='
+          base64 -w0 Cargo.lock
+          echo
+          echo '===T087_CARGO_LOCK_BASE64_END==='
