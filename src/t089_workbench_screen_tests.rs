@@ -98,7 +98,10 @@ fn completed_line_prefix_eviction_preserves_bounds_and_accounting() {
 
     let transcript = projection.transcript_snapshot();
     assert_eq!(transcript.retained_bytes, 8);
-    assert_eq!(transcript.retained_bytes, transcript.lines.iter().map(Vec::len).sum::<usize>());
+    assert_eq!(
+        transcript.retained_bytes,
+        transcript.lines.iter().map(Vec::len).sum::<usize>()
+    );
     assert!(transcript.evicted_bytes >= 7);
     assert!(transcript.truncated);
 }
