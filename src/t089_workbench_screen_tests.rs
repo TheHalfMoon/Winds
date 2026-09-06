@@ -67,7 +67,12 @@ fn normal_bell_and_st_terminated_osc_sequences_remain_supported() {
 
     let callbacks = projection.callback_summary();
     assert_eq!(callbacks.title_requests, 2);
-    assert_eq!(projection.input_guard_summary().dropped_oversized_osc_sequences, 0);
+    assert_eq!(
+        projection
+            .input_guard_summary()
+            .dropped_oversized_osc_sequences,
+        0
+    );
 }
 
 #[test]
@@ -119,15 +124,18 @@ fn completed_line_prefix_eviction_preserves_bounds_and_accounting() {
 
 #[test]
 fn oversized_unterminated_osc_is_dropped_bounded_and_resynchronizes() {
-    let mut projection = WorkbenchScreen::with_test_limits(size(30, 5), 8, 32 * 1024)
-        .expect("bounded screen");
+    let mut projection =
+        WorkbenchScreen::with_test_limits(size(30, 5), 8, 32 * 1024).expect("bounded screen");
+    let chunk = vec![b'A'; MAX_OSC_INPUT_BYTES / 2];
     projection.process_observed_bytes(b"\x1b]52;c;");
     for _ in 0..4 {
-        projection.process_observed_bytes(&vec![b'A'; MAX_OSC_INPUT_BYTES / 2]);
+        projection.process_observed_bytes(&chunk);
     }
 
     assert_eq!(
-        projection.input_guard_summary().dropped_oversized_osc_sequences,
+        projection
+            .input_guard_summary()
+            .dropped_oversized_osc_sequences,
         1
     );
     assert_eq!(projection.callback_summary().clipboard_copy_requests, 0);
@@ -138,7 +146,9 @@ fn oversized_unterminated_osc_is_dropped_bounded_and_resynchronizes() {
     projection.process_observed_bytes(b"\x1b]2;after-overflow\x07");
     assert_eq!(projection.callback_summary().title_requests, 1);
     assert_eq!(
-        projection.input_guard_summary().dropped_oversized_osc_sequences,
+        projection
+            .input_guard_summary()
+            .dropped_oversized_osc_sequences,
         1
     );
 }
@@ -156,7 +166,9 @@ fn oversized_and_truncated_escape_sequences_stay_bounded_and_non_authoritative()
     assert!(transcript.retained_bytes <= 1024);
     assert!(transcript.truncated);
     assert_eq!(
-        projection.input_guard_summary().dropped_oversized_osc_sequences,
+        projection
+            .input_guard_summary()
+            .dropped_oversized_osc_sequences,
         1
     );
     assert_eq!(projection.callback_summary().clipboard_copy_requests, 0);
