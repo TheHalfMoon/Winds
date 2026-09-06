@@ -44,6 +44,8 @@ mod t075_agentic_authority_tests;
 mod t077_codex_protocol_tests;
 #[cfg(test)]
 mod t078_claude_structured_tests;
+#[cfg(test)]
+mod t085_agentic_hardening_tests;
 
 use crate::check::run_check;
 use crate::domain::{CheckEvidence, CheckStatus, Eligibility, PromotionReport};
