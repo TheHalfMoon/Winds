@@ -1584,7 +1584,126 @@ impl Store {
         })
     }
 
-    pub fn save_evidence(&mut self, report: &EvidenceReport, now_ms: i64) -> Result<()> {
+    pub(crate) fn observe_and_save_evidence(
+        &mut self,
+        repo: &crate::git::Repo,
+        run_id: &str,
+        now_ms: i64,
+    ) -> Result<EvidenceReport> {
+        let persisted = self
+            .connection
+            .query_row(
+                "SELECT repo_path, base_oid, candidate_ref, candidate_oid, candidate_tree,
+                        worktree_path, check_command, timeout_secs, state
+                 FROM candidate_runs WHERE run_id = ?1",
+                params![run_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, i64>(7)?,
+                        row.get::<_, String>(8)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| format!("unknown Winds run for evidence observation: {run_id}"))?;
+
+        if persisted.8 != "READY" {
+            return Err(format!(
+                "verification evidence observation requires READY candidate state, found {}",
+                persisted.8
+            )
+            .into());
+        }
+        let observed_repo_path = repo
+            .root()
+            .to_str()
+            .ok_or("verification repository path is not valid UTF-8")?;
+        if observed_repo_path != persisted.0 {
+            return Err("verification repository does not match persisted candidate run".into());
+        }
+
+        let worktree = PathBuf::from(&persisted.5);
+        let timeout_secs = u64::try_from(persisted.7)?;
+        let check_run = crate::check::run_check(
+            &worktree,
+            &persisted.6,
+            std::time::Duration::from_secs(timeout_secs),
+        )
+        .map_err(|error| format!("required check failed to execute: {error}"))?;
+        let head_after = repo.worktree_head(&worktree)?;
+        let clean_after = repo.worktree_is_clean(&worktree)?;
+        let mut warnings = Vec::new();
+
+        if head_after != persisted.3 {
+            warnings.push("candidate HEAD changed while evidence was being collected".to_owned());
+        }
+        if !clean_after {
+            warnings.push("required check mutated candidate worktree state".to_owned());
+        }
+        if check_run.stdout.truncated || check_run.stderr.truncated {
+            warnings.push(
+                "required check output exceeded the capture cap; evidence is incomplete".to_owned(),
+            );
+        }
+
+        let eligibility = if check_run.status != crate::domain::CheckStatus::Pass
+            || head_after != persisted.3
+            || !clean_after
+        {
+            Eligibility::Blocked
+        } else if check_run.stdout.truncated || check_run.stderr.truncated {
+            Eligibility::Warning
+        } else {
+            Eligibility::Eligible
+        };
+
+        let stdout = self.write_blob(
+            run_id,
+            "check.stdout",
+            &check_run.stdout.bytes,
+            check_run.stdout.truncated,
+        )?;
+        let stderr = self.write_blob(
+            run_id,
+            "check.stderr",
+            &check_run.stderr.bytes,
+            check_run.stderr.truncated,
+        )?;
+
+        let report = EvidenceReport {
+            schema_version: 1,
+            run_id: run_id.to_owned(),
+            authority: "WINDS_OBSERVED",
+            repo_path: persisted.0,
+            base_oid: persisted.1,
+            candidate_ref: persisted.2,
+            candidate_oid: persisted.3,
+            candidate_tree: persisted.4,
+            worktree_path: persisted.5,
+            check: CheckEvidence {
+                authority: "WINDS_OBSERVED",
+                command: persisted.6,
+                status: check_run.status,
+                exit_code: check_run.exit_code,
+                duration_ms: check_run.duration_ms,
+                stdout,
+                stderr,
+            },
+            eligibility,
+            warnings,
+        };
+        self.save_evidence(&report, now_ms)?;
+        Ok(report)
+    }
+
+    fn save_evidence(&mut self, report: &EvidenceReport, now_ms: i64) -> Result<()> {
         let tx = self.connection.transaction()?;
         let persisted = tx
             .query_row(
@@ -1755,6 +1874,15 @@ impl Store {
         )?;
         tx.commit()?;
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn save_evidence_for_test(
+        &mut self,
+        report: &EvidenceReport,
+        now_ms: i64,
+    ) -> Result<()> {
+        self.save_evidence(report, now_ms)
     }
 
     pub fn load_run(&self, run_id: &str) -> Result<StoredRun> {

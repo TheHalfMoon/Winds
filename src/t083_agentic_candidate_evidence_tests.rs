@@ -144,7 +144,7 @@ fn persisted_store(
     let (home, mut store) = ready_store(name, run_id, candidate);
     let report = evidence_report(run_id, candidate, eligibility);
     store
-        .save_evidence(&report, 3)
+        .save_evidence_for_test(&report, 3)
         .expect("persist T083 verification evidence");
     (home, store)
 }
@@ -193,7 +193,7 @@ fn invented_eligible_report_with_blocked_check_cannot_be_persisted() {
     let mut report = evidence_report("invented-eligible", &candidate, Eligibility::Blocked);
     report.eligibility = Eligibility::Eligible;
 
-    assert!(store.save_evidence(&report, 3).is_err());
+    assert!(store.save_evidence_for_test(&report, 3).is_err());
     assert_eq!(
         store.load_run("invented-eligible").unwrap().eligibility,
         Eligibility::Blocked
@@ -212,7 +212,7 @@ fn persisted_evidence_candidate_oid_or_tree_mismatch_fails_closed() {
             report.candidate_tree = oid('d');
         }
 
-        assert!(store.save_evidence(&report, 3).is_err());
+        assert!(store.save_evidence_for_test(&report, 3).is_err());
         assert_eq!(
             store.load_run(name).unwrap().eligibility,
             Eligibility::Blocked
