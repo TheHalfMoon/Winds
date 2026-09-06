@@ -1,20 +1,31 @@
 use super::terminal::WorkbenchTerminals;
 use super::{PaneLifecycleView, PanePresentationMetadata, PaneSize, WorkbenchState};
+#[cfg(unix)]
 use crate::git::shell_profiles::{ShellProfile, discover_native_shell_profiles};
+#[cfg(unix)]
 use crate::git::workspace_inventory::WorkspaceEnvironmentInventory;
+#[cfg(unix)]
 use std::fs;
+#[cfg(unix)]
 use std::io::{self, Cursor, Read};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(unix)]
 use std::thread;
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(unix)]
 struct TestRoot(PathBuf);
 
+#[cfg(unix)]
 impl TestRoot {
     fn new(name: &str) -> Self {
         let sequence = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
@@ -31,6 +42,7 @@ impl TestRoot {
     }
 }
 
+#[cfg(unix)]
 impl Drop for TestRoot {
     fn drop(&mut self) {
         let canonical_temp = match std::env::temp_dir().canonicalize() {
@@ -51,8 +63,10 @@ impl Drop for TestRoot {
     }
 }
 
+#[cfg(unix)]
 struct FailingReader;
 
+#[cfg(unix)]
 impl Read for FailingReader {
     fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
         Err(io::Error::other("synthetic T090 reader failure"))
@@ -63,8 +77,14 @@ fn default_size() -> PaneSize {
     PaneSize::new(80, 24)
 }
 
+#[cfg(unix)]
 fn new_pane(state: &mut WorkbenchState, title: &str) -> super::PaneId {
-    state.create_pane(title, Some("workspace-t090".to_owned()), None, default_size())
+    state.create_pane(
+        title,
+        Some("workspace-t090".to_owned()),
+        None,
+        default_size(),
+    )
 }
 
 #[cfg(unix)]
@@ -116,7 +136,10 @@ fn t090_start_and_close_bind_a_pane_to_the_exact_owned_terminal_session() {
 
     terminals.close(&mut state, pane).unwrap();
     assert!(!terminals.has_owned_terminal(pane));
-    assert_eq!(state.pane(pane).unwrap().lifecycle, PaneLifecycleView::Exited);
+    assert_eq!(
+        state.pane(pane).unwrap().lifecycle,
+        PaneLifecycleView::Exited
+    );
 }
 
 #[cfg(unix)]
@@ -161,13 +184,22 @@ fn t090_natural_child_exit_updates_lifecycle_without_removing_the_visual_pane() 
         if let Some(exit) = terminals.poll_exit(&mut state, pane).unwrap() {
             break exit;
         }
-        assert!(Instant::now() < deadline, "T090 child did not exit inside fixture deadline");
+        assert!(
+            Instant::now() < deadline,
+            "T090 child did not exit inside fixture deadline"
+        );
         thread::sleep(Duration::from_millis(10));
     };
 
     assert_eq!(exit.exit_code, 7);
-    assert_eq!(state.pane(pane).unwrap().lifecycle, PaneLifecycleView::Exited);
-    assert!(state.pane(pane).is_some(), "visual pane must remain after child exit");
+    assert_eq!(
+        state.pane(pane).unwrap().lifecycle,
+        PaneLifecycleView::Exited
+    );
+    assert!(
+        state.pane(pane).is_some(),
+        "visual pane must remain after child exit"
+    );
     assert_eq!(terminals.close(&mut state, pane).unwrap(), exit);
 }
 
@@ -182,18 +214,26 @@ fn t090_output_reader_eof_while_child_is_live_fails_closed_but_retains_owned_cle
     terminals
         .start_native(&mut state, pane, &profile, root.path())
         .unwrap();
-    assert!(terminals.replace_output_reader_for_test(pane, Box::new(Cursor::new(Vec::<u8>::new()))));
+    assert!(
+        terminals.replace_output_reader_for_test(pane, Box::new(Cursor::new(Vec::<u8>::new())))
+    );
 
     let mut buffer = [0_u8; 64];
     let error = terminals
         .read_output_once(&mut state, pane, &mut buffer)
         .unwrap_err();
     assert!(error.to_string().contains("reader closed"));
-    assert_eq!(state.pane(pane).unwrap().lifecycle, PaneLifecycleView::Error);
+    assert_eq!(
+        state.pane(pane).unwrap().lifecycle,
+        PaneLifecycleView::Error
+    );
     assert!(terminals.has_owned_terminal(pane));
 
     terminals.close(&mut state, pane).unwrap();
-    assert_eq!(state.pane(pane).unwrap().lifecycle, PaneLifecycleView::Exited);
+    assert_eq!(
+        state.pane(pane).unwrap().lifecycle,
+        PaneLifecycleView::Exited
+    );
 }
 
 #[cfg(unix)]
@@ -214,7 +254,10 @@ fn t090_output_reader_error_while_child_is_live_fails_closed_but_retains_owned_c
         .read_output_once(&mut state, pane, &mut buffer)
         .unwrap_err();
     assert!(error.to_string().contains("reader failed"));
-    assert_eq!(state.pane(pane).unwrap().lifecycle, PaneLifecycleView::Error);
+    assert_eq!(
+        state.pane(pane).unwrap().lifecycle,
+        PaneLifecycleView::Error
+    );
     assert!(terminals.has_owned_terminal(pane));
 
     terminals.close(&mut state, pane).unwrap();
@@ -233,9 +276,15 @@ fn t090_interrupt_and_terminate_reuse_the_accepted_owned_session_lifecycle() {
         .unwrap();
 
     terminals.interrupt(&mut state, pane).unwrap();
-    assert_ne!(state.pane(pane).unwrap().lifecycle, PaneLifecycleView::OwnershipLost);
+    assert_ne!(
+        state.pane(pane).unwrap().lifecycle,
+        PaneLifecycleView::OwnershipLost
+    );
     terminals.terminate(&mut state, pane).unwrap();
-    assert_eq!(state.pane(pane).unwrap().lifecycle, PaneLifecycleView::Exited);
+    assert_eq!(
+        state.pane(pane).unwrap().lifecycle,
+        PaneLifecycleView::Exited
+    );
     assert!(!terminals.has_owned_terminal(pane));
 }
 
@@ -254,7 +303,10 @@ fn t090_start_revalidates_profile_and_working_directory_before_marking_live() {
             .start_native(&mut state, cwd_pane, &profile, &missing_cwd)
             .is_err()
     );
-    assert_eq!(state.pane(cwd_pane).unwrap().lifecycle, PaneLifecycleView::Error);
+    assert_eq!(
+        state.pane(cwd_pane).unwrap().lifecycle,
+        PaneLifecycleView::Error
+    );
     assert!(!terminals.has_owned_terminal(cwd_pane));
 
     let profile_pane = new_pane(&mut state, "invalid-profile");
@@ -265,7 +317,10 @@ fn t090_start_revalidates_profile_and_working_directory_before_marking_live() {
             .start_native(&mut state, profile_pane, &invalid_profile, root.path())
             .is_err()
     );
-    assert_eq!(state.pane(profile_pane).unwrap().lifecycle, PaneLifecycleView::Error);
+    assert_eq!(
+        state.pane(profile_pane).unwrap().lifecycle,
+        PaneLifecycleView::Error
+    );
     assert!(!terminals.has_owned_terminal(profile_pane));
 }
 
