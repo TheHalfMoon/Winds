@@ -89,6 +89,7 @@ fn store_with_findability_fixture(home: &TestHome) -> Store {
         ("session-alpha-a", "Alpha Planner"),
         ("session-alpha-b", "alpha plan review"),
         ("session-beta", "Beta"),
+        ("session-beta-review", "Beta review"),
         ("session-reviewer", "Release Reviewer"),
         ("session-unicode", "Résumé Planner"),
     ]
@@ -147,6 +148,14 @@ fn session_findability_is_case_unicode_and_fuzzy_aware_without_silent_ambiguity(
         .resolve_winds_continuation("workspace-main", Some("session-beta"))
         .unwrap();
     assert_eq!(selected_session_id(exact), "session-beta");
+
+    let exact_display_beats_lower_rank = store
+        .resolve_winds_continuation("workspace-main", Some("BETA"))
+        .unwrap();
+    assert_eq!(
+        selected_session_id(exact_display_beats_lower_rank),
+        "session-beta"
+    );
 
     let unicode_case = store
         .resolve_winds_continuation("workspace-main", Some("RÉSUMÉ"))
