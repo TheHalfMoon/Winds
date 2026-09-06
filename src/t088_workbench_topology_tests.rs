@@ -26,17 +26,28 @@ fn topology_transitions_are_deterministic_and_selection_is_explicit() {
         .expect("split an existing pane");
     assert_eq!(state.selected_pane(), Some(split));
     assert_eq!(
-        state.panes().iter().map(|pane| pane.pane_id).collect::<Vec<_>>(),
+        state
+            .panes()
+            .iter()
+            .map(|pane| pane.pane_id)
+            .collect::<Vec<_>>(),
         vec![first, split, second]
     );
     assert_eq!(state.pane(split).unwrap().split_from, Some(first));
-    assert_eq!(state.pane(split).unwrap().split_axis, Some(SplitAxis::Horizontal));
+    assert_eq!(
+        state.pane(split).unwrap().split_axis,
+        Some(SplitAxis::Horizontal)
+    );
 
     assert!(state.resize_pane(split, size(120, 40)));
     assert_eq!(state.pane(split).unwrap().size, size(120, 40));
     assert!(state.move_pane_to_index(second, 0));
     assert_eq!(
-        state.panes().iter().map(|pane| pane.pane_id).collect::<Vec<_>>(),
+        state
+            .panes()
+            .iter()
+            .map(|pane| pane.pane_id)
+            .collect::<Vec<_>>(),
         vec![second, first, split]
     );
 
@@ -74,14 +85,20 @@ fn layout_and_display_mutations_never_change_canonical_associations() {
 
     let original = state.pane(pane).unwrap();
     assert_eq!(original.display_title, "Renamed presentation only");
-    assert_eq!(original.canonical_workspace_id.as_deref(), Some("workspace-stable"));
+    assert_eq!(
+        original.canonical_workspace_id.as_deref(),
+        Some("workspace-stable")
+    );
     assert_eq!(
         original.canonical_winds_session_id.as_deref(),
         Some("session-stable")
     );
 
     let derived = state.pane(split).unwrap();
-    assert_eq!(derived.canonical_workspace_id, original.canonical_workspace_id);
+    assert_eq!(
+        derived.canonical_workspace_id,
+        original.canonical_workspace_id
+    );
     assert_eq!(
         derived.canonical_winds_session_id,
         original.canonical_winds_session_id
@@ -103,7 +120,10 @@ fn restored_presentation_metadata_never_establishes_live_ownership() {
     assert_eq!(pane.lifecycle, PaneLifecycleView::OwnershipLost);
     assert_ne!(pane.lifecycle, PaneLifecycleView::Live);
     assert_eq!(pane.display_title, "LIVE shell from yesterday");
-    assert_eq!(pane.canonical_workspace_id.as_deref(), Some("workspace-restored"));
+    assert_eq!(
+        pane.canonical_workspace_id.as_deref(),
+        Some("workspace-restored")
+    );
     assert_eq!(
         pane.canonical_winds_session_id.as_deref(),
         Some("session-restored")
@@ -122,7 +142,10 @@ fn lifecycle_views_keep_live_and_non_live_truth_distinct() {
 
     let mut state = WorkbenchState::new();
     let pane = state.create_pane("inert", None, None, size(80, 24));
-    assert_eq!(state.pane(pane).unwrap().lifecycle, PaneLifecycleView::Stopped);
+    assert_eq!(
+        state.pane(pane).unwrap().lifecycle,
+        PaneLifecycleView::Stopped
+    );
 }
 
 #[test]
@@ -159,7 +182,15 @@ fn fifty_plus_inert_panes_remain_bounded_presentation_state_without_live_shells(
 #[test]
 fn unicode_case_and_colliding_titles_never_define_pane_identity() {
     let mut state = WorkbenchState::new();
-    let titles = ["Pane", "pane", "Pane", "Cafe\u{301}", "Café", "终端", "终端"];
+    let titles = [
+        "Pane",
+        "pane",
+        "Pane",
+        "Cafe\u{301}",
+        "Café",
+        "终端",
+        "终端",
+    ];
     let ids = titles
         .iter()
         .map(|title| state.create_pane(*title, None, None, size(80, 24)))
@@ -189,7 +220,10 @@ fn unknown_pane_operations_fail_without_changing_selection_or_topology() {
     assert!(!state.rename_pane(unknown, "ignored"));
     assert!(!state.move_pane_to_index(unknown, 0));
     assert!(!state.close_pane(unknown));
-    assert_eq!(state.split_pane(unknown, SplitAxis::Vertical, "ignored"), None);
+    assert_eq!(
+        state.split_pane(unknown, SplitAxis::Vertical, "ignored"),
+        None
+    );
     assert_eq!(state, before);
     assert_eq!(state.selected_dispatch_candidate(), Some(known));
 }

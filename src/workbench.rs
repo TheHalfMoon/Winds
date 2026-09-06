@@ -109,10 +109,7 @@ impl WorkbenchState {
         pane_id
     }
 
-    pub(crate) fn restore_presentation(
-        &mut self,
-        metadata: PanePresentationMetadata,
-    ) -> PaneId {
+    pub(crate) fn restore_presentation(&mut self, metadata: PanePresentationMetadata) -> PaneId {
         let pane_id = self.allocate_pane_id();
         self.panes.push(PaneState {
             pane_id,
@@ -172,7 +169,11 @@ impl WorkbenchState {
         true
     }
 
-    pub(crate) fn rename_pane(&mut self, pane_id: PaneId, display_title: impl Into<String>) -> bool {
+    pub(crate) fn rename_pane(
+        &mut self,
+        pane_id: PaneId,
+        display_title: impl Into<String>,
+    ) -> bool {
         let Some(index) = self.pane_index(pane_id) else {
             return false;
         };
