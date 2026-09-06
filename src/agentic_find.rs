@@ -149,7 +149,14 @@ fn ordered_subsequence(query: &str, candidate: &str) -> bool {
 }
 
 fn normalize(value: &str) -> String {
-    value.chars().flat_map(char::to_lowercase).collect()
+    let mut normalized = String::new();
+    for character in value.chars() {
+        match character {
+            'ß' | 'ẞ' => normalized.push_str("ss"),
+            _ => normalized.extend(character.to_lowercase()),
+        }
+    }
+    normalized
 }
 
 #[cfg(test)]
