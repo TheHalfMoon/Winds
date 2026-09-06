@@ -46,7 +46,7 @@ mod t077_codex_protocol_tests;
 mod t078_claude_structured_tests;
 
 use crate::check::run_check;
-use crate::domain::{CheckEvidence, CheckStatus, Eligibility, EvidenceReport, PromotionReport};
+use crate::domain::{CheckEvidence, CheckStatus, Eligibility, PromotionReport};
 use crate::git::Repo;
 use crate::store::{NewRun, Store};
 use serde_json::json;
@@ -145,69 +145,7 @@ fn verify(flags: HashMap<String, String>) -> Result<()> {
     store.mark_workspace_ready(&run_id, unix_ms()?)?;
     drop(git_lock);
 
-    let check_run = run_check(&worktree, check_command, Duration::from_secs(timeout_secs))
-        .map_err(|error| format!("required check failed to execute: {error}"))?;
-    let head_after = repo.worktree_head(&worktree)?;
-    let clean_after = repo.worktree_is_clean(&worktree)?;
-    let mut warnings = Vec::new();
-
-    if head_after != candidate_oid {
-        warnings.push("candidate HEAD changed while evidence was being collected".to_owned());
-    }
-    if !clean_after {
-        warnings.push("required check mutated candidate worktree state".to_owned());
-    }
-    if check_run.stdout.truncated || check_run.stderr.truncated {
-        warnings.push(
-            "required check output exceeded the capture cap; evidence is incomplete".to_owned(),
-        );
-    }
-
-    let eligibility =
-        if check_run.status != CheckStatus::Pass || head_after != candidate_oid || !clean_after {
-            Eligibility::Blocked
-        } else if check_run.stdout.truncated || check_run.stderr.truncated {
-            Eligibility::Warning
-        } else {
-            Eligibility::Eligible
-        };
-
-    let stdout = store.write_blob(
-        &run_id,
-        "check.stdout",
-        &check_run.stdout.bytes,
-        check_run.stdout.truncated,
-    )?;
-    let stderr = store.write_blob(
-        &run_id,
-        "check.stderr",
-        &check_run.stderr.bytes,
-        check_run.stderr.truncated,
-    )?;
-
-    let report = EvidenceReport {
-        schema_version: 1,
-        run_id: run_id.clone(),
-        authority: "WINDS_OBSERVED",
-        repo_path,
-        base_oid,
-        candidate_ref: candidate_ref.to_owned(),
-        candidate_oid,
-        candidate_tree,
-        worktree_path,
-        check: CheckEvidence {
-            authority: "WINDS_OBSERVED",
-            command: check_command.to_owned(),
-            status: check_run.status,
-            exit_code: check_run.exit_code,
-            duration_ms: check_run.duration_ms,
-            stdout,
-            stderr,
-        },
-        eligibility,
-        warnings,
-    };
-    store.save_evidence(&report, unix_ms()?)?;
+    let report = store.observe_and_save_evidence(&repo, &run_id, unix_ms()?)?;
     println!("{}", serde_json::to_string_pretty(&report)?);
     if report.eligibility != Eligibility::Eligible {
         return Err(format!("candidate verification is {}", report.eligibility.as_str()).into());

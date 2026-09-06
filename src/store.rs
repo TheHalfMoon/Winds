@@ -997,7 +997,6 @@ impl Store {
         tx.commit()?;
         Ok(())
     }
-
     pub fn mark_terminal_exited(
         &mut self,
         execution_id: &str,
@@ -1585,13 +1584,295 @@ impl Store {
         })
     }
 
-    pub fn save_evidence(&mut self, report: &EvidenceReport, now_ms: i64) -> Result<()> {
-        let json = serde_json::to_string(report)?;
+    pub(crate) fn observe_and_save_evidence(
+        &mut self,
+        repo: &crate::git::Repo,
+        run_id: &str,
+        now_ms: i64,
+    ) -> Result<EvidenceReport> {
+        let persisted = self
+            .connection
+            .query_row(
+                "SELECT repo_path, base_oid, candidate_ref, candidate_oid, candidate_tree,
+                        worktree_path, check_command, timeout_secs, state
+                 FROM candidate_runs WHERE run_id = ?1",
+                params![run_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, i64>(7)?,
+                        row.get::<_, String>(8)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| format!("unknown Winds run for evidence observation: {run_id}"))?;
+
+        if persisted.8 != "READY" {
+            return Err(format!(
+                "verification evidence observation requires READY candidate state, found {}",
+                persisted.8
+            )
+            .into());
+        }
+        let observed_repo_path = repo
+            .root()
+            .to_str()
+            .ok_or("verification repository path is not valid UTF-8")?;
+        if observed_repo_path != persisted.0 {
+            return Err("verification repository does not match persisted candidate run".into());
+        }
+
+        let worktree = PathBuf::from(&persisted.5);
+        let head_before = repo.worktree_head(&worktree)?;
+        if head_before != persisted.3 {
+            return Err("verification worktree HEAD does not match persisted candidate OID".into());
+        }
+        let tree_before = repo.tree_oid(&head_before)?;
+        if tree_before != persisted.4 {
+            return Err(
+                "verification worktree tree does not match persisted candidate tree".into(),
+            );
+        }
+        if !repo.worktree_is_clean(&worktree)? {
+            return Err("verification worktree must be clean before the required check".into());
+        }
+
+        let timeout_secs = u64::try_from(persisted.7)?;
+        let check_run = crate::check::run_check(
+            &worktree,
+            &persisted.6,
+            std::time::Duration::from_secs(timeout_secs),
+        )
+        .map_err(|error| format!("required check failed to execute: {error}"))?;
+        let head_after = repo.worktree_head(&worktree)?;
+        let clean_after = repo.worktree_is_clean(&worktree)?;
+        let mut warnings = Vec::new();
+
+        if head_after != persisted.3 {
+            warnings.push("candidate HEAD changed while evidence was being collected".to_owned());
+        }
+        if !clean_after {
+            warnings.push("required check mutated candidate worktree state".to_owned());
+        }
+        if check_run.stdout.truncated || check_run.stderr.truncated {
+            warnings.push(
+                "required check output exceeded the capture cap; evidence is incomplete".to_owned(),
+            );
+        }
+
+        let eligibility = if check_run.status != crate::domain::CheckStatus::Pass
+            || head_after != persisted.3
+            || !clean_after
+        {
+            Eligibility::Blocked
+        } else if check_run.stdout.truncated || check_run.stderr.truncated {
+            Eligibility::Warning
+        } else {
+            Eligibility::Eligible
+        };
+
+        let stdout = self.write_blob(
+            run_id,
+            "check.stdout",
+            &check_run.stdout.bytes,
+            check_run.stdout.truncated,
+        )?;
+        let stderr = self.write_blob(
+            run_id,
+            "check.stderr",
+            &check_run.stderr.bytes,
+            check_run.stderr.truncated,
+        )?;
+
+        let report = EvidenceReport {
+            schema_version: 1,
+            run_id: run_id.to_owned(),
+            authority: "WINDS_OBSERVED",
+            repo_path: persisted.0,
+            base_oid: persisted.1,
+            candidate_ref: persisted.2,
+            candidate_oid: persisted.3,
+            candidate_tree: persisted.4,
+            worktree_path: persisted.5,
+            check: CheckEvidence {
+                authority: "WINDS_OBSERVED",
+                command: persisted.6,
+                status: check_run.status,
+                exit_code: check_run.exit_code,
+                duration_ms: check_run.duration_ms,
+                stdout,
+                stderr,
+            },
+            eligibility,
+            warnings,
+        };
+        self.save_evidence(&report, now_ms)?;
+        Ok(report)
+    }
+
+    fn save_evidence(&mut self, report: &EvidenceReport, now_ms: i64) -> Result<()> {
         let tx = self.connection.transaction()?;
-        tx.execute(
-            "UPDATE candidate_runs SET state = 'VERIFIED' WHERE run_id = ?1",
+        let persisted = tx
+            .query_row(
+                "SELECT repo_path, base_oid, candidate_ref, candidate_oid, candidate_tree,
+                        worktree_path, check_command, state
+                 FROM candidate_runs WHERE run_id = ?1",
+                params![report.run_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| format!("unknown Winds run for evidence: {}", report.run_id))?;
+
+        if persisted.7 != "READY" {
+            return Err(format!(
+                "verification evidence requires READY candidate state, found {}",
+                persisted.7
+            )
+            .into());
+        }
+        if report.schema_version != 1 {
+            return Err("unsupported verification evidence schema version".into());
+        }
+        if report.authority != "WINDS_OBSERVED" || report.check.authority != "WINDS_OBSERVED" {
+            return Err("verification evidence authority must be WINDS_OBSERVED".into());
+        }
+
+        let bindings = [
+            (
+                "repository path",
+                report.repo_path.as_str(),
+                persisted.0.as_str(),
+            ),
+            ("base OID", report.base_oid.as_str(), persisted.1.as_str()),
+            (
+                "candidate ref",
+                report.candidate_ref.as_str(),
+                persisted.2.as_str(),
+            ),
+            (
+                "candidate OID",
+                report.candidate_oid.as_str(),
+                persisted.3.as_str(),
+            ),
+            (
+                "candidate tree",
+                report.candidate_tree.as_str(),
+                persisted.4.as_str(),
+            ),
+            (
+                "worktree path",
+                report.worktree_path.as_str(),
+                persisted.5.as_str(),
+            ),
+            (
+                "check command",
+                report.check.command.as_str(),
+                persisted.6.as_str(),
+            ),
+        ];
+        for (label, reported, expected) in bindings {
+            if reported != expected {
+                return Err(format!(
+                    "verification evidence {label} does not match persisted candidate run"
+                )
+                .into());
+            }
+        }
+
+        const HEAD_CHANGED: &str = "candidate HEAD changed while evidence was being collected";
+        const WORKTREE_MUTATED: &str = "required check mutated candidate worktree state";
+        const OUTPUT_TRUNCATED: &str =
+            "required check output exceeded the capture cap; evidence is incomplete";
+
+        if report.warnings.iter().any(|warning| {
+            !matches!(
+                warning.as_str(),
+                HEAD_CHANGED | WORKTREE_MUTATED | OUTPUT_TRUNCATED
+            )
+        }) {
+            return Err("verification evidence contains an unknown warning".into());
+        }
+        if report
+            .warnings
+            .iter()
+            .enumerate()
+            .any(|(index, warning)| report.warnings[..index].contains(warning))
+        {
+            return Err("verification evidence contains duplicate warnings".into());
+        }
+
+        let head_changed = report
+            .warnings
+            .iter()
+            .any(|warning| warning == HEAD_CHANGED);
+        let worktree_mutated = report
+            .warnings
+            .iter()
+            .any(|warning| warning == WORKTREE_MUTATED);
+        let output_truncated = report.check.stdout.truncated || report.check.stderr.truncated;
+        let truncation_warning = report
+            .warnings
+            .iter()
+            .any(|warning| warning == OUTPUT_TRUNCATED);
+        if output_truncated != truncation_warning {
+            return Err("verification evidence truncation warning is inconsistent".into());
+        }
+        if report.check.status == crate::domain::CheckStatus::Pass
+            && report.check.exit_code != Some(0)
+        {
+            return Err("PASS verification evidence requires exit code 0".into());
+        }
+        if report.check.status == crate::domain::CheckStatus::Fail
+            && report.check.exit_code == Some(0)
+        {
+            return Err("FAIL verification evidence cannot carry exit code 0".into());
+        }
+
+        let expected_eligibility = if report.check.status != crate::domain::CheckStatus::Pass
+            || head_changed
+            || worktree_mutated
+        {
+            Eligibility::Blocked
+        } else if output_truncated {
+            Eligibility::Warning
+        } else {
+            Eligibility::Eligible
+        };
+        if report.eligibility != expected_eligibility {
+            return Err(format!(
+                "verification evidence eligibility {} is inconsistent with observed report state {}",
+                report.eligibility.as_str(),
+                expected_eligibility.as_str()
+            )
+            .into());
+        }
+
+        let json = serde_json::to_string(report)?;
+        let updated = tx.execute(
+            "UPDATE candidate_runs SET state = 'VERIFIED' WHERE run_id = ?1 AND state = 'READY'",
             params![report.run_id],
         )?;
+        if updated != 1 {
+            return Err("verification evidence lost its expected READY candidate row".into());
+        }
         tx.execute(
             "INSERT INTO evidence_reports(run_id, eligibility, report_json, created_unix_ms)
              VALUES (?1, ?2, ?3, ?4)",
@@ -1607,6 +1888,15 @@ impl Store {
         )?;
         tx.commit()?;
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn save_evidence_for_test(
+        &mut self,
+        report: &EvidenceReport,
+        now_ms: i64,
+    ) -> Result<()> {
+        self.save_evidence(report, now_ms)
     }
 
     pub fn load_run(&self, run_id: &str) -> Result<StoredRun> {
