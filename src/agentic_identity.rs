@@ -400,6 +400,9 @@ impl Store {
                         .then_with(|| left.session_id.cmp(&right.session_id))
                         .then_with(|| left.display_name.cmp(&right.display_name))
                 });
+                if let Some(best_rank) = ranked.first().map(|(rank, _)| *rank) {
+                    ranked.retain(|(rank, _)| *rank == best_rank);
+                }
                 ranked
                     .into_iter()
                     .map(|(_, session)| session)
