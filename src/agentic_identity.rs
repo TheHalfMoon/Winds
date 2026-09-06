@@ -1,10 +1,16 @@
 use super::{Result, Store, validate_agentic_identity_text, validate_agentic_identity_timestamp};
 use crate::domain::WindsSessionRecord;
 use rusqlite::{OptionalExtension, params};
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 #[cfg(test)]
 #[path = "t071_agentic_continuity_tests.rs"]
 mod t071_agentic_continuity_tests;
+
+#[cfg(test)]
+#[path = "t084_agentic_findability_tests.rs"]
+mod t084_agentic_findability_tests;
 
 #[allow(
     dead_code,
@@ -14,6 +20,202 @@ mod t071_agentic_continuity_tests;
 pub(crate) enum ContinuationResolution {
     Selected(WindsSessionRecord),
     Candidates(Vec<WindsSessionRecord>),
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 006 T084 deterministic context findability metadata; product picker callers land later"
+)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ContextCandidateProvenance {
+    Changed,
+    Recent,
+    Test,
+    Symbol(String),
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 006 T084 deterministic context findability input; product picker callers land later"
+)]
+#[derive(Debug, Clone)]
+pub(crate) struct PathCandidateSeed<'a> {
+    pub path: &'a Path,
+    pub provenance: ContextCandidateProvenance,
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 006 T084 deterministic context findability result; product picker callers land later"
+)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedPathCandidate {
+    pub canonical_path: PathBuf,
+    pub provenance: Vec<ContextCandidateProvenance>,
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 006 T084 deterministic symbol findability input; product picker callers land later"
+)]
+#[derive(Debug, Clone)]
+pub(crate) struct SymbolPathCandidateSeed<'a> {
+    pub path: &'a Path,
+    pub symbol: &'a str,
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 006 T084 keeps unavailable semantic intelligence explicit"
+)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SymbolFindability {
+    Unavailable,
+    Candidates(Vec<ResolvedPathCandidate>),
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 006 T084 deterministic context findability seam; product picker callers land later"
+)]
+pub(crate) fn resolve_path_candidates(
+    workspace_root: &Path,
+    seeds: &[PathCandidateSeed<'_>],
+) -> Result<Vec<ResolvedPathCandidate>> {
+    let canonical_root = canonical_findability_root(workspace_root)?;
+    let mut grouped = BTreeMap::<PathBuf, BTreeSet<ContextCandidateProvenance>>::new();
+
+    for seed in seeds {
+        if let ContextCandidateProvenance::Symbol(symbol) = &seed.provenance
+            && symbol.trim().is_empty()
+        {
+            return Err("symbol provenance must contain a non-empty symbol name".into());
+        }
+
+        let requested_path = if seed.path.is_absolute() {
+            seed.path.to_path_buf()
+        } else {
+            canonical_root.join(seed.path)
+        };
+        let canonical_path = requested_path.canonicalize().map_err(|error| {
+            format!(
+                "context candidate cannot be canonicalized ({}): {error}",
+                requested_path.display()
+            )
+        })?;
+        if !canonical_path.starts_with(&canonical_root) {
+            return Err(format!(
+                "context candidate is outside the canonical workspace root: {}",
+                canonical_path.display()
+            )
+            .into());
+        }
+        if !canonical_path.is_file() && !canonical_path.is_dir() {
+            return Err(format!(
+                "context candidate is not a file or directory: {}",
+                canonical_path.display()
+            )
+            .into());
+        }
+
+        grouped
+            .entry(canonical_path)
+            .or_default()
+            .insert(seed.provenance.clone());
+    }
+
+    Ok(grouped
+        .into_iter()
+        .map(|(canonical_path, provenance)| ResolvedPathCandidate {
+            canonical_path,
+            provenance: provenance.into_iter().collect(),
+        })
+        .collect())
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 006 T084 keeps unavailable semantic intelligence explicit"
+)]
+pub(crate) fn resolve_symbol_path_candidates(
+    workspace_root: &Path,
+    seeds: Option<&[SymbolPathCandidateSeed<'_>]>,
+) -> Result<SymbolFindability> {
+    let Some(seeds) = seeds else {
+        return Ok(SymbolFindability::Unavailable);
+    };
+
+    let path_seeds = seeds
+        .iter()
+        .map(|seed| {
+            if seed.symbol.trim().is_empty() {
+                return Err("symbol candidate must contain a non-empty symbol name".into());
+            }
+            Ok(PathCandidateSeed {
+                path: seed.path,
+                provenance: ContextCandidateProvenance::Symbol(seed.symbol.to_owned()),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(SymbolFindability::Candidates(resolve_path_candidates(
+        workspace_root,
+        &path_seeds,
+    )?))
+}
+
+fn canonical_findability_root(workspace_root: &Path) -> Result<PathBuf> {
+    let canonical_root = workspace_root
+        .canonicalize()
+        .map_err(|error| format!("workspace root cannot be canonicalized: {error}"))?;
+    if !canonical_root.is_dir() {
+        return Err("workspace root is not a directory".into());
+    }
+    Ok(canonical_root)
+}
+
+fn normalized_findability_text(value: &str) -> String {
+    value
+        .trim()
+        .chars()
+        .flat_map(|character| character.to_lowercase())
+        .collect()
+}
+
+fn is_findability_subsequence(needle: &str, haystack: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+
+    let mut needle = needle.chars();
+    let mut expected = needle.next();
+    for character in haystack.chars() {
+        if Some(character) == expected {
+            expected = needle.next();
+            if expected.is_none() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn session_findability_rank(session: &WindsSessionRecord, selector: &str) -> Option<u8> {
+    let selector = normalized_findability_text(selector);
+    let session_id = normalized_findability_text(&session.session_id);
+    let display_name = normalized_findability_text(&session.display_name);
+
+    if session_id == selector || display_name == selector {
+        Some(0)
+    } else if session_id.contains(&selector) || display_name.contains(&selector) {
+        Some(1)
+    } else if is_findability_subsequence(&selector, &session_id)
+        || is_findability_subsequence(&selector, &display_name)
+    {
+        Some(2)
+    } else {
+        None
+    }
 }
 
 #[allow(
@@ -184,9 +386,26 @@ impl Store {
                 {
                     return Ok(ContinuationResolution::Selected(exact));
                 }
-                sessions
+
+                let mut ranked = sessions
                     .into_iter()
-                    .filter(|session| session.display_name == selector)
+                    .filter_map(|session| {
+                        session_findability_rank(&session, selector).map(|rank| (rank, session))
+                    })
+                    .collect::<Vec<_>>();
+                ranked.sort_by(|(left_rank, left), (right_rank, right)| {
+                    left_rank
+                        .cmp(right_rank)
+                        .then_with(|| left.created_unix_ms.cmp(&right.created_unix_ms))
+                        .then_with(|| left.session_id.cmp(&right.session_id))
+                        .then_with(|| left.display_name.cmp(&right.display_name))
+                });
+                if let Some(best_rank) = ranked.first().map(|(rank, _)| *rank) {
+                    ranked.retain(|(rank, _)| *rank == best_rank);
+                }
+                ranked
+                    .into_iter()
+                    .map(|(_, session)| session)
                     .collect::<Vec<_>>()
             }
             None => sessions,
