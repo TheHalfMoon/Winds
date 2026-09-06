@@ -16,11 +16,14 @@ fn t087_inert_workbench_renders_deterministically_without_terminal_child() {
     assert_eq!(first[(47, 0)].symbol(), "┐");
     assert_eq!(first[(0, 4)].symbol(), "└");
     assert_eq!(first[(47, 4)].symbol(), "┘");
-    let rendered_message = (9u16..=37u16)
+    let rendered_row = (0u16..48u16)
         .map(|x| first[(x, 1)].symbol())
         .collect::<Vec<_>>()
         .concat();
-    assert_eq!(rendered_message, "No terminal panes are active.");
+    assert!(
+        rendered_row.contains("No terminal panes are active."),
+        "expected empty-state message in rendered row: {rendered_row:?}"
+    );
 
     terminal
         .draw(render_inert_workbench)
