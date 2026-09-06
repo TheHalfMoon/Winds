@@ -38,10 +38,10 @@ jobs:
           sha256sum Cargo.lock
           echo '===T087_CARGO_LOCK_SHA256_END==='
           echo '===T087_CARGO_TREE_FEATURES_BEGIN==='
-          cargo tree --locked -e features
+          cargo tree --locked -e features | tee /tmp/t087-cargo-tree-features.txt
           echo '===T087_CARGO_TREE_FEATURES_END==='
           cargo metadata --locked --format-version 1 > /tmp/t087-metadata.json
-          python3 - <<'PY'
+          python3 - <<'PY' | tee /tmp/t087-metadata-summary.txt
           import json
           from pathlib import Path
 
@@ -74,3 +74,13 @@ jobs:
           base64 -w0 Cargo.lock
           echo
           echo '===T087_CARGO_LOCK_BASE64_END==='
+      - name: Upload T087 lock evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: t087-lock-evidence-${{ github.sha }}
+          path: |
+            Cargo.lock
+            /tmp/t087-cargo-tree-features.txt
+            /tmp/t087-metadata.json
+            /tmp/t087-metadata-summary.txt
+          if-no-files-found: error
