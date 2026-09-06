@@ -12,6 +12,16 @@ fn t087_inert_workbench_renders_deterministically_without_terminal_child() {
         .expect("first inert workbench render");
     let first = terminal.backend().buffer().clone();
 
+    assert_eq!(first[(0, 0)].symbol(), "┌");
+    assert_eq!(first[(47, 0)].symbol(), "┐");
+    assert_eq!(first[(0, 4)].symbol(), "└");
+    assert_eq!(first[(47, 4)].symbol(), "┘");
+    let rendered_message = (9u16..=37u16)
+        .map(|x| first[(x, 1)].symbol())
+        .collect::<Vec<_>>()
+        .concat();
+    assert_eq!(rendered_message, "No terminal panes are active.");
+
     terminal
         .draw(render_inert_workbench)
         .expect("second inert workbench render");
