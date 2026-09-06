@@ -86,7 +86,7 @@ fn retained_transcript_has_visible_line_and_payload_eviction() {
     assert!(transcript.truncated);
     assert_eq!(
         transcript.retained_bytes,
-        transcript.lines.iter().map(Vec::len).sum()
+        transcript.lines.iter().map(Vec::len).sum::<usize>()
     );
 }
 
