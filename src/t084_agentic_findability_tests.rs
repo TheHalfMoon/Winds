@@ -126,7 +126,10 @@ fn selected_session_id(resolution: ContinuationResolution) -> String {
 fn candidate_session_ids(resolution: ContinuationResolution) -> Vec<String> {
     match resolution {
         ContinuationResolution::Selected(session) => {
-            panic!("expected explicit ambiguity, got selected session: {}", session.session_id)
+            panic!(
+                "expected explicit ambiguity, got selected session: {}",
+                session.session_id
+            )
         }
         ContinuationResolution::Candidates(candidates) => candidates
             .into_iter()
@@ -179,7 +182,11 @@ fn path_findability_canonicalizes_files_and_directories_and_merges_provenance() 
     fs::create_dir_all(root.join("src")).unwrap();
     fs::create_dir_all(root.join("tests")).unwrap();
     fs::write(root.join("src/Résumé.rs"), "pub fn résumé() {}\n").unwrap();
-    fs::write(root.join("tests/findability.rs"), "#[test] fn fixture() {}\n").unwrap();
+    fs::write(
+        root.join("tests/findability.rs"),
+        "#[test] fn fixture() {}\n",
+    )
+    .unwrap();
 
     let seeds = [
         PathCandidateSeed {
