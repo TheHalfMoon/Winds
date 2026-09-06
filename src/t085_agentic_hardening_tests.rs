@@ -192,9 +192,8 @@ fn bounded_fake_claude_repetition_rejects_resume_reuse_and_bad_output() {
             "iteration={iteration}"
         );
 
-        let resolution = RuntimeResumeResolution::Candidate(Box::new(claude_binding(
-            "session-exact-t085",
-        )));
+        let resolution =
+            RuntimeResumeResolution::Candidate(Box::new(claude_binding("session-exact-t085")));
         let invocation = build_claude_structured_invocation(
             ClaudeOutputFormat::Json,
             ClaudeSessionSelection::RevalidatedResume(&resolution),
