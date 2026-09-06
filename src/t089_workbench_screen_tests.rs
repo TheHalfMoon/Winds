@@ -139,8 +139,6 @@ fn winds_looking_markers_and_forged_json_are_only_rendered_terminal_text() {
 
 #[test]
 fn production_transcript_limits_match_or_tighten_fr_050() {
-    assert!(MAX_TRANSCRIPT_LINES <= 100_000);
-    assert!(MAX_TRANSCRIPT_BYTES <= 32 * 1024 * 1024);
     assert_eq!(MAX_TRANSCRIPT_LINES, 100_000);
     assert_eq!(MAX_TRANSCRIPT_BYTES, 32 * 1024 * 1024);
 }
