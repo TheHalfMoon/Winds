@@ -32,6 +32,11 @@ mod domain;
 mod execution;
 mod git;
 mod store;
+#[allow(
+    dead_code,
+    reason = "Spec 007 T087 inert render seam; live workbench event loop remains blocked"
+)]
+mod workbench;
 #[cfg(test)]
 mod t068_store_regression_tests;
 #[cfg(test)]
@@ -46,6 +51,8 @@ mod t077_codex_protocol_tests;
 mod t078_claude_structured_tests;
 #[cfg(test)]
 mod t085_agentic_hardening_tests;
+#[cfg(test)]
+mod t087_workbench_dependency_tests;
 
 use crate::check::run_check;
 use crate::domain::{CheckEvidence, CheckStatus, Eligibility, PromotionReport};
