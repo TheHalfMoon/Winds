@@ -10,6 +10,30 @@
 
 This file decomposes Spec 006 into independently reviewable slices. It does not itself execute an Agent, send a prompt, call a model/provider API, install a runtime, accept terms, duplicate credentials, enable MCP, add a daemon, or authorize remote execution.
 
+## T086 Closeout Ledger
+
+The checked task state below records the first Spec 006 **implementation program** closeout candidate. It becomes canonical only after the exact final T086 closeout candidate satisfies its deterministic/review gates, lands with an expected-head guard, and is post-merge verified on canonical `main`.
+
+The three separately governed physical-runtime lanes remain distinct from implementation closure:
+
+```text
+T079_IMPLEMENTATION_LANE=CLOSED_CANONICAL_PREDECESSOR
+T079_LIVE_EVIDENCE_LANE=OPEN_DEFERRED_EXTERNAL
+T079_LIVE_PASS=NO
+
+T080_IMPLEMENTATION_LANE=CLOSED_CANONICAL_PREDECESSOR
+T080_LIVE_EVIDENCE_LANE=OPEN_DEFERRED_EXTERNAL
+T080_LIVE_PASS=NO
+REAL_CLAUDE_EXECUTION=NO
+
+T082_IMPLEMENTATION_LANE=CLOSED_CANONICAL_PREDECESSOR
+T082_WORKER_LIVE_EVIDENCE_LANE=OPEN_DEFERRED_EXTERNAL
+T082_WORKER_LIVE_PASS=NO
+REAL_CODEX_WORKER_EXECUTION=NO
+```
+
+No checked task below upgrades those deferred live lanes to PASS. Canonical Tasks Amendment 001 governs that implementation/live-evidence separation.
+
 ## Global Rules
 
 1. Execute tasks in dependency order. Only the next dependency-satisfied task is authorized.
@@ -58,7 +82,7 @@ T072 may perform documented non-Agent executable/version discovery because `DISC
 
 ## Phase 1 — Canonical Identity, Fixture-Only
 
-### [ ] T070 — Workstream and Winds-session persistence substrate
+### [x] T070 — Workstream and Winds-session persistence substrate
 
 **Purpose**: add structural canonical identity without any Agent process.
 
@@ -90,7 +114,7 @@ workspaces(workspace_id)
 
 **Depends on**: canonical Tasks. **Closes to authorize**: T071.
 
-### [ ] T071 — Continue / fork / new-session / new-task semantics
+### [x] T071 — Continue / fork / new-session / new-task semantics
 
 **Authorized paths**:
 - `migrations/0007_agentic_session_origins.sql`
@@ -116,7 +140,7 @@ T071 may add only the minimum forward-only persistence needed to make fork origi
 
 ## Phase 2 — Runtime Discovery / Binding Truth, Fixture-Only
 
-### [ ] T072 — Codex/Claude safe discovery with fake executables
+### [x] T072 — Codex/Claude safe discovery with fake executables
 
 **Authorized paths**:
 - `src/agentic_runtime.rs`
@@ -136,7 +160,7 @@ T071 may add only the minimum forward-only persistence needed to make fork origi
 
 **Depends on**: T071. **Closes to authorize**: T073.
 
-### [ ] T073 — Runtime-session binding persistence and continuity truth
+### [x] T073 — Runtime-session binding persistence and continuity truth
 
 **Authorized paths**:
 - `migrations/0008_runtime_session_bindings.sql`
@@ -161,7 +185,7 @@ T071 may add only the minimum forward-only persistence needed to make fork origi
 
 ## Phase 3 — Canonical Context, Fixture-Only
 
-### [ ] T074 — Deterministic context capsule and transfer report
+### [x] T074 — Deterministic context capsule and transfer report
 
 **Authorized paths**:
 - `src/agentic_context.rs`
@@ -190,7 +214,7 @@ T074 must first prove the canonical capsule using existing workstream/session fi
 
 ## Phase 4 — Authority / Approval, Fixture-Only
 
-### [ ] T075 — Pure authority/delegation evaluator
+### [x] T075 — Pure authority/delegation evaluator
 
 **Authorized paths**:
 - `src/agentic_authority.rs`
@@ -212,7 +236,7 @@ T074 must first prove the canonical capsule using existing workstream/session fi
 
 **Depends on**: T074. **Closes to authorize**: T076.
 
-### [ ] T076 — Content-bound human approval digest / audit substrate
+### [x] T076 — Content-bound human approval digest / audit substrate
 
 **Authorized paths**:
 - `migrations/0009_agentic_delegation_audit.sql`
@@ -238,7 +262,7 @@ Approval identity includes, as applicable: workstream/session IDs, requested Wor
 
 ## Phase 5 — Structured Runtime Clients, Fake Before Real
 
-### [ ] T077 — Fake Codex App Server protocol client
+### [x] T077 — Fake Codex App Server protocol client
 
 **Authorized paths**:
 - `src/agentic_codex.rs`
@@ -267,7 +291,7 @@ initialize request
 
 **Depends on**: T076. **Closes to authorize**: T078.
 
-### [ ] T078 — Fake Claude structured CLI construction/parser
+### [x] T078 — Fake Claude structured CLI construction/parser
 
 **Authorized paths**:
 - `src/agentic_claude.rs`
@@ -291,7 +315,9 @@ initialize request
 
 ## Phase 6 — First Real Runtime Proofs
 
-### [ ] T079 — FIRST REAL CODEX PROMPT: bounded App Server proof
+### [x] T079 — FIRST REAL CODEX PROMPT: bounded App Server proof
+
+**Implementation-closeout note**: this checked state means the T079 implementation lane is canonically landed for the first implementation program. It does **not** mean the separately governed T079 live-evidence lane passed; `T079_LIVE_PASS=NO` remains authoritative.
 
 **Special authorization**: first task permitted to launch the exact locally discovered/revalidated real Codex App Server for Agent work and send a Codex prompt.
 
@@ -374,7 +400,9 @@ This registry is closed for T079: there are exactly 21 known diagnostic classes 
 
 **Depends on**: T078. **Closes to authorize**: T080.
 
-### [ ] T080 — FIRST REAL CLAUDE PROMPT: bounded Planner/read-plan proof
+### [x] T080 — FIRST REAL CLAUDE PROMPT: bounded Planner/read-plan proof
+
+**Implementation-closeout note**: this checked state means the T080 implementation lane is canonically landed for the first implementation program. It does **not** mean the separately governed T080 live-evidence lane passed; `T080_LIVE_PASS=NO` and `REAL_CLAUDE_EXECUTION=NO` remain authoritative.
 
 **Special authorization**: first task permitted to launch exact locally discovered/revalidated real Claude Code and send a Claude prompt.
 
@@ -409,7 +437,7 @@ This registry is closed for T079: there are exactly 21 known diagnostic classes 
 
 ## Phase 7 — Cross-Runtime Handoff / One Bounded Delegation
 
-### [ ] T081 — Claude-Planner -> Codex-Worker handoff contract
+### [x] T081 — Claude-Planner -> Codex-Worker handoff contract
 
 **Authorized paths**:
 - `src/agentic_context.rs`
@@ -431,7 +459,9 @@ This registry is closed for T079: there are exactly 21 known diagnostic classes 
 
 **Depends on**: T080. **Closes to authorize**: T082.
 
-### [ ] T082 — One human-approved Codex Worker edit in exact worktree
+### [x] T082 — One human-approved Codex Worker edit in exact worktree
+
+**Implementation-closeout note**: this checked state means the T082 deterministic implementation lane is canonically landed for the first implementation program. It does **not** mean a real Codex Worker edit was accepted; `T082_WORKER_LIVE_PASS=NO` and `REAL_CODEX_WORKER_EXECUTION=NO` remain authoritative.
 
 Real Codex Worker is allowed only under the canonical T079 path after explicit approval of the T081 normalized contract.
 
@@ -459,7 +489,7 @@ Real Codex Worker is allowed only under the canonical T079 path after explicit a
 
 ## Phase 8 — Exact Candidate Review / Verification
 
-### [ ] T083 — Candidate binding, review staleness, `winds verify` bridge
+### [x] T083 — Candidate binding, review staleness, `winds verify` bridge
 
 **Authorized paths**:
 - existing `src/git.rs`, `src/store.rs`, `src/domain.rs`, `src/main.rs` only where required
@@ -482,7 +512,7 @@ Real Codex Worker is allowed only under the canonical T079 path after explicit a
 
 ## Phase 9 — P2 Findability
 
-### [ ] T084 — Deterministic session/path findability
+### [x] T084 — Deterministic session/path findability
 
 **Authorized paths**:
 - existing CLI/workspace selection surfaces where practical
@@ -506,7 +536,7 @@ Real Codex Worker is allowed only under the canonical T079 path after explicit a
 
 ## Phase 10 — Hardening / Acceptance
 
-### [ ] T085 — Cross-platform negative/fault/repetition campaign
+### [x] T085 — Cross-platform negative/fault/repetition campaign
 
 Cover deterministically: corrupt/unknown identity/binding values, cross-workspace attempts, changed workspace identity, executable replacement, malformed/oversized runtime output, Codex handshake exits/unknown messages, Claude resume rejection/reuse, imported-history injection, explicit context omissions, over-ceiling/deny/approval-replay cases, runtime success conflicting with Git, candidate movement during review/check, dirty Worker recovery, no blind PID/native attachment, bounded fake runtime repetitions, deterministic capsule hashes, and Spec 003 verification/store regressions.
 
@@ -516,7 +546,9 @@ Real-runtime repetition, if any, is bounded by measured cost; do not invent a 10
 
 **Depends on**: T084. **Closes to authorize**: T086.
 
-### [ ] T086 — Spec 006 acceptance / exact-head review / evidence reconciliation
+### [x] T086 — Spec 006 acceptance / exact-head review / evidence reconciliation
+
+**Candidate-closeout note**: this checkbox records T086 task truth on the closeout branch. It is not canonical closure until the exact final docs-only closeout candidate passes all T086 gates, lands with an expected-head guard, and is post-merge verified.
 
 **Authorized paths**:
 - task-state updates in this `tasks.md`
