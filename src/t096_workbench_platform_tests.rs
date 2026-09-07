@@ -1,9 +1,7 @@
 use super::screen::WorkbenchScreen;
 use super::screen::host_safety::{HOST_INTEGRATION_CAPABILITIES, TerminalHostSafetySnapshot};
 use super::terminal::WorkbenchTerminals;
-use super::terminal::input::{
-    MultilineSubmitPolicy, ShellSubmitTerminator, WorkbenchShellEditor,
-};
+use super::terminal::input::{MultilineSubmitPolicy, ShellSubmitTerminator, WorkbenchShellEditor};
 use super::ui::WorkbenchNavigation;
 use super::{PaneLifecycleView, PaneSize, WorkbenchState, render_inert_workbench};
 use crate::git::shell_profiles::{ShellProfile, discover_native_shell_profiles};
@@ -235,7 +233,10 @@ fn t096_native_workbench_path_directly_qualifies_current_host_domain() {
         .close(&mut state, pane)
         .expect("T096 native owned terminal must close with proven cleanup");
     assert!(!terminals.has_owned_terminal(pane));
-    assert_eq!(state.pane(pane).unwrap().lifecycle, PaneLifecycleView::Exited);
+    assert_eq!(
+        state.pane(pane).unwrap().lifecycle,
+        PaneLifecycleView::Exited
+    );
 }
 
 #[cfg(windows)]
@@ -312,5 +313,8 @@ fn t096_real_wsl2_workbench_path_preserves_host_guest_domain_and_path_truth() {
         .close(&mut state, pane)
         .expect("T096 real WSL2 owned terminal must close with proven cleanup");
     assert!(!terminals.has_owned_terminal(pane));
-    assert_eq!(state.pane(pane).unwrap().lifecycle, PaneLifecycleView::Exited);
+    assert_eq!(
+        state.pane(pane).unwrap().lifecycle,
+        PaneLifecycleView::Exited
+    );
 }
