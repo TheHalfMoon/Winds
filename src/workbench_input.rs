@@ -73,7 +73,9 @@ impl WorkbenchShellEditor {
 
     pub(crate) fn insert_char(&mut self, character: char) -> Result<()> {
         if character == '\r' || character == '\n' {
-            return Err("shell editor newline insertion must use the explicit newline operation".into());
+            return Err(
+                "shell editor newline insertion must use the explicit newline operation".into(),
+            );
         }
         self.textarea.insert_char(character);
         Ok(())
