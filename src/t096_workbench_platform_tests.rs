@@ -19,6 +19,10 @@ const RESIZED_SIZE: PaneSize = PaneSize::new(100, 30);
 const NATIVE_MARKER: &str = "WINDS_T096_NATIVE_OK";
 #[cfg(windows)]
 const WSL_MARKER: &str = "WINDS_T096_WSL_OK";
+#[cfg(windows)]
+const CURSOR_POSITION_QUERY: &[u8] = b"\x1b[6n";
+#[cfg(windows)]
+const TEST_CURSOR_POSITION_RESPONSE: &[u8] = b"\x1b[1;1R";
 
 const _: () = {
     assert!(!HOST_INTEGRATION_CAPABILITIES.terminal_clipboard_write);
@@ -150,6 +154,43 @@ fn exercise_unicode_parser_and_fail_closed_osc52(screen: &mut WorkbenchScreen) {
     assert_eq!(safety.trusted_ui_state_transitions, 0);
 }
 
+#[cfg(windows)]
+fn complete_windows_headless_terminal_startup(
+    state: &mut WorkbenchState,
+    terminals: &mut WorkbenchTerminals,
+    screen: &mut WorkbenchScreen,
+) {
+    let pane = state
+        .selected_pane()
+        .expect("T096 Windows startup requires one selected pane");
+    let mut observed = Vec::new();
+    for _ in 0..64 {
+        let mut buffer = [0_u8; 4096];
+        let count = terminals
+            .read_output_once(state, pane, &mut buffer)
+            .expect("T096 Windows startup output must remain readable");
+        if count == 0 {
+            break;
+        }
+        screen.process_observed_bytes(&buffer[..count]);
+        observed.extend_from_slice(&buffer[..count]);
+        if observed
+            .windows(CURSOR_POSITION_QUERY.len())
+            .any(|window| window == CURSOR_POSITION_QUERY)
+        {
+            let dispatched = terminals
+                .dispatch_selected_input(state, TEST_CURSOR_POSITION_RESPONSE)
+                .expect("T096 headless ConPTY fixture must answer cursor-position query");
+            assert_eq!(dispatched, pane);
+            return;
+        }
+    }
+    panic!(
+        "T096 timed out before observing the ConPTY cursor-position query; bytes={:?}",
+        String::from_utf8_lossy(&observed)
+    );
+}
+
 fn read_until_marker(
     state: &mut WorkbenchState,
     terminals: &mut WorkbenchTerminals,
@@ -212,6 +253,10 @@ fn t096_native_workbench_path_directly_qualifies_current_host_domain() {
     assert!(terminals.has_owned_terminal(pane));
     assert_eq!(state.pane(pane).unwrap().lifecycle, PaneLifecycleView::Live);
 
+    let mut screen = WorkbenchScreen::new(DEFAULT_SIZE).unwrap();
+    #[cfg(windows)]
+    complete_windows_headless_terminal_startup(&mut state, &mut terminals, &mut screen);
+
     let mut navigation = WorkbenchNavigation::new();
     let mut resize_editor = WorkbenchShellEditor::new();
     navigation
@@ -225,9 +270,11 @@ fn t096_native_workbench_path_directly_qualifies_current_host_domain() {
         )
         .expect("T096 host resize event must reach the exact owned pane");
     assert_eq!(state.pane(pane).unwrap().size, RESIZED_SIZE);
+    screen
+        .explicit_resize(RESIZED_SIZE)
+        .expect("T096 screen projection must follow the accepted host resize");
 
     exercise_host_input_and_dispatch(&mut state, &mut terminals, NATIVE_MARKER);
-    let mut screen = WorkbenchScreen::new(RESIZED_SIZE).unwrap();
     read_until_marker(&mut state, &mut terminals, &mut screen, NATIVE_MARKER);
     assert!(screen.screen_contents().contains(NATIVE_MARKER));
     exercise_unicode_parser_and_fail_closed_osc52(&mut screen);
@@ -292,6 +339,9 @@ fn t096_real_wsl2_workbench_path_preserves_host_guest_domain_and_path_truth() {
     assert!(terminals.has_owned_terminal(pane));
     assert_eq!(state.pane(pane).unwrap().lifecycle, PaneLifecycleView::Live);
 
+    let mut screen = WorkbenchScreen::new(DEFAULT_SIZE).unwrap();
+    complete_windows_headless_terminal_startup(&mut state, &mut terminals, &mut screen);
+
     let mut navigation = WorkbenchNavigation::new();
     let mut resize_editor = WorkbenchShellEditor::new();
     navigation
@@ -305,9 +355,11 @@ fn t096_real_wsl2_workbench_path_preserves_host_guest_domain_and_path_truth() {
         )
         .expect("T096 WSL2 resize must pass through the owned Windows/WSL terminal path");
     assert_eq!(state.pane(pane).unwrap().size, RESIZED_SIZE);
+    screen
+        .explicit_resize(RESIZED_SIZE)
+        .expect("T096 WSL2 screen projection must follow the accepted host resize");
 
     exercise_host_input_and_dispatch(&mut state, &mut terminals, WSL_MARKER);
-    let mut screen = WorkbenchScreen::new(RESIZED_SIZE).unwrap();
     read_until_marker(&mut state, &mut terminals, &mut screen, WSL_MARKER);
     assert!(screen.screen_contents().contains(WSL_MARKER));
     exercise_unicode_parser_and_fail_closed_osc52(&mut screen);
