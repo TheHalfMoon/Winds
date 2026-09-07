@@ -201,10 +201,7 @@ fn t094_exact_candidate_and_diff_projection_use_read_only_git_observation() {
 
     assert_eq!(projected.candidate.oid, head);
     assert_eq!(projected.candidate.tree, expected_tree);
-    let projected_diff = projected
-        .diff
-        .as_ref()
-        .expect("read-only diff projection");
+    let projected_diff = projected.diff.as_ref().expect("read-only diff projection");
     assert_eq!(projected_diff.base_oid, base);
     assert_eq!(projected_diff.candidate_oid, head);
     assert_eq!(projected_diff.candidate_tree, expected_tree);
