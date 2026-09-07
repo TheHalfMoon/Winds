@@ -269,7 +269,9 @@ impl WorkbenchTerminals {
             Some(self.finish_owned_terminal(state, pane_id, "pane close")?)
         } else if lifecycle == PaneLifecycleView::Live {
             state.set_pane_lifecycle(pane_id, PaneLifecycleView::OwnershipLost);
-            return Err("live workbench pane has no owned terminal session; refusing visual close".into());
+            return Err(
+                "live workbench pane has no owned terminal session; refusing visual close".into(),
+            );
         } else {
             None
         };
@@ -380,7 +382,9 @@ fn require_output_readable_pane(state: &WorkbenchState, pane_id: PaneId) -> Resu
     let pane = state.pane(pane_id).ok_or("unknown workbench pane")?;
     match pane.lifecycle {
         PaneLifecycleView::Live | PaneLifecycleView::Exited => Ok(()),
-        PaneLifecycleView::Stopped | PaneLifecycleView::OwnershipLost | PaneLifecycleView::Error => {
+        PaneLifecycleView::Stopped
+        | PaneLifecycleView::OwnershipLost
+        | PaneLifecycleView::Error => {
             Err("workbench pane output is unavailable without retained terminal ownership".into())
         }
     }
