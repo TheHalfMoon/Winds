@@ -20,6 +20,13 @@ const NATIVE_MARKER: &str = "WINDS_T096_NATIVE_OK";
 #[cfg(windows)]
 const WSL_MARKER: &str = "WINDS_T096_WSL_OK";
 
+const _: () = {
+    assert!(!HOST_INTEGRATION_CAPABILITIES.terminal_clipboard_write);
+    assert!(!HOST_INTEGRATION_CAPABILITIES.external_url_open);
+    assert!(!HOST_INTEGRATION_CAPABILITIES.external_file_open);
+    assert!(!HOST_INTEGRATION_CAPABILITIES.network_or_browser_integration);
+};
+
 fn current_checkout() -> PathBuf {
     std::env::current_dir()
         .expect("T096 runner must expose a current checkout")
@@ -141,10 +148,6 @@ fn exercise_unicode_parser_and_fail_closed_osc52(screen: &mut WorkbenchScreen) {
     let safety = TerminalHostSafetySnapshot::from_callbacks(callbacks);
     assert_eq!(safety.host_actions_performed, 0);
     assert_eq!(safety.trusted_ui_state_transitions, 0);
-    assert!(!HOST_INTEGRATION_CAPABILITIES.terminal_clipboard_write);
-    assert!(!HOST_INTEGRATION_CAPABILITIES.external_url_open);
-    assert!(!HOST_INTEGRATION_CAPABILITIES.external_file_open);
-    assert!(!HOST_INTEGRATION_CAPABILITIES.network_or_browser_integration);
 }
 
 fn read_until_marker(
