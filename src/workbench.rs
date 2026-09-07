@@ -262,6 +262,8 @@ pub(crate) fn render_inert_workbench(frame: &mut Frame<'_>) {
 pub(crate) mod screen;
 #[path = "workbench_terminal.rs"]
 pub(crate) mod terminal;
+#[path = "workbench_ui.rs"]
+pub(crate) mod ui;
 
 #[cfg(test)]
 #[path = "t088_workbench_topology_tests.rs"]
