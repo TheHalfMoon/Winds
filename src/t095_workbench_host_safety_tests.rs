@@ -6,6 +6,13 @@ use super::{
 use crate::workbench::PaneSize;
 use crate::workbench::screen::WorkbenchScreen;
 
+const _: () = {
+    assert!(!HOST_INTEGRATION_CAPABILITIES.terminal_clipboard_write);
+    assert!(!HOST_INTEGRATION_CAPABILITIES.external_url_open);
+    assert!(!HOST_INTEGRATION_CAPABILITIES.external_file_open);
+    assert!(!HOST_INTEGRATION_CAPABILITIES.network_or_browser_integration);
+};
+
 fn size() -> PaneSize {
     PaneSize::new(100, 12)
 }
@@ -20,7 +27,6 @@ fn t095_osc52_never_silently_writes_or_reads_clipboard() {
     assert_eq!(snapshot.observed_clipboard_requests, 2);
     assert_eq!(snapshot.host_actions_performed, 0);
     assert_eq!(snapshot.trusted_ui_state_transitions, 0);
-    assert!(!HOST_INTEGRATION_CAPABILITIES.terminal_clipboard_write);
 
     for kind in [
         TerminalHostRequestKind::ClipboardWrite,
@@ -67,8 +73,6 @@ fn t095_terminal_title_window_and_https_reference_are_advisory_only() {
     assert_eq!(hyperlink.disposition, TerminalHostDisposition::AdvisoryOnly);
     assert_eq!(hyperlink.reason, TerminalHostReason::ExternalOpenDisabled);
     assert!(!hyperlink.can_perform_host_action());
-    assert!(!HOST_INTEGRATION_CAPABILITIES.external_url_open);
-    assert!(!HOST_INTEGRATION_CAPABILITIES.network_or_browser_integration);
 }
 
 #[test]
@@ -127,7 +131,6 @@ fn t095_file_references_are_never_opened_and_ambiguous_paths_are_denied() {
             TerminalHostReason::UnsupportedOrAmbiguousReference
         );
     }
-    assert!(!HOST_INTEGRATION_CAPABILITIES.external_file_open);
 }
 
 #[test]
@@ -196,11 +199,6 @@ fn t095_split_nested_and_oversized_escape_input_stays_terminal_data_only() {
 
 #[test]
 fn t095_host_policy_has_no_external_side_effect_capability() {
-    assert!(!HOST_INTEGRATION_CAPABILITIES.terminal_clipboard_write);
-    assert!(!HOST_INTEGRATION_CAPABILITIES.external_url_open);
-    assert!(!HOST_INTEGRATION_CAPABILITIES.external_file_open);
-    assert!(!HOST_INTEGRATION_CAPABILITIES.network_or_browser_integration);
-
     let summary = TerminalCallbackSummaryFixture::many_untrusted_requests();
     assert!(summary.observed_callback_requests >= 6);
     assert_eq!(summary.host_actions_performed, 0);
