@@ -70,17 +70,18 @@ The workflow is authorized only to:
 1. run on the T097 pull-request candidate and by explicit `workflow_dispatch` with an exact candidate SHA;
 2. use `permissions: contents: read` and checkout with `persist-credentials: false`;
 3. verify the exact checked-out commit before measurements;
-4. install repository-pinned Rust `1.97.1` using the same pinned toolchain action already accepted by repository workflows;
-5. build/run the T097 harness in an explicit release-like profile with `--locked`;
-6. run only local deterministic fixtures with provider/model/network behavior prohibited during benchmark execution;
-7. collect the canonical T097 evidence fields and raw samples or a machine-readable lossless/adequate summary required by the canonical Plan/Tasks;
-8. write machine-readable evidence under `specs/007-native-agentic-terminal-ux-foundation/evidence/` in the job workspace and print the record to the job log;
-9. upload the generated evidence using the already repository-qualified pinned `actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` action;
-10. fail closed if any FR-045..FR-053 threshold or identity/environment prerequisite is not proven.
+4. declare the reference runner before measurement as the explicit GitHub-hosted label `ubuntu-24.04`, declare the exact expected runner-image identity (including `ImageOS` and `ImageVersion`) in committed workflow configuration, and fail closed before any qualifying sample if the observed runner label/image identity differs from that declaration; `ubuntu-latest`, dynamically discovered image identities, and post-hoc acceptance of an unpinned image are prohibited;
+5. install repository-pinned Rust `1.97.1` using the same pinned toolchain action already accepted by repository workflows;
+6. build/run the T097 harness in an explicit release-like profile with `--locked`;
+7. run only local deterministic fixtures with provider/model/network behavior prohibited during benchmark execution;
+8. collect the canonical T097 evidence fields and raw samples or a machine-readable lossless/adequate summary required by the canonical Plan/Tasks;
+9. write machine-readable evidence under `specs/007-native-agentic-terminal-ux-foundation/evidence/` in the job workspace and print the record to the job log;
+10. upload the generated evidence using the already repository-qualified pinned `actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` action;
+11. fail closed if any FR-045..FR-053 threshold or identity/environment prerequisite is not proven.
 
 The workflow MUST NOT commit, push, create or mutate a PR, tag, release, merge, rebase, cherry-pick, change repository settings, use write-capable repository permissions, or perform any product Git mutation.
 
-The workflow may use the GitHub-hosted Ubuntu reference environment for the generic frozen performance budgets. It may add native-platform jobs only where a T097 performance claim is actually made for that platform. It MUST NOT infer platform parity from one runner.
+The generic frozen performance budgets may qualify only on the predeclared `ubuntu-24.04` reference runner whose exact committed image identity passes the fail-closed check above. Native-platform jobs may be added only where a T097 performance claim is actually made for that platform, and each such reference environment must be equivalently pinned and verified before measurement. Platform parity MUST NOT be inferred from one runner.
 
 ## Reference-environment and measurement discipline
 
@@ -107,6 +108,8 @@ p50
 p95
 max
 ```
+
+The committed reference-environment declaration is part of the measurement method. A changed runner label, `ImageOS`, `ImageVersion`, architecture, or other declared environment prerequisite invalidates the campaign before samples qualify; updating that declaration moves the candidate and therefore invalidates all earlier candidate-bound benchmark and review evidence.
 
 FR-045 must use at least 20 process launches of the release-built `winds workbench --t097-exit-after-ready` path and measure from process launch to the readiness record produced only after the accepted first-pane/input-ready boundary.
 
