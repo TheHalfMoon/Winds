@@ -16,13 +16,19 @@ This amendment authorizes only the smallest temporary lock-generation mechanism 
 
 When canonical, this amendment supplements only T091's authorized-path boundary for temporary dependency-lock generation.
 
+### Mandatory predecessor gate
+
+This amendment is inert unless live canonical repository truth already proves `T090=CLOSED_CANONICAL`: the guarded T090 landing is present on canonical `main`, the landed tree is verified, and all applicable T090 post-merge/push CI required by the Standard Acceptance Gate has succeeded.
+
+If any part of that predecessor proof is absent, stale, ambiguous, or no longer applicable to current canonical `main`, this amendment grants no workflow or T091 implementation authority. No T091 lock-generation evidence may be produced for qualification until the predecessor gate is re-established from live repository truth.
+
 All existing Spec 007 `tasks.md` requirements remain unchanged, including exact dependency authority, the Standard Acceptance Gate, no-Tokio/no-daemon/no-IPC boundaries, exact submitted-byte semantics, safe multiline/paste fallback, focused-test registration, exact-head review, guarded landing, and the prohibition on unauthorized dependencies.
 
-T091 remains the only authorized implementation task. T092–T100 remain dependency-blocked until T091 closes canonically.
+Only after the mandatory predecessor gate is satisfied does T091 become the authorized implementation task. T092–T100 remain dependency-blocked until T091 closes canonically.
 
 ## Temporary Workflow Authority
 
-During T091 development only, a branch-local temporary workflow may be added at:
+During an authorized T091 development slice only, a branch-local temporary workflow may be added at:
 
 ```text
 .github/workflows/t091-lock-generation.yml
@@ -95,4 +101,4 @@ This amendment is not canonical merely because this file exists.
 
 The exact amendment candidate must satisfy the repository Standard Acceptance Gate applicable to governance-only changes: repository `quality` SUCCESS, correctness/safety/governance/evidence-integrity author review, Ponytail/YAGNI review, fresh independent substantive review bound to the exact candidate, zero unresolved material findings/threads, exact one-file scope reconciliation, guarded expected-head landing, and post-merge canonical main/tree plus applicable push-CI verification.
 
-Only after successful canonical landing may the temporary T091 lock-generation workflow be created.
+Only after successful canonical landing, and only while the mandatory T090 predecessor gate remains satisfied by live repository truth, may the temporary T091 lock-generation workflow be created.
