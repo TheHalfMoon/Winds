@@ -464,6 +464,9 @@ fn validate_size(size: PaneSize) -> Result<(), &'static str> {
     Ok(())
 }
 
+#[path = "workbench_host_safety.rs"]
+pub(crate) mod host_safety;
+
 #[cfg(test)]
 #[path = "t089_workbench_screen_tests.rs"]
 mod t089_workbench_screen_tests;
