@@ -74,7 +74,7 @@ fn t092_findability_prefers_exact_canonical_ids_and_returns_ambiguity_explicitly
     assert!(
         pane_matches
             .iter()
-            .all(|found| matches!(found.target, NavigationTarget::Pane(_)))
+            .all(|found| matches!(&found.target, NavigationTarget::Pane(_)))
     );
 
     let ambiguous_sessions = resolve_find_query("BUILD", &state, &workspaces, &sessions);
@@ -507,8 +507,7 @@ fn t092_event_loop_uses_nonzero_blocking_wait_and_renders_only_on_events() {
         &mut state,
         &mut terminals,
         &mut editor,
-        &[],
-        &[],
+        (&[], &[]),
         &mut source,
         |_, _, _| {
             renders += 1;
