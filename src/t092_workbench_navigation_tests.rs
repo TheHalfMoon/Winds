@@ -523,7 +523,11 @@ fn t092_multi_pane_host_resize_never_guesses_split_geometry() {
         Some("workspace-1")
     );
     assert_eq!(
-        state.pane(second).unwrap().canonical_winds_session_id.as_deref(),
+        state
+            .pane(second)
+            .unwrap()
+            .canonical_winds_session_id
+            .as_deref(),
         Some("session-1")
     );
 }
