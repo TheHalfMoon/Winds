@@ -106,43 +106,116 @@ impl TranscriptRetentionView {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TranscriptSearchScope {
+    RetainedWindowOnly,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TerminalTranscriptView<'a> {
+    snapshot: &'a TranscriptSnapshot,
+    context: &'a InteractionContext,
+}
+
+impl<'a> TerminalTranscriptView<'a> {
+    pub(crate) fn new(snapshot: &'a TranscriptSnapshot, context: &'a InteractionContext) -> Self {
+        Self { snapshot, context }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TranscriptSearchRetention {
+    pub(crate) transcript_count: usize,
+    pub(crate) retained_lines: usize,
+    pub(crate) retained_bytes: usize,
+    pub(crate) evicted_lines: u64,
+    pub(crate) evicted_bytes: u64,
+    pub(crate) truncated: bool,
+}
+
+impl TranscriptSearchRetention {
+    fn from_views(views: &[TerminalTranscriptView<'_>]) -> Self {
+        let mut retention = Self {
+            transcript_count: views.len(),
+            retained_lines: 0,
+            retained_bytes: 0,
+            evicted_lines: 0,
+            evicted_bytes: 0,
+            truncated: false,
+        };
+        for view in views {
+            let current = TranscriptRetentionView::from_snapshot(view.snapshot);
+            retention.retained_lines = retention
+                .retained_lines
+                .saturating_add(current.retained_lines);
+            retention.retained_bytes = retention
+                .retained_bytes
+                .saturating_add(current.retained_bytes);
+            retention.evicted_lines = retention.evicted_lines.saturating_add(current.evicted_lines);
+            retention.evicted_bytes = retention.evicted_bytes.saturating_add(current.evicted_bytes);
+            retention.truncated |= current.truncated;
+        }
+        retention
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TranscriptSearchMatch {
+    pub(crate) transcript_index: usize,
     pub(crate) retained_line_index: usize,
     pub(crate) presentation: InteractionPresentation,
     pub(crate) retention: TranscriptRetentionView,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TranscriptSearchResult {
+    pub(crate) scope: TranscriptSearchScope,
+    pub(crate) matches: Vec<TranscriptSearchMatch>,
+    pub(crate) retention: TranscriptSearchRetention,
 }
 
 pub(crate) fn search_terminal_transcript(
     snapshot: &TranscriptSnapshot,
     context: &InteractionContext,
     query: &str,
-) -> Vec<TranscriptSearchMatch> {
+) -> TranscriptSearchResult {
+    search_terminal_transcripts(&[TerminalTranscriptView::new(snapshot, context)], query)
+}
+
+pub(crate) fn search_terminal_transcripts(
+    views: &[TerminalTranscriptView<'_>],
+    query: &str,
+) -> TranscriptSearchResult {
     let normalized_query = normalize(query);
-    if normalized_query.is_empty() {
-        return Vec::new();
+    let retention = TranscriptSearchRetention::from_views(views);
+    let mut matches = Vec::new();
+
+    if !normalized_query.is_empty() {
+        for (transcript_index, view) in views.iter().enumerate() {
+            let transcript_retention = TranscriptRetentionView::from_snapshot(view.snapshot);
+            for (retained_line_index, line) in view.snapshot.lines.iter().enumerate() {
+                let searchable = normalize(&String::from_utf8_lossy(line));
+                if searchable.contains(&normalized_query) {
+                    matches.push(TranscriptSearchMatch {
+                        transcript_index,
+                        retained_line_index,
+                        presentation: InteractionPresentation::labelled(
+                            InteractionSource::TerminalOutput,
+                            line,
+                            view.context.clone(),
+                        ),
+                        retention: transcript_retention,
+                    });
+                }
+            }
+        }
     }
 
-    let retention = TranscriptRetentionView::from_snapshot(snapshot);
-    snapshot
-        .lines
-        .iter()
-        .enumerate()
-        .filter_map(|(retained_line_index, line)| {
-            let searchable = normalize(&String::from_utf8_lossy(line));
-            searchable
-                .contains(&normalized_query)
-                .then(|| TranscriptSearchMatch {
-                    retained_line_index,
-                    presentation: InteractionPresentation::labelled(
-                        InteractionSource::TerminalOutput,
-                        line,
-                        context.clone(),
-                    ),
-                    retention,
-                })
-        })
-        .collect()
+    TranscriptSearchResult {
+        scope: TranscriptSearchScope::RetainedWindowOnly,
+        matches,
+        retention,
+    }
 }
 
 fn normalize(value: &str) -> String {

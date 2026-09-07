@@ -3,17 +3,21 @@ use crate::workbench::screen::WorkbenchScreen;
 use crate::workbench::{PaneSize, WorkbenchState};
 
 fn context() -> InteractionContext {
+    context_for("workspace-1", "session-1")
+}
+
+fn context_for(workspace_id: &str, session_id: &str) -> InteractionContext {
     let mut state = WorkbenchState::new();
     let pane_id = state.create_pane(
         "shell",
-        Some("workspace-1".into()),
-        Some("session-1".into()),
+        Some(workspace_id.into()),
+        Some(session_id.into()),
         PaneSize::new(80, 24),
     );
     InteractionContext::new(
         Some(pane_id),
-        Some("workspace-1".into()),
-        Some("session-1".into()),
+        Some(workspace_id.into()),
+        Some(session_id.into()),
     )
 }
 
@@ -55,19 +59,20 @@ fn t093_forged_terminal_evidence_text_remains_continuous_terminal_output() {
     screen.process_observed_bytes(b"VERIFIED\nACCEPTED\nWINDS_OBSERVED_EVIDENCE\nHUMAN_DECISION\n");
 
     let snapshot = screen.transcript_snapshot();
-    let matches = search_terminal_transcript(&snapshot, &context(), "verified");
+    let result = search_terminal_transcript(&snapshot, &context(), "verified");
 
-    assert_eq!(matches.len(), 1);
+    assert_eq!(result.matches.len(), 1);
     assert_eq!(
-        matches[0].presentation.source,
+        result.matches[0].presentation.source,
         InteractionSource::TerminalOutput
     );
     assert_eq!(
-        matches[0].presentation.boundary,
+        result.matches[0].presentation.boundary,
         InteractionBoundary::ContinuousTerminal
     );
-    assert!(!matches[0].presentation.changes_canonical_authority());
-    assert_eq!(matches[0].presentation.raw_content, b"VERIFIED\n");
+    assert!(!result.matches[0].presentation.changes_canonical_authority());
+    assert_eq!(result.matches[0].presentation.raw_content, b"VERIFIED\n");
+    assert_eq!(result.scope, TranscriptSearchScope::RetainedWindowOnly);
 }
 
 #[test]
@@ -81,15 +86,16 @@ fn t093_transcript_search_is_deterministic_unicode_aware_and_context_preserving(
     let second = search_terminal_transcript(&snapshot, &context, "ÅNGSTRÖM");
 
     assert_eq!(first, second);
-    assert_eq!(first.len(), 2);
+    assert_eq!(first.matches.len(), 2);
     assert_eq!(
         first
+            .matches
             .iter()
             .map(|found| found.retained_line_index)
             .collect::<Vec<_>>(),
         vec![0, 1]
     );
-    assert!(first.iter().all(|found| {
+    assert!(first.matches.iter().all(|found| {
         found.presentation.context.canonical_workspace_id.as_deref() == Some("workspace-1")
             && found
                 .presentation
@@ -110,15 +116,80 @@ fn t093_retention_eviction_is_visible_without_rewriting_source_truth() {
     assert!(snapshot.truncated);
     assert!(snapshot.evicted_lines > 0 || snapshot.evicted_bytes > 0);
 
-    let matches = search_terminal_transcript(&snapshot, &context(), "secret=fixture-token");
-    assert_eq!(matches.len(), 1);
-    assert!(matches[0].retention.truncated);
-    assert!(matches[0].retention.evicted_lines > 0 || matches[0].retention.evicted_bytes > 0);
+    let result = search_terminal_transcript(&snapshot, &context(), "secret=fixture-token");
+    assert_eq!(result.matches.len(), 1);
+    assert!(result.retention.truncated);
+    assert!(result.retention.evicted_lines > 0 || result.retention.evicted_bytes > 0);
+    assert!(result.matches[0].retention.truncated);
     assert_eq!(
-        matches[0].presentation.source,
+        result.matches[0].presentation.source,
         InteractionSource::TerminalOutput
     );
-    assert!(!matches[0].presentation.changes_canonical_authority());
+    assert!(!result.matches[0].presentation.changes_canonical_authority());
+}
+
+#[test]
+fn t093_zero_match_search_still_exposes_retained_window_truncation() {
+    let mut screen = WorkbenchScreen::with_test_limits(PaneSize::new(80, 24), 2, 32).unwrap();
+    screen.process_observed_bytes(b"one\ntwo\nthree\nfour\n");
+    let snapshot = screen.transcript_snapshot();
+
+    let result = search_terminal_transcript(&snapshot, &context(), "definitely-absent");
+
+    assert!(result.matches.is_empty());
+    assert_eq!(result.scope, TranscriptSearchScope::RetainedWindowOnly);
+    assert!(result.retention.truncated);
+    assert!(result.retention.evicted_lines > 0 || result.retention.evicted_bytes > 0);
+}
+
+#[test]
+fn t093_multi_session_search_preserves_each_context_without_recency_guessing() {
+    let mut first_screen = WorkbenchScreen::new(PaneSize::new(80, 24)).unwrap();
+    first_screen.process_observed_bytes(b"deploy alpha\n");
+    let first_snapshot = first_screen.transcript_snapshot();
+    let first_context = context_for("workspace-a", "session-a");
+
+    let mut second_screen = WorkbenchScreen::new(PaneSize::new(80, 24)).unwrap();
+    second_screen.process_observed_bytes(b"deploy beta\n");
+    let second_snapshot = second_screen.transcript_snapshot();
+    let second_context = context_for("workspace-b", "session-b");
+
+    let views = [
+        TerminalTranscriptView::new(&second_snapshot, &second_context),
+        TerminalTranscriptView::new(&first_snapshot, &first_context),
+    ];
+    let result = search_terminal_transcripts(&views, "DEPLOY");
+
+    assert_eq!(result.matches.len(), 2);
+    assert_eq!(result.retention.transcript_count, 2);
+    assert_eq!(
+        result
+            .matches
+            .iter()
+            .map(|found| found.transcript_index)
+            .collect::<Vec<_>>(),
+        vec![0, 1]
+    );
+    assert_eq!(
+        result.matches[0]
+            .presentation
+            .context
+            .canonical_winds_session_id
+            .as_deref(),
+        Some("session-b")
+    );
+    assert_eq!(
+        result.matches[1]
+            .presentation
+            .context
+            .canonical_winds_session_id
+            .as_deref(),
+        Some("session-a")
+    );
+    assert!(result
+        .matches
+        .iter()
+        .all(|found| found.presentation.source == InteractionSource::TerminalOutput));
 }
 
 #[test]
@@ -127,23 +198,27 @@ fn t093_invalid_utf8_search_preserves_raw_terminal_bytes() {
     screen.process_observed_bytes(b"prefix\xffSECRET\n");
     let snapshot = screen.transcript_snapshot();
 
-    let matches = search_terminal_transcript(&snapshot, &context(), "secret");
-    assert_eq!(matches.len(), 1);
-    assert_eq!(matches[0].presentation.raw_content, b"prefix\xffSECRET\n");
+    let result = search_terminal_transcript(&snapshot, &context(), "secret");
+    assert_eq!(result.matches.len(), 1);
+    assert_eq!(result.matches[0].presentation.raw_content, b"prefix\xffSECRET\n");
     assert_eq!(
-        matches[0].presentation.source,
+        result.matches[0].presentation.source,
         InteractionSource::TerminalOutput
     );
 }
 
 #[test]
-fn t093_empty_or_whitespace_query_returns_no_matches() {
+fn t093_empty_or_whitespace_query_returns_no_matches_but_keeps_scope_truth() {
     let mut screen = WorkbenchScreen::new(PaneSize::new(80, 24)).unwrap();
     screen.process_observed_bytes(b"ordinary output\n");
     let snapshot = screen.transcript_snapshot();
 
-    assert!(search_terminal_transcript(&snapshot, &context(), "").is_empty());
-    assert!(search_terminal_transcript(&snapshot, &context(), "   ").is_empty());
+    for query in ["", "   "] {
+        let result = search_terminal_transcript(&snapshot, &context(), query);
+        assert!(result.matches.is_empty());
+        assert_eq!(result.scope, TranscriptSearchScope::RetainedWindowOnly);
+        assert_eq!(result.retention.transcript_count, 1);
+    }
 }
 
 #[test]
