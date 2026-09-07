@@ -80,7 +80,7 @@ impl WorkbenchShellEditor {
     }
 
     pub(crate) fn insert_text(&mut self, text: &str) -> Result<bool> {
-        if text.contains(['\r', '\n']) {
+        if text.contains('\r') || text.contains('\n') {
             return Err(
                 "shell editor single-line insertion rejects newline-bearing text; use explicit multiline paste"
                     .into(),
@@ -210,3 +210,7 @@ impl WorkbenchTerminals {
         Ok(pane_id)
     }
 }
+
+#[cfg(test)]
+#[path = "t091_workbench_input_tests.rs"]
+mod t091_workbench_input_tests;
