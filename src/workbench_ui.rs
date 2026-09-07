@@ -13,6 +13,7 @@ use std::time::Duration;
 
 pub(crate) const HOST_EVENT_WAIT: Duration = Duration::from_millis(250);
 const DEFAULT_PANE_SIZE: PaneSize = PaneSize::new(80, 24);
+type CanonicalFindSources<'a> = (&'a [WorkspaceRecord], &'a [WindsSessionRecord]);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum NavigationTarget {
@@ -114,10 +115,8 @@ impl WorkbenchNavigation {
         sessions: &[WindsSessionRecord],
         event: Event,
     ) -> Result<NavigationEffect> {
-        if let Event::Key(key) = &event {
-            if key.kind == KeyEventKind::Release {
-                return Ok(NavigationEffect::None);
-            }
+        if matches!(&event, Event::Key(key) if key.kind == KeyEventKind::Release) {
+            return Ok(NavigationEffect::None);
         }
 
         if self.search_query.is_some() {
@@ -369,8 +368,7 @@ pub(crate) fn run_host_event_loop<S, R>(
     state: &mut WorkbenchState,
     terminals: &mut WorkbenchTerminals,
     editor: &mut WorkbenchShellEditor,
-    workspaces: &[WorkspaceRecord],
-    sessions: &[WindsSessionRecord],
+    find_sources: CanonicalFindSources<'_>,
     source: &mut S,
     mut render: R,
 ) -> Result<()>
@@ -383,8 +381,14 @@ where
         let Some(event) = source.next_event(HOST_EVENT_WAIT)? else {
             continue;
         };
-        let effect =
-            navigation.handle_event(state, terminals, editor, workspaces, sessions, event)?;
+        let effect = navigation.handle_event(
+            state,
+            terminals,
+            editor,
+            find_sources.0,
+            find_sources.1,
+            event,
+        )?;
         render(state, navigation, editor)?;
         if effect == NavigationEffect::Quit {
             return Ok(());
