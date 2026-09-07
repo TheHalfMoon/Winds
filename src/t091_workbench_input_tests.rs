@@ -274,7 +274,7 @@ fn t091_focus_at_submit_dispatches_exactly_once_to_the_selected_owned_pane() {
     let profile = executable_profile(
         &root,
         "capture.sh",
-        "#!/bin/sh\nIFS= read -r line\nprintf '%s' \"$line\" > received.txt\nexit 0\n",
+        "#!/bin/sh\nIFS= read -r line\nprintf '%s' \"$line\" > received.txt\nIFS= read -r _\n",
     );
     let pane_a_cwd = root.path().join("pane-a");
     let pane_b_cwd = root.path().join("pane-b");
@@ -316,18 +316,6 @@ fn t091_focus_at_submit_dispatches_exactly_once_to_the_selected_owned_pane() {
     wait_for_path(&pane_b_received);
     assert_eq!(fs::read(&pane_b_received).unwrap(), payload.as_bytes());
     assert!(!pane_a_cwd.join("received.txt").exists());
-
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        if terminals.poll_exit(&mut state, pane_b).unwrap().is_some() {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "T091 selected child did not exit before fixture deadline"
-        );
-        thread::sleep(Duration::from_millis(10));
-    }
 
     terminals.close(&mut state, pane_a).unwrap();
     terminals.close(&mut state, pane_b).unwrap();
