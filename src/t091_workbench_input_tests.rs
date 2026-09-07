@@ -317,8 +317,10 @@ fn t091_focus_at_submit_dispatches_exactly_once_to_the_selected_owned_pane() {
     assert_eq!(fs::read(&pane_b_received).unwrap(), payload.as_bytes());
     assert!(!pane_a_cwd.join("received.txt").exists());
 
-    terminals.close(&mut state, pane_a).unwrap();
-    terminals.close(&mut state, pane_b).unwrap();
+    // T090 owns terminal-close qualification. This T091 fixture ends after
+    // exactly-one-pane dispatch proof and delegates bounded cleanup to the
+    // already-qualified TerminalSession RAII path.
+    drop(terminals);
 }
 
 #[cfg(unix)]
