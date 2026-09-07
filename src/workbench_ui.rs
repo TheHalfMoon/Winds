@@ -226,7 +226,8 @@ impl WorkbenchNavigation {
                     return Ok(NavigationEffect::None);
                 }
                 KeyCode::Char('n') => {
-                    create_presentation_pane(state);
+                    let pane_id = create_presentation_pane(state);
+                    state.focus_pane(pane_id);
                     return Ok(NavigationEffect::None);
                 }
                 KeyCode::Char('h') => {
