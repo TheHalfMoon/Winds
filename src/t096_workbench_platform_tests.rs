@@ -313,14 +313,8 @@ fn t096_real_wsl2_workbench_path_preserves_host_guest_domain_and_path_truth() {
             assert!(linux_git_common_dir.starts_with('/'));
             assert!(!git_head_oid.is_empty());
         }
-        WslCwdResolution::FallbackHome {
-            requested_windows_workspace_root,
-            linux_home,
-            reason,
-        } => {
-            assert!(!requested_windows_workspace_root.is_empty());
-            assert!(linux_home.starts_with('/'));
-            assert!(!reason.is_empty());
+        WslCwdResolution::FallbackHome { reason, .. } => {
+            panic!("T096 real WSL2 qualification requires a mapped workspace: {reason}");
         }
     }
 
