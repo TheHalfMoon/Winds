@@ -35,7 +35,7 @@ fn t091_dependency_is_exact_and_optional_search_backends_remain_disabled() {
     assert!(!manifest.contains("features = [\"crossterm\", \"search\"]"));
     assert!(!manifest.contains("features = [\"search\"]"));
 
-    let lock = include_str!("../Cargo.lock");
+    let lock = include_str!("../Cargo.lock").replace("\r\n", "\n");
     let package = "[[package]]\nname = \"ratatui-textarea\"\nversion = \"0.9.2\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"3c78d5ba0f26f97baed69a4c479f268a31c7b5b89d68ab939842152e383d6e73\"";
     assert!(lock.contains(package));
 }
