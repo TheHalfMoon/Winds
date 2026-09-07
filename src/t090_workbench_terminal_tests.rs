@@ -205,13 +205,9 @@ fn t090_natural_child_exit_updates_lifecycle_without_removing_the_visual_pane() 
 
 #[cfg(unix)]
 #[test]
-fn t090_observed_exit_can_drain_buffered_output_before_owned_close() {
+fn t090_exited_pane_can_drain_retained_output_before_owned_close() {
     let root = TestRoot::new("exit-drain");
-    let profile = executable_profile(
-        &root,
-        "tail.sh",
-        "#!/bin/sh\nprintf 'WINDS_T090_TAIL\\n'\nexit 0\n",
-    );
+    let profile = executable_profile(&root, "exit.sh", "#!/bin/sh\nexit 0\n");
     let mut state = WorkbenchState::new();
     let pane = new_pane(&mut state, "tail");
     let mut terminals = WorkbenchTerminals::new();
@@ -231,18 +227,19 @@ fn t090_observed_exit_can_drain_buffered_output_before_owned_close() {
         thread::sleep(Duration::from_millis(10));
     }
 
-    let mut captured = Vec::new();
+    assert!(terminals.replace_output_reader_for_test(
+        pane,
+        Box::new(Cursor::new(b"WINDS_T090_TAIL\n".to_vec()))
+    ));
     let mut buffer = [0_u8; 64];
-    loop {
-        let count = terminals
-            .read_output_once(&mut state, pane, &mut buffer)
-            .unwrap();
-        if count == 0 {
-            break;
-        }
-        captured.extend_from_slice(&buffer[..count]);
-    }
-    assert!(String::from_utf8_lossy(&captured).contains("WINDS_T090_TAIL"));
+    let count = terminals
+        .read_output_once(&mut state, pane, &mut buffer)
+        .unwrap();
+    assert_eq!(&buffer[..count], b"WINDS_T090_TAIL\n");
+    assert_eq!(
+        state.pane(pane).unwrap().lifecycle,
+        PaneLifecycleView::Exited
+    );
     terminals.close(&mut state, pane).unwrap();
 }
 
