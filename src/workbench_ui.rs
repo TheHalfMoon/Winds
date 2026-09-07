@@ -181,11 +181,11 @@ impl WorkbenchNavigation {
             KeyCode::Enter => {
                 let query = self.search_query.as_deref().unwrap_or_default();
                 let resolution = resolve_find_query(query, state, workspaces, sessions);
+                self.selected_canonical_target = None;
                 if let FindResolution::Unique(found) = &resolution {
                     match &found.target {
                         NavigationTarget::Pane(pane_id) => {
                             state.focus_pane(*pane_id);
-                            self.selected_canonical_target = None;
                         }
                         target @ (NavigationTarget::Workspace { .. }
                         | NavigationTarget::Session { .. }) => {
