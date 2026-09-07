@@ -275,3 +275,6 @@ mod t088_workbench_topology_tests;
 #[cfg(test)]
 #[path = "t090_workbench_terminal_tests.rs"]
 mod t090_workbench_terminal_tests;
+#[cfg(test)]
+#[path = "t096_workbench_platform_tests.rs"]
+mod t096_workbench_platform_tests;
