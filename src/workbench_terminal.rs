@@ -158,7 +158,7 @@ impl WorkbenchTerminals {
         if buffer.is_empty() {
             return Err("workbench output buffer must not be empty".into());
         }
-        require_live_pane(state, pane_id)?;
+        require_output_readable_pane(state, pane_id)?;
 
         let read = self
             .terminals
@@ -251,6 +251,33 @@ impl WorkbenchTerminals {
         pane_id: PaneId,
     ) -> Result<TerminalExit> {
         self.finish_owned_terminal(state, pane_id, "close")
+    }
+
+    /// Close the presentation pane only after any retained terminal authority has
+    /// been resolved. Unproven cleanup keeps the pane visible as OWNERSHIP_LOST.
+    pub(crate) fn close_pane(
+        &mut self,
+        state: &mut WorkbenchState,
+        pane_id: PaneId,
+    ) -> Result<Option<TerminalExit>> {
+        let lifecycle = state
+            .pane(pane_id)
+            .ok_or("unknown workbench pane")?
+            .lifecycle;
+
+        let exit = if self.terminals.contains_key(&pane_id) {
+            Some(self.finish_owned_terminal(state, pane_id, "pane close")?)
+        } else if lifecycle == PaneLifecycleView::Live {
+            state.set_pane_lifecycle(pane_id, PaneLifecycleView::OwnershipLost);
+            return Err("live workbench pane has no owned terminal session; refusing visual close".into());
+        } else {
+            None
+        };
+
+        if !state.close_pane(pane_id) {
+            return Err("workbench pane disappeared during terminal-aware close".into());
+        }
+        Ok(exit)
     }
 
     fn require_live_owned(&mut self, state: &mut WorkbenchState, pane_id: PaneId) -> Result<()> {
@@ -347,6 +374,16 @@ fn require_live_pane(state: &WorkbenchState, pane_id: PaneId) -> Result<()> {
         return Err("workbench pane is not live".into());
     }
     Ok(())
+}
+
+fn require_output_readable_pane(state: &WorkbenchState, pane_id: PaneId) -> Result<()> {
+    let pane = state.pane(pane_id).ok_or("unknown workbench pane")?;
+    match pane.lifecycle {
+        PaneLifecycleView::Live | PaneLifecycleView::Exited => Ok(()),
+        PaneLifecycleView::Stopped | PaneLifecycleView::OwnershipLost | PaneLifecycleView::Error => {
+            Err("workbench pane output is unavailable without retained terminal ownership".into())
+        }
+    }
 }
 
 fn require_nonzero_size(size: PaneSize) -> Result<()> {
