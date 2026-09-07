@@ -78,7 +78,7 @@ impl WorkbenchState {
         self.selected_pane
     }
 
-    /// Return only the presentation-selected pane. Later lifecycle integration must
+    /// Return only the presentation-selected pane. Lifecycle integration must
     /// separately resolve this transient identifier to an accepted owned terminal.
     pub(crate) fn selected_dispatch_candidate(&self) -> Option<PaneId> {
         self.selected_pane
@@ -169,6 +169,18 @@ impl WorkbenchState {
         true
     }
 
+    pub(crate) fn set_pane_lifecycle(
+        &mut self,
+        pane_id: PaneId,
+        lifecycle: PaneLifecycleView,
+    ) -> bool {
+        let Some(index) = self.pane_index(pane_id) else {
+            return false;
+        };
+        self.panes[index].lifecycle = lifecycle;
+        true
+    }
+
     pub(crate) fn rename_pane(
         &mut self,
         pane_id: PaneId,
@@ -248,7 +260,12 @@ pub(crate) fn render_inert_workbench(frame: &mut Frame<'_>) {
 
 #[path = "workbench_screen.rs"]
 pub(crate) mod screen;
+#[path = "workbench_terminal.rs"]
+pub(crate) mod terminal;
 
 #[cfg(test)]
 #[path = "t088_workbench_topology_tests.rs"]
 mod t088_workbench_topology_tests;
+#[cfg(test)]
+#[path = "t090_workbench_terminal_tests.rs"]
+mod t090_workbench_terminal_tests;
