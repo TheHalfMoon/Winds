@@ -258,6 +258,8 @@ pub(crate) fn render_inert_workbench(frame: &mut Frame<'_>) {
     }
 }
 
+#[path = "workbench_interaction.rs"]
+pub(crate) mod interaction;
 #[path = "workbench_screen.rs"]
 pub(crate) mod screen;
 #[path = "workbench_terminal.rs"]
