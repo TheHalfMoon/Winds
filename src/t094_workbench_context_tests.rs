@@ -8,7 +8,7 @@ use crate::domain::{
 };
 use crate::git::Repo;
 use crate::store::{NewRun, Store};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -201,7 +201,10 @@ fn t094_exact_candidate_and_diff_projection_use_read_only_git_observation() {
 
     assert_eq!(projected.candidate.oid, head);
     assert_eq!(projected.candidate.tree, expected_tree);
-    let projected_diff = projected.diff.expect("read-only diff projection");
+    let projected_diff = projected
+        .diff
+        .as_ref()
+        .expect("read-only diff projection");
     assert_eq!(projected_diff.base_oid, base);
     assert_eq!(projected_diff.candidate_oid, head);
     assert_eq!(projected_diff.candidate_tree, expected_tree);
