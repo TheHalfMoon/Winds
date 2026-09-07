@@ -221,7 +221,10 @@ fn t092_vertical_split_uses_non_c0_alt_v_binding() {
         .unwrap();
     assert_eq!(state.panes().len(), 2);
     let split = state.selected_pane().unwrap();
-    assert_eq!(state.pane(split).unwrap().split_axis, Some(SplitAxis::Vertical));
+    assert_eq!(
+        state.pane(split).unwrap().split_axis,
+        Some(SplitAxis::Vertical)
+    );
 
     navigation
         .handle_event(
