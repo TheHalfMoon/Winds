@@ -171,10 +171,7 @@ fn t092_keyboard_paths_create_split_focus_resize_and_close_without_identity_rewr
             &mut editor,
             &[],
             &[],
-            key(
-                KeyCode::Right,
-                KeyModifiers::ALT | KeyModifiers::SHIFT,
-            ),
+            key(KeyCode::Right, KeyModifiers::ALT | KeyModifiers::SHIFT),
         )
         .unwrap();
     assert_eq!(state.pane(created).unwrap().size, PaneSize::new(81, 24));
@@ -500,10 +497,7 @@ fn t092_event_loop_uses_nonzero_blocking_wait_and_renders_only_on_events() {
     let mut editor = WorkbenchShellEditor::new();
     let mut navigation = WorkbenchNavigation::new();
     let mut source = FakeEventSource {
-        events: VecDeque::from([
-            None,
-            Some(key(KeyCode::Char('q'), KeyModifiers::CONTROL)),
-        ]),
+        events: VecDeque::from([None, Some(key(KeyCode::Char('q'), KeyModifiers::CONTROL))]),
         waits: Vec::new(),
     };
     let mut renders = 0usize;
