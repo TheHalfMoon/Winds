@@ -20,18 +20,21 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Checkout exact candidate head
+      - name: Checkout exact candidate head with canonical predecessor history
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
           ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
 
       - name: Verify exact candidate and T091 predecessor
         shell: bash
         run: |
           set -euo pipefail
+          T091_BASE="aa57b7a7d6272ea19080f86a5bb8e545c1187b0c"
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-          test "$(git show -s --format=%H aa57b7a7d6272ea19080f86a5bb8e545c1187b0c)" = "aa57b7a7d6272ea19080f86a5bb8e545c1187b0c"
+          git cat-file -e "${T091_BASE}^{commit}"
+          git merge-base --is-ancestor "$T091_BASE" "$CANDIDATE_SHA"
           grep -Fqx 'ratatui-textarea = { version = "=0.9.2", default-features = false, features = ["crossterm"] }' Cargo.toml
 
       - name: Install pinned Rust toolchain
