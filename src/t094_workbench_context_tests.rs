@@ -164,10 +164,7 @@ fn persist_eligible_evidence(
         .mark_workspace_ready(run_id, 2)
         .expect("mark T094 verification worktree ready");
     store
-        .save_evidence_for_test(
-            &eligible_report(run_id, candidate_oid, candidate_tree),
-            3,
-        )
+        .save_evidence_for_test(&eligible_report(run_id, candidate_oid, candidate_tree), 3)
         .expect("persist T094 eligible evidence");
     VerificationEvidenceReference::from_store(store, run_id)
         .expect("load T094 eligible evidence reference")
@@ -254,12 +251,8 @@ fn t094_candidate_movement_makes_evidence_review_and_human_acceptance_stale() {
     let candidate_a_tree = fixture.tree(&candidate_a_oid);
     let repo = fixture.repo();
     let mut store = fixture.store();
-    let evidence_a = persist_eligible_evidence(
-        &mut store,
-        "verify-a",
-        &candidate_a_oid,
-        &candidate_a_tree,
-    );
+    let evidence_a =
+        persist_eligible_evidence(&mut store, "verify-a", &candidate_a_oid, &candidate_a_tree);
     let candidate_a = candidate(&candidate_a_oid, &candidate_a_tree);
     let review_a = IndependentReviewContext::build(IndependentReviewContextInput {
         base_oid: &candidate_a_oid,
@@ -288,7 +281,10 @@ fn t094_candidate_movement_makes_evidence_review_and_human_acceptance_stale() {
     .unwrap();
 
     assert_eq!(projected.candidate.oid, candidate_b_oid);
-    assert_eq!(projected.verification.state, VerificationProjectionState::Stale);
+    assert_eq!(
+        projected.verification.state,
+        VerificationProjectionState::Stale
+    );
     assert_eq!(projected.verification.applicable_evidence_count, 0);
     assert_eq!(projected.verification.stale_evidence_count, 1);
     assert_eq!(projected.review, ReviewProjectionState::Stale);
@@ -324,7 +320,10 @@ fn t094_agent_or_terminal_success_text_never_creates_verification_or_acceptance(
         projected.agent_progress,
         AgentProgressProjection::AgentReportedDone
     );
-    assert_eq!(projected.verification.state, VerificationProjectionState::NotRun);
+    assert_eq!(
+        projected.verification.state,
+        VerificationProjectionState::NotRun
+    );
     assert_eq!(projected.review, ReviewProjectionState::NotAvailable);
     assert_eq!(
         projected.human_acceptance,
@@ -358,7 +357,10 @@ fn t094_running_verification_is_distinct_from_agent_done_and_verified() {
         projected.agent_progress,
         AgentProgressProjection::AgentReportedDone
     );
-    assert_eq!(projected.verification.state, VerificationProjectionState::Running);
+    assert_eq!(
+        projected.verification.state,
+        VerificationProjectionState::Running
+    );
     assert_eq!(
         projected.human_acceptance,
         HumanAcceptanceProjectionState::NotAccepted
@@ -393,6 +395,9 @@ fn t094_explicit_human_acceptance_is_candidate_bound_and_still_non_authoritative
         projected.human_acceptance,
         HumanAcceptanceProjectionState::AcceptedForExactCandidate
     );
-    assert_eq!(projected.verification.state, VerificationProjectionState::NotRun);
+    assert_eq!(
+        projected.verification.state,
+        VerificationProjectionState::NotRun
+    );
     assert!(!projected.changes_canonical_authority());
 }
