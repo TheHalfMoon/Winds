@@ -403,3 +403,6 @@ fn terminal_size(size: PaneSize) -> TerminalSize {
         cols: size.columns,
     }
 }
+
+#[path = "workbench_input.rs"]
+pub(crate) mod input;
