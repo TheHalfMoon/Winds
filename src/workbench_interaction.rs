@@ -60,7 +60,7 @@ pub(crate) struct InteractionPresentation {
 }
 
 impl InteractionPresentation {
-    pub(crate) fn labelled(
+    fn labelled(
         source: InteractionSource,
         content: impl AsRef<[u8]>,
         context: InteractionContext,
