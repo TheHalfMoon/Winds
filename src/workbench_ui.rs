@@ -17,7 +17,9 @@ const DEFAULT_PANE_SIZE: PaneSize = PaneSize::new(80, 24);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum NavigationTarget {
     Pane(PaneId),
-    Workspace { workspace_id: String },
+    Workspace {
+        workspace_id: String,
+    },
     Session {
         session_id: String,
         workstream_id: String,
@@ -410,7 +412,9 @@ pub(crate) fn find_matches(
                 canonical_context: format!(
                     "workspace={} session={}",
                     pane.canonical_workspace_id.as_deref().unwrap_or("UNKNOWN"),
-                    pane.canonical_winds_session_id.as_deref().unwrap_or("UNKNOWN")
+                    pane.canonical_winds_session_id
+                        .as_deref()
+                        .unwrap_or("UNKNOWN")
                 ),
                 rank,
                 stable_key: format!("0-pane-{index:020}"),
@@ -526,7 +530,9 @@ fn create_presentation_pane(state: &mut WorkbenchState) -> PaneId {
         .selected_pane()
         .and_then(|pane_id| state.pane(pane_id))
         .cloned();
-    let size = selected.as_ref().map_or(DEFAULT_PANE_SIZE, |pane| pane.size);
+    let size = selected
+        .as_ref()
+        .map_or(DEFAULT_PANE_SIZE, |pane| pane.size);
     state.create_pane(
         "shell",
         selected
