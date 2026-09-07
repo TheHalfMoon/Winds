@@ -290,6 +290,79 @@ fn t092_search_selection_resolves_to_canonical_id_and_never_guesses_ambiguity() 
             workstream_id
         }) if session_id == "session-1" && workstream_id == "workstream-1"
     ));
+
+    navigation
+        .handle_event(
+            &mut state,
+            &mut terminals,
+            &mut editor,
+            &[],
+            &sessions,
+            key(KeyCode::Char('f'), KeyModifiers::CONTROL),
+        )
+        .unwrap();
+    for character in "deploy".chars() {
+        navigation
+            .handle_event(
+                &mut state,
+                &mut terminals,
+                &mut editor,
+                &[],
+                &sessions,
+                key(KeyCode::Char(character), KeyModifiers::NONE),
+            )
+            .unwrap();
+    }
+    let effect = navigation
+        .handle_event(
+            &mut state,
+            &mut terminals,
+            &mut editor,
+            &[],
+            &sessions,
+            key(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .unwrap();
+    assert!(matches!(
+        effect,
+        NavigationEffect::Find(FindResolution::Ambiguous(ref matches)) if matches.len() == 2
+    ));
+    assert!(navigation.selected_canonical_target().is_none());
+
+    navigation
+        .handle_event(
+            &mut state,
+            &mut terminals,
+            &mut editor,
+            &[],
+            &sessions,
+            key(KeyCode::Char('f'), KeyModifiers::CONTROL),
+        )
+        .unwrap();
+    for character in "missing".chars() {
+        navigation
+            .handle_event(
+                &mut state,
+                &mut terminals,
+                &mut editor,
+                &[],
+                &sessions,
+                key(KeyCode::Char(character), KeyModifiers::NONE),
+            )
+            .unwrap();
+    }
+    let effect = navigation
+        .handle_event(
+            &mut state,
+            &mut terminals,
+            &mut editor,
+            &[],
+            &sessions,
+            key(KeyCode::Enter, KeyModifiers::NONE),
+        )
+        .unwrap();
+    assert_eq!(effect, NavigationEffect::Find(FindResolution::NotFound));
+    assert!(navigation.selected_canonical_target().is_none());
 }
 
 #[test]
