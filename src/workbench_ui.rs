@@ -119,7 +119,7 @@ impl WorkbenchNavigation {
             return Ok(NavigationEffect::None);
         }
 
-        if self.search_query.is_some() {
+        if self.search_query.is_some() && !matches!(&event, Event::Resize(_, _)) {
             return self.handle_search_event(state, workspaces, sessions, event);
         }
 
@@ -238,10 +238,6 @@ impl WorkbenchNavigation {
                     split_selected(state, SplitAxis::Horizontal)?;
                     return Ok(NavigationEffect::None);
                 }
-                KeyCode::Char('j') => {
-                    split_selected(state, SplitAxis::Vertical)?;
-                    return Ok(NavigationEffect::None);
-                }
                 KeyCode::Char('w') => {
                     close_selected(state, terminals)?;
                     return Ok(NavigationEffect::None);
@@ -261,6 +257,10 @@ impl WorkbenchNavigation {
 
         if key.modifiers.contains(KeyModifiers::ALT) {
             match key.code {
+                KeyCode::Char('v') => {
+                    split_selected(state, SplitAxis::Vertical)?;
+                    return Ok(NavigationEffect::None);
+                }
                 KeyCode::Left if key.modifiers.contains(KeyModifiers::SHIFT) => {
                     resize_selected_by(state, terminals, -1, 0)?;
                     return Ok(NavigationEffect::None);

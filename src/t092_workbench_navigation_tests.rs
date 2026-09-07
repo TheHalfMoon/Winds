@@ -202,6 +202,41 @@ fn t092_keyboard_paths_create_split_focus_resize_and_close_without_identity_rewr
 }
 
 #[test]
+fn t092_vertical_split_uses_non_c0_alt_v_binding() {
+    let mut state = WorkbenchState::new();
+    state.create_pane("first", None, None, PaneSize::new(80, 24));
+    let mut terminals = WorkbenchTerminals::new();
+    let mut editor = WorkbenchShellEditor::new();
+    let mut navigation = WorkbenchNavigation::new();
+
+    navigation
+        .handle_event(
+            &mut state,
+            &mut terminals,
+            &mut editor,
+            &[],
+            &[],
+            key(KeyCode::Char('v'), KeyModifiers::ALT),
+        )
+        .unwrap();
+    assert_eq!(state.panes().len(), 2);
+    let split = state.selected_pane().unwrap();
+    assert_eq!(state.pane(split).unwrap().split_axis, Some(SplitAxis::Vertical));
+
+    navigation
+        .handle_event(
+            &mut state,
+            &mut terminals,
+            &mut editor,
+            &[],
+            &[],
+            key(KeyCode::Char('j'), KeyModifiers::CONTROL),
+        )
+        .unwrap();
+    assert_eq!(state.panes().len(), 2);
+}
+
+#[test]
 fn t092_search_selection_resolves_to_canonical_id_and_never_guesses_ambiguity() {
     let mut state = WorkbenchState::new();
     state.create_pane("shell", None, None, PaneSize::new(80, 24));
@@ -485,6 +520,48 @@ fn t092_host_resize_preserves_canonical_identity_and_never_revives_ownership() {
     assert_eq!(
         pane.canonical_winds_session_id.as_deref(),
         Some("session-r")
+    );
+}
+
+#[test]
+fn t092_resize_is_not_lost_while_find_mode_is_active() {
+    let mut state = WorkbenchState::new();
+    let pane = state.create_pane(
+        "shell",
+        Some("workspace-r".into()),
+        Some("session-r".into()),
+        PaneSize::new(80, 24),
+    );
+    let mut terminals = WorkbenchTerminals::new();
+    let mut editor = WorkbenchShellEditor::new();
+    let mut navigation = WorkbenchNavigation::new();
+
+    navigation
+        .handle_event(
+            &mut state,
+            &mut terminals,
+            &mut editor,
+            &[],
+            &[],
+            key(KeyCode::Char('f'), KeyModifiers::CONTROL),
+        )
+        .unwrap();
+    navigation
+        .handle_event(
+            &mut state,
+            &mut terminals,
+            &mut editor,
+            &[],
+            &[],
+            Event::Resize(120, 40),
+        )
+        .unwrap();
+
+    assert_eq!(navigation.search_query(), Some(""));
+    assert_eq!(state.pane(pane).unwrap().size, PaneSize::new(120, 40));
+    assert_eq!(
+        state.pane(pane).unwrap().canonical_workspace_id.as_deref(),
+        Some("workspace-r")
     );
 }
 
