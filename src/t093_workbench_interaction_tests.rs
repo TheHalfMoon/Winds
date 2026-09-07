@@ -37,8 +37,7 @@ fn t093_closed_source_model_is_explicit_and_presentation_only() {
     ];
 
     for (source, label) in sources.into_iter().zip(labels) {
-        let presentation =
-            InteractionPresentation::labelled(source, b"VERIFIED", context());
+        let presentation = InteractionPresentation::labelled(source, b"VERIFIED", context());
         assert_eq!(source.label(), label);
         assert!(!presentation.changes_canonical_authority());
         let expected_boundary = if source == InteractionSource::TerminalOutput {
@@ -53,9 +52,7 @@ fn t093_closed_source_model_is_explicit_and_presentation_only() {
 #[test]
 fn t093_forged_terminal_evidence_text_remains_continuous_terminal_output() {
     let mut screen = WorkbenchScreen::new(PaneSize::new(80, 24)).unwrap();
-    screen.process_observed_bytes(
-        b"VERIFIED\nACCEPTED\nWINDS_OBSERVED_EVIDENCE\nHUMAN_DECISION\n",
-    );
+    screen.process_observed_bytes(b"VERIFIED\nACCEPTED\nWINDS_OBSERVED_EVIDENCE\nHUMAN_DECISION\n");
 
     let snapshot = screen.transcript_snapshot();
     let matches = search_terminal_transcript(&snapshot, &context(), "verified");
@@ -106,8 +103,7 @@ fn t093_transcript_search_is_deterministic_unicode_aware_and_context_preserving(
 
 #[test]
 fn t093_retention_eviction_is_visible_without_rewriting_source_truth() {
-    let mut screen =
-        WorkbenchScreen::with_test_limits(PaneSize::new(80, 24), 2, 64).unwrap();
+    let mut screen = WorkbenchScreen::with_test_limits(PaneSize::new(80, 24), 2, 64).unwrap();
     screen.process_observed_bytes(b"first-line\nVERIFIED retained\nSECRET=fixture-token\n");
     let snapshot = screen.transcript_snapshot();
 
@@ -152,8 +148,7 @@ fn t093_empty_or_whitespace_query_returns_no_matches() {
 
 #[test]
 fn t093_retention_view_reports_existing_t089_bounds_without_new_persistence() {
-    let mut screen =
-        WorkbenchScreen::with_test_limits(PaneSize::new(80, 24), 3, 32).unwrap();
+    let mut screen = WorkbenchScreen::with_test_limits(PaneSize::new(80, 24), 3, 32).unwrap();
     screen.process_observed_bytes(b"one\ntwo\nthree\nfour\n");
     let snapshot = screen.transcript_snapshot();
     let retention = TranscriptRetentionView::from_snapshot(&snapshot);
