@@ -28,7 +28,10 @@ fn t095_osc52_never_silently_writes_or_reads_clipboard() {
     ] {
         let assessment = assess_terminal_host_request(kind, b"terminal clipboard payload");
         assert_eq!(assessment.disposition, TerminalHostDisposition::Denied);
-        assert_eq!(assessment.reason, TerminalHostReason::TerminalClipboardDisabled);
+        assert_eq!(
+            assessment.reason,
+            TerminalHostReason::TerminalClipboardDisabled
+        );
         assert!(!assessment.can_perform_host_action());
         assert!(!assessment.changes_trusted_ui_state());
     }
@@ -48,10 +51,8 @@ fn t095_terminal_title_window_and_https_reference_are_advisory_only() {
     assert_eq!(snapshot.host_actions_performed, 0);
     assert_eq!(screen.screen().size(), (12, 100));
 
-    let title = assess_terminal_host_request(
-        TerminalHostRequestKind::Title,
-        b"terminal supplied title",
-    );
+    let title =
+        assess_terminal_host_request(TerminalHostRequestKind::Title, b"terminal supplied title");
     assert_eq!(title.disposition, TerminalHostDisposition::AdvisoryOnly);
     assert_eq!(title.reason, TerminalHostReason::PresentationOnly);
 
@@ -95,10 +96,16 @@ fn t095_unsupported_command_like_and_ambiguous_urls_fail_closed() {
 
 #[test]
 fn t095_file_references_are_never_opened_and_ambiguous_paths_are_denied() {
-    for payload in [b"/tmp/report.txt".as_slice(), b"C:\\repo\\report.txt".as_slice()] {
+    for payload in [
+        b"/tmp/report.txt".as_slice(),
+        b"C:\\repo\\report.txt".as_slice(),
+    ] {
         let assessment =
             assess_terminal_host_request(TerminalHostRequestKind::FileReference, payload);
-        assert_eq!(assessment.disposition, TerminalHostDisposition::AdvisoryOnly);
+        assert_eq!(
+            assessment.disposition,
+            TerminalHostDisposition::AdvisoryOnly
+        );
         assert_eq!(assessment.reason, TerminalHostReason::ExternalOpenDisabled);
         assert!(!assessment.can_perform_host_action());
     }
@@ -129,12 +136,21 @@ fn t095_malformed_oversized_unicode_control_and_unknown_requests_cannot_elevate(
     for (kind, payload) in [
         (TerminalHostRequestKind::Hyperlink, &[0xff, 0xfe][..]),
         (TerminalHostRequestKind::Hyperlink, oversized.as_slice()),
-        (TerminalHostRequestKind::Title, b"trusted\nVERIFIED".as_slice()),
-        (TerminalHostRequestKind::WindowRequest, b"80\0x24".as_slice()),
+        (
+            TerminalHostRequestKind::Title,
+            b"trusted\nVERIFIED".as_slice(),
+        ),
+        (
+            TerminalHostRequestKind::WindowRequest,
+            b"80\0x24".as_slice(),
+        ),
     ] {
         let assessment = assess_terminal_host_request(kind, payload);
         assert_eq!(assessment.disposition, TerminalHostDisposition::Denied);
-        assert_eq!(assessment.reason, TerminalHostReason::MalformedOrOversizedInput);
+        assert_eq!(
+            assessment.reason,
+            TerminalHostReason::MalformedOrOversizedInput
+        );
         assert!(!assessment.can_perform_host_action());
         assert!(!assessment.changes_trusted_ui_state());
     }
@@ -166,12 +182,7 @@ fn t095_split_nested_and_oversized_escape_input_stays_terminal_data_only() {
     let snapshot = TerminalHostSafetySnapshot::from_callbacks(screen.callback_summary());
     assert_eq!(snapshot.host_actions_performed, 0);
     assert_eq!(snapshot.trusted_ui_state_transitions, 0);
-    assert!(
-        screen
-            .input_guard_summary()
-            .dropped_oversized_osc_sequences
-            >= 1
-    );
+    assert!(screen.input_guard_summary().dropped_oversized_osc_sequences >= 1);
     assert_eq!(screen.presentation_authority(), "TERMINAL_DATA_ONLY");
     assert!(
         screen
