@@ -64,7 +64,8 @@ impl WorkbenchShellEditor {
     }
 
     pub(crate) fn cursor(&self) -> (usize, usize) {
-        self.textarea.cursor()
+        let cursor = self.textarea.cursor();
+        (cursor.0, cursor.1)
     }
 
     pub(crate) fn is_selecting(&self) -> bool {
