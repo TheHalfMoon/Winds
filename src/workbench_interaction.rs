@@ -151,8 +151,12 @@ impl TranscriptSearchRetention {
             retention.retained_bytes = retention
                 .retained_bytes
                 .saturating_add(current.retained_bytes);
-            retention.evicted_lines = retention.evicted_lines.saturating_add(current.evicted_lines);
-            retention.evicted_bytes = retention.evicted_bytes.saturating_add(current.evicted_bytes);
+            retention.evicted_lines = retention
+                .evicted_lines
+                .saturating_add(current.evicted_lines);
+            retention.evicted_bytes = retention
+                .evicted_bytes
+                .saturating_add(current.evicted_bytes);
             retention.truncated |= current.truncated;
         }
         retention

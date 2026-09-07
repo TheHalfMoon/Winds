@@ -186,10 +186,12 @@ fn t093_multi_session_search_preserves_each_context_without_recency_guessing() {
             .as_deref(),
         Some("session-a")
     );
-    assert!(result
-        .matches
-        .iter()
-        .all(|found| found.presentation.source == InteractionSource::TerminalOutput));
+    assert!(
+        result
+            .matches
+            .iter()
+            .all(|found| found.presentation.source == InteractionSource::TerminalOutput)
+    );
 }
 
 #[test]
@@ -200,7 +202,10 @@ fn t093_invalid_utf8_search_preserves_raw_terminal_bytes() {
 
     let result = search_terminal_transcript(&snapshot, &context(), "secret");
     assert_eq!(result.matches.len(), 1);
-    assert_eq!(result.matches[0].presentation.raw_content, b"prefix\xffSECRET\n");
+    assert_eq!(
+        result.matches[0].presentation.raw_content,
+        b"prefix\xffSECRET\n"
+    );
     assert_eq!(
         result.matches[0].presentation.source,
         InteractionSource::TerminalOutput
