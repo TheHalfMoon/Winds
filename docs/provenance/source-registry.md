@@ -49,12 +49,39 @@ A source appearing here is **not admitted**. Before copying/adapting code or add
 | OpenSandbox | https://github.com/opensandbox-group/OpenSandbox | FOUNDER_SUPPLIED | Future isolated-execution/sandbox lifecycle reference | UNADMITTED; broad sandboxing remains outside Spec 003 |
 | LlamaCoder | https://github.com/nutlope/llamacoder | FOUNDER_SUPPLIED | Possible future UI/preview/evaluation reference | UNADMITTED |
 | TencentDB Agent Memory | https://github.com/TencentCloud/TencentDB-Agent-Memory | FOUNDER_SUPPLIED | Future governed agent memory/skills/provenance/ACL reference | UNADMITTED |
+| LoopForge | https://github.com/Tencent/LoopForge | FOUNDER_SUPPLIED | Resumable multi-stage development workflow, stage/actor identity, artifact freshness, bounded retry, deterministic handoff, and workflow regression reference | UNADMITTED; exact audit recorded below; research/process reference only |
+| SkillHone | https://github.com/Tencent/SkillHone | FOUNDER_SUPPLIED | Persistent decision history, whole-skill versioning, evaluation/optimization separation, redacted observations, negative-experiment and learning-loop reference | UNADMITTED; exact audit recorded below; research/evaluation reference only |
 | Pi | https://github.com/earendil-works/pi | FOUNDER_SUPPLIED | Agent CLI/runtime reference | UNADMITTED; no Pi transplant in Spec 003 |
 | OpenJarvis | https://openjarvis.stanford.edu | FOUNDER_SUPPLIED | Agent/runtime research reference | UNADMITTED |
 | OpenWhispr | https://openwhispr.com | FOUNDER_SUPPLIED | Voice/input tooling reference | UNADMITTED / peripheral |
 | OpenPipe | https://openpipe.ai | FOUNDER_SUPPLIED | Model/evaluation/observability reference | UNADMITTED |
 | Herdr website | https://herdr.dev | FOUNDER_SUPPLIED | Agent terminal workspace/runtime reference | UNADMITTED; daemon/socket/plugin/persistent-session architecture remains outside Spec 003 |
 | nicobailon GitHub account | https://github.com/nicobailon | FOUNDER_SUPPLIED | Requested Pi extension ecosystem audit | Account-level source; individual repositories listed below |
+
+## LoopForge and SkillHone — exact audit snapshot
+
+Founder supplied both repositories on 2026-09-08. The following pins are research/provenance facts only and do not admit code, dependencies, runtimes, protocols, or implementation scope.
+
+### Tencent/LoopForge
+
+- URL: https://github.com/Tencent/LoopForge
+- Exact inspected commit: `09c765286f549624dd95434e1e6ef2249657cbeb`
+- License: MIT; repository license/notice text also attributes modified/vendored `obra/superpowers` material under MIT.
+- Inspected paths include `LICENSE`, `THIRD_PARTY_NOTICES.md`, `README.md`, `skills/devflow/SKILL.md`, `skills/devflow/references/workflow-contract.md`, `skills/devflow/scripts/workflow_state.py`, and `skills/devflow/tests/test_regressions.py`.
+- Winds relevance: deterministic resumable workflow state, stage transitions, artifact baselines/freshness, bounded retries, actor/run-instance identity, stage-specific handoffs, and adversarial stale-runtime/state tests.
+- Admission: **UNADMITTED**. Recommended reuse mode is Winds-authored selective design/test adaptation, not Python runtime transplantation.
+
+### Tencent/SkillHone
+
+- URL: https://github.com/Tencent/SkillHone
+- Exact inspected commit: `7d565839fb4dc74f9c77f09ace660e1c0484e048`
+- License: MIT.
+- Inspected paths include `LICENSE`, `README.md`, `skills/skillhone/SKILL.md`, `skills/skillhone-optimization/SKILL.md`, `skills/skillhone/references/evaluation.md`, `skills/skillhone/references/optim.md`, `skills/skillhone/scripts/optim.py`, `skills/skillhone/scripts/core/git_ops.py`, and `skills/skillhone/scripts/core/redaction.py`.
+- Winds relevance: persistent decision history, redacted failure observations, score provenance, practice/probe vs acceptance distinction, whole-skill change identity, negative-experiment retention, and bounded optimization loops.
+- Audit caution: the inspected public bundle documents private eval separation, while `optim.py` also exposes the eval clone path in run configuration/prompt-visible state and uses a high-permission agent mode. The inspected paths do not establish a hard filesystem/capability holdout boundary. Winds must therefore treat prompt-only non-access instructions as insufficient protection and require mechanically testable isolation before making protected-evaluation claims.
+- Admission: **UNADMITTED**. Recommended reuse mode is research/evaluation methodology plus Winds-authored enforcement, not Forgejo/LiteLLM/optimization-runtime adoption.
+
+Detailed roadmap reconciliation: `docs/research/014-loopforge-skillhone-roadmap-reconciliation.md`.
 
 ## Herdr — derived canonical source
 
