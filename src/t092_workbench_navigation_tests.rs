@@ -489,6 +489,46 @@ fn t092_host_resize_preserves_canonical_identity_and_never_revives_ownership() {
 }
 
 #[test]
+fn t092_multi_pane_host_resize_never_guesses_split_geometry() {
+    let mut state = WorkbenchState::new();
+    let first = state.create_pane(
+        "first",
+        Some("workspace-1".into()),
+        Some("session-1".into()),
+        PaneSize::new(80, 24),
+    );
+    let second = state
+        .split_pane(first, SplitAxis::Vertical, "second")
+        .expect("fixture split must create the second pane");
+    state.focus_pane(first);
+    let mut terminals = WorkbenchTerminals::new();
+    let mut editor = WorkbenchShellEditor::new();
+    let mut navigation = WorkbenchNavigation::new();
+
+    navigation
+        .handle_event(
+            &mut state,
+            &mut terminals,
+            &mut editor,
+            &[],
+            &[],
+            Event::Resize(120, 40),
+        )
+        .unwrap();
+
+    assert_eq!(state.pane(first).unwrap().size, PaneSize::new(80, 24));
+    assert_eq!(state.pane(second).unwrap().size, PaneSize::new(80, 24));
+    assert_eq!(
+        state.pane(first).unwrap().canonical_workspace_id.as_deref(),
+        Some("workspace-1")
+    );
+    assert_eq!(
+        state.pane(second).unwrap().canonical_winds_session_id.as_deref(),
+        Some("session-1")
+    );
+}
+
+#[test]
 fn t092_shell_events_preserve_explicit_multiline_and_control_boundaries() {
     let mut state = WorkbenchState::new();
     state.create_pane("shell", None, None, PaneSize::new(80, 24));

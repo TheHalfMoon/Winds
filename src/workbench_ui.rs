@@ -148,8 +148,12 @@ impl WorkbenchNavigation {
                 Ok(NavigationEffect::None)
             }
             Event::Resize(columns, rows) => {
-                let size = PaneSize::new(columns.max(1), rows.max(1));
-                resize_selected(state, terminals, size)?;
+                // Host dimensions determine pane dimensions only when topology is unambiguous.
+                // Multi-pane geometry is presentation state that T092 must not guess.
+                if state.panes().len() == 1 {
+                    let size = PaneSize::new(columns.max(1), rows.max(1));
+                    resize_selected(state, terminals, size)?;
+                }
                 Ok(NavigationEffect::None)
             }
             Event::FocusGained | Event::FocusLost => Ok(NavigationEffect::None),
