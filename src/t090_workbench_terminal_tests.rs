@@ -205,6 +205,49 @@ fn t090_natural_child_exit_updates_lifecycle_without_removing_the_visual_pane() 
 
 #[cfg(unix)]
 #[test]
+fn t090_observed_exit_can_drain_buffered_output_before_owned_close() {
+    let root = TestRoot::new("exit-drain");
+    let profile = executable_profile(
+        &root,
+        "tail.sh",
+        "#!/bin/sh\nprintf 'WINDS_T090_TAIL\\n'\nexit 0\n",
+    );
+    let mut state = WorkbenchState::new();
+    let pane = new_pane(&mut state, "tail");
+    let mut terminals = WorkbenchTerminals::new();
+    terminals
+        .start_native(&mut state, pane, &profile, root.path())
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if terminals.poll_exit(&mut state, pane).unwrap().is_some() {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "T090 child did not exit inside fixture deadline"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    let mut captured = Vec::new();
+    let mut buffer = [0_u8; 64];
+    loop {
+        let count = terminals
+            .read_output_once(&mut state, pane, &mut buffer)
+            .unwrap();
+        if count == 0 {
+            break;
+        }
+        captured.extend_from_slice(&buffer[..count]);
+    }
+    assert!(String::from_utf8_lossy(&captured).contains("WINDS_T090_TAIL"));
+    terminals.close(&mut state, pane).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn t090_output_reader_eof_while_child_is_live_fails_closed_but_retains_owned_cleanup() {
     let root = TestRoot::new("reader-eof");
     let profile = lingering_profile(&root);
@@ -261,6 +304,37 @@ fn t090_output_reader_error_while_child_is_live_fails_closed_but_retains_owned_c
     assert!(terminals.has_owned_terminal(pane));
 
     terminals.close(&mut state, pane).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn t090_terminal_aware_pane_close_resolves_reader_failure_before_visual_removal() {
+    let root = TestRoot::new("pane-close-reader-error");
+    let profile = lingering_profile(&root);
+    let mut state = WorkbenchState::new();
+    let pane = new_pane(&mut state, "pane-close");
+    let mut terminals = WorkbenchTerminals::new();
+    terminals
+        .start_native(&mut state, pane, &profile, root.path())
+        .unwrap();
+    assert!(terminals.replace_output_reader_for_test(pane, Box::new(FailingReader)));
+
+    let mut buffer = [0_u8; 64];
+    assert!(
+        terminals
+            .read_output_once(&mut state, pane, &mut buffer)
+            .is_err()
+    );
+    assert_eq!(
+        state.pane(pane).unwrap().lifecycle,
+        PaneLifecycleView::Error
+    );
+    assert!(terminals.has_owned_terminal(pane));
+
+    let exit = terminals.close_pane(&mut state, pane).unwrap();
+    assert!(exit.is_some());
+    assert!(!terminals.has_owned_terminal(pane));
+    assert!(state.pane(pane).is_none());
 }
 
 #[cfg(unix)]
@@ -345,6 +419,22 @@ fn t090_restart_presentation_never_reattaches_to_persisted_or_native_identifiers
         state.pane(restored).unwrap().lifecycle,
         PaneLifecycleView::OwnershipLost
     );
+}
+
+#[test]
+fn t090_live_presentation_without_owned_session_refuses_close_and_marks_ownership_lost() {
+    let mut state = WorkbenchState::new();
+    let pane = state.create_pane("orphan", None, None, default_size());
+    assert!(state.set_pane_lifecycle(pane, PaneLifecycleView::Live));
+    let mut terminals = WorkbenchTerminals::new();
+
+    let error = terminals.close_pane(&mut state, pane).unwrap_err();
+    assert!(error.to_string().contains("refusing visual close"));
+    assert_eq!(
+        state.pane(pane).unwrap().lifecycle,
+        PaneLifecycleView::OwnershipLost
+    );
+    assert!(state.pane(pane).is_some());
 }
 
 #[cfg(unix)]
