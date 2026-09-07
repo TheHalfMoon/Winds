@@ -1,6 +1,6 @@
-use super::*;
 use super::super::super::{PaneLifecycleView, PaneSize, WorkbenchState};
 use super::super::WorkbenchTerminals;
+use super::*;
 
 #[cfg(unix)]
 use crate::git::shell_profiles::{ShellProfile, discover_native_shell_profiles};
@@ -123,7 +123,11 @@ fn t091_multiline_and_bracketed_paste_require_explicit_literal_policy() {
             ShellSubmitTerminator::LineFeed,
         )
         .unwrap_err();
-    assert!(error.to_string().contains("explicit literal-multiline policy"));
+    assert!(
+        error
+            .to_string()
+            .contains("explicit literal-multiline policy")
+    );
 
     let mut expected = pasted.as_bytes().to_vec();
     expected.push(b'\n');
