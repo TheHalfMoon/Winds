@@ -8,7 +8,8 @@ use crate::git::shell_profiles::discover_native_shell_profiles;
 use crate::git::workspace::open_existing_workspace;
 use crate::git::workspace_inventory::inventory_workspace_environment;
 use crossterm::event::{
-    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
+    KeyCode, KeyEventKind, KeyModifiers,
 };
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -23,6 +24,57 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 
 const EMPTY_WORKBENCH_MESSAGE: &str = "No terminal panes are active.";
+const COMPACT_WORKBENCH_MIN_WIDTH: u16 = 60;
+const COMPACT_WORKBENCH_MIN_HEIGHT: u16 = 10;
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct WorkbenchAccessibilityState {
+    verification_inspection_open: bool,
+}
+
+impl WorkbenchAccessibilityState {
+    const fn verification_inspection_open(self) -> bool {
+        self.verification_inspection_open
+    }
+
+    fn handle_event(&mut self, event: &Event, search_active: bool) -> bool {
+        if search_active {
+            return false;
+        }
+        if matches!(event, Event::Key(key) if key.kind == KeyEventKind::Release) {
+            return false;
+        }
+
+        if matches!(
+            event,
+            Event::Key(key)
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && key.code == KeyCode::Char('e')
+        ) {
+            self.verification_inspection_open = !self.verification_inspection_open;
+            return true;
+        }
+
+        if !self.verification_inspection_open {
+            return false;
+        }
+
+        match event {
+            Event::Key(key)
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && key.code == KeyCode::Char('q') =>
+            {
+                false
+            }
+            Event::Key(key) if key.code == KeyCode::Esc => {
+                self.verification_inspection_open = false;
+                true
+            }
+            Event::Resize(_, _) | Event::FocusGained | Event::FocusLost => false,
+            _ => true,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct PaneId(u64);
@@ -275,6 +327,195 @@ impl WorkbenchState {
     }
 }
 
+fn use_compact_workbench_layout(width: u16, height: u16) -> bool {
+    width < COMPACT_WORKBENCH_MIN_WIDTH || height < COMPACT_WORKBENCH_MIN_HEIGHT
+}
+
+fn pane_accessibility_text(state: &WorkbenchState, include_titles: bool) -> String {
+    if state.panes().is_empty() {
+        return EMPTY_WORKBENCH_MESSAGE.to_owned();
+    }
+
+    state
+        .panes()
+        .iter()
+        .map(|pane| {
+            let selection = if state.selected_pane() == Some(pane.pane_id) {
+                "SELECTED"
+            } else {
+                "NOT_SELECTED"
+            };
+            let identity = format!(
+                "selection={selection} lifecycle={} workspace={} session={}",
+                pane.lifecycle.label(),
+                pane.canonical_workspace_id.as_deref().unwrap_or("UNKNOWN"),
+                pane.canonical_winds_session_id
+                    .as_deref()
+                    .unwrap_or("UNBOUND")
+            );
+            if include_titles {
+                format!("{identity} title={}", pane.display_title)
+            } else {
+                identity
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn agent_progress_accessibility_label(state: context::AgentProgressProjection) -> &'static str {
+    match state {
+        context::AgentProgressProjection::NotReported => "AGENT_PROGRESS_NOT_REPORTED",
+        context::AgentProgressProjection::AgentReportedDone => "AGENT_REPORTED_DONE",
+    }
+}
+
+fn verification_accessibility_label(state: context::VerificationProjectionState) -> &'static str {
+    match state {
+        context::VerificationProjectionState::NotRun => "VERIFICATION_NOT_RUN",
+        context::VerificationProjectionState::Running => "VERIFICATION_RUNNING",
+        context::VerificationProjectionState::VerifiedForExactCandidate => {
+            "VERIFIED_FOR_EXACT_CANDIDATE"
+        }
+        context::VerificationProjectionState::Stale => "VERIFICATION_STALE_NOT_APPLICABLE",
+    }
+}
+
+fn review_accessibility_label(state: context::ReviewProjectionState) -> &'static str {
+    match state {
+        context::ReviewProjectionState::NotAvailable => "REVIEW_NOT_AVAILABLE",
+        context::ReviewProjectionState::ApplicableToExactCandidate => {
+            "REVIEW_APPLICABLE_TO_EXACT_CANDIDATE"
+        }
+        context::ReviewProjectionState::Stale => "REVIEW_STALE_NOT_APPLICABLE",
+    }
+}
+
+fn acceptance_accessibility_label(state: context::HumanAcceptanceProjectionState) -> &'static str {
+    match state {
+        context::HumanAcceptanceProjectionState::NotAccepted => "HUMAN_NOT_ACCEPTED",
+        context::HumanAcceptanceProjectionState::AcceptedForExactCandidate => {
+            "HUMAN_ACCEPTED_FOR_EXACT_CANDIDATE"
+        }
+        context::HumanAcceptanceProjectionState::Stale => "HUMAN_ACCEPTANCE_STALE",
+    }
+}
+
+fn verification_inspection_text(
+    candidate_oid: &str,
+    candidate_tree: &str,
+    projected: Option<&context::WorkbenchCandidateContext>,
+) -> String {
+    let details = match projected {
+        Some(projected) => format!(
+            "agent_progress=CANONICAL_STATE_NOT_LOADED\nverification_state={}\nevidence_applicability=applicable:{} stale:{}\nreview_state=CANONICAL_REVIEW_NOT_LOADED\nhuman_acceptance=CANONICAL_DECISION_NOT_LOADED",
+            verification_accessibility_label(projected.verification.state),
+            projected.verification.applicable_evidence_count,
+            projected.verification.stale_evidence_count,
+        ),
+        None => concat!(
+            "agent_progress=CANONICAL_STATE_NOT_LOADED\n",
+            "verification_state=CANONICAL_EVIDENCE_NOT_LOADED\n",
+            "evidence_applicability=CANONICAL_EVIDENCE_NOT_LOADED\n",
+            "review_state=CANONICAL_REVIEW_NOT_LOADED\n",
+            "human_acceptance=CANONICAL_DECISION_NOT_LOADED"
+        )
+        .to_owned(),
+    };
+
+    format!(
+        "SOURCE=REPOSITORY_EVIDENCE_ONLY\nMODE=READ_ONLY\ncandidate_oid={candidate_oid}\ncandidate_tree={candidate_tree}\n{details}\nINVARIANT=AGENT_REPORTED_DONE != VERIFIED != ACCEPTED\nINVARIANT=TERMINAL_OUTPUT != VERIFICATION_EVIDENCE\nCtrl+E or Esc closes verification inspection"
+    )
+}
+
+fn load_workbench_candidate_context(
+    repo: &Repo,
+    store: &crate::store::Store,
+) -> Result<context::WorkbenchCandidateContext, String> {
+    let repo_path = repo
+        .root()
+        .to_str()
+        .ok_or_else(|| "T098 repository path is not valid UTF-8".to_owned())?;
+    let runs = store
+        .runs_for_repo(repo_path)
+        .map_err(|error| format!("T098 verification-run discovery failed: {error}"))?;
+    let mut eligible_run_ids = Vec::new();
+    for run in runs {
+        let stored = store.load_run(&run.run_id).map_err(|error| {
+            format!(
+                "T098 verification-run load failed for {}: {error}",
+                run.run_id
+            )
+        })?;
+        if stored.eligibility == crate::domain::Eligibility::Eligible {
+            eligible_run_ids.push(run.run_id);
+        }
+    }
+    let verification_run_ids = eligible_run_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    context::project_candidate_context(context::WorkbenchContextInput {
+        repo,
+        store,
+        base_ref: "HEAD",
+        candidate_ref: "HEAD",
+        diff_bytes: None,
+        verification_run_ids: &verification_run_ids,
+        verification_running: false,
+        agent_reported_done: false,
+        review: None,
+        human_accepted_candidate: None,
+    })
+}
+
+fn compact_workbench_text_with_context(
+    state: &WorkbenchState,
+    output: &output::WorkbenchOutput,
+    accessibility: WorkbenchAccessibilityState,
+    candidate_oid: &str,
+    candidate_tree: &str,
+    projected: Option<&context::WorkbenchCandidateContext>,
+) -> String {
+    let mut text = format!(
+        "WINDS_WORKBENCH_COMPACT\nCtrl+E verify-inspect | Ctrl+Q quit\ncandidate_oid={candidate_oid}\ncandidate_tree={candidate_tree}\n{}",
+        pane_accessibility_text(state, false)
+    );
+    if accessibility.verification_inspection_open() {
+        text.push('\n');
+        text.push_str(&verification_inspection_text(
+            candidate_oid,
+            candidate_tree,
+            projected,
+        ));
+    } else {
+        text.push_str("\nSOURCE=TERMINAL_DATA_ONLY\n");
+        let terminal_text = state
+            .selected_pane()
+            .and_then(|pane_id| output.screen_contents(pane_id))
+            .unwrap_or_else(|| "No observed terminal output is attached to this pane.".to_owned());
+        text.push_str(&terminal_text);
+    }
+    text
+}
+
+fn compact_workbench_text(
+    state: &WorkbenchState,
+    output: &output::WorkbenchOutput,
+    accessibility: WorkbenchAccessibilityState,
+    candidate_oid: &str,
+    candidate_tree: &str,
+) -> String {
+    compact_workbench_text_with_context(
+        state,
+        output,
+        accessibility,
+        candidate_oid,
+        candidate_tree,
+        None,
+    )
+}
+
 /// Render the inert T087 workbench shell without owning terminal runtime state.
 pub(crate) fn render_inert_workbench(frame: &mut Frame<'_>) {
     let area = frame.area();
@@ -290,12 +531,32 @@ pub(crate) fn render_inert_workbench(frame: &mut Frame<'_>) {
     }
 }
 
-fn render_workbench(
+fn render_workbench_accessible(
     frame: &mut Frame<'_>,
     state: &WorkbenchState,
     editor: &terminal::input::WorkbenchShellEditor,
     output: &output::WorkbenchOutput,
+    accessibility: WorkbenchAccessibilityState,
+    candidate: (&str, &str),
+    projected: Option<&context::WorkbenchCandidateContext>,
 ) {
+    let area = frame.area();
+    if use_compact_workbench_layout(area.width, area.height) {
+        frame.render_widget(
+            Paragraph::new(compact_workbench_text_with_context(
+                state,
+                output,
+                accessibility,
+                candidate.0,
+                candidate.1,
+                projected,
+            ))
+            .block(Block::bordered().title(" Winds Workbench · compact ")),
+            area,
+        );
+        return;
+    }
+
     let areas = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -303,61 +564,72 @@ fn render_workbench(
             Constraint::Min(1),
             Constraint::Length(3),
         ])
-        .split(frame.area());
+        .split(area);
 
     frame.render_widget(
-        Paragraph::new("Ctrl+Q quit | Enter submit | Ctrl+F find | Alt+Left/Right focus"),
+        Paragraph::new(
+            "Ctrl+N new | Ctrl+H split-h | Alt+V split-v | Alt+Arrows focus | Alt+Shift+Arrows resize | Ctrl+W close | Ctrl+F find | Ctrl+E verify-inspect | Ctrl+Q quit",
+        ),
         areas[0],
     );
 
     let body = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(36), Constraint::Min(1)])
+        .constraints([Constraint::Length(44), Constraint::Min(1)])
         .split(areas[1]);
-    let pane_text = if state.panes().is_empty() {
-        EMPTY_WORKBENCH_MESSAGE.to_owned()
-    } else {
-        state
-            .panes()
-            .iter()
-            .map(|pane| {
-                let selected = if state.selected_pane() == Some(pane.pane_id) {
-                    ">"
-                } else {
-                    " "
-                };
-                format!(
-                    "{selected} {} [{}]\n  workspace={}\n  session={}",
-                    pane.display_title,
-                    pane.lifecycle.label(),
-                    pane.canonical_workspace_id.as_deref().unwrap_or("UNKNOWN"),
-                    pane.canonical_winds_session_id
-                        .as_deref()
-                        .unwrap_or("UNBOUND")
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
     frame.render_widget(
-        Paragraph::new(pane_text).block(Block::bordered().title(" Panes ")),
+        Paragraph::new(pane_accessibility_text(state, true))
+            .block(Block::bordered().title(" Panes · textual state ")),
         body[0],
     );
 
-    let terminal_text = state
-        .selected_pane()
-        .and_then(|pane_id| output.screen_contents(pane_id))
-        .unwrap_or_else(|| "No observed terminal output is attached to this pane.".to_owned());
-    frame.render_widget(
-        Paragraph::new(terminal_text)
-            .block(Block::bordered().title(" Terminal output · TERMINAL_DATA_ONLY ")),
-        body[1],
-    );
+    if accessibility.verification_inspection_open() {
+        frame.render_widget(
+            Paragraph::new(verification_inspection_text(
+                candidate.0,
+                candidate.1,
+                projected,
+            ))
+            .block(Block::bordered().title(" Verification inspection · REPOSITORY_EVIDENCE_ONLY ")),
+            body[1],
+        );
+    } else {
+        let terminal_text = state
+            .selected_pane()
+            .and_then(|pane_id| output.screen_contents(pane_id))
+            .unwrap_or_else(|| "No observed terminal output is attached to this pane.".to_owned());
+        frame.render_widget(
+            Paragraph::new(terminal_text)
+                .block(Block::bordered().title(" Terminal output · TERMINAL_DATA_ONLY ")),
+            body[1],
+        );
+    }
 
     let input = editor.lines().join("\n");
     frame.render_widget(
         Paragraph::new(input).block(Block::bordered().title(" Shell input ")),
         areas[2],
+    );
+}
+
+#[cfg(test)]
+fn render_workbench(
+    frame: &mut Frame<'_>,
+    state: &WorkbenchState,
+    editor: &terminal::input::WorkbenchShellEditor,
+    output: &output::WorkbenchOutput,
+) {
+    render_workbench_accessible(
+        frame,
+        state,
+        editor,
+        output,
+        WorkbenchAccessibilityState::default(),
+        (
+            "CANONICAL_CANDIDATE_NOT_LOADED",
+            "CANONICAL_CANDIDATE_TREE_NOT_LOADED",
+        ),
+        None,
     );
 }
 
@@ -372,8 +644,11 @@ pub(crate) fn run_cli(args: Vec<String>) -> crate::Result<()> {
         None => std::env::current_dir()?,
     };
     let repo = Repo::open(&requested_repo)?;
+    let mut candidate_oid = repo.resolve_commit("HEAD")?;
+    let mut candidate_tree = repo.tree_oid(&candidate_oid)?;
     let home = crate::winds_home(None, &repo)?;
     let workspace = open_existing_workspace(repo.root(), &home, crate::unix_ms()?)?;
+    let store = crate::store::Store::open(&home)?;
     let inventory = inventory_workspace_environment(&workspace)?;
     let profiles = discover_native_shell_profiles(&inventory)?;
     let profile = profiles
@@ -400,12 +675,24 @@ pub(crate) fn run_cli(args: Vec<String>) -> crate::Result<()> {
     output.attach_live_pane(&mut terminals, &mut state, pane_id)?;
     let mut editor = terminal::input::WorkbenchShellEditor::new();
     let mut navigation = ui::WorkbenchNavigation::new();
+    let mut accessibility = WorkbenchAccessibilityState::default();
+    let mut projected_context: Option<context::WorkbenchCandidateContext> = None;
 
     let mut host_guard = HostTerminalGuard::enter()?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut host_terminal = Terminal::new(backend)?;
     output.drain_tick(&mut terminals, &mut state)?;
-    host_terminal.draw(|frame| render_workbench(frame, &state, &editor, &output))?;
+    host_terminal.draw(|frame| {
+        render_workbench_accessible(
+            frame,
+            &state,
+            &editor,
+            &output,
+            accessibility,
+            (&candidate_oid, &candidate_tree),
+            projected_context.as_ref(),
+        )
+    })?;
 
     if exit_after_ready {
         eprintln!(
@@ -432,7 +719,17 @@ pub(crate) fn run_cli(args: Vec<String>) -> crate::Result<()> {
     let loop_result = (|| -> crate::Result<()> {
         loop {
             output.drain_tick(&mut terminals, &mut state)?;
-            host_terminal.draw(|frame| render_workbench(frame, &state, &editor, &output))?;
+            host_terminal.draw(|frame| {
+                render_workbench_accessible(
+                    frame,
+                    &state,
+                    &editor,
+                    &output,
+                    accessibility,
+                    (&candidate_oid, &candidate_tree),
+                    projected_context.as_ref(),
+                )
+            })?;
 
             let Some(event) = <ui::CrosstermHostEventSource as ui::HostEventSource>::next_event(
                 &mut source,
@@ -441,6 +738,26 @@ pub(crate) fn run_cli(args: Vec<String>) -> crate::Result<()> {
             else {
                 continue;
             };
+            let inspection_was_open = accessibility.verification_inspection_open();
+            if accessibility.handle_event(&event, navigation.search_query().is_some()) {
+                if !inspection_was_open && accessibility.verification_inspection_open() {
+                    match load_workbench_candidate_context(&repo, &store) {
+                        Ok(projected) => {
+                            candidate_oid = projected.candidate.oid.clone();
+                            candidate_tree = projected.candidate.tree.clone();
+                            projected_context = Some(projected);
+                        }
+                        Err(_) => {
+                            candidate_oid = repo.resolve_commit("HEAD")?;
+                            candidate_tree = repo.tree_oid(&candidate_oid)?;
+                            projected_context = None;
+                        }
+                    }
+                } else if inspection_was_open && !accessibility.verification_inspection_open() {
+                    projected_context = None;
+                }
+                continue;
+            }
             let effect = navigation.handle_event(
                 &mut state,
                 &mut terminals,
@@ -578,3 +895,6 @@ mod t096_workbench_platform_tests;
 #[cfg(test)]
 #[path = "t097_workbench_performance_tests.rs"]
 mod t097_workbench_performance_tests;
+#[cfg(test)]
+#[path = "t098_workbench_accessibility_tests.rs"]
+mod t098_workbench_accessibility_tests;
