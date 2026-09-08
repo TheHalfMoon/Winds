@@ -79,8 +79,9 @@ impl EvidenceFixture {
         candidate_oid: &str,
         candidate_tree: &str,
     ) {
-        let repo_path = self
-            .root
+        let canonical_root = std::fs::canonicalize(&self.root)
+            .expect("canonicalize T098 evidence repository root");
+        let repo_path = canonical_root
             .to_str()
             .expect("T098 evidence repository path is UTF-8");
         store
