@@ -537,8 +537,7 @@ fn render_workbench_accessible(
     editor: &terminal::input::WorkbenchShellEditor,
     output: &output::WorkbenchOutput,
     accessibility: WorkbenchAccessibilityState,
-    candidate_oid: &str,
-    candidate_tree: &str,
+    candidate: (&str, &str),
     projected: Option<&context::WorkbenchCandidateContext>,
 ) {
     let area = frame.area();
@@ -548,8 +547,8 @@ fn render_workbench_accessible(
                 state,
                 output,
                 accessibility,
-                candidate_oid,
-                candidate_tree,
+                candidate.0,
+                candidate.1,
                 projected,
             ))
             .block(Block::bordered().title(" Winds Workbench · compact ")),
@@ -587,8 +586,8 @@ fn render_workbench_accessible(
     if accessibility.verification_inspection_open() {
         frame.render_widget(
             Paragraph::new(verification_inspection_text(
-                candidate_oid,
-                candidate_tree,
+                candidate.0,
+                candidate.1,
                 projected,
             ))
             .block(Block::bordered().title(" Verification inspection · REPOSITORY_EVIDENCE_ONLY ")),
@@ -626,8 +625,10 @@ fn render_workbench(
         editor,
         output,
         WorkbenchAccessibilityState::default(),
-        "CANONICAL_CANDIDATE_NOT_LOADED",
-        "CANONICAL_CANDIDATE_TREE_NOT_LOADED",
+        (
+            "CANONICAL_CANDIDATE_NOT_LOADED",
+            "CANONICAL_CANDIDATE_TREE_NOT_LOADED",
+        ),
         None,
     );
 }
@@ -688,8 +689,7 @@ pub(crate) fn run_cli(args: Vec<String>) -> crate::Result<()> {
             &editor,
             &output,
             accessibility,
-            &candidate_oid,
-            &candidate_tree,
+            (&candidate_oid, &candidate_tree),
             projected_context.as_ref(),
         )
     })?;
@@ -726,8 +726,7 @@ pub(crate) fn run_cli(args: Vec<String>) -> crate::Result<()> {
                     &editor,
                     &output,
                     accessibility,
-                    &candidate_oid,
-                    &candidate_tree,
+                    (&candidate_oid, &candidate_tree),
                     projected_context.as_ref(),
                 )
             })?;
