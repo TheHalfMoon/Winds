@@ -475,7 +475,7 @@ pub(crate) fn render_inert_workbench(frame: &mut Frame<'_>) {
     }
 }
 
-fn render_workbench(
+fn render_workbench_accessible(
     frame: &mut Frame<'_>,
     state: &WorkbenchState,
     editor: &terminal::input::WorkbenchShellEditor,
@@ -555,6 +555,24 @@ fn render_workbench(
     );
 }
 
+#[cfg(test)]
+fn render_workbench(
+    frame: &mut Frame<'_>,
+    state: &WorkbenchState,
+    editor: &terminal::input::WorkbenchShellEditor,
+    output: &output::WorkbenchOutput,
+) {
+    render_workbench_accessible(
+        frame,
+        state,
+        editor,
+        output,
+        WorkbenchAccessibilityState::default(),
+        "CANONICAL_CANDIDATE_NOT_LOADED",
+        "CANONICAL_CANDIDATE_TREE_NOT_LOADED",
+    );
+}
+
 pub(crate) fn run_cli(args: Vec<String>) -> crate::Result<()> {
     let (repo_path, exit_after_ready) = parse_workbench_args(&args)?;
     if exit_after_ready && std::env::var("WINDS_T097_BENCHMARK").as_deref() != Ok("1") {
@@ -603,7 +621,7 @@ pub(crate) fn run_cli(args: Vec<String>) -> crate::Result<()> {
     let mut host_terminal = Terminal::new(backend)?;
     output.drain_tick(&mut terminals, &mut state)?;
     host_terminal.draw(|frame| {
-        render_workbench(
+        render_workbench_accessible(
             frame,
             &state,
             &editor,
@@ -640,7 +658,7 @@ pub(crate) fn run_cli(args: Vec<String>) -> crate::Result<()> {
         loop {
             output.drain_tick(&mut terminals, &mut state)?;
             host_terminal.draw(|frame| {
-                render_workbench(
+                render_workbench_accessible(
                     frame,
                     &state,
                     &editor,
