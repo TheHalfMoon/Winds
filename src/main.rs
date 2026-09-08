@@ -48,10 +48,6 @@ mod t078_claude_structured_tests;
 mod t085_agentic_hardening_tests;
 #[cfg(test)]
 mod t087_workbench_dependency_tests;
-#[allow(
-    dead_code,
-    reason = "Spec 007 T087 inert render seam; live workbench event loop remains blocked"
-)]
 mod workbench;
 
 use crate::check::run_check;
@@ -87,7 +83,11 @@ fn run() -> Result<()> {
     let Some(command) = args.next() else {
         return Err(usage().into());
     };
-    let flags = parse_flags(args.collect())?;
+    let raw_args: Vec<String> = args.collect();
+    if command == "workbench" {
+        return workbench::run_cli(raw_args);
+    }
+    let flags = parse_flags(raw_args)?;
     match command.as_str() {
         "verify" => verify(flags),
         "promote" => promote(flags),
@@ -454,5 +454,5 @@ fn unix_ms() -> Result<i64> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  winds verify --repo PATH --base REF --candidate REF --check COMMAND [--timeout-secs N] [--home PATH]\n  winds promote --repo PATH --run RUN_ID [--home PATH]\n  winds recover --repo PATH [--home PATH]\n  winds workspace-open --repo PATH [--home PATH]\n  winds workspace-clone --remote REMOTE --destination ABS_PATH [--home PATH]\n  winds profiles --repo PATH [--home PATH]\n  winds run --repo PATH --execution-id ID --executable ABS_PATH [--args-json JSON_ARRAY] [--history command|disabled] [--home PATH]\n  winds terminal-proof --repo PATH --execution-id ID --profile-id PROFILE_ID [--rows N] [--cols N] [--home PATH]\n  winds execution --repo PATH --execution-id ID [--home PATH]"
+    "usage:\n  winds verify --repo PATH --base REF --candidate REF --check COMMAND [--timeout-secs N] [--home PATH]\n  winds promote --repo PATH --run RUN_ID [--home PATH]\n  winds recover --repo PATH [--home PATH]\n  winds workspace-open --repo PATH [--home PATH]\n  winds workspace-clone --remote REMOTE --destination ABS_PATH [--home PATH]\n  winds profiles --repo PATH [--home PATH]\n  winds run --repo PATH --execution-id ID --executable ABS_PATH [--args-json JSON_ARRAY] [--history command|disabled] [--home PATH]\n  winds terminal-proof --repo PATH --execution-id ID --profile-id PROFILE_ID [--rows N] [--cols N] [--home PATH]\n  winds execution --repo PATH --execution-id ID [--home PATH]\n  winds workbench [--repo PATH]"
 }
