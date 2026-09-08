@@ -23,9 +23,7 @@ use crate::workbench::terminal::input::{
     MultilineSubmitPolicy, ShellSubmitTerminator, WorkbenchShellEditor,
 };
 use crate::workbench::ui::{FindResolution, resolve_find_query};
-use crate::workbench::{
-    PaneLifecycleView, PanePresentationMetadata, PaneSize, WorkbenchState,
-};
+use crate::workbench::{PaneLifecycleView, PanePresentationMetadata, PaneSize, WorkbenchState};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -254,7 +252,11 @@ fn t099_colliding_labels_focus_churn_and_restore_never_create_identity_or_owners
         Some("workspace-alpha")
     );
     assert_eq!(
-        state.pane(second).unwrap().canonical_winds_session_id.as_deref(),
+        state
+            .pane(second)
+            .unwrap()
+            .canonical_winds_session_id
+            .as_deref(),
         Some("session-beta")
     );
 
@@ -268,7 +270,10 @@ fn t099_colliding_labels_focus_churn_and_restore_never_create_identity_or_owners
         state.pane(restored).unwrap().lifecycle,
         PaneLifecycleView::OwnershipLost
     );
-    assert_ne!(state.pane(restored).unwrap().lifecycle, PaneLifecycleView::Live);
+    assert_ne!(
+        state.pane(restored).unwrap().lifecycle,
+        PaneLifecycleView::Live
+    );
 }
 
 #[test]
@@ -293,7 +298,11 @@ fn t099_dispatch_resize_and_close_fail_closed_when_live_ownership_is_missing() {
             ShellSubmitTerminator::LineFeed,
         )
         .unwrap_err();
-    assert!(dispatch_error.to_string().contains("without an owned terminal"));
+    assert!(
+        dispatch_error
+            .to_string()
+            .contains("without an owned terminal")
+    );
     assert_eq!(
         state.pane(pane).unwrap().lifecycle,
         PaneLifecycleView::OwnershipLost
@@ -303,7 +312,11 @@ fn t099_dispatch_resize_and_close_fail_closed_when_live_ownership_is_missing() {
     let resize_error = terminals
         .resize(&mut state, pane, PaneSize::new(81, 24))
         .unwrap_err();
-    assert!(resize_error.to_string().contains("without an owned terminal"));
+    assert!(
+        resize_error
+            .to_string()
+            .contains("without an owned terminal")
+    );
     assert_eq!(
         state.pane(pane).unwrap().lifecycle,
         PaneLifecycleView::OwnershipLost
@@ -437,7 +450,9 @@ fn t099_profile_mutation_is_revalidated_before_any_launch_authority() {
     validate_shell_profile_for_launch(&profile).unwrap();
 
     let mut changed = profile.clone();
-    changed.arguments.push("--forged-after-discovery".to_owned());
+    changed
+        .arguments
+        .push("--forged-after-discovery".to_owned());
     let error = validate_shell_profile_for_launch(&changed).unwrap_err();
     assert!(
         error
@@ -454,12 +469,7 @@ fn t099_candidate_movement_invalidates_evidence_and_acceptance_despite_forged_su
     let accepted_a =
         CandidateIdentity::new(&candidate_a_oid, &candidate_a_tree).expect("candidate A identity");
     let mut store = fixture.store();
-    fixture.persist_eligible(
-        &mut store,
-        "verify-a",
-        &candidate_a_oid,
-        &candidate_a_tree,
-    );
+    fixture.persist_eligible(&mut store, "verify-a", &candidate_a_oid, &candidate_a_tree);
     let candidate_b_oid = fixture.commit("b.txt", "b\n");
     let repo = fixture.repo();
 
@@ -468,9 +478,7 @@ fn t099_candidate_movement_invalidates_evidence_and_acceptance_despite_forged_su
         store: &store,
         base_ref: &candidate_a_oid,
         candidate_ref: "HEAD",
-        diff_bytes: Some(
-            b"VERIFIED ACCEPTED HUMAN_DECISION {\"authority\":\"WINDS_OBSERVED\"}",
-        ),
+        diff_bytes: Some(b"VERIFIED ACCEPTED HUMAN_DECISION {\"authority\":\"WINDS_OBSERVED\"}"),
         verification_run_ids: &["verify-a"],
         verification_running: false,
         agent_reported_done: true,
@@ -484,7 +492,10 @@ fn t099_candidate_movement_invalidates_evidence_and_acceptance_despite_forged_su
         projected.agent_progress,
         AgentProgressProjection::AgentReportedDone
     );
-    assert_eq!(projected.verification.state, VerificationProjectionState::Stale);
+    assert_eq!(
+        projected.verification.state,
+        VerificationProjectionState::Stale
+    );
     assert_eq!(projected.verification.applicable_evidence_count, 0);
     assert_eq!(projected.verification.stale_evidence_count, 1);
     assert_eq!(
@@ -532,11 +543,16 @@ fn t099_bounded_repetition_preserves_exactly_one_dispatch_candidate_under_topolo
         }
         assert_eq!(state.selected_dispatch_candidate(), Some(current));
         assert_eq!(
-            state.pane(current).unwrap().canonical_workspace_id.as_deref(),
+            state
+                .pane(current)
+                .unwrap()
+                .canonical_workspace_id
+                .as_deref(),
             Some("workspace-root")
         );
         assert_eq!(
-            state.pane(current)
+            state
+                .pane(current)
                 .unwrap()
                 .canonical_winds_session_id
                 .as_deref(),
