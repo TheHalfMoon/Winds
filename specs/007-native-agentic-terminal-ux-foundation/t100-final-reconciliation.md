@@ -71,7 +71,7 @@ T096 is the canonical platform-integration task; later T097-T099 exact-head work
 
 No FR-045..FR-053 threshold was relaxed.
 
-T097 exact candidate `92504b8d6243e41f7c6e0f649e51188429b9f217` passed `t097-performance` run `34230456075` and produced artifact `10057649778` bound to the exact candidate/environment/method. Its recorded reconciliation includes `thresholds_relaxed=false`.
+Final T099 exact accepted head `0875333b16c9c2c1838051c1bcafd6f6f56f8f1b` / tree `0be307a19429261edb63a654cf5eb609a896387b` passed `t097-performance` run `34274620724`. That run rebuilt the exact candidate in the pinned Ubuntu 24.04 release environment and explicitly proved FR-045, bounded production output projection, FR-046 through FR-050 and FR-052, FR-051 idle CPU/RSS overhead, and FR-053 exact-candidate staleness semantics before assembling and uploading exact-candidate machine-readable artifact `10075321553` (`t097-performance-0875333b16c9c2c1838051c1bcafd6f6f56f8f1b`, digest `sha256:cab06edf67e7602694e4d32a349f92c80ff8d89fd8906483098989c49aed8294`). This is the final implementation-head performance provenance; the earlier T097 artifact remains historical only.
 
 | Requirement | Status | Canonical disposition |
 | --- | --- | --- |
@@ -168,11 +168,11 @@ T099 Amendment 004 changes no Spec performance threshold and no production clean
 | SC-004 | `PROVEN_DETERMINISTIC` | T094/T098/T099 make candidate-A evidence stale/not-applicable after movement while retaining history. |
 | SC-005 | `PROVEN_DETERMINISTIC` | T091/T099 prove exactly-one-pane shell dispatch, no provider/model invocation, and no silent broadcast. |
 | SC-006 | `PROVEN_DETERMINISTIC` | T091 proves multiline/Unicode/long-input semantics without silent truncation or line-splitting drift. |
-| SC-007 | `PROVEN_PLATFORM_BOUND` | T097 proves FR-045 on the pinned reference environment. |
-| SC-008 | `PROVEN_PLATFORM_BOUND` | T097 proves FR-046 and FR-047. |
-| SC-009 | `PROVEN_PLATFORM_BOUND` | T097 proves FR-048 and FR-049. |
-| SC-010 | `PROVEN_DETERMINISTIC` | T089/T097 prove FR-050 bounds and visible eviction without evidence mutation. |
-| SC-011 | `PROVEN_PLATFORM_BOUND` | T097 proves FR-051 and FR-052. |
+| SC-007 | `PROVEN_PLATFORM_BOUND` | Final T099 `t097-performance` run `34274620724` proves FR-045 on the pinned reference environment. |
+| SC-008 | `PROVEN_PLATFORM_BOUND` | Final T099 `t097-performance` run `34274620724` proves FR-046 and FR-047. |
+| SC-009 | `PROVEN_PLATFORM_BOUND` | Final T099 `t097-performance` run `34274620724` proves FR-048 and FR-049. |
+| SC-010 | `PROVEN_DETERMINISTIC` | T089 plus final T099 `t097-performance` run `34274620724` prove FR-050 bounds and visible eviction without evidence mutation. |
+| SC-011 | `PROVEN_PLATFORM_BOUND` | Final T099 `t097-performance` run `34274620724` proves FR-051 and FR-052. |
 | SC-012 | `PROVEN_DETERMINISTIC` | T089/T095/T099 malformed/control campaigns cannot crash into privileged host actions. |
 | SC-013 | `PROVEN_DETERMINISTIC` | T092/T098 prove keyboard reachability and non-color-only critical state. |
 | SC-014 | `PROVEN_PLATFORM_BOUND` | T096 directly qualifies native Windows/ConPTY, WSL2, Linux, and macOS claims separately. |
@@ -217,7 +217,7 @@ The workbench remains one-process, shell-compatible, and verification-native ove
 
 ## 9. Historical evidence discipline
 
-Older-head CI, benchmark, and review evidence is retained as history only. Every task was requalified after candidate movement before its canonical landing. T100 does not represent an earlier task candidate as the current T100 candidate, and it does not reuse the T097 benchmark artifact as proof that the moved T100 docs candidate itself passed CI; it uses that artifact only as canonical evidence for the already-closed frozen performance requirements whose implementation bytes T100 does not modify.
+Older-head CI, benchmark, and review evidence is retained as history only. Every task was requalified after candidate movement before its canonical landing. T100 does not represent an earlier task candidate as the current T100 candidate. Final frozen-performance claims are grounded in `t097-performance` run `34274620724` and artifact `10075321553` on final T099 implementation head `0875333b16c9c2c1838051c1bcafd6f6f56f8f1b`; T100 does not represent that implementation-head performance run as current CI for the moved docs-only T100 candidate, whose own exact-head qualification remains separate below.
 
 ## 10. T100 exact-candidate qualification boundary
 
