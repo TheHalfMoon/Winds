@@ -48,7 +48,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-          test -n "$(git rev-parse HEAD^{tree})"
+          test -n "$(git rev-parse 'HEAD^{tree}')"
 
       - name: Verify pinned reference environment before sampling
         shell: bash
@@ -57,7 +57,11 @@ jobs:
           test "${RUNNER_OS:-}" = "$EXPECTED_RUNNER_OS"
           test "${RUNNER_ARCH:-}" = "$EXPECTED_RUNNER_ARCH"
           test "${ImageOS:-}" = "$EXPECTED_IMAGE_OS"
-          test "${ImageVersion:-}" = "$EXPECTED_IMAGE_VERSION"
+          if [[ "${ImageVersion:-}" != "$EXPECTED_IMAGE_VERSION" ]]; then
+            printf 'Pinned T097 runner image mismatch: expected=%s observed=%s\n' \
+              "$EXPECTED_IMAGE_VERSION" "${ImageVersion:-UNSET}" >&2
+            exit 1
+          fi
           test "$(. /etc/os-release && printf '%s' "$VERSION_ID")" = "24.04"
           printf 'runner_os=%s\nrunner_arch=%s\nimage_os=%s\nimage_version=%s\n' \
             "$RUNNER_OS" "$RUNNER_ARCH" "$ImageOS" "$ImageVersion"
@@ -79,6 +83,7 @@ jobs:
           import json
           import os
           import re
+          import select
           import shlex
           import shutil
           import subprocess
@@ -108,6 +113,10 @@ jobs:
               deadline = time.monotonic() + 10.0
               ready_ns = None
               while time.monotonic() < deadline:
+                  remaining = deadline - time.monotonic()
+                  readable, _, _ = select.select([proc.stdout.fileno()], [], [], remaining)
+                  if not readable:
+                      break
                   chunk = os.read(proc.stdout.fileno(), 4096)
                   if not chunk:
                       break
@@ -150,6 +159,14 @@ jobs:
           print("T097_STARTUP_JSON=" + json.dumps(result, sort_keys=True))
           PY
 
+      - name: Prove bounded production output projection
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --release --locked --bin winds \
+            workbench::t097_workbench_performance_tests::t097_nonblocking_output_pump_drains_live_pane_into_its_screen \
+            -- --exact --test-threads=1
+
       - name: Prove FR-046 through FR-050 and FR-052
         shell: bash
         run: |
@@ -163,8 +180,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export WINDS_T097_CLK_TCK="$(getconf CLK_TCK)"
-          export WINDS_T097_PAGE_SIZE="$(getconf PAGESIZE)"
+          WINDS_T097_CLK_TCK="$(getconf CLK_TCK)"
+          WINDS_T097_PAGE_SIZE="$(getconf PAGESIZE)"
+          export WINDS_T097_CLK_TCK WINDS_T097_PAGE_SIZE
           cargo test --release --locked --bin winds \
             workbench::t097_workbench_performance_tests::t097_idle_resource_campaign \
             -- --ignored --exact --nocapture --test-threads=1 | tee /tmp/t097-idle.log
@@ -232,9 +250,10 @@ jobs:
               'logical_cpu_count': os.cpu_count(),
               'memory': memory,
               'fixture_shell': '/bin/sh',
-              'fixture_id': 'spec007-t097-local-deterministic-v1',
+              'fixture_id': 'spec007-t097-local-deterministic-v2',
               'measurement_command': [
                   'target/release/winds workbench --repo <exact-checkout> --t097-exit-after-ready',
+                  'cargo test --release --locked --bin winds ...t097_nonblocking_output_pump_drains_live_pane_into_its_screen',
                   'cargo test --release --locked --bin winds ...t097_release_benchmark_campaign',
                   'cargo test --release --locked --bin winds ...t097_idle_resource_campaign',
               ],
@@ -242,7 +261,7 @@ jobs:
                   'startup': 'cold state root per sample; no discarded startup samples',
                   'dispatch': '100 warmup dispatches before 1000 measured dispatches',
                   'history_search': '10 warmup searches before 200 measured searches',
-                  'idle': 'ten live panes established, one-second settling period, then 60-second sample window',
+                  'idle': 'ten live panes with bounded output pumps and rendering, one-second settling period, then 60-second sample window',
               },
               'sample_count': startup['sample_count'],
               'raw_samples_or_machine_readable_summary': {

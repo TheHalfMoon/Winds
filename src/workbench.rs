@@ -294,6 +294,7 @@ fn render_workbench(
     frame: &mut Frame<'_>,
     state: &WorkbenchState,
     editor: &terminal::input::WorkbenchShellEditor,
+    output: &output::WorkbenchOutput,
 ) {
     let areas = Layout::default()
         .direction(Direction::Vertical)
@@ -309,6 +310,10 @@ fn render_workbench(
         areas[0],
     );
 
+    let body = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(36), Constraint::Min(1)])
+        .split(areas[1]);
     let pane_text = if state.panes().is_empty() {
         EMPTY_WORKBENCH_MESSAGE.to_owned()
     } else {
@@ -322,7 +327,7 @@ fn render_workbench(
                     " "
                 };
                 format!(
-                    "{selected} {} [{}] workspace={} session={}",
+                    "{selected} {} [{}]\n  workspace={}\n  session={}",
                     pane.display_title,
                     pane.lifecycle.label(),
                     pane.canonical_workspace_id.as_deref().unwrap_or("UNKNOWN"),
@@ -336,7 +341,17 @@ fn render_workbench(
     };
     frame.render_widget(
         Paragraph::new(pane_text).block(Block::bordered().title(" Panes ")),
-        areas[1],
+        body[0],
+    );
+
+    let terminal_text = state
+        .selected_pane()
+        .and_then(|pane_id| output.screen_contents(pane_id))
+        .unwrap_or_else(|| "No observed terminal output is attached to this pane.".to_owned());
+    frame.render_widget(
+        Paragraph::new(terminal_text)
+            .block(Block::bordered().title(" Terminal output · TERMINAL_DATA_ONLY ")),
+        body[1],
     );
 
     let input = editor.lines().join("\n");
@@ -381,13 +396,16 @@ pub(crate) fn run_cli(args: Vec<String>) -> crate::Result<()> {
         profile,
         std::path::Path::new(&workspace.canonical_worktree_root),
     )?;
+    let mut output = output::WorkbenchOutput::new();
+    output.attach_live_pane(&mut terminals, &mut state, pane_id)?;
     let mut editor = terminal::input::WorkbenchShellEditor::new();
     let mut navigation = ui::WorkbenchNavigation::new();
 
     let mut host_guard = HostTerminalGuard::enter()?;
     let backend = CrosstermBackend::new(io::stdout());
     let mut host_terminal = Terminal::new(backend)?;
-    host_terminal.draw(|frame| render_workbench(frame, &state, &editor))?;
+    output.drain_tick(&mut terminals, &mut state)?;
+    host_terminal.draw(|frame| render_workbench(frame, &state, &editor, &output))?;
 
     if exit_after_ready {
         eprintln!(
@@ -411,18 +429,30 @@ pub(crate) fn run_cli(args: Vec<String>) -> crate::Result<()> {
     }
 
     let mut source = ui::CrosstermHostEventSource;
-    let loop_result = ui::run_host_event_loop(
-        &mut navigation,
-        &mut state,
-        &mut terminals,
-        &mut editor,
-        (&[], &[]),
-        &mut source,
-        |state, _navigation, editor| {
-            host_terminal.draw(|frame| render_workbench(frame, state, editor))?;
-            Ok(())
-        },
-    );
+    let loop_result = (|| -> crate::Result<()> {
+        loop {
+            output.drain_tick(&mut terminals, &mut state)?;
+            host_terminal.draw(|frame| render_workbench(frame, &state, &editor, &output))?;
+
+            let Some(event) = <ui::CrosstermHostEventSource as ui::HostEventSource>::next_event(
+                &mut source,
+                ui::HOST_EVENT_WAIT,
+            )? else {
+                continue;
+            };
+            let effect = navigation.handle_event(
+                &mut state,
+                &mut terminals,
+                &mut editor,
+                &[],
+                &[],
+                event,
+            )?;
+            if effect == ui::NavigationEffect::Quit {
+                return Ok(());
+            }
+        }
+    })();
     let cleanup = close_all_workbench_panes(&mut terminals, &mut state);
     drop(host_terminal);
     let restore = host_guard.restore();
@@ -526,6 +556,8 @@ impl Drop for HostTerminalGuard {
 pub(crate) mod context;
 #[path = "workbench_interaction.rs"]
 pub(crate) mod interaction;
+#[path = "workbench_output.rs"]
+pub(crate) mod output;
 #[path = "workbench_screen.rs"]
 pub(crate) mod screen;
 #[path = "workbench_terminal.rs"]

@@ -1,11 +1,14 @@
 #![cfg(target_os = "linux")]
 
 use super::interaction::{InteractionContext, search_terminal_transcript};
+use super::output::WorkbenchOutput;
 use super::screen::WorkbenchScreen;
 use super::terminal::WorkbenchTerminals;
 use super::{PaneId, PaneSize, WorkbenchState};
 use crate::git::shell_profiles::{ShellProfile, discover_native_shell_profiles};
 use crate::git::workspace_inventory::WorkspaceEnvironmentInventory;
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -90,6 +93,53 @@ fn close_all(terminals: &mut WorkbenchTerminals, state: &mut WorkbenchState, pan
 }
 
 #[test]
+fn t097_nonblocking_output_pump_drains_live_pane_into_its_screen() {
+    let cwd = canonical_cwd();
+    let profile = fixture_shell_profile(&cwd);
+    let mut state = WorkbenchState::new();
+    let pane_id = state.create_pane(
+        "output-pump",
+        Some("t097-workspace".to_owned()),
+        None,
+        PaneSize::new(80, 24),
+    );
+    let mut terminals = WorkbenchTerminals::new();
+    terminals
+        .start_native(&mut state, pane_id, &profile, &cwd)
+        .expect("output-pump fixture shell must start");
+    let mut output = WorkbenchOutput::new();
+    output
+        .attach_live_pane(&mut terminals, &mut state, pane_id)
+        .expect("live pane must transfer its output reader to the bounded pump");
+    terminals
+        .dispatch_selected_input(
+            &mut state,
+            b"printf 'WINDS_T097_OUTPUT_PUMP\\n'\n",
+        )
+        .expect("fixture marker command must dispatch to the selected owned pane");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        output
+            .drain_tick(&mut terminals, &mut state)
+            .expect("output pump must drain without blocking the host tick");
+        if output
+            .screen_contents(pane_id)
+            .is_some_and(|contents| contents.contains("WINDS_T097_OUTPUT_PUMP"))
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "T097 output pump did not project the terminal marker inside the fixture deadline"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    close_all(&mut terminals, &mut state, &[pane_id]);
+}
+
+#[test]
 #[ignore = "T097 release-profile benchmark campaign; run explicitly in t097-performance"]
 fn t097_release_benchmark_campaign() {
     require_release_profile();
@@ -136,10 +186,14 @@ fn t097_release_benchmark_campaign() {
         "FR-050 over-bound campaign must record eviction"
     );
 
-    let resize = benchmark_resize(&cwd, &profile);
+    let (resize, final_size_correct) = benchmark_resize(&cwd, &profile);
     assert!(
         resize <= Duration::from_secs(10),
         "FR-052 1000 resize requests exceeded ten seconds: {resize:?}"
+    );
+    assert!(
+        final_size_correct,
+        "FR-052 final live terminal size did not match the final accepted size"
     );
 
     println!(
@@ -161,7 +215,8 @@ fn t097_release_benchmark_campaign() {
             "fr052_resize": {
                 "sample_count": RESIZE_ITERATIONS,
                 "total_us": u64::try_from(resize.as_micros()).unwrap_or(u64::MAX),
-                "final_size_correct": true,
+                "final_size_correct": final_size_correct,
+                "verification_source": "owned TerminalSession::current_size",
             },
         }))
         .expect("T097 core evidence must serialize")
@@ -260,17 +315,6 @@ fn benchmark_history_search() -> Summary {
 }
 
 fn benchmark_large_output_and_navigation() -> (Summary, usize, usize, u64, u64, bool) {
-    let mut screen = WorkbenchScreen::new(PaneSize::new(80, 24))
-        .expect("large-output benchmark screen must initialize");
-    let mut line = Vec::from("output ".as_bytes());
-    line.extend(std::iter::repeat_n(b'x', 104));
-    line.push(b'\n');
-    assert!(line.len() * OUTPUT_LINES >= 10 * 1024 * 1024);
-    for _ in 0..OUTPUT_LINES {
-        screen.process_observed_bytes(&line);
-    }
-    let snapshot = screen.transcript_snapshot();
-
     let mut state = WorkbenchState::new();
     let mut pane_ids = Vec::with_capacity(50);
     for index in 0..50 {
@@ -281,10 +325,31 @@ fn benchmark_large_output_and_navigation() -> (Summary, usize, usize, u64, u64, 
             PaneSize::new(80, 24),
         ));
     }
+    let output_pane = pane_ids[0];
+    let mut output = WorkbenchOutput::new();
+    output
+        .attach_screen(output_pane, PaneSize::new(80, 24))
+        .expect("large-output pane screen must attach to the navigated pane");
+
+    let mut line = Vec::from("output ".as_bytes());
+    line.extend(std::iter::repeat_n(b'x', 104));
+    line.push(b'\n');
+    assert!(line.len() * OUTPUT_LINES >= 10 * 1024 * 1024);
+    for _ in 0..OUTPUT_LINES {
+        output
+            .process_observed_bytes(output_pane, &line)
+            .expect("large-output bytes must remain bound to their pane screen");
+    }
+    let snapshot = output
+        .transcript_snapshot(output_pane)
+        .expect("large-output pane must retain its bounded transcript");
+
     let mut samples = Vec::with_capacity(TOPOLOGY_ITERATIONS);
     for index in 0..TOPOLOGY_ITERATIONS {
+        let other = pane_ids[1 + (index % (pane_ids.len() - 1))];
+        assert!(state.focus_pane(other));
         let start = Instant::now();
-        assert!(state.focus_pane(pane_ids[index % pane_ids.len()]));
+        assert!(state.focus_pane(output_pane));
         samples.push(start.elapsed());
     }
 
@@ -298,7 +363,7 @@ fn benchmark_large_output_and_navigation() -> (Summary, usize, usize, u64, u64, 
     )
 }
 
-fn benchmark_resize(cwd: &Path, profile: &ShellProfile) -> Duration {
+fn benchmark_resize(cwd: &Path, profile: &ShellProfile) -> (Duration, bool) {
     let mut state = WorkbenchState::new();
     let mut terminals = WorkbenchTerminals::new();
     let mut pane_ids = Vec::with_capacity(10);
@@ -331,14 +396,16 @@ fn benchmark_resize(cwd: &Path, profile: &ShellProfile) -> Duration {
     }
     let elapsed = start.elapsed();
 
-    for (index, pane_id) in pane_ids.iter().copied().enumerate() {
-        assert_eq!(
-            state.pane(pane_id).expect("pane must remain present").size,
-            final_sizes[index]
-        );
-    }
+    let final_size_correct = pane_ids
+        .iter()
+        .copied()
+        .zip(final_sizes)
+        .all(|(pane_id, expected)| {
+            state.pane(pane_id).is_some_and(|pane| pane.size == expected)
+                && terminals.current_size(pane_id).is_ok_and(|actual| actual == expected)
+        });
     close_all(&mut terminals, &mut state, &pane_ids);
-    elapsed
+    (elapsed, final_size_correct)
 }
 
 #[test]
@@ -354,6 +421,7 @@ fn t097_idle_resource_campaign() {
 
     let mut state = WorkbenchState::new();
     let mut terminals = WorkbenchTerminals::new();
+    let mut output = WorkbenchOutput::new();
     let mut pane_ids = Vec::with_capacity(IDLE_PANES);
     for index in 0..IDLE_PANES {
         let pane_id = state.create_pane(
@@ -365,14 +433,36 @@ fn t097_idle_resource_campaign() {
         terminals
             .start_native(&mut state, pane_id, &profile, &cwd)
             .expect("idle fixture shell must start");
+        output
+            .attach_live_pane(&mut terminals, &mut state, pane_id)
+            .expect("idle live pane must attach its bounded output pump");
         pane_ids.push(pane_id);
     }
+    let editor = super::terminal::input::WorkbenchShellEditor::new();
+    let backend = TestBackend::new(160, 50);
+    let mut host_terminal = Terminal::new(backend).expect("idle render backend must initialize");
 
-    thread::sleep(Duration::from_secs(1));
+    let settle = Instant::now();
+    while settle.elapsed() < Duration::from_secs(1) {
+        output
+            .drain_tick(&mut terminals, &mut state)
+            .expect("idle settling output must drain");
+        host_terminal
+            .draw(|frame| super::render_workbench(frame, &state, &editor, &output))
+            .expect("idle settling render must succeed");
+        thread::sleep(Duration::from_millis(10));
+    }
+
     let start_ticks = process_cpu_ticks();
     let started = Instant::now();
     let mut max_rss = process_rss_bytes(page_size);
     while started.elapsed() < IDLE_DURATION {
+        output
+            .drain_tick(&mut terminals, &mut state)
+            .expect("idle workbench output tick must remain nonblocking");
+        host_terminal
+            .draw(|frame| super::render_workbench(frame, &state, &editor, &output))
+            .expect("idle workbench render tick must succeed");
         thread::sleep(Duration::from_millis(250));
         max_rss = max_rss.max(process_rss_bytes(page_size));
     }
@@ -398,10 +488,14 @@ fn t097_idle_resource_campaign() {
             "pane_count": IDLE_PANES,
             "duration_ms": u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
             "cpu_percent_one_logical_core": cpu_percent_one_core,
+            "cpu_scope": "winds_workbench_process_only",
+            "child_cpu_excluded": true,
             "rss_baseline_bytes": baseline_rss,
             "rss_max_bytes": max_rss,
             "rss_overhead_bytes": rss_overhead,
+            "rss_scope": "winds_workbench_process_only",
             "child_memory_excluded": true,
+            "idle_tick_includes_output_pumps_and_render": true,
         }))
         .expect("T097 idle evidence must serialize")
     );
