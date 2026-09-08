@@ -1,0 +1,274 @@
+name: t097-performance
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/t097-performance.yml"
+      - "src/main.rs"
+      - "src/workbench.rs"
+      - "src/workbench_*.rs"
+      - "src/t097_workbench_performance_tests.rs"
+      - "specs/007-native-agentic-terminal-ux-foundation/evidence/**"
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        description: Exact candidate commit SHA to qualify
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: t097-performance-${{ github.event.pull_request.number || inputs.candidate_sha }}
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    name: pinned-ubuntu-release-qualification
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      CANDIDATE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.candidate_sha }}
+      EXPECTED_IMAGE_OS: ubuntu24
+      EXPECTED_IMAGE_VERSION: 20260831.293.1
+      EXPECTED_RUNNER_OS: Linux
+      EXPECTED_RUNNER_ARCH: X64
+
+    steps:
+      - name: Checkout exact candidate head
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ env.CANDIDATE_SHA }}
+
+      - name: Verify exact candidate identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test -n "$(git rev-parse HEAD^{tree})"
+
+      - name: Verify pinned reference environment before sampling
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${RUNNER_OS:-}" = "$EXPECTED_RUNNER_OS"
+          test "${RUNNER_ARCH:-}" = "$EXPECTED_RUNNER_ARCH"
+          test "${ImageOS:-}" = "$EXPECTED_IMAGE_OS"
+          test "${ImageVersion:-}" = "$EXPECTED_IMAGE_VERSION"
+          test "$(. /etc/os-release && printf '%s' "$VERSION_ID")" = "24.04"
+          printf 'runner_os=%s\nrunner_arch=%s\nimage_os=%s\nimage_version=%s\n' \
+            "$RUNNER_OS" "$RUNNER_ARCH" "$ImageOS" "$ImageVersion"
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.97.1
+
+      - name: Build exact candidate in release profile
+        shell: bash
+        run: cargo build --release --locked --bin winds
+
+      - name: Prove FR-045 cold process start to input-ready
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import shlex
+          import shutil
+          import statistics
+          import subprocess
+          import tempfile
+          import time
+          from pathlib import Path
+
+          samples = []
+          ready_pattern = re.compile(rb"WINDS_T097_READY=(\{[^\r\n]+\})")
+          binary = str(Path("target/release/winds").resolve())
+          repo = str(Path.cwd().resolve())
+
+          for index in range(20):
+              home = tempfile.mkdtemp(prefix=f"winds-t097-startup-{index:02}-")
+              command = (
+                  f"WINDS_T097_BENCHMARK=1 WINDS_HOME={shlex.quote(home)} "
+                  f"{shlex.quote(binary)} workbench --repo {shlex.quote(repo)} "
+                  "--t097-exit-after-ready"
+              )
+              started = time.perf_counter_ns()
+              proc = subprocess.Popen(
+                  ["script", "-qfec", command, "/dev/null"],
+                  stdout=subprocess.PIPE,
+                  stderr=subprocess.STDOUT,
+              )
+              captured = bytearray()
+              deadline = time.monotonic() + 10.0
+              ready_ns = None
+              while time.monotonic() < deadline:
+                  chunk = os.read(proc.stdout.fileno(), 4096)
+                  if not chunk:
+                      break
+                  captured.extend(chunk)
+                  match = ready_pattern.search(captured)
+                  if match:
+                      ready_ns = time.perf_counter_ns()
+                      readiness = json.loads(match.group(1))
+                      if readiness.get("state") != "INPUT_READY":
+                          raise SystemExit(f"invalid readiness state: {readiness!r}")
+                      if readiness.get("pane_count") != 1 or not readiness.get("selected_live_owned"):
+                          raise SystemExit(f"invalid readiness ownership: {readiness!r}")
+                      break
+              if ready_ns is None:
+                  proc.kill()
+                  raise SystemExit(f"readiness marker missing on sample {index}: {captured[-4000:]!r}")
+              remainder, _ = proc.communicate(timeout=10)
+              captured.extend(remainder or b"")
+              if proc.returncode != 0:
+                  raise SystemExit(f"startup sample {index} exited {proc.returncode}: {captured[-4000:]!r}")
+              samples.append((ready_ns - started) / 1_000_000.0)
+              shutil.rmtree(home, ignore_errors=True)
+
+          ordered = sorted(samples)
+          def percentile(p):
+              rank = max(1, (len(ordered) * p + 99) // 100)
+              return ordered[min(rank - 1, len(ordered) - 1)]
+
+          result = {
+              "sample_count": len(samples),
+              "raw_samples_ms": samples,
+              "p50_ms": percentile(50),
+              "p95_ms": percentile(95),
+              "max_ms": max(samples),
+              "wrapper": "util-linux script pseudo-TTY; wrapper overhead is included",
+          }
+          if result["p95_ms"] > 1500.0:
+              raise SystemExit(f"FR-045 p95 exceeded 1500 ms: {result['p95_ms']:.3f} ms")
+          Path("/tmp/t097-startup.json").write_text(json.dumps(result, sort_keys=True))
+          print("T097_STARTUP_JSON=" + json.dumps(result, sort_keys=True))
+          PY
+
+      - name: Prove FR-046 through FR-050 and FR-052
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --release --locked --bin winds \
+            workbench::t097_workbench_performance_tests::t097_release_benchmark_campaign \
+            -- --ignored --exact --nocapture --test-threads=1 | tee /tmp/t097-core.log
+          grep -q '^T097_CORE_JSON=' /tmp/t097-core.log
+
+      - name: Prove FR-051 idle CPU and RSS overhead
+        shell: bash
+        run: |
+          set -euo pipefail
+          export WINDS_T097_CLK_TCK="$(getconf CLK_TCK)"
+          export WINDS_T097_PAGE_SIZE="$(getconf PAGESIZE)"
+          cargo test --release --locked --bin winds \
+            workbench::t097_workbench_performance_tests::t097_idle_resource_campaign \
+            -- --ignored --exact --nocapture --test-threads=1 | tee /tmp/t097-idle.log
+          grep -q '^T097_IDLE_JSON=' /tmp/t097-idle.log
+
+      - name: Prove FR-053 exact candidate staleness semantics
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --release --locked --bin winds \
+            workbench::context::t094_workbench_context_tests::t094_candidate_movement_makes_evidence_review_and_human_acceptance_stale \
+            -- --exact --test-threads=1
+
+      - name: Assemble exact-candidate machine-readable evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import platform
+          import re
+          import subprocess
+          from pathlib import Path
+
+          def marker(path, prefix):
+              for line in Path(path).read_text().splitlines():
+                  if line.startswith(prefix):
+                      return json.loads(line[len(prefix):])
+              raise SystemExit(f"missing marker {prefix} in {path}")
+
+          startup = json.loads(Path('/tmp/t097-startup.json').read_text())
+          core = marker('/tmp/t097-core.log', 'T097_CORE_JSON=')
+          idle = marker('/tmp/t097-idle.log', 'T097_IDLE_JSON=')
+          candidate = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip()
+          if candidate != os.environ['CANDIDATE_SHA']:
+              raise SystemExit('candidate moved before evidence assembly')
+          rust_version = subprocess.check_output(['rustc', '--version', '--verbose'], text=True).strip()
+          cpu = next(
+              (line.split(':', 1)[1].strip() for line in Path('/proc/cpuinfo').read_text().splitlines()
+               if line.lower().startswith('model name')),
+              'UNAVAILABLE',
+          )
+          memory = next(
+              (line.split(':', 1)[1].strip() for line in Path('/proc/meminfo').read_text().splitlines()
+               if line.startswith('MemTotal:')),
+              'UNAVAILABLE',
+          )
+          evidence = {
+              'schema': 'WINDS_SPEC_007_T097_PERFORMANCE_EVIDENCE_V1',
+              'candidate_commit': candidate,
+              'candidate_tree': tree,
+              'os': 'linux',
+              'os_version_or_image': {
+                  'runner_label': 'ubuntu-24.04',
+                  'image_os': os.environ['ImageOS'],
+                  'image_version': os.environ['ImageVersion'],
+                  'distribution': platform.platform(),
+              },
+              'arch': platform.machine(),
+              'rust_version': rust_version,
+              'build_profile': 'release',
+              'cpu_description_or_runner_class': cpu,
+              'logical_cpu_count': os.cpu_count(),
+              'memory': memory,
+              'fixture_shell': '/bin/sh',
+              'fixture_id': 'spec007-t097-local-deterministic-v1',
+              'measurement_command': [
+                  'target/release/winds workbench --repo <exact-checkout> --t097-exit-after-ready',
+                  'cargo test --release --locked --bin winds ...t097_release_benchmark_campaign',
+                  'cargo test --release --locked --bin winds ...t097_idle_resource_campaign',
+              ],
+              'warmup_policy': {
+                  'startup': 'cold state root per sample; no discarded startup samples',
+                  'dispatch': 100 warmup dispatches before 1000 measured dispatches',
+                  'history_search': 10 warmup searches before 200 measured searches',
+                  'idle': 'ten live panes established, one-second settling period, then 60-second sample window',
+              },
+              'sample_count': startup['sample_count'],
+              'raw_samples_or_machine_readable_summary': {
+                  'fr045_startup': startup,
+                  'fr046_fr050_fr052': core,
+                  'fr051_idle_resources': idle,
+                  'fr053_exact_candidate_staleness': {'passed': True},
+              },
+              'p50': startup['p50_ms'],
+              'p95': startup['p95_ms'],
+              'max': startup['max_ms'],
+              'thresholds_relaxed': False,
+              'provider_network_model_fixture_calls': False,
+          }
+          destination = Path('specs/007-native-agentic-terminal-ux-foundation/evidence')
+          destination.mkdir(parents=True, exist_ok=True)
+          path = destination / f't097-{candidate}.json'
+          path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + '\n')
+          print(path.read_text())
+          PY
+
+      - name: Upload exact-candidate T097 evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: t097-performance-${{ env.CANDIDATE_SHA }}
+          path: specs/007-native-agentic-terminal-ux-foundation/evidence/t097-${{ env.CANDIDATE_SHA }}.json
+          if-no-files-found: error
+          retention-days: 30
