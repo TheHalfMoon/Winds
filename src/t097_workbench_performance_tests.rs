@@ -43,11 +43,7 @@ fn summarize(samples: &[Duration]) -> Summary {
 }
 
 fn percentile(sorted: &[u64], percentile: usize) -> u64 {
-    let rank = sorted
-        .len()
-        .saturating_mul(percentile)
-        .saturating_add(99)
-        / 100;
+    let rank = sorted.len().saturating_mul(percentile).saturating_add(99) / 100;
     sorted[rank.saturating_sub(1).min(sorted.len() - 1)]
 }
 
@@ -217,12 +213,10 @@ fn benchmark_topology() -> Summary {
         let pane_id = pane_ids[index % pane_ids.len()];
         let start = Instant::now();
         assert!(state.focus_pane(pane_id));
-        assert!(
-            state.resize_pane(
-                pane_id,
-                PaneSize::new(80 + u16::try_from(index % 8).unwrap(), 24)
-            )
-        );
+        assert!(state.resize_pane(
+            pane_id,
+            PaneSize::new(80 + u16::try_from(index % 8).unwrap(), 24)
+        ));
         samples.push(start.elapsed());
     }
     summarize(&samples)
