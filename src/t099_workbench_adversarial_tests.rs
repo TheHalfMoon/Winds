@@ -155,7 +155,7 @@ impl EvidenceFixture {
                 &EvidenceReport {
                     schema_version: 1,
                     run_id: run_id.to_owned(),
-                    authority: "WINDS_OBSERVED".to_owned(),
+                    authority: "WINDS_OBSERVED",
                     repo_path: repo_path.to_owned(),
                     base_oid: candidate_oid.to_owned(),
                     candidate_ref: "HEAD".to_owned(),
@@ -163,7 +163,7 @@ impl EvidenceFixture {
                     candidate_tree: candidate_tree.to_owned(),
                     worktree_path: repo_path.to_owned(),
                     check: CheckEvidence {
-                        authority: "WINDS_OBSERVED".to_owned(),
+                        authority: "WINDS_OBSERVED",
                         command: "cargo test --locked".to_owned(),
                         status: CheckStatus::Pass,
                         exit_code: Some(0),
