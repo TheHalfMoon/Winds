@@ -208,7 +208,10 @@ fn t097_release_benchmark_campaign() {
         high_volume.retained_bytes <= 32 * 1024 * 1024,
         "FR-050 payload bound exceeded"
     );
-    assert!(high_volume.truncated, "FR-050 eviction state must be visible");
+    assert!(
+        high_volume.truncated,
+        "FR-050 eviction state must be visible"
+    );
     assert!(
         high_volume.evicted_lines > 0 || high_volume.evicted_bytes > 0,
         "FR-050 over-bound campaign must record eviction"
@@ -427,7 +430,8 @@ fn benchmark_large_output_and_navigation(cwd: &Path, profile: &ShellProfile) -> 
     let snapshot = output
         .transcript_snapshot(output_pane)
         .expect("high-volume pane must retain its final bounded transcript");
-    let processed_lines = u64::try_from(snapshot.lines.len()).unwrap_or(u64::MAX)
+    let processed_lines = u64::try_from(snapshot.lines.len())
+        .unwrap_or(u64::MAX)
         .saturating_add(snapshot.evicted_lines);
     let processed_bytes = u64::try_from(snapshot.retained_bytes)
         .unwrap_or(u64::MAX)
