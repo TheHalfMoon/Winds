@@ -48,6 +48,8 @@ mod t078_claude_structured_tests;
 mod t085_agentic_hardening_tests;
 #[cfg(test)]
 mod t087_workbench_dependency_tests;
+#[cfg(test)]
+mod t099_workbench_adversarial_tests;
 mod workbench;
 
 use crate::check::run_check;
