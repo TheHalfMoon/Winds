@@ -62,7 +62,10 @@ impl WorkbenchAccessibilityState {
         match event {
             Event::Key(key)
                 if key.modifiers.contains(KeyModifiers::CONTROL)
-                    && key.code == KeyCode::Char('q') => false,
+                    && key.code == KeyCode::Char('q') =>
+            {
+                false
+            }
             Event::Key(key) if key.code == KeyCode::Esc => {
                 self.verification_inspection_open = false;
                 true
@@ -367,9 +370,7 @@ fn agent_progress_accessibility_label(state: context::AgentProgressProjection) -
     }
 }
 
-fn verification_accessibility_label(
-    state: context::VerificationProjectionState,
-) -> &'static str {
+fn verification_accessibility_label(state: context::VerificationProjectionState) -> &'static str {
     match state {
         context::VerificationProjectionState::NotRun => "VERIFICATION_NOT_RUN",
         context::VerificationProjectionState::Running => "VERIFICATION_RUNNING",
@@ -390,9 +391,7 @@ fn review_accessibility_label(state: context::ReviewProjectionState) -> &'static
     }
 }
 
-fn acceptance_accessibility_label(
-    state: context::HumanAcceptanceProjectionState,
-) -> &'static str {
+fn acceptance_accessibility_label(state: context::HumanAcceptanceProjectionState) -> &'static str {
     match state {
         context::HumanAcceptanceProjectionState::NotAccepted => "HUMAN_NOT_ACCEPTED",
         context::HumanAcceptanceProjectionState::AcceptedForExactCandidate => {

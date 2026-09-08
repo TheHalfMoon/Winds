@@ -134,10 +134,7 @@ fn t098_keyboard_paths_cover_core_actions_search_and_verification_inspection_wit
             &mut editor,
             &workspaces,
             &[],
-            key(
-                KeyCode::Right,
-                KeyModifiers::ALT | KeyModifiers::SHIFT,
-            ),
+            key(KeyCode::Right, KeyModifiers::ALT | KeyModifiers::SHIFT),
         )
         .unwrap();
     assert_eq!(
@@ -158,10 +155,7 @@ fn t098_keyboard_paths_cover_core_actions_search_and_verification_inspection_wit
         .unwrap();
     assert_eq!(state.panes().len(), pane_count - 1);
 
-    assert!(accessibility.handle_event(
-        &key(KeyCode::Char('e'), KeyModifiers::CONTROL),
-        false
-    ));
+    assert!(accessibility.handle_event(&key(KeyCode::Char('e'), KeyModifiers::CONTROL), false));
     assert!(accessibility.verification_inspection_open());
 
     assert!(accessibility.handle_event(&key(KeyCode::Enter, KeyModifiers::NONE), false));
@@ -177,8 +171,7 @@ fn t098_selected_and_lifecycle_states_are_explicit_text_not_color_only() {
     let mut state = WorkbenchState::new();
     let live = state.create_pane("live", None, None, PaneSize::new(80, 24));
     let exited = state.create_pane("exited", None, None, PaneSize::new(80, 24));
-    let ownership_lost =
-        state.create_pane("ownership", None, None, PaneSize::new(80, 24));
+    let ownership_lost = state.create_pane("ownership", None, None, PaneSize::new(80, 24));
     let error = state.create_pane("error", None, None, PaneSize::new(80, 24));
     state.set_pane_lifecycle(live, PaneLifecycleView::Live);
     state.set_pane_lifecycle(exited, PaneLifecycleView::Exited);
