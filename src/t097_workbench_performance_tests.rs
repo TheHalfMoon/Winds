@@ -84,10 +84,8 @@ fn close_all(terminals: &mut WorkbenchTerminals, state: &mut WorkbenchState, pan
 #[test]
 #[ignore = "T097 release-profile benchmark campaign; run explicitly in t097-performance"]
 fn t097_release_benchmark_campaign() {
-    assert!(
-        !cfg!(debug_assertions),
-        "T097 performance qualification requires cargo test --release"
-    );
+    #[cfg(debug_assertions)]
+    panic!("T097 performance qualification requires cargo test --release");
 
     let cwd = canonical_cwd();
     let profile = fixture_shell_profile(&cwd);
@@ -299,7 +297,7 @@ fn benchmark_resize(cwd: &Path, profile: &ShellProfile) -> Duration {
     let mut state = WorkbenchState::new();
     let mut terminals = WorkbenchTerminals::new();
     let mut pane_ids = Vec::with_capacity(10);
-    let mut final_sizes = vec![PaneSize::new(80, 24); 10];
+    let mut final_sizes = [PaneSize::new(80, 24); 10];
 
     for index in 0..10 {
         let pane_id = state.create_pane(
@@ -342,10 +340,8 @@ fn benchmark_resize(cwd: &Path, profile: &ShellProfile) -> Duration {
 #[test]
 #[ignore = "T097 sixty-second idle resource campaign; run explicitly in t097-performance"]
 fn t097_idle_resource_campaign() {
-    assert!(
-        !cfg!(debug_assertions),
-        "T097 performance qualification requires cargo test --release"
-    );
+    #[cfg(debug_assertions)]
+    panic!("T097 performance qualification requires cargo test --release");
 
     let cwd = canonical_cwd();
     let profile = fixture_shell_profile(&cwd);
