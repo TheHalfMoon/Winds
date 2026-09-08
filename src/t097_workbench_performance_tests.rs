@@ -54,6 +54,14 @@ fn canonical_cwd() -> PathBuf {
         .expect("benchmark cwd must be canonicalizable")
 }
 
+fn require_release_profile() {
+    let debug_assertions = std::hint::black_box(cfg!(debug_assertions));
+    assert!(
+        !debug_assertions,
+        "T097 performance qualification requires cargo test --release"
+    );
+}
+
 #[cfg(target_os = "linux")]
 fn fixture_shell_profile(cwd: &Path) -> ShellProfile {
     let shell = "/bin/sh";
@@ -84,8 +92,7 @@ fn close_all(terminals: &mut WorkbenchTerminals, state: &mut WorkbenchState, pan
 #[test]
 #[ignore = "T097 release-profile benchmark campaign; run explicitly in t097-performance"]
 fn t097_release_benchmark_campaign() {
-    #[cfg(debug_assertions)]
-    panic!("T097 performance qualification requires cargo test --release");
+    require_release_profile();
 
     let cwd = canonical_cwd();
     let profile = fixture_shell_profile(&cwd);
@@ -340,8 +347,7 @@ fn benchmark_resize(cwd: &Path, profile: &ShellProfile) -> Duration {
 #[test]
 #[ignore = "T097 sixty-second idle resource campaign; run explicitly in t097-performance"]
 fn t097_idle_resource_campaign() {
-    #[cfg(debug_assertions)]
-    panic!("T097 performance qualification requires cargo test --release");
+    require_release_profile();
 
     let cwd = canonical_cwd();
     let profile = fixture_shell_profile(&cwd);
