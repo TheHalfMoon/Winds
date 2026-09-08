@@ -217,10 +217,12 @@ fn benchmark_topology() -> Summary {
         let pane_id = pane_ids[index % pane_ids.len()];
         let start = Instant::now();
         assert!(state.focus_pane(pane_id));
-        assert!(state.resize_pane(
-            pane_id,
-            PaneSize::new(80 + u16::try_from(index % 8).unwrap(), 24)
-        ));
+        assert!(
+            state.resize_pane(
+                pane_id,
+                PaneSize::new(80 + u16::try_from(index % 8).unwrap(), 24)
+            )
+        );
         samples.push(start.elapsed());
     }
     summarize(&samples)
