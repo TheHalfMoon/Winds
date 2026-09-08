@@ -81,7 +81,6 @@ jobs:
           import re
           import shlex
           import shutil
-          import statistics
           import subprocess
           import tempfile
           import time
@@ -158,7 +157,7 @@ jobs:
           cargo test --release --locked --bin winds \
             workbench::t097_workbench_performance_tests::t097_release_benchmark_campaign \
             -- --ignored --exact --nocapture --test-threads=1 | tee /tmp/t097-core.log
-          grep -q '^T097_CORE_JSON=' /tmp/t097-core.log
+          grep -q 'T097_CORE_JSON=' /tmp/t097-core.log
 
       - name: Prove FR-051 idle CPU and RSS overhead
         shell: bash
@@ -169,7 +168,7 @@ jobs:
           cargo test --release --locked --bin winds \
             workbench::t097_workbench_performance_tests::t097_idle_resource_campaign \
             -- --ignored --exact --nocapture --test-threads=1 | tee /tmp/t097-idle.log
-          grep -q '^T097_IDLE_JSON=' /tmp/t097-idle.log
+          grep -q 'T097_IDLE_JSON=' /tmp/t097-idle.log
 
       - name: Prove FR-053 exact candidate staleness semantics
         shell: bash
@@ -187,14 +186,14 @@ jobs:
           import json
           import os
           import platform
-          import re
           import subprocess
           from pathlib import Path
 
           def marker(path, prefix):
               for line in Path(path).read_text().splitlines():
-                  if line.startswith(prefix):
-                      return json.loads(line[len(prefix):])
+                  offset = line.find(prefix)
+                  if offset >= 0:
+                      return json.loads(line[offset + len(prefix):])
               raise SystemExit(f"missing marker {prefix} in {path}")
 
           startup = json.loads(Path('/tmp/t097-startup.json').read_text())
@@ -241,8 +240,8 @@ jobs:
               ],
               'warmup_policy': {
                   'startup': 'cold state root per sample; no discarded startup samples',
-                  'dispatch': 100 warmup dispatches before 1000 measured dispatches',
-                  'history_search': 10 warmup searches before 200 measured searches',
+                  'dispatch': '100 warmup dispatches before 1000 measured dispatches',
+                  'history_search': '10 warmup searches before 200 measured searches',
                   'idle': 'ten live panes established, one-second settling period, then 60-second sample window',
               },
               'sample_count': startup['sample_count'],
