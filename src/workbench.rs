@@ -437,7 +437,8 @@ pub(crate) fn run_cli(args: Vec<String>) -> crate::Result<()> {
             let Some(event) = <ui::CrosstermHostEventSource as ui::HostEventSource>::next_event(
                 &mut source,
                 ui::HOST_EVENT_WAIT,
-            )? else {
+            )?
+            else {
                 continue;
             };
             let effect = navigation.handle_event(

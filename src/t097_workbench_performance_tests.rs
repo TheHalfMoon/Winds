@@ -112,10 +112,7 @@ fn t097_nonblocking_output_pump_drains_live_pane_into_its_screen() {
         .attach_live_pane(&mut terminals, &mut state, pane_id)
         .expect("live pane must transfer its output reader to the bounded pump");
     terminals
-        .dispatch_selected_input(
-            &mut state,
-            b"printf 'WINDS_T097_OUTPUT_PUMP\\n'\n",
-        )
+        .dispatch_selected_input(&mut state, b"printf 'WINDS_T097_OUTPUT_PUMP\\n'\n")
         .expect("fixture marker command must dispatch to the selected owned pane");
 
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -396,14 +393,19 @@ fn benchmark_resize(cwd: &Path, profile: &ShellProfile) -> (Duration, bool) {
     }
     let elapsed = start.elapsed();
 
-    let final_size_correct = pane_ids
-        .iter()
-        .copied()
-        .zip(final_sizes)
-        .all(|(pane_id, expected)| {
-            state.pane(pane_id).is_some_and(|pane| pane.size == expected)
-                && terminals.current_size(pane_id).is_ok_and(|actual| actual == expected)
-        });
+    let final_size_correct =
+        pane_ids
+            .iter()
+            .copied()
+            .zip(final_sizes)
+            .all(|(pane_id, expected)| {
+                state
+                    .pane(pane_id)
+                    .is_some_and(|pane| pane.size == expected)
+                    && terminals
+                        .current_size(pane_id)
+                        .is_ok_and(|actual| actual == expected)
+            });
     close_all(&mut terminals, &mut state, &pane_ids);
     (elapsed, final_size_correct)
 }

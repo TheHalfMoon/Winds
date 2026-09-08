@@ -53,7 +53,10 @@ impl WorkbenchOutput {
             .pane(pane_id)
             .ok_or("cannot attach output for an unknown workbench pane")?
             .size;
-        if state.pane(pane_id).is_none_or(|pane| pane.lifecycle != PaneLifecycleView::Live) {
+        if state
+            .pane(pane_id)
+            .is_none_or(|pane| pane.lifecycle != PaneLifecycleView::Live)
+        {
             return Err("cannot attach output pump to a non-live workbench pane".into());
         }
         self.attach_screen(pane_id, size)?;
@@ -87,7 +90,9 @@ impl WorkbenchOutput {
     }
 
     pub(crate) fn screen_contents(&self, pane_id: PaneId) -> Option<String> {
-        self.screens.get(&pane_id).map(WorkbenchScreen::screen_contents)
+        self.screens
+            .get(&pane_id)
+            .map(WorkbenchScreen::screen_contents)
     }
 
     pub(crate) fn transcript_snapshot(&self, pane_id: PaneId) -> Option<TranscriptSnapshot> {
@@ -119,22 +124,20 @@ impl WorkbenchOutput {
                 {
                     Ok(event) => event,
                     Err(TryRecvError::Empty) => break,
-                    Err(TryRecvError::Disconnected) => {
-                        match terminals.poll_exit(state, pane_id) {
-                            Ok(Some(_)) => {
-                                finished.push(pane_id);
-                                break;
-                            }
-                            Ok(None) => {
-                                state.set_pane_lifecycle(pane_id, PaneLifecycleView::Error);
-                                return Err(
-                                    "workbench output pump disconnected while the owned child remained live"
-                                        .into(),
-                                );
-                            }
-                            Err(error) => return Err(error),
+                    Err(TryRecvError::Disconnected) => match terminals.poll_exit(state, pane_id) {
+                        Ok(Some(_)) => {
+                            finished.push(pane_id);
+                            break;
                         }
-                    }
+                        Ok(None) => {
+                            state.set_pane_lifecycle(pane_id, PaneLifecycleView::Error);
+                            return Err(
+                                "workbench output pump disconnected while the owned child remained live"
+                                    .into(),
+                            );
+                        }
+                        Err(error) => return Err(error),
+                    },
                 };
 
                 match event {
@@ -201,7 +204,10 @@ impl WorkbenchOutput {
         self.pumps.retain(|pane_id, _| {
             terminals.has_owned_terminal(*pane_id)
                 && state.pane(*pane_id).is_some_and(|pane| {
-                    matches!(pane.lifecycle, PaneLifecycleView::Live | PaneLifecycleView::Exited)
+                    matches!(
+                        pane.lifecycle,
+                        PaneLifecycleView::Live | PaneLifecycleView::Exited
+                    )
                 })
         });
     }
