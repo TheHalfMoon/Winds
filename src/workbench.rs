@@ -408,13 +408,10 @@ fn verification_inspection_text(
 ) -> String {
     let details = match projected {
         Some(projected) => format!(
-            "agent_progress={}\nverification_state={}\nevidence_applicability=applicable:{} stale:{}\nreview_state={}\nhuman_acceptance={}",
-            agent_progress_accessibility_label(projected.agent_progress),
+            "agent_progress=CANONICAL_STATE_NOT_LOADED\nverification_state={}\nevidence_applicability=applicable:{} stale:{}\nreview_state=CANONICAL_REVIEW_NOT_LOADED\nhuman_acceptance=CANONICAL_DECISION_NOT_LOADED",
             verification_accessibility_label(projected.verification.state),
             projected.verification.applicable_evidence_count,
             projected.verification.stale_evidence_count,
-            review_accessibility_label(projected.review),
-            acceptance_accessibility_label(projected.human_acceptance),
         ),
         None => concat!(
             "agent_progress=CANONICAL_STATE_NOT_LOADED\n",
@@ -431,12 +428,48 @@ fn verification_inspection_text(
     )
 }
 
-fn compact_workbench_text(
+fn load_workbench_candidate_context(
+    repo: &Repo,
+    store: &crate::store::Store,
+) -> Result<context::WorkbenchCandidateContext, String> {
+    let repo_path = repo
+        .root()
+        .to_str()
+        .ok_or_else(|| "T098 repository path is not valid UTF-8".to_owned())?;
+    let runs = store
+        .runs_for_repo(repo_path)
+        .map_err(|error| format!("T098 verification-run discovery failed: {error}"))?;
+    let mut eligible_run_ids = Vec::new();
+    for run in runs {
+        let stored = store
+            .load_run(&run.run_id)
+            .map_err(|error| format!("T098 verification-run load failed for {}: {error}", run.run_id))?;
+        if stored.eligibility == crate::domain::Eligibility::Eligible {
+            eligible_run_ids.push(run.run_id);
+        }
+    }
+    let verification_run_ids = eligible_run_ids.iter().map(String::as_str).collect::<Vec<_>>();
+    context::project_candidate_context(context::WorkbenchContextInput {
+        repo,
+        store,
+        base_ref: "HEAD",
+        candidate_ref: "HEAD",
+        diff_bytes: None,
+        verification_run_ids: &verification_run_ids,
+        verification_running: false,
+        agent_reported_done: false,
+        review: None,
+        human_accepted_candidate: None,
+    })
+}
+
+fn compact_workbench_text_with_context(
     state: &WorkbenchState,
     output: &output::WorkbenchOutput,
     accessibility: WorkbenchAccessibilityState,
     candidate_oid: &str,
     candidate_tree: &str,
+    projected: Option<&context::WorkbenchCandidateContext>,
 ) -> String {
     let mut text = format!(
         "WINDS_WORKBENCH_COMPACT\nCtrl+E verify-inspect | Ctrl+Q quit\ncandidate_oid={candidate_oid}\ncandidate_tree={candidate_tree}\n{}",
@@ -447,7 +480,7 @@ fn compact_workbench_text(
         text.push_str(&verification_inspection_text(
             candidate_oid,
             candidate_tree,
-            None,
+            projected,
         ));
     } else {
         text.push_str("\nSOURCE=TERMINAL_DATA_ONLY\n");
@@ -458,6 +491,23 @@ fn compact_workbench_text(
         text.push_str(&terminal_text);
     }
     text
+}
+
+fn compact_workbench_text(
+    state: &WorkbenchState,
+    output: &output::WorkbenchOutput,
+    accessibility: WorkbenchAccessibilityState,
+    candidate_oid: &str,
+    candidate_tree: &str,
+) -> String {
+    compact_workbench_text_with_context(
+        state,
+        output,
+        accessibility,
+        candidate_oid,
+        candidate_tree,
+        None,
+    )
 }
 
 /// Render the inert T087 workbench shell without owning terminal runtime state.
@@ -483,16 +533,18 @@ fn render_workbench_accessible(
     accessibility: WorkbenchAccessibilityState,
     candidate_oid: &str,
     candidate_tree: &str,
+    projected: Option<&context::WorkbenchCandidateContext>,
 ) {
     let area = frame.area();
     if use_compact_workbench_layout(area.width, area.height) {
         frame.render_widget(
-            Paragraph::new(compact_workbench_text(
+            Paragraph::new(compact_workbench_text_with_context(
                 state,
                 output,
                 accessibility,
                 candidate_oid,
                 candidate_tree,
+                projected,
             ))
             .block(Block::bordered().title(" Winds Workbench · compact ")),
             area,
@@ -531,7 +583,7 @@ fn render_workbench_accessible(
             Paragraph::new(verification_inspection_text(
                 candidate_oid,
                 candidate_tree,
-                None,
+                projected,
             ))
             .block(Block::bordered().title(" Verification inspection · REPOSITORY_EVIDENCE_ONLY ")),
             body[1],
@@ -570,6 +622,7 @@ fn render_workbench(
         WorkbenchAccessibilityState::default(),
         "CANONICAL_CANDIDATE_NOT_LOADED",
         "CANONICAL_CANDIDATE_TREE_NOT_LOADED",
+        None,
     );
 }
 
@@ -588,6 +641,7 @@ pub(crate) fn run_cli(args: Vec<String>) -> crate::Result<()> {
     let mut candidate_tree = repo.tree_oid(&candidate_oid)?;
     let home = crate::winds_home(None, &repo)?;
     let workspace = open_existing_workspace(repo.root(), &home, crate::unix_ms()?)?;
+    let store = crate::store::Store::open(&home)?;
     let inventory = inventory_workspace_environment(&workspace)?;
     let profiles = discover_native_shell_profiles(&inventory)?;
     let profile = profiles
@@ -615,6 +669,7 @@ pub(crate) fn run_cli(args: Vec<String>) -> crate::Result<()> {
     let mut editor = terminal::input::WorkbenchShellEditor::new();
     let mut navigation = ui::WorkbenchNavigation::new();
     let mut accessibility = WorkbenchAccessibilityState::default();
+    let mut projected_context: Option<context::WorkbenchCandidateContext> = None;
 
     let mut host_guard = HostTerminalGuard::enter()?;
     let backend = CrosstermBackend::new(io::stdout());
@@ -629,6 +684,7 @@ pub(crate) fn run_cli(args: Vec<String>) -> crate::Result<()> {
             accessibility,
             &candidate_oid,
             &candidate_tree,
+            projected_context.as_ref(),
         )
     })?;
 
@@ -666,6 +722,7 @@ pub(crate) fn run_cli(args: Vec<String>) -> crate::Result<()> {
                     accessibility,
                     &candidate_oid,
                     &candidate_tree,
+                    projected_context.as_ref(),
                 )
             })?;
 
@@ -679,8 +736,20 @@ pub(crate) fn run_cli(args: Vec<String>) -> crate::Result<()> {
             let inspection_was_open = accessibility.verification_inspection_open();
             if accessibility.handle_event(&event, navigation.search_query().is_some()) {
                 if !inspection_was_open && accessibility.verification_inspection_open() {
-                    candidate_oid = repo.resolve_commit("HEAD")?;
-                    candidate_tree = repo.tree_oid(&candidate_oid)?;
+                    match load_workbench_candidate_context(&repo, &store) {
+                        Ok(projected) => {
+                            candidate_oid = projected.candidate.oid.clone();
+                            candidate_tree = projected.candidate.tree.clone();
+                            projected_context = Some(projected);
+                        }
+                        Err(_) => {
+                            candidate_oid = repo.resolve_commit("HEAD")?;
+                            candidate_tree = repo.tree_oid(&candidate_oid)?;
+                            projected_context = None;
+                        }
+                    }
+                } else if inspection_was_open && !accessibility.verification_inspection_open() {
+                    projected_context = None;
                 }
                 continue;
             }

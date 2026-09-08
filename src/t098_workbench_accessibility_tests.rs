@@ -1,6 +1,15 @@
 use super::*;
-use crate::domain::WorkspaceRecord;
+use crate::domain::{
+    BlobEvidence, CheckEvidence, CheckStatus, Eligibility, EvidenceReport, WorkspaceRecord,
+};
+use crate::git::Repo;
+use crate::store::{NewRun, Store};
 use crossterm::event::{KeyEvent, KeyEventState};
+use std::path::PathBuf;
+use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_EVIDENCE_FIXTURE: AtomicU64 = AtomicU64::new(1);
 
 fn key(code: KeyCode, modifiers: KeyModifiers) -> Event {
     Event::Key(KeyEvent {
@@ -18,6 +27,151 @@ fn workspace(id: &str, root: &str) -> WorkspaceRecord {
         git_common_dir: format!("{root}/.git"),
         created_unix_ms: 1,
         last_opened_unix_ms: 1,
+    }
+}
+
+struct EvidenceFixture {
+    root: PathBuf,
+    state: PathBuf,
+}
+
+impl EvidenceFixture {
+    fn new(name: &str) -> Self {
+        let sequence = NEXT_EVIDENCE_FIXTURE.fetch_add(1, Ordering::Relaxed);
+        let base = std::env::temp_dir().join(format!(
+            "winds-t098-evidence-{name}-{}-{sequence}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("repo");
+        let state = base.join("state");
+        std::fs::create_dir_all(&root).expect("create T098 evidence repository root");
+        let fixture = Self { root, state };
+        fixture.git(&["init"]);
+        fixture.git(&["config", "user.email", "t098@example.invalid"]);
+        fixture.git(&["config", "user.name", "T098 Fixture"]);
+        fixture
+    }
+
+    fn repo(&self) -> Repo {
+        Repo::open(&self.root).expect("open T098 evidence repository")
+    }
+
+    fn store(&self) -> Store {
+        Store::open(&self.state).expect("open T098 evidence store")
+    }
+
+    fn commit(&self, name: &str, content: &str) -> String {
+        std::fs::write(self.root.join(name), content).expect("write T098 evidence fixture file");
+        self.git(&["add", "--", name]);
+        self.git(&["commit", "-m", &format!("T098 fixture {name}")]);
+        self.git_text(&["rev-parse", "HEAD"])
+    }
+
+    fn tree(&self, oid: &str) -> String {
+        self.git_text(&["rev-parse", &format!("{oid}^{{tree}}")])
+    }
+
+    fn persist_eligible(
+        &self,
+        store: &mut Store,
+        run_id: &str,
+        candidate_oid: &str,
+        candidate_tree: &str,
+    ) {
+        let repo_path = self
+            .root
+            .to_str()
+            .expect("T098 evidence repository path is UTF-8");
+        store
+            .create_run(
+                NewRun {
+                    run_id,
+                    repo_path,
+                    base_oid: candidate_oid,
+                    candidate_ref: "HEAD",
+                    candidate_oid,
+                    candidate_tree,
+                    worktree_path: repo_path,
+                    check_command: "cargo test --locked",
+                    timeout_secs: 60,
+                },
+                1,
+            )
+            .expect("create T098 verification run");
+        store
+            .mark_workspace_ready(run_id, 2)
+            .expect("mark T098 verification run ready");
+        let report = EvidenceReport {
+            schema_version: 1,
+            run_id: run_id.to_owned(),
+            authority: "WINDS_OBSERVED",
+            repo_path: repo_path.to_owned(),
+            base_oid: candidate_oid.to_owned(),
+            candidate_ref: "HEAD".to_owned(),
+            candidate_oid: candidate_oid.to_owned(),
+            candidate_tree: candidate_tree.to_owned(),
+            worktree_path: repo_path.to_owned(),
+            check: CheckEvidence {
+                authority: "WINDS_OBSERVED",
+                command: "cargo test --locked".to_owned(),
+                status: CheckStatus::Pass,
+                exit_code: Some(0),
+                duration_ms: 1,
+                stdout: BlobEvidence {
+                    relative_path: "fixture/stdout".to_owned(),
+                    sha256: "0".repeat(64),
+                    captured_bytes: 0,
+                    truncated: false,
+                },
+                stderr: BlobEvidence {
+                    relative_path: "fixture/stderr".to_owned(),
+                    sha256: "1".repeat(64),
+                    captured_bytes: 0,
+                    truncated: false,
+                },
+            },
+            eligibility: Eligibility::Eligible,
+            warnings: Vec::new(),
+        };
+        store
+            .save_evidence_for_test(&report, 3)
+            .expect("persist T098 eligible evidence");
+    }
+
+    fn git(&self, args: &[&str]) {
+        let output = Command::new("git")
+            .current_dir(&self.root)
+            .args(args)
+            .output()
+            .expect("run T098 evidence git fixture");
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn git_text(&self, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .current_dir(&self.root)
+            .args(args)
+            .output()
+            .expect("run T098 evidence git text fixture");
+        assert!(output.status.success());
+        String::from_utf8(output.stdout)
+            .expect("T098 evidence git output is UTF-8")
+            .trim()
+            .to_owned()
+    }
+}
+
+impl Drop for EvidenceFixture {
+    fn drop(&mut self) {
+        if let Some(base) = self.root.parent() {
+            let _ = std::fs::remove_dir_all(base);
+        }
     }
 }
 
@@ -231,6 +385,51 @@ fn t098_verification_projection_wording_keeps_done_verified_and_accepted_distinc
     assert!(unloaded.contains("verification_state=CANONICAL_EVIDENCE_NOT_LOADED"));
     assert!(unloaded.contains("INVARIANT=AGENT_REPORTED_DONE != VERIFIED != ACCEPTED"));
     assert!(unloaded.contains("MODE=READ_ONLY"));
+}
+
+#[test]
+fn t098_production_context_loader_projects_current_and_stale_persisted_evidence() {
+    let fixture = EvidenceFixture::new("projection");
+    let candidate_a = fixture.commit("a.txt", "a\n");
+    let candidate_a_tree = fixture.tree(&candidate_a);
+    let repo = fixture.repo();
+    let mut store = fixture.store();
+    fixture.persist_eligible(&mut store, "verify-a", &candidate_a, &candidate_a_tree);
+
+    let current = load_workbench_candidate_context(&repo, &store).unwrap();
+    assert_eq!(current.candidate.oid, candidate_a);
+    assert_eq!(
+        current.verification.state,
+        context::VerificationProjectionState::VerifiedForExactCandidate
+    );
+    assert_eq!(current.verification.applicable_evidence_count, 1);
+    assert_eq!(current.verification.stale_evidence_count, 0);
+    let current_text = verification_inspection_text(
+        &current.candidate.oid,
+        &current.candidate.tree,
+        Some(&current),
+    );
+    assert!(current_text.contains("verification_state=VERIFIED_FOR_EXACT_CANDIDATE"));
+    assert!(current_text.contains("evidence_applicability=applicable:1 stale:0"));
+    assert!(current_text.contains("review_state=CANONICAL_REVIEW_NOT_LOADED"));
+    assert!(current_text.contains("human_acceptance=CANONICAL_DECISION_NOT_LOADED"));
+
+    let candidate_b = fixture.commit("b.txt", "b\n");
+    let stale = load_workbench_candidate_context(&repo, &store).unwrap();
+    assert_eq!(stale.candidate.oid, candidate_b);
+    assert_eq!(
+        stale.verification.state,
+        context::VerificationProjectionState::Stale
+    );
+    assert_eq!(stale.verification.applicable_evidence_count, 0);
+    assert_eq!(stale.verification.stale_evidence_count, 1);
+    let stale_text = verification_inspection_text(
+        &stale.candidate.oid,
+        &stale.candidate.tree,
+        Some(&stale),
+    );
+    assert!(stale_text.contains("verification_state=VERIFICATION_STALE_NOT_APPLICABLE"));
+    assert!(stale_text.contains("evidence_applicability=applicable:0 stale:1"));
 }
 
 #[test]
