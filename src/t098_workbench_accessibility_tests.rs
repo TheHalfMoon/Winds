@@ -423,11 +423,8 @@ fn t098_production_context_loader_projects_current_and_stale_persisted_evidence(
     );
     assert_eq!(stale.verification.applicable_evidence_count, 0);
     assert_eq!(stale.verification.stale_evidence_count, 1);
-    let stale_text = verification_inspection_text(
-        &stale.candidate.oid,
-        &stale.candidate.tree,
-        Some(&stale),
-    );
+    let stale_text =
+        verification_inspection_text(&stale.candidate.oid, &stale.candidate.tree, Some(&stale));
     assert!(stale_text.contains("verification_state=VERIFICATION_STALE_NOT_APPLICABLE"));
     assert!(stale_text.contains("evidence_applicability=applicable:0 stale:1"));
 }

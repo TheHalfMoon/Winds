@@ -441,14 +441,20 @@ fn load_workbench_candidate_context(
         .map_err(|error| format!("T098 verification-run discovery failed: {error}"))?;
     let mut eligible_run_ids = Vec::new();
     for run in runs {
-        let stored = store
-            .load_run(&run.run_id)
-            .map_err(|error| format!("T098 verification-run load failed for {}: {error}", run.run_id))?;
+        let stored = store.load_run(&run.run_id).map_err(|error| {
+            format!(
+                "T098 verification-run load failed for {}: {error}",
+                run.run_id
+            )
+        })?;
         if stored.eligibility == crate::domain::Eligibility::Eligible {
             eligible_run_ids.push(run.run_id);
         }
     }
-    let verification_run_ids = eligible_run_ids.iter().map(String::as_str).collect::<Vec<_>>();
+    let verification_run_ids = eligible_run_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
     context::project_candidate_context(context::WorkbenchContextInput {
         repo,
         store,
