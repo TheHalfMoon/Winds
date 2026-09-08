@@ -1,8 +1,15 @@
+#![allow(
+    dead_code,
+    reason = "Spec 007 workbench includes accepted presentation and safety seams not all reached by the initial production entry"
+)]
+
 use crate::git::Repo;
 use crate::git::shell_profiles::discover_native_shell_profiles;
 use crate::git::workspace::open_existing_workspace;
 use crate::git::workspace_inventory::inventory_workspace_environment;
-use crossterm::event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture};
+use crossterm::event::{
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
     size as host_terminal_size,
@@ -436,9 +443,7 @@ fn parse_workbench_args(args: &[String]) -> crate::Result<(Option<PathBuf>, bool
                 if repo.is_some() {
                     return Err("duplicate flag --repo".into());
                 }
-                let value = args
-                    .get(index + 1)
-                    .ok_or("missing value for --repo")?;
+                let value = args.get(index + 1).ok_or("missing value for --repo")?;
                 if value.starts_with("--") {
                     return Err("missing value for --repo".into());
                 }
