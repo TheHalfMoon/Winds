@@ -7,6 +7,7 @@ use crate::git::shell_profiles::{
     discover_native_shell_profiles, validate_shell_profile_for_launch,
 };
 use crate::git::workspace_inventory::WorkspaceEnvironmentInventory;
+#[cfg(not(windows))]
 use crate::git::wsl_launch::prepare_wsl_terminal_launch;
 use crate::store::{NewRun, Store};
 use crate::workbench::context::{
@@ -24,7 +25,9 @@ use crate::workbench::terminal::input::{
 };
 use crate::workbench::ui::{FindResolution, resolve_find_query};
 use crate::workbench::{PaneLifecycleView, PanePresentationMetadata, PaneSize, WorkbenchState};
-use std::path::{Path, PathBuf};
+#[cfg(not(windows))]
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
