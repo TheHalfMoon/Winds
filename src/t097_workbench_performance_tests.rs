@@ -378,7 +378,7 @@ fn benchmark_large_output_and_navigation(cwd: &Path, profile: &ShellProfile) -> 
     let payload_bytes = (OUTPUT_BODY_BYTES + 1) * OUTPUT_LINES;
     assert!(payload_bytes >= 10 * 1024 * 1024);
     let command = format!(
-        "i=0; while [ \"$i\" -lt {OUTPUT_LINES} ]; do printf '%s\\n' '{line_body}'; i=$((i + 1)); done; printf '{HIGH_VOLUME_DONE_MARKER}\\n'\n"
+        "i=0; while [ \"$i\" -lt {OUTPUT_LINES} ]; do printf '%s\\n' '{line_body}'; i=$((i + 1)); done; printf '%s%s\\n' 'WINDS_T097_HIGH_' 'VOLUME_DONE'\n"
     );
     terminals
         .dispatch_selected_input(&mut state, command.as_bytes())
