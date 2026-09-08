@@ -109,7 +109,7 @@ A task closes only after guarded landing and post-merge verification. Closing T1
 
 ## Phase 1 — Minimal UI Dependency and Pure State Foundation
 
-### [ ] T087 — Ratatui/Crossterm dependency qualification and inert workbench shell
+### [x] T087 — Ratatui/Crossterm dependency qualification and inert workbench shell
 
 **Purpose**: land only the host-TUI dependencies needed for the first inert workbench shell and prove their exact dependency/security/platform shape before any terminal parser/editor dependency is added.
 
@@ -153,7 +153,7 @@ No other new direct dependency is authorized by T087. `vt100` and `ratatui-texta
 
 **Depends on**: canonical Tasks. **Closes to authorize**: T088.
 
-### [ ] T088 — Pure workbench topology, selection, and presentation identity
+### [x] T088 — Pure workbench topology, selection, and presentation identity
 
 **Purpose**: implement deterministic in-memory pane topology without terminal process ownership.
 
@@ -182,7 +182,7 @@ No other new direct dependency is authorized by T087. `vt100` and `ratatui-texta
 
 ## Phase 2 — Terminal Screen Projection and Existing Lifecycle Integration
 
-### [ ] T089 — vt100 screen projection, bounded transcript, and fail-closed callbacks
+### [x] T089 — vt100 screen projection, bounded transcript, and fail-closed callbacks
 
 **Purpose**: parse observed terminal bytes into non-authoritative screen/transcript state without owning a terminal child or authorizing host actions.
 
@@ -222,7 +222,7 @@ No other new direct dependency is authorized by T089.
 
 **Depends on**: T088. **Closes to authorize**: T090.
 
-### [ ] T090 — Pane integration with accepted TerminalSession lifecycle
+### [x] T090 — Pane integration with accepted TerminalSession lifecycle
 
 **Purpose**: connect panes to existing terminal ownership without creating a second terminal runtime.
 
@@ -251,7 +251,7 @@ No other new direct dependency is authorized by T089.
 
 ## Phase 3 — Explicit Input and Workbench Navigation
 
-### [ ] T091 — Shell editor and exactly-one-pane dispatch
+### [x] T091 — Shell editor and exactly-one-pane dispatch
 
 **Purpose**: add keyboard-first editable shell input without building a custom editor or model router.
 
@@ -291,7 +291,7 @@ No other new direct dependency is authorized by T091.
 
 **Depends on**: T090. **Closes to authorize**: T092.
 
-### [ ] T092 — Host event loop, keyboard/pointer pane navigation, and canonical findability
+### [x] T092 — Host event loop, keyboard/pointer pane navigation, and canonical findability
 
 **Purpose**: make the workbench usable while keeping host events and search non-authoritative.
 
@@ -321,7 +321,7 @@ No other new direct dependency is authorized by T091.
 
 ## Phase 4 — Typed Interaction and Verification-Native Context
 
-### [ ] T093 — Typed source labels, bounded terminal history, and transcript search
+### [x] T093 — Typed source labels, bounded terminal history, and transcript search
 
 **Purpose**: distinguish user input, terminal output, Agent-reported material, accepted Winds evidence, warnings, and human decisions without manufacturing authority from presentation.
 
@@ -344,7 +344,7 @@ No other new direct dependency is authorized by T091.
 
 **Depends on**: T092. **Closes to authorize**: T094.
 
-### [ ] T094 — Read-only exact candidate, diff, evidence, and verification projection
+### [x] T094 — Read-only exact candidate, diff, evidence, and verification projection
 
 **Purpose**: surface canonical context where work happens without creating a second verifier or Git authority.
 
@@ -371,7 +371,7 @@ No other new direct dependency is authorized by T091.
 
 ## Phase 5 — Terminal Host Safety and Platform Qualification
 
-### [ ] T095 — Host-integration safety campaign
+### [x] T095 — Host-integration safety campaign
 
 **Purpose**: prove terminal-originated control data cannot silently cause host side effects or trusted UI state.
 
@@ -393,7 +393,7 @@ No other new direct dependency is authorized by T091.
 
 **Depends on**: T094. **Closes to authorize**: T096.
 
-### [ ] T096 — Cross-platform workbench integration qualification
+### [x] T096 — Cross-platform workbench integration qualification
 
 **Purpose**: qualify only the platform/domain claims actually exercised by the complete workbench path.
 
@@ -421,7 +421,7 @@ No other new direct dependency is authorized by T091.
 
 ## Phase 6 — Performance and Accessibility Acceptance
 
-### [ ] T097 — Frozen performance, retention, idle, and resize qualification
+### [x] T097 — Frozen performance, retention, idle, and resize qualification
 
 **Purpose**: prove FR-045..FR-053 on reproducible exact candidates without changing the frozen thresholds.
 
@@ -473,7 +473,7 @@ max
 
 **Depends on**: T096. **Closes to authorize**: T098.
 
-### [ ] T098 — Accessibility and daily-driver UX acceptance
+### [x] T098 — Accessibility and daily-driver UX acceptance
 
 **Purpose**: prove required actions remain keyboard-accessible and state meaning is not color-only or visually ambiguous.
 
@@ -500,7 +500,7 @@ max
 
 ## Phase 7 — Adversarial Campaign and Final Reconciliation
 
-### [ ] T099 — Negative/adversarial/repetition campaign
+### [x] T099 — Negative/adversarial/repetition campaign
 
 **Purpose**: attack the full Spec 007 workbench truth model before final acceptance.
 
@@ -538,7 +538,9 @@ max
 
 **Depends on**: T098. **Closes to authorize**: T100.
 
-### [ ] T100 — Spec 007 final acceptance, reconciliation, and closeout
+### [x] T100 — Spec 007 final acceptance, reconciliation, and closeout
+
+**Candidate-closeout note**: this checkbox records T100 task truth on the closeout branch. It is not canonical closure until the exact final documentation/evidence-only candidate passes every T100 gate, lands with an expected-head guard, and is post-merge verified on canonical `main`.
 
 **Purpose**: reconcile every Spec 007 requirement/success criterion against canonical implementation evidence and close only what is actually proven.
 
