@@ -4,7 +4,7 @@ use super::interaction::{InteractionContext, search_terminal_transcript};
 use super::output::WorkbenchOutput;
 use super::screen::WorkbenchScreen;
 use super::terminal::WorkbenchTerminals;
-use super::{PaneId, PaneSize, WorkbenchState};
+use super::{PaneId, PaneLifecycleView, PaneSize, WorkbenchState};
 use crate::git::shell_profiles::{ShellProfile, discover_native_shell_profiles};
 use crate::git::workspace_inventory::WorkspaceEnvironmentInventory;
 use ratatui::Terminal;
@@ -20,9 +20,12 @@ const TOPOLOGY_ITERATIONS: usize = 1_000;
 const HISTORY_LINES: usize = 100_000;
 const HISTORY_SEARCHES: usize = 200;
 const OUTPUT_LINES: usize = 100_001;
+const OUTPUT_BODY_BYTES: usize = 111;
 const RESIZE_ITERATIONS: usize = 1_000;
 const IDLE_PANES: usize = 10;
 const IDLE_DURATION: Duration = Duration::from_secs(60);
+const HIGH_VOLUME_DEADLINE: Duration = Duration::from_secs(60);
+const HIGH_VOLUME_DONE_MARKER: &str = "WINDS_T097_HIGH_VOLUME_DONE";
 
 #[derive(Debug, Clone, Copy)]
 struct Summary {
@@ -30,6 +33,20 @@ struct Summary {
     p50_us: u64,
     p95_us: u64,
     max_us: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct HighVolumeSummary {
+    navigation: Summary,
+    processed_lines: u64,
+    processed_bytes: u64,
+    retained_lines: usize,
+    retained_bytes: usize,
+    evicted_lines: u64,
+    evicted_bytes: u64,
+    truncated: bool,
+    lifecycle_live_after_campaign: bool,
+    owned_terminal_after_campaign: bool,
 }
 
 fn summarize(samples: &[Duration]) -> Summary {
@@ -165,21 +182,35 @@ fn t097_release_benchmark_campaign() {
         history_search.p95_us
     );
 
-    let (navigation, retained_lines, retained_bytes, evicted_lines, evicted_bytes, truncated) =
-        benchmark_large_output_and_navigation();
+    let high_volume = benchmark_large_output_and_navigation(&cwd, &profile);
     assert!(
-        navigation.p95_us <= 100_000,
+        high_volume.navigation.p95_us <= 100_000,
         "FR-049 navigation p95 exceeded 100 ms: {} us",
-        navigation.p95_us
+        high_volume.navigation.p95_us
     );
-    assert!(retained_lines <= 100_000, "FR-050 line bound exceeded");
     assert!(
-        retained_bytes <= 32 * 1024 * 1024,
+        high_volume.processed_lines >= u64::try_from(OUTPUT_LINES).unwrap(),
+        "FR-049 processed fewer than the required logical lines"
+    );
+    assert!(
+        high_volume.processed_bytes >= 10 * 1024 * 1024,
+        "FR-049 processed less than the required 10 MiB terminal payload"
+    );
+    assert!(
+        high_volume.lifecycle_live_after_campaign && high_volume.owned_terminal_after_campaign,
+        "FR-049 high-volume campaign corrupted live terminal lifecycle or ownership"
+    );
+    assert!(
+        high_volume.retained_lines <= 100_000,
+        "FR-050 line bound exceeded"
+    );
+    assert!(
+        high_volume.retained_bytes <= 32 * 1024 * 1024,
         "FR-050 payload bound exceeded"
     );
-    assert!(truncated, "FR-050 eviction state must be visible");
+    assert!(high_volume.truncated, "FR-050 eviction state must be visible");
     assert!(
-        evicted_lines > 0 || evicted_bytes > 0,
+        high_volume.evicted_lines > 0 || high_volume.evicted_bytes > 0,
         "FR-050 over-bound campaign must record eviction"
     );
 
@@ -199,13 +230,20 @@ fn t097_release_benchmark_campaign() {
             "fr046_dispatch": summary_json(dispatch),
             "fr047_topology": summary_json(topology),
             "fr048_history_search": summary_json(history_search),
-            "fr049_navigation": summary_json(navigation),
+            "fr049_navigation": summary_json(high_volume.navigation),
+            "fr049_high_volume": {
+                "processed_lines": high_volume.processed_lines,
+                "processed_bytes": high_volume.processed_bytes,
+                "source": "live_fixture_shell_via_owned_pty_and_bounded_workbench_output_pump",
+                "lifecycle_live_after_campaign": high_volume.lifecycle_live_after_campaign,
+                "owned_terminal_after_campaign": high_volume.owned_terminal_after_campaign,
+            },
             "fr050_retention": {
-                "retained_lines": retained_lines,
-                "retained_bytes": retained_bytes,
-                "evicted_lines": evicted_lines,
-                "evicted_bytes": evicted_bytes,
-                "truncated": truncated,
+                "retained_lines": high_volume.retained_lines,
+                "retained_bytes": high_volume.retained_bytes,
+                "evicted_lines": high_volume.evicted_lines,
+                "evicted_bytes": high_volume.evicted_bytes,
+                "truncated": high_volume.truncated,
                 "line_limit": 100_000,
                 "byte_limit": 32 * 1024 * 1024,
             },
@@ -311,7 +349,7 @@ fn benchmark_history_search() -> Summary {
     summarize(&samples)
 }
 
-fn benchmark_large_output_and_navigation() -> (Summary, usize, usize, u64, u64, bool) {
+fn benchmark_large_output_and_navigation(cwd: &Path, profile: &ShellProfile) -> HighVolumeSummary {
     let mut state = WorkbenchState::new();
     let mut pane_ids = Vec::with_capacity(50);
     for index in 0..50 {
@@ -323,41 +361,96 @@ fn benchmark_large_output_and_navigation() -> (Summary, usize, usize, u64, u64, 
         ));
     }
     let output_pane = pane_ids[0];
+    let mut terminals = WorkbenchTerminals::new();
+    terminals
+        .start_native(&mut state, output_pane, profile, cwd)
+        .expect("high-volume fixture shell must start");
     let mut output = WorkbenchOutput::new();
     output
-        .attach_screen(output_pane, PaneSize::new(80, 24))
-        .expect("large-output pane screen must attach to the navigated pane");
+        .attach_live_pane(&mut terminals, &mut state, output_pane)
+        .expect("high-volume live pane must attach the bounded output pump");
 
-    let mut line = Vec::from("output ".as_bytes());
-    line.extend(std::iter::repeat_n(b'x', 104));
-    line.push(b'\n');
-    assert!(line.len() * OUTPUT_LINES >= 10 * 1024 * 1024);
-    for _ in 0..OUTPUT_LINES {
+    let line_body = format!("output {}", "x".repeat(104));
+    assert_eq!(line_body.len(), OUTPUT_BODY_BYTES);
+    let payload_bytes = (OUTPUT_BODY_BYTES + 1) * OUTPUT_LINES;
+    assert!(payload_bytes >= 10 * 1024 * 1024);
+    let command = format!(
+        "i=0; while [ \"$i\" -lt {OUTPUT_LINES} ]; do printf '%s\\n' '{line_body}'; i=$((i + 1)); done; printf '{HIGH_VOLUME_DONE_MARKER}\\n'\n"
+    );
+    terminals
+        .dispatch_selected_input(&mut state, command.as_bytes())
+        .expect("high-volume fixture command must dispatch to the exact owned pane");
+
+    let deadline = Instant::now() + HIGH_VOLUME_DEADLINE;
+    let mut samples = Vec::with_capacity(TOPOLOGY_ITERATIONS);
+    let mut output_observed = false;
+    loop {
         output
-            .process_observed_bytes(output_pane, &line)
-            .expect("large-output bytes must remain bound to their pane screen");
+            .drain_tick(&mut terminals, &mut state)
+            .expect("high-volume output pump must drain without lifecycle corruption");
+        let snapshot = output
+            .transcript_snapshot(output_pane)
+            .expect("high-volume pane must retain a bounded transcript");
+        output_observed |= snapshot.retained_bytes > 0 || snapshot.evicted_bytes > 0;
+        let marker_seen = output
+            .screen_contents(output_pane)
+            .is_some_and(|contents| contents.contains(HIGH_VOLUME_DONE_MARKER));
+
+        if output_observed && !marker_seen {
+            for _ in 0..25 {
+                if samples.len() == TOPOLOGY_ITERATIONS {
+                    break;
+                }
+                let other = pane_ids[1 + (samples.len() % (pane_ids.len() - 1))];
+                assert!(state.focus_pane(other));
+                let start = Instant::now();
+                assert!(state.focus_pane(output_pane));
+                samples.push(start.elapsed());
+            }
+        }
+
+        if marker_seen {
+            assert_eq!(
+                samples.len(),
+                TOPOLOGY_ITERATIONS,
+                "FR-049 output campaign completed before 1000 in-campaign navigation samples"
+            );
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "FR-049 live high-volume terminal campaign exceeded its 60-second fixture deadline"
+        );
+        thread::yield_now();
     }
+
     let snapshot = output
         .transcript_snapshot(output_pane)
-        .expect("large-output pane must retain its bounded transcript");
+        .expect("high-volume pane must retain its final bounded transcript");
+    let processed_lines = u64::try_from(snapshot.lines.len()).unwrap_or(u64::MAX)
+        .saturating_add(snapshot.evicted_lines);
+    let processed_bytes = u64::try_from(snapshot.retained_bytes)
+        .unwrap_or(u64::MAX)
+        .saturating_add(snapshot.evicted_bytes);
+    let lifecycle_live_after_campaign = state
+        .pane(output_pane)
+        .is_some_and(|pane| pane.lifecycle == PaneLifecycleView::Live);
+    let owned_terminal_after_campaign = terminals.has_owned_terminal(output_pane);
 
-    let mut samples = Vec::with_capacity(TOPOLOGY_ITERATIONS);
-    for index in 0..TOPOLOGY_ITERATIONS {
-        let other = pane_ids[1 + (index % (pane_ids.len() - 1))];
-        assert!(state.focus_pane(other));
-        let start = Instant::now();
-        assert!(state.focus_pane(output_pane));
-        samples.push(start.elapsed());
-    }
-
-    (
-        summarize(&samples),
-        snapshot.lines.len(),
-        snapshot.retained_bytes,
-        snapshot.evicted_lines,
-        snapshot.evicted_bytes,
-        snapshot.truncated,
-    )
+    let result = HighVolumeSummary {
+        navigation: summarize(&samples),
+        processed_lines,
+        processed_bytes,
+        retained_lines: snapshot.lines.len(),
+        retained_bytes: snapshot.retained_bytes,
+        evicted_lines: snapshot.evicted_lines,
+        evicted_bytes: snapshot.evicted_bytes,
+        truncated: snapshot.truncated,
+        lifecycle_live_after_campaign,
+        owned_terminal_after_campaign,
+    };
+    close_all(&mut terminals, &mut state, &[output_pane]);
+    result
 }
 
 fn benchmark_resize(cwd: &Path, profile: &ShellProfile) -> (Duration, bool) {
