@@ -1,6 +1,19 @@
-use ratatui::Frame;
-use ratatui::layout::Alignment;
+use crate::git::Repo;
+use crate::git::shell_profiles::discover_native_shell_profiles;
+use crate::git::workspace::open_existing_workspace;
+use crate::git::workspace_inventory::inventory_workspace_environment;
+use crossterm::event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture};
+use crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+    size as host_terminal_size,
+};
+use ratatui::backend::CrosstermBackend;
+use ratatui::layout::{Alignment, Constraint, Direction, Layout};
 use ratatui::widgets::{Block, Paragraph};
+use ratatui::{Frame, Terminal};
+use serde_json::json;
+use std::io::{self, Write};
+use std::path::PathBuf;
 
 const EMPTY_WORKBENCH_MESSAGE: &str = "No terminal panes are active.";
 
@@ -14,6 +27,18 @@ pub(crate) enum PaneLifecycleView {
     Stopped,
     OwnershipLost,
     Error,
+}
+
+impl PaneLifecycleView {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Live => "LIVE",
+            Self::Exited => "EXITED",
+            Self::Stopped => "STOPPED",
+            Self::OwnershipLost => "OWNERSHIP_LOST",
+            Self::Error => "ERROR",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -258,6 +283,240 @@ pub(crate) fn render_inert_workbench(frame: &mut Frame<'_>) {
     }
 }
 
+fn render_workbench(
+    frame: &mut Frame<'_>,
+    state: &WorkbenchState,
+    editor: &terminal::input::WorkbenchShellEditor,
+) {
+    let areas = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(3),
+        ])
+        .split(frame.area());
+
+    frame.render_widget(
+        Paragraph::new("Ctrl+Q quit | Enter submit | Ctrl+F find | Alt+Left/Right focus"),
+        areas[0],
+    );
+
+    let pane_text = if state.panes().is_empty() {
+        EMPTY_WORKBENCH_MESSAGE.to_owned()
+    } else {
+        state
+            .panes()
+            .iter()
+            .map(|pane| {
+                let selected = if state.selected_pane() == Some(pane.pane_id) {
+                    ">"
+                } else {
+                    " "
+                };
+                format!(
+                    "{selected} {} [{}] workspace={} session={}",
+                    pane.display_title,
+                    pane.lifecycle.label(),
+                    pane.canonical_workspace_id.as_deref().unwrap_or("UNKNOWN"),
+                    pane.canonical_winds_session_id.as_deref().unwrap_or("UNBOUND")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    frame.render_widget(
+        Paragraph::new(pane_text).block(Block::bordered().title(" Panes ")),
+        areas[1],
+    );
+
+    let input = editor.lines().join("\n");
+    frame.render_widget(
+        Paragraph::new(input).block(Block::bordered().title(" Shell input ")),
+        areas[2],
+    );
+}
+
+pub(crate) fn run_cli(args: Vec<String>) -> crate::Result<()> {
+    let (repo_path, exit_after_ready) = parse_workbench_args(&args)?;
+    if exit_after_ready && std::env::var("WINDS_T097_BENCHMARK").as_deref() != Ok("1") {
+        return Err(
+            "--t097-exit-after-ready is restricted to WINDS_T097_BENCHMARK=1".into(),
+        );
+    }
+
+    let requested_repo = match repo_path {
+        Some(path) => path,
+        None => std::env::current_dir()?,
+    };
+    let repo = Repo::open(&requested_repo)?;
+    let home = crate::winds_home(None, &repo)?;
+    let workspace = open_existing_workspace(repo.root(), &home, crate::unix_ms()?)?;
+    let inventory = inventory_workspace_environment(&workspace)?;
+    let profiles = discover_native_shell_profiles(&inventory)?;
+    let profile = profiles
+        .first()
+        .ok_or("no usable native shell profile is available for the workbench")?;
+    let (columns, rows) = host_terminal_size()?;
+    let size = PaneSize::new(columns.max(1), rows.max(1));
+
+    let mut state = WorkbenchState::new();
+    let pane_id = state.create_pane(
+        profile.display_name.clone(),
+        Some(workspace.workspace_id.clone()),
+        None,
+        size,
+    );
+    let mut terminals = terminal::WorkbenchTerminals::new();
+    terminals.start_native(
+        &mut state,
+        pane_id,
+        profile,
+        std::path::Path::new(&workspace.canonical_worktree_root),
+    )?;
+    let mut editor = terminal::input::WorkbenchShellEditor::new();
+    let mut navigation = ui::WorkbenchNavigation::new();
+
+    let mut host_guard = HostTerminalGuard::enter()?;
+    let backend = CrosstermBackend::new(io::stdout());
+    let mut host_terminal = Terminal::new(backend)?;
+    host_terminal.draw(|frame| render_workbench(frame, &state, &editor))?;
+
+    if exit_after_ready {
+        eprintln!(
+            "WINDS_T097_READY={}",
+            serde_json::to_string(&json!({
+                "state": "INPUT_READY",
+                "pane_count": state.panes().len(),
+                "selected_live_owned": state
+                    .selected_pane()
+                    .is_some_and(|selected| terminals.has_owned_terminal(selected)),
+                "workspace_id": workspace.workspace_id,
+            }))?
+        );
+        io::stderr().flush()?;
+        let cleanup = close_all_workbench_panes(&mut terminals, &mut state);
+        drop(host_terminal);
+        let restore = host_guard.restore();
+        cleanup?;
+        restore?;
+        return Ok(());
+    }
+
+    let mut source = ui::CrosstermHostEventSource;
+    let loop_result = ui::run_host_event_loop(
+        &mut navigation,
+        &mut state,
+        &mut terminals,
+        &mut editor,
+        (&[], &[]),
+        &mut source,
+        |state, _navigation, editor| {
+            host_terminal.draw(|frame| render_workbench(frame, state, editor))?;
+            Ok(())
+        },
+    );
+    let cleanup = close_all_workbench_panes(&mut terminals, &mut state);
+    drop(host_terminal);
+    let restore = host_guard.restore();
+
+    loop_result?;
+    cleanup?;
+    restore?;
+    Ok(())
+}
+
+fn parse_workbench_args(args: &[String]) -> crate::Result<(Option<PathBuf>, bool)> {
+    let mut repo = None;
+    let mut exit_after_ready = false;
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--repo" => {
+                if repo.is_some() {
+                    return Err("duplicate flag --repo".into());
+                }
+                let value = args
+                    .get(index + 1)
+                    .ok_or("missing value for --repo")?;
+                if value.starts_with("--") {
+                    return Err("missing value for --repo".into());
+                }
+                repo = Some(PathBuf::from(value));
+                index += 2;
+            }
+            "--t097-exit-after-ready" => {
+                if exit_after_ready {
+                    return Err("duplicate flag --t097-exit-after-ready".into());
+                }
+                exit_after_ready = true;
+                index += 1;
+            }
+            other => return Err(format!("unknown workbench argument: {other}").into()),
+        }
+    }
+    Ok((repo, exit_after_ready))
+}
+
+fn close_all_workbench_panes(
+    terminals: &mut terminal::WorkbenchTerminals,
+    state: &mut WorkbenchState,
+) -> crate::Result<()> {
+    let pane_ids: Vec<PaneId> = state.panes().iter().map(|pane| pane.pane_id).collect();
+    for pane_id in pane_ids {
+        if terminals.has_owned_terminal(pane_id) {
+            terminals.close_pane(state, pane_id)?;
+        } else {
+            state.close_pane(pane_id);
+        }
+    }
+    Ok(())
+}
+
+struct HostTerminalGuard {
+    active: bool,
+}
+
+impl HostTerminalGuard {
+    fn enter() -> crate::Result<Self> {
+        enable_raw_mode()?;
+        let mut guard = Self { active: true };
+        if let Err(error) = crossterm::execute!(
+            io::stdout(),
+            EnterAlternateScreen,
+            EnableMouseCapture,
+            EnableBracketedPaste
+        ) {
+            let _ = guard.restore();
+            return Err(error.into());
+        }
+        Ok(guard)
+    }
+
+    fn restore(&mut self) -> crate::Result<()> {
+        if !self.active {
+            return Ok(());
+        }
+        let terminal_restore = crossterm::execute!(
+            io::stdout(),
+            DisableBracketedPaste,
+            DisableMouseCapture,
+            LeaveAlternateScreen
+        );
+        let raw_restore = disable_raw_mode();
+        self.active = false;
+        terminal_restore?;
+        raw_restore?;
+        Ok(())
+    }
+}
+
+impl Drop for HostTerminalGuard {
+    fn drop(&mut self) {
+        let _ = self.restore();
+    }
+}
+
 #[path = "workbench_context.rs"]
 pub(crate) mod context;
 #[path = "workbench_interaction.rs"]
@@ -278,3 +537,6 @@ mod t090_workbench_terminal_tests;
 #[cfg(test)]
 #[path = "t096_workbench_platform_tests.rs"]
 mod t096_workbench_platform_tests;
+#[cfg(test)]
+#[path = "t097_workbench_performance_tests.rs"]
+mod t097_workbench_performance_tests;
