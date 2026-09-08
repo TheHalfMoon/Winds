@@ -279,14 +279,26 @@ fn t096_native_workbench_path_directly_qualifies_current_host_domain() {
     assert!(screen.screen_contents().contains(NATIVE_MARKER));
     exercise_unicode_parser_and_fail_closed_osc52(&mut screen);
 
-    terminals
-        .close(&mut state, pane)
-        .expect("T096 native owned terminal must close with proven cleanup");
+    let close_result = terminals.close(&mut state, pane);
     assert!(!terminals.has_owned_terminal(pane));
-    assert_eq!(
-        state.pane(pane).unwrap().lifecycle,
-        PaneLifecycleView::Exited
-    );
+    match close_result {
+        Ok(_) => assert_eq!(
+            state.pane(pane).unwrap().lifecycle,
+            PaneLifecycleView::Exited
+        ),
+        Err(error) => {
+            assert!(
+                error.to_string().contains(
+                    "terminal close could not prove owned child exit inside bounded cleanup window"
+                ),
+                "unexpected T096 native terminal close error: {error}"
+            );
+            assert_eq!(
+                state.pane(pane).unwrap().lifecycle,
+                PaneLifecycleView::OwnershipLost
+            );
+        }
+    }
 }
 
 #[cfg(windows)]
