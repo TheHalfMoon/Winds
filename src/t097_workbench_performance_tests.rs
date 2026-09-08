@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 use super::interaction::{InteractionContext, search_terminal_transcript};
 use super::screen::WorkbenchScreen;
 use super::terminal::WorkbenchTerminals;
@@ -62,7 +64,6 @@ fn require_release_profile() {
     );
 }
 
-#[cfg(target_os = "linux")]
 fn fixture_shell_profile(cwd: &Path) -> ShellProfile {
     let shell = "/bin/sh";
     let inventory = WorkspaceEnvironmentInventory {
@@ -88,7 +89,6 @@ fn close_all(terminals: &mut WorkbenchTerminals, state: &mut WorkbenchState, pan
     }
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 #[ignore = "T097 release-profile benchmark campaign; run explicitly in t097-performance"]
 fn t097_release_benchmark_campaign() {
@@ -168,7 +168,6 @@ fn t097_release_benchmark_campaign() {
     );
 }
 
-#[cfg(target_os = "linux")]
 fn benchmark_dispatch(cwd: &Path, profile: &ShellProfile) -> Summary {
     let mut state = WorkbenchState::new();
     let pane_id = state.create_pane(
@@ -299,7 +298,6 @@ fn benchmark_large_output_and_navigation() -> (Summary, usize, usize, u64, u64, 
     )
 }
 
-#[cfg(target_os = "linux")]
 fn benchmark_resize(cwd: &Path, profile: &ShellProfile) -> Duration {
     let mut state = WorkbenchState::new();
     let mut terminals = WorkbenchTerminals::new();
@@ -343,7 +341,6 @@ fn benchmark_resize(cwd: &Path, profile: &ShellProfile) -> Duration {
     elapsed
 }
 
-#[cfg(target_os = "linux")]
 #[test]
 #[ignore = "T097 sixty-second idle resource campaign; run explicitly in t097-performance"]
 fn t097_idle_resource_campaign() {
@@ -410,7 +407,6 @@ fn t097_idle_resource_campaign() {
     );
 }
 
-#[cfg(target_os = "linux")]
 fn required_env_u64(name: &str) -> u64 {
     std::env::var(name)
         .unwrap_or_else(|_| panic!("{name} must be provided by the pinned T097 workflow"))
@@ -418,7 +414,6 @@ fn required_env_u64(name: &str) -> u64 {
         .unwrap_or_else(|_| panic!("{name} must be an unsigned integer"))
 }
 
-#[cfg(target_os = "linux")]
 fn process_cpu_ticks() -> u64 {
     let stat = fs::read_to_string("/proc/self/stat").expect("/proc/self/stat must be readable");
     let end_comm = stat
@@ -438,7 +433,6 @@ fn process_cpu_ticks() -> u64 {
     user.saturating_add(system)
 }
 
-#[cfg(target_os = "linux")]
 fn process_rss_bytes(page_size: u64) -> u64 {
     let statm = fs::read_to_string("/proc/self/statm").expect("/proc/self/statm must be readable");
     let resident_pages = statm
