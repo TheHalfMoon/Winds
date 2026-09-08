@@ -326,7 +326,9 @@ fn render_workbench(
                     pane.display_title,
                     pane.lifecycle.label(),
                     pane.canonical_workspace_id.as_deref().unwrap_or("UNKNOWN"),
-                    pane.canonical_winds_session_id.as_deref().unwrap_or("UNBOUND")
+                    pane.canonical_winds_session_id
+                        .as_deref()
+                        .unwrap_or("UNBOUND")
                 )
             })
             .collect::<Vec<_>>()
@@ -347,9 +349,7 @@ fn render_workbench(
 pub(crate) fn run_cli(args: Vec<String>) -> crate::Result<()> {
     let (repo_path, exit_after_ready) = parse_workbench_args(&args)?;
     if exit_after_ready && std::env::var("WINDS_T097_BENCHMARK").as_deref() != Ok("1") {
-        return Err(
-            "--t097-exit-after-ready is restricted to WINDS_T097_BENCHMARK=1".into(),
-        );
+        return Err("--t097-exit-after-ready is restricted to WINDS_T097_BENCHMARK=1".into());
     }
 
     let requested_repo = match repo_path {
