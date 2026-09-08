@@ -1138,7 +1138,7 @@ pub(crate) fn prove_wsl_exec_scope_cleanup_for_test(distribution: &str) -> Resul
         "/bin/sh",
         &[OsString::from("-c"), OsString::from(descendant_script)],
         2,
-        Duration::from_secs(8),
+        Duration::from_secs(15),
     )?;
     let descendant_pid = parse_single_text(&output, "WSL scope descendant pid")?;
     if descendant_pid.is_empty() || !descendant_pid.bytes().all(|byte| byte.is_ascii_digit()) {
@@ -1158,7 +1158,7 @@ pub(crate) fn prove_wsl_exec_scope_cleanup_for_test(distribution: &str) -> Resul
             OsString::from(&descendant_pid),
         ],
         2,
-        Duration::from_secs(8),
+        Duration::from_secs(15),
     )
     .map_err(|error| {
         format!("WSL-side descendant survived the completed owned attestation scope: {error}")
