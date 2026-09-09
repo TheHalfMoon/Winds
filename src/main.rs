@@ -50,7 +50,11 @@ mod t085_agentic_hardening_tests;
 mod t087_workbench_dependency_tests;
 #[cfg(test)]
 mod t099_workbench_adversarial_tests;
+#[cfg(test)]
+mod t101_workflow_domain_tests;
 mod workbench;
+#[cfg(test)]
+mod workflow;
 
 use crate::check::run_check;
 use crate::domain::{CheckEvidence, CheckStatus, Eligibility, PromotionReport};
