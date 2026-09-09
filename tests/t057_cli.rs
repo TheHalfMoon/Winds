@@ -137,23 +137,108 @@ fn minimal_cli_proves_workspace_profiles_execution_and_terminal_paths() {
             "80",
         ],
     );
-    assert_success(&terminal);
-    let terminal_json: Value = serde_json::from_slice(&terminal.stdout).unwrap();
-    assert_eq!(terminal_json["execution"]["execution_id"], terminal_id);
-    assert_eq!(terminal_json["execution"]["kind"], "TERMINAL");
-    assert_eq!(terminal_json["execution"]["status"], "INTERRUPTED");
-    assert_eq!(
-        terminal_json["execution"]["terminal"]["close_reason"],
-        "TERMINATED_BY_WINDS"
-    );
-    assert_eq!(
-        terminal_json["execution"]["git_observations"]
-            .as_array()
-            .unwrap()
-            .len(),
-        0
-    );
-    assert_eq!(terminal_json["proof"]["profile_id"], profile_id);
+    if terminal.status.success() {
+        let terminal_json: Value = serde_json::from_slice(&terminal.stdout).unwrap();
+        assert_eq!(terminal_json["execution"]["execution_id"], terminal_id);
+        assert_eq!(terminal_json["execution"]["kind"], "TERMINAL");
+        assert_eq!(
+            terminal_json["execution"]["status_source"],
+            "WINDS_OBSERVED"
+        );
+        assert!(
+            terminal_json["execution"]["ended_unix_ms"]
+                .as_i64()
+                .is_some()
+        );
+        assert!(terminal_json["execution"]["duration_ms"].as_u64().is_some());
+        assert_eq!(
+            terminal_json["execution"]["terminal"]["profile_id"],
+            profile_id
+        );
+        match terminal_json["execution"]["status"].as_str().unwrap() {
+            "EXITED" => assert_eq!(
+                terminal_json["execution"]["terminal"]["close_reason"],
+                "PROCESS_EXITED"
+            ),
+            "INTERRUPTED" => assert_eq!(
+                terminal_json["execution"]["terminal"]["close_reason"],
+                "TERMINATED_BY_WINDS"
+            ),
+            status => panic!("unexpected proven terminal-proof status: {status}"),
+        }
+        assert_eq!(
+            terminal_json["execution"]["git_observations"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(terminal_json["proof"]["profile_id"], profile_id);
+    } else {
+        assert!(String::from_utf8_lossy(&terminal.stderr).contains(
+            "terminal terminate could not prove owned child exit inside bounded cleanup window"
+        ));
+        let durable = rusqlite::Connection::open_with_flags(
+            winds_home.join("winds.db"),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let command_status: String = durable
+            .query_row(
+                "SELECT status FROM executions WHERE execution_id = ?1",
+                [command_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let terminal_status: String = durable
+            .query_row(
+                "SELECT status FROM executions WHERE execution_id = ?1",
+                [terminal_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(command_status, "EXITED");
+        assert_eq!(terminal_status, "OWNERSHIP_LOST");
+        drop(durable);
+
+        let terminal_execution = winds(
+            &winds_home,
+            [
+                "execution",
+                "--repo",
+                test_path(&repo),
+                "--execution-id",
+                terminal_id,
+            ],
+        );
+        assert_success(&terminal_execution);
+        let terminal_json: Value = serde_json::from_slice(&terminal_execution.stdout).unwrap();
+        assert_eq!(terminal_json["execution_id"], terminal_id);
+        assert_eq!(terminal_json["kind"], "TERMINAL");
+        assert_eq!(terminal_json["status"], "OWNERSHIP_LOST");
+        assert_eq!(terminal_json["status_source"], "WINDS_OBSERVED");
+        assert!(terminal_json["ended_unix_ms"].is_null());
+        assert!(terminal_json["duration_ms"].is_null());
+        assert_eq!(terminal_json["terminal"]["profile_id"], profile_id);
+        assert_eq!(
+            terminal_json["terminal"]["close_reason"],
+            "OWNERSHIP_LOST_PROCESS_STATE_UNKNOWN"
+        );
+        assert_eq!(
+            terminal_json["git_observations"].as_array().unwrap().len(),
+            0
+        );
+        assert!(
+            terminal_json["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|event| {
+                    event["kind"] == "TerminalOwnershipLostAfterCleanupFailure"
+                        && event["source"] == "WINDS_OBSERVED"
+                })
+        );
+    }
 }
 
 #[test]
