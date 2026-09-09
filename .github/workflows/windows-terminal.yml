@@ -56,6 +56,8 @@ jobs:
         run: cargo test --locked --bin winds git::terminal::tests -- --test-threads=1
       - name: CLI terminal proof integration
         run: cargo test --locked --test t057_cli minimal_cli_proves_workspace_profiles_execution_and_terminal_paths -- --test-threads=1
+      - name: T096 native Unix workbench qualification
+        run: cargo test --locked --bin winds workbench::t096_workbench_platform_tests::t096_native_workbench_path_directly_qualifies_current_host_domain -- --exact --test-threads=1
 
   native-windows-terminal:
     runs-on: windows-2025
@@ -93,6 +95,8 @@ jobs:
         run: cargo test --locked --bin winds store::persistence_tests -- --test-threads=1
       - name: Explicit command observability tests
         run: cargo test --locked --bin winds command::tests -- --test-threads=1
+      - name: T096 native Windows workbench qualification
+        run: cargo test --locked --bin winds workbench::t096_workbench_platform_tests::t096_native_workbench_path_directly_qualifies_current_host_domain -- --exact --test-threads=1
 
   real-wsl2-integration:
     name: real-wsl2-integration (windows-2025 / Ubuntu)
@@ -208,6 +212,12 @@ jobs:
           if ($evidence.mismatch.fallback_launch -cne "PASS") {
             throw "T062 evidence does not prove fallback launch"
           }
+
+      - name: T096 real WSL2 workbench qualification
+        shell: pwsh
+        env:
+          WINDS_T096_WSL_DISTRO: Ubuntu
+        run: cargo test --locked --bin winds workbench::t096_workbench_platform_tests::t096_real_wsl2_workbench_path_preserves_host_guest_domain_and_path_truth -- --ignored --exact --test-threads=1
 
       - name: Upload T062 evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

@@ -15,7 +15,7 @@ const TERMINAL_CLEANUP_TIMEOUT: Duration = Duration::from_millis(500);
 
 struct PaneTerminal {
     session: TerminalSession,
-    output_reader: Box<dyn Read + Send>,
+    output_reader: Option<Box<dyn Read + Send>>,
 }
 
 #[derive(Default)]
@@ -106,11 +106,33 @@ impl WorkbenchTerminals {
             pane_id,
             PaneTerminal {
                 session,
-                output_reader,
+                output_reader: Some(output_reader),
             },
         );
         state.set_pane_lifecycle(pane_id, PaneLifecycleView::Live);
         Ok(())
+    }
+
+    pub(crate) fn take_output_reader_for_pump(
+        &mut self,
+        pane_id: PaneId,
+    ) -> Result<Box<dyn Read + Send>> {
+        self.terminals
+            .get_mut(&pane_id)
+            .ok_or("workbench pane has no owned terminal session")?
+            .output_reader
+            .take()
+            .ok_or_else(|| "workbench terminal output reader has already been transferred".into())
+    }
+
+    pub(crate) fn current_size(&self, pane_id: PaneId) -> Result<PaneSize> {
+        let size = self
+            .terminals
+            .get(&pane_id)
+            .ok_or("workbench pane has no owned terminal session")?
+            .session
+            .current_size()?;
+        Ok(PaneSize::new(size.cols, size.rows))
     }
 
     pub(crate) fn poll_exit(
@@ -160,11 +182,23 @@ impl WorkbenchTerminals {
         }
         require_output_readable_pane(state, pane_id)?;
 
+        if !self.terminals.contains_key(&pane_id) {
+            if state
+                .pane(pane_id)
+                .is_some_and(|pane| pane.lifecycle == PaneLifecycleView::Live)
+            {
+                state.set_pane_lifecycle(pane_id, PaneLifecycleView::OwnershipLost);
+            }
+            return Err("workbench pane has no owned terminal session".into());
+        }
+
         let read = self
             .terminals
             .get_mut(&pane_id)
-            .ok_or("workbench pane has no owned terminal session")?
+            .expect("retained terminal ownership was just proven")
             .output_reader
+            .as_mut()
+            .ok_or("blocking output read is unavailable after the reader was transferred")?
             .read(buffer);
 
         match read {
@@ -356,7 +390,7 @@ impl WorkbenchTerminals {
         let Some(terminal) = self.terminals.get_mut(&pane_id) else {
             return false;
         };
-        terminal.output_reader = reader;
+        terminal.output_reader = Some(reader);
         true
     }
 }
