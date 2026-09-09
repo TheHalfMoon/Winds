@@ -225,8 +225,8 @@ A developer can inspect a concise operator-facing projection answering current s
 
 ### Canonical workflow and stage identity
 
-- **FR-001**: Winds MUST represent a workflow run with a stable canonical identity distinct from chat/session/runtime/UI identity.
-- **FR-002**: Winds MUST represent each stage attempt with a stable canonical identity distinct from stage display name and actor/session identity.
+- **FR-001**: Winds MUST represent a workflow run with a stable canonical identity distinct from chat/session/runtime/UI identity and MUST bind that `WorkflowRun` immutably to the inherited canonical workspace plus workstream/task identity applicable to the workflow. Missing, stale, malformed, or ambiguous required work-context bindings MUST fail closed; Winds MUST NOT attach a workflow by display label, filesystem path, session identity, runtime identity, or identifier coincidence.
+- **FR-002**: Winds MUST represent each stage attempt with a stable canonical identity distinct from stage display name and actor/session identity; every `StageRun` MUST retain and validate the parent `WorkflowRun` canonical workspace/workstream/task bindings before the stage can become applicable or active.
 - **FR-003**: Every new stage attempt MUST have a unique run-instance/attempt identity; retry/reconstruction MUST NOT silently reuse a prior attempt identity as new work.
 - **FR-004**: Mutable workflow/stage labels MUST remain presentation-only and MUST NOT determine canonical identity or authority.
 - **FR-005**: A stage MUST expose an explicit lifecycle state from a deterministic state model covering at minimum prepared, active, waiting approval, waiting external condition, blocked, failed, stale, cancelled, completed, and recovery-required truth where applicable.
@@ -237,7 +237,7 @@ A developer can inspect a concise operator-facing projection answering current s
 
 ### Artifact baselines, candidate binding, and freshness
 
-- **FR-010**: Preparing a stage MUST establish an explicit baseline for every required upstream artifact/input whose freshness affects stage validity.
+- **FR-010**: Preparing a stage MUST establish an explicit baseline for every required upstream artifact/input whose freshness affects stage validity, and that baseline MUST retain and validate the parent workflow canonical workspace/workstream/task bindings.
 - **FR-011**: The baseline MUST carry stable reference/identity information sufficient for later deterministic freshness comparison; the specification does not require a particular hashing/storage implementation.
 - **FR-012**: A material change to a required baseline input before the applicable gate MUST make the prepared stage stale/not-applicable until explicitly re-prepared or otherwise resolved by an accepted rule.
 - **FR-013**: A stale artifact from an older attempt MUST NOT silently satisfy a newly prepared stage gate merely because its path/name/content presentation is similar.
@@ -248,7 +248,7 @@ A developer can inspect a concise operator-facing projection answering current s
 
 ### Actor binding, continuation, and reconstruction truth
 
-- **FR-018**: An active stage MUST bind to explicit Winds actor and stage run-instance identity; Winds session/runtime/native identity MUST also be bound where applicable to the actor kind so stale replacement or ambiguous continuation can be detected.
+- **FR-018**: An active stage MUST bind to explicit Winds actor and stage run-instance identity and MUST retain and validate the parent workflow canonical workspace/workstream/task bindings; Winds session/runtime/native identity MUST also be bound where applicable to the actor kind so stale replacement or ambiguous continuation can be detected.
 - **FR-019**: Actor binding MUST NOT be inferred from display name, PID reuse, native-session identifier coincidence, or transcript continuity alone.
 - **FR-020**: `RESUMED` MUST require the applicable existing accepted proof for an exact runtime/native-session mapping and supported resume path revalidated at use time.
 - **FR-021**: A new actor/runtime initialized from canonical Winds workflow state MUST be classified `RECONSTRUCTED`, not `RESUMED`.
@@ -271,7 +271,7 @@ A developer can inspect a concise operator-facing projection answering current s
 
 ### Append-only decision ledger
 
-- **FR-035**: Every canonical decision record MUST have stable identity and, where applicable, explicit workflow/stage/workstream binding.
+- **FR-035**: Every canonical decision record MUST have stable identity and, where applicable, explicit workflow/stage binding plus the immutable canonical workspace/workstream/task bindings inherited from the bound `WorkflowRun`; those bindings MUST be validated before the decision can be treated as applicable.
 - **FR-036**: A canonical decision record MUST identify its source/actor/authority class, decision type, rationale/result, creation identity/time, and exact candidate/evidence references where applicable.
 - **FR-037**: Decision records MUST be append-only at the semantic level; changing a decision MUST create a new record/relationship rather than deleting or rewriting the prior decision into a different historical claim.
 - **FR-038**: Supersession MUST preserve explicit predecessor/successor lineage and the superseded decision MUST remain auditable.
@@ -283,7 +283,7 @@ A developer can inspect a concise operator-facing projection answering current s
 
 ### Structured handoff and reviewer independence
 
-- **FR-044**: Stage handoff MUST be assembled from canonical structured workflow/stage state plus exact required artifacts/evidence, not from an unqualified transcript as canonical authority.
+- **FR-044**: Stage handoff MUST be assembled from canonical structured workflow/stage state plus exact required artifacts/evidence, not from an unqualified transcript as canonical authority; every handoff MUST retain and validate the bound workflow canonical workspace/workstream/task identities before it can be treated as applicable.
 - **FR-045**: Handoff MUST identify exact workflow/stage/attempt identity, actor role/binding as applicable, candidate/artifact baseline, authority ceiling, and required evidence/blocker context needed for the receiving role.
 - **FR-046**: Context minimization MUST NOT remove required evidence completeness, provenance, authority, recovery, or safety facts.
 - **FR-047**: Material unavailable/omitted context MUST be explicitly represented rather than silently reconstructed.
@@ -294,7 +294,7 @@ A developer can inspect a concise operator-facing projection answering current s
 ### Durable-state validation, corruption recovery, and redaction
 
 - **FR-051**: Canonical workflow/decision state intended to survive process restart MUST have an explicit versioned logical schema/format contract selected by later Plan/Tasks without this specification selecting a storage engine.
-- **FR-052**: Durable state MUST be validated before use for required identity, version compatibility, internal consistency, and references necessary to the attempted operation.
+- **FR-052**: Durable state MUST be validated before use for required identity, version compatibility, internal consistency, canonical workspace/workstream/task bindings, and references necessary to the attempted operation; recovery/continuation MUST fail closed when those required bindings are missing, stale, malformed, or ambiguous.
 - **FR-053**: Malformed, partial, internally inconsistent, or unsupported-version state MUST fail closed to explicit recovery-required/failure truth rather than being silently treated as a new clean workflow.
 - **FR-054**: Unreadable/corrupt state MUST be preserved or quarantined for bounded diagnosis/recovery as later Plan/Tasks define; recovery MUST NOT destroy the only available historical evidence by default.
 - **FR-055**: Migration/recovery MUST preserve stable canonical identity, decision history, stale/failed attempt history, and evidence/candidate provenance or explicitly report any proven loss.
@@ -306,7 +306,7 @@ A developer can inspect a concise operator-facing projection answering current s
 
 ### Operator-facing workflow truth
 
-- **FR-061**: Winds MUST provide a deterministic operator-facing projection of current workflow/stage identity and lifecycle truth suitable for later CLI/TUI presentation.
+- **FR-061**: Winds MUST provide a deterministic operator-facing projection of current workflow/stage identity and lifecycle truth suitable for later CLI/TUI presentation; status/resume/why-blocked projections MUST retain and validate the bound workflow canonical workspace/workstream/task identities and MUST NOT attach through display label, path, session, or runtime coincidence.
 - **FR-062**: The projection MUST identify current actor/binding truth, candidate/artifact/evidence applicability, blocker/approval/external-condition state, retry/no-progress state, and continuation/reconstruction semantics where applicable.
 - **FR-063**: A resume preview MUST state whether the action would use an already-proven live/native resume path, reconstruct from Winds state, reassign, fail/block, or operate with ownership unavailable as applicable.
 - **FR-064**: A why-blocked projection MUST identify the known blocker and explicit approval/external condition/recovery action needed where the canonical state can prove it.
