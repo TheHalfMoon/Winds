@@ -175,9 +175,10 @@ fn minimal_cli_proves_workspace_profiles_execution_and_terminal_paths() {
         );
         assert_eq!(terminal_json["proof"]["profile_id"], profile_id);
     } else {
-        assert!(String::from_utf8_lossy(&terminal.stderr).contains(
-            "terminal terminate could not prove owned child exit inside bounded cleanup window"
-        ));
+        assert_eq!(
+            String::from_utf8_lossy(&terminal.stderr),
+            "winds: terminal terminate could not prove owned child exit inside bounded cleanup window\n"
+        );
         let durable = rusqlite::Connection::open_with_flags(
             winds_home.join("winds.db"),
             rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
