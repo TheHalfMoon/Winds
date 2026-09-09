@@ -32,7 +32,7 @@ jobs:
     env:
       CANDIDATE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.candidate_sha }}
       EXPECTED_IMAGE_OS: ubuntu24
-      EXPECTED_IMAGE_VERSION: 20260831.293.1
+      EXPECTED_IMAGE_VERSION: 20260907.300.1
       EXPECTED_RUNNER_OS: Linux
       EXPECTED_RUNNER_ARCH: X64
 
