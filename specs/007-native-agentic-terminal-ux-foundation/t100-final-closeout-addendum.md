@@ -103,7 +103,7 @@ POSTMERGE_QUALITY=34291818680 SUCCESS
 POSTMERGE_WINDOWS_TERMINAL=34291818718 FAILURE
 ```
 
-The post-merge `windows-terminal` failure was again preserved as first-attempt evidence. Ubuntu terminal, macOS terminal, real Windows plus Ubuntu WSL2, and the repaired T096 native-Windows fixture passed. The sole failure was the native-Windows full Spec 003 touched-surface suite at `git::process_scope::tests::surviving_descendant_is_detected_and_terminated_as_owned_scope`, where the direct PowerShell bootstrap was not observed exited inside the fixture-local five-second observation budget.
+The post-merge `windows-terminal` failure was again preserved as first-attempt evidence. Ubuntu terminal, macOS terminal, real Windows plus Ubuntu WSL2, and the repaired T096 native-Windows fixture passed. The sole failure was the native-Windows full Spec 003 touched-surface suite at `git::process_scope::tests::surviving_descendant_is_detected_and_terminated_as_owned_scope`, where the direct PowerShell bootstrap was not observed to exit inside the fixture-local five-second observation budget.
 
 ## 5. Amendment 008 and Windows process-scope observation repair
 
