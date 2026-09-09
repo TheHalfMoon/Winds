@@ -177,6 +177,13 @@ workflow_actor_bindings
   continuation_class
   bound_unix_ms
 
+workflow_reconstruction_reports
+  reconstruction_report_id PK
+  binding_id FK UNIQUE
+  schema_version
+  canonical_report_json
+  created_unix_ms
+
 workflow_decisions
   decision_id PK
   workflow_run_id FK
@@ -202,7 +209,8 @@ Required identity/schema constraints:
 - every child operation must load and revalidate the parent workflow context before the row can be treated as applicable;
 - if Tasks prove that a duplicated identity column is required for an audit row, it must use the existing 0009-style fail-closed hierarchy trigger and may not become a second authority source;
 - no persisted handoff table is selected for the first slice; handoff is a deterministic projection from canonical workflow/stage/artifact/decision state unless a later Task proves a durable record is required;
-- artifact-baseline and actor-binding rows are immutable historical facts after creation; refreshed baseline/actor truth uses a new row/attempt relationship rather than rewriting prior history;
+- artifact-baseline, actor-binding, and reconstruction-report rows are immutable historical facts after creation; refreshed baseline/actor/reconstruction truth uses a new row/attempt relationship rather than rewriting prior history;
+- `workflow_reconstruction_reports.canonical_report_json` is a bounded, schema-versioned structured metadata report only; it stores category/source/transfer/completeness/reference truth, not raw provider-private state, transcript, prompts, credentials, or environment dumps;
 - no persisted free-form transcript, raw prompt, environment dump, credential, token, or provider-private state is added.
 
 ### 3. Exact artifact/candidate baseline evaluator
@@ -249,6 +257,11 @@ Rules:
 
 - `RESUMED` requires the existing exact runtime/native mapping and accepted runtime-supported resume proof revalidated at use time;
 - `RECONSTRUCTED` means a new actor/runtime was initialized from canonical Winds state;
+- every `RECONSTRUCTED` binding MUST be created atomically with one bounded immutable `ReconstructionReport`; a reconstructed binding is not applicable if the required report is absent, malformed, incomplete for required categories, or bound to a different StageRun/actor binding;
+- the reconstruction report uses a closed material-context category set in the first slice: `CANONICAL_WORK_CONTEXT`, `OBJECTIVE_CONSTRAINTS`, `DECISIONS`, `CANDIDATE_EVIDENCE`, `PRIOR_STAGE_OUTPUTS`, `RUNTIME_NATIVE_CONTEXT`, and `PROVIDER_PRIVATE_STATE`;
+- each category records source/provenance plus exactly one transfer state from `PRESERVED_REFERENCE`, `RECONSTRUCTED`, `DERIVED`, `OMITTED`, `UNAVAILABLE`, or `NO_LONGER_TRANSFERABLE`, and an explicit completeness/content state where material content may be redacted or absent;
+- provider-private state is never fabricated as transferred; when it cannot be proven/exported it is recorded `UNAVAILABLE` or `NO_LONGER_TRANSFERABLE` without persisting the private payload;
+- the same deterministic reconstruction-context evaluation used by execution is exposed in side-effect-free resume preview before a reconstruction action; after reconstruction, the persisted report becomes the historical source for status/handoff truth;
 - restart of Winds alone proves no live native ownership;
 - actor/session replacement creates a new binding/attempt relationship rather than changing the historical actor;
 - an unavailable or ambiguous runtime/native mapping fails closed and cannot be upgraded by transcript or UI continuity;
@@ -289,17 +302,18 @@ Every projection must include enough stable identity to prove which workflow/sta
 - workflow/stage/attempt identity;
 - current stage lifecycle state;
 - actor/continuation truth;
+- the persisted reconstruction report category/source/transfer/completeness summary whenever the applicable binding is `RECONSTRUCTED`;
 - required baseline freshness/applicability;
 - blocker/approval/external-condition state;
 - retry/no-progress state;
 - exact candidate/evidence applicability where relevant;
 - separate verification and human-acceptance state when those existing authorities are in view.
 
-`ResumePreviewProjection` must say whether the next action would be exact native resume, Winds reconstruction, reassignment, blocked/unavailable, or ownership-lost handling. It must never execute a resume merely because the preview was requested.
+`ResumePreviewProjection` must say whether the next action would be exact native resume, Winds reconstruction, reassignment, blocked/unavailable, or ownership-lost handling. When reconstruction is the prospective action, the preview must include the deterministic material-context transfer/loss evaluation that would become the immutable reconstruction report if the action proceeds. It must never execute a resume/reconstruction merely because the preview was requested.
 
 `WhyBlockedProjection` must return a canonical known blocker and required explicit approval/external/recovery action where provable; it must use `UNKNOWN`/unavailable truth rather than invent a reason.
 
-`ReviewerHandoffProjection` must include exact candidate/artifact/evidence/authority context but exclude builder persuasion/confidence and untrusted transcript as acceptance guidance by default.
+`ReviewerHandoffProjection` must include exact candidate/artifact/evidence/authority context but exclude builder persuasion/confidence and untrusted transcript as acceptance guidance by default. If the current/relevant actor binding is reconstructed, the handoff must include the bounded reconstruction report summary so omitted/unavailable/derived context is visible to the reviewer.
 
 ## Stage Lifecycle Model
 
@@ -336,9 +350,11 @@ Consequences:
 - every invalid transition fails closed;
 - stage completion means only that stage's procedural contract completed;
 - stage completion does not imply candidate verification, human acceptance, workflow landing, or success of another stage;
+- `CANCELLED` is reached only by an explicit stage-cancel compare-and-set mutation whose caller/authority input passes the applicable accepted Winds authority/human-decision path; terminal/agent/UI prose and a decision row by itself can never cancel a stage;
+- an `AGENT_REPORTED` decision may explain/request cancellation but is never cancellation authority; a later decision record may reference an already-authorized cancellation as history without causing the transition;
 - workflow-level nonterminal status is derived from canonical workflow + stage records rather than maintained as an independently mutable UI summary;
 - `WorkflowRun.terminal_state` is nullable and may become only `COMPLETED`, `CANCELLED`, or `RECOVERY_REQUIRED` through an explicit compare-and-set terminal action;
-- workflow `COMPLETED` is accepted only when no latest logical-stage attempt is `PREPARED`, `ACTIVE`, `WAITING_APPROVAL`, `WAITING_EXTERNAL`, `BLOCKED`, or `RECOVERY_REQUIRED`, and every failed/stale logical stage has either a later applicable completed attempt or an explicit canonical cancellation/decision that resolves that stage;
+- workflow `COMPLETED` is accepted only when no latest logical-stage attempt is `PREPARED`, `ACTIVE`, `WAITING_APPROVAL`, `WAITING_EXTERNAL`, `BLOCKED`, or `RECOVERY_REQUIRED`, and every logical stage is resolved by either a latest applicable `COMPLETED` attempt or a latest `CANCELLED` attempt produced by the explicit authorized stage-cancel transition above; decision records, including `AGENT_REPORTED`, stale, superseded, forged, or otherwise non-applicable decisions, never satisfy workflow-completion resolution by themselves;
 - duplicate workflow completion is idempotent no-change for the same exact canonical preconditions; conflicting terminal mutation is rejected;
 - workflow completion remains purely procedural and still does not imply candidate verification, human acceptance, or landing.
 
@@ -385,7 +401,8 @@ Before a workflow row or dependent record is used, Winds must validate:
 - lifecycle/continuation/source/authority enums are known;
 - candidate OID/tree values are well-formed where present;
 - supersession/predecessor relationships do not create self-reference or impossible lineage;
-- required redaction/completeness markers are present where material content may be omitted.
+- required redaction/completeness markers are present where material content may be omitted;
+- every applicable `RECONSTRUCTED` actor binding has exactly one schema-valid reconstruction report bound to the same binding/StageRun, with all first-slice material-context categories represented once and no unknown transfer state silently accepted.
 
 Recovery posture:
 
@@ -504,7 +521,9 @@ Prove:
 Reuse accepted Spec 006 seams to prove:
 
 - exact revalidated native mapping -> truthful `RESUMED` only where already supported;
-- new runtime/session from canonical workflow state -> `RECONSTRUCTED`;
+- new runtime/session from canonical workflow state -> `RECONSTRUCTED` plus an immutable bounded reconstruction report;
+- reconstruction-report fixtures cover preserved canonical references, derived state, omitted artifacts/context, unavailable provider-private state, no-longer-transferable runtime/native context, and stale native mappings;
+- missing/malformed/incomplete reconstruction report makes a `RECONSTRUCTED` binding non-applicable;
 - stale/missing/ambiguous mapping -> fail-closed unavailable/ownership-lost/recovery truth;
 - process restart alone -> no live-ownership upgrade;
 - Spec 006 live-runtime nonclaims remain `NO`.
@@ -526,7 +545,8 @@ Prove:
 - canonical exact candidate/evidence/authority context is retained;
 - builder persuasion/confidence is omitted by default;
 - reviewer independence remains intact;
-- stale candidate invalidates handoff applicability without deleting history.
+- stale candidate invalidates handoff applicability without deleting history;
+- a reconstructed actor handoff exposes reconstruction-loss/omission/unavailable truth and cannot imply full context transfer.
 
 ### Regression and platform gates
 
@@ -617,6 +637,7 @@ Examples:
 - corrupt/unsupported workflow state -> recovery required while preserving existing data;
 - candidate movement -> prior candidate-bound evidence/review/decision applicability stale;
 - reviewer handoff with missing required evidence -> incomplete/blocked, not a clean handoff;
+- forged/stale/superseded/`AGENT_REPORTED` cancellation decisions -> cannot transition a stage to `CANCELLED` or satisfy workflow completion;
 - workflow/stage completion with verification pending -> completion remains separate from verification;
 - human acceptance missing -> never implied by workflow state.
 
