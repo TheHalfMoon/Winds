@@ -130,7 +130,7 @@ winds: terminal terminate could not prove owned child exit inside bounded cleanu
 The fixture MUST then:
 
 - NOT retry `terminal-proof`, `terminate`, `close`, or any other cleanup operation;
-- use the existing read-only `execution --repo ... --execution-id t057-terminal-proof` inspection command exactly once to inspect durable truth after the failed command process has returned;
+- require the earlier T057 shell-command record and `t057-terminal-proof` to already be in final durable states before inspection, then invoke the existing `execution --repo ... --execution-id t057-terminal-proof` command exactly once to inspect the target durable truth after the failed command process has returned;
 - require the inspection command to succeed;
 - require execution kind `TERMINAL`;
 - require status exactly `OWNERSHIP_LOST`;
@@ -141,7 +141,7 @@ The fixture MUST then:
 - require at least one exact `TerminalOwnershipLostAfterCleanupFailure` event with source `WINDS_OBSERVED`;
 - require terminal Git observations to remain empty.
 
-The `execution` inspection is observation of already-final durable state. It must not trigger cleanup retry, lifecycle promotion, or ownership reacquisition.
+The single `execution` invocation is permitted only after the fixture has proven the relevant T057 records are already final. For `t057-terminal-proof`, the invocation must not perform cleanup, ownership reacquisition, or any lifecycle transition; it only returns the already-final durable target snapshot. This amendment does not claim that the `execution` command is globally side-effect-free, because its existing startup reconciliation may finalize unrelated non-final rows.
 
 Any other command failure, lifecycle state, source, close reason, event shape, end/duration shape, or profile mismatch MUST fail the fixture.
 
