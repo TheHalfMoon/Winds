@@ -142,7 +142,7 @@ workflow_runs
   workspace_id FK
   workstream_id FK
   schema_version
-  terminal_marker?        # only explicit terminal workflow truth if later needed
+  terminal_state?         # NULL or COMPLETED / CANCELLED / RECOVERY_REQUIRED
   created_unix_ms
 
 workflow_stage_runs
@@ -153,6 +153,10 @@ workflow_stage_runs
   predecessor_stage_run_id?
   relation_kind?          # RETRY_OF / RECOVERY_OF / REASSIGNMENT_OF where applicable
   lifecycle_state
+  failure_class?
+  checkpoint_identity?
+  material_progress_basis?
+  outcome_reason?
   created_unix_ms
   updated_unix_ms
 
@@ -180,6 +184,7 @@ workflow_decisions
   source_class
   authority_class
   decision_type
+  decision_result
   predecessor_decision_id?
   candidate_oid?
   candidate_tree?
@@ -189,8 +194,10 @@ workflow_decisions
   created_unix_ms
 ```
 
-YAGNI constraints on this shape:
+Required identity/schema constraints:
 
+- because `workflow_runs` deliberately stores both `workspace_id` and `workstream_id`, its insert path MUST use a 0009-style fail-closed hierarchy constraint/trigger (or an equivalently strong database-enforced relation) proving the workstream belongs to that workspace; application-side checking alone is insufficient;
+- Tasks must enforce uniqueness of `(workflow_run_id, stage_key, attempt_ordinal)` and require any predecessor to belong to the same workflow and logical stage lineage unless the explicit relation kind is a separately authorized cross-stage relation;
 - child rows retain canonical work context through their immutable `workflow_run_id` parent rather than duplicating workspace/workstream columns everywhere;
 - every child operation must load and revalidate the parent workflow context before the row can be treated as applicable;
 - if Tasks prove that a duplicated identity column is required for an audit row, it must use the existing 0009-style fail-closed hierarchy trigger and may not become a second authority source;
@@ -329,7 +336,11 @@ Consequences:
 - every invalid transition fails closed;
 - stage completion means only that stage's procedural contract completed;
 - stage completion does not imply candidate verification, human acceptance, workflow landing, or success of another stage;
-- workflow-level status is derived from canonical workflow + stage records and explicit terminal workflow action where Tasks require one; nonterminal workflow truth must not be maintained as an independently mutable UI summary.
+- workflow-level nonterminal status is derived from canonical workflow + stage records rather than maintained as an independently mutable UI summary;
+- `WorkflowRun.terminal_state` is nullable and may become only `COMPLETED`, `CANCELLED`, or `RECOVERY_REQUIRED` through an explicit compare-and-set terminal action;
+- workflow `COMPLETED` is accepted only when no latest logical-stage attempt is `PREPARED`, `ACTIVE`, `WAITING_APPROVAL`, `WAITING_EXTERNAL`, `BLOCKED`, or `RECOVERY_REQUIRED`, and every failed/stale logical stage has either a later applicable completed attempt or an explicit canonical cancellation/decision that resolves that stage;
+- duplicate workflow completion is idempotent no-change for the same exact canonical preconditions; conflicting terminal mutation is rejected;
+- workflow completion remains purely procedural and still does not imply candidate verification, human acceptance, or landing.
 
 ## Retry and No-Progress Policy
 
@@ -352,6 +363,7 @@ Interpretation:
 - the second consecutive retry that still proves no material progress ends that `StageRun` as `FAILED` with explicit `RETRY_BUDGET_EXHAUSTED` reason; the budget does not silently reset;
 - any further retry request in the same no-progress lineage is rejected without creating another `StageRun` until an explicit accepted recovery/re-preparation condition establishes a new applicable basis;
 - material progress must be deterministically evidenced, not asserted by prose;
+- each retryable attempt persists/derives a normalized failure class, checkpoint identity where applicable, and material-progress basis sufficient for later deterministic comparison and operator projection;
 - deterministic no-progress signals include unchanged required candidate/artifact signatures plus the same normalized failure class, repeated checkpoint identity without a newer accepted checkpoint, and exhausted explicit task budget where one applies;
 - a changed candidate/artifact alone is not automatically "progress" if the failure class/checkpoint remains materially unresolved; Tasks must define the exact comparator for each retryable slice;
 - any prior possibly-completed non-idempotent side effect with ambiguous completion moves to `RECOVERY_REQUIRED`/explicit reconciliation, not automatic retry;
