@@ -16,7 +16,7 @@ The Founder has explicitly authorized Winds to copy, adapt, and otherwise reuse 
 
 It does **not** remove the repository's existing provenance, license, notice, safety, evidence, and review requirements. Every copied or adapted slice must still identify the exact upstream source, preserve applicable notices, remain compatible with Winds' licensing and architecture, and prove Winds semantics with deterministic tests.
 
-This document does not itself admit a dependency, copy donor code, amend the Constitution, alter Spec 007, authorize Spec 008 implementation, or bypass the active T095/T096 dependency ladder.
+This document does not itself admit a dependency, copy donor code, amend the Constitution, alter closed Spec 007, or authorize Spec 008 implementation. The former T095/T096 dependency ladder is closed canonical history and is not a current merge gate.
 
 ---
 
