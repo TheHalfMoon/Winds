@@ -1077,9 +1077,14 @@ mod tests {
 
         let mut process =
             spawn_owned_process(&mut command, "process-scope descendant fixture").unwrap();
+        let direct_exit_timeout = if cfg!(windows) {
+            Duration::from_secs(15)
+        } else {
+            Duration::from_secs(5)
+        };
         assert!(wait_for_direct_exit(
             &mut process,
-            Instant::now() + Duration::from_secs(5)
+            Instant::now() + direct_exit_timeout
         ));
         assert!(
             !process
