@@ -76,6 +76,18 @@ NO_DAEMON_OR_IPC_IN_SPEC_008
 
 Existing Spec 003/006/007 evidence, authority, terminal-lifecycle, recovery, platform, privacy, and human-landing invariants remain unchanged. Historical failed evidence remains historical and MUST NOT be rewritten as success.
 
+Spec 006 live-runtime nonclaims also remain unchanged:
+
+```text
+T079_LIVE_PASS=NO
+T080_LIVE_PASS=NO
+T082_WORKER_LIVE_PASS=NO
+REAL_CLAUDE_EXECUTION=NO
+REAL_CODEX_WORKER_EXECUTION=NO
+```
+
+Spec 008 may specify continuation proof levels and deterministic fixtures, but nothing in this specification constitutes or upgrades those separate live provider/runtime acceptance lanes.
+
 ## User Scenarios & Testing
 
 ### User Story 1 - Return to a Multi-Stage Workflow and See Exact Current Truth (Priority: P1)
