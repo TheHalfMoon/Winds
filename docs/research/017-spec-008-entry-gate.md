@@ -44,7 +44,7 @@ Historical failed first-attempt CI evidence from the Spec 007 closeout/repair ch
 
 ## 3. Founder decision
 
-The Founder authorizes the next canonical planning sequence to proceed through the repository's mandatory `Constitution -> Spec -> Plan -> Tasks -> Implement -> Verify -> Review -> Human landing` discipline.
+The Founder authorizes only the next canonical formal specification stage under the repository's mandatory `Constitution -> Spec -> Plan -> Tasks -> Implement -> Verify -> Review -> Human landing` discipline. Plan, Tasks, and implementation remain unauthorized until each is separately qualified and canonically accepted in dependency order.
 
 The next formal specification is:
 
@@ -108,6 +108,7 @@ The specification must remain implementation-agnostic. It may require durable lo
 Unless a later accepted amendment changes this boundary, Spec 008 does not authorize:
 
 - persistent background owner, daemon, server, socket, IPC, HTTP/SSE/WebSocket control plane, or public runtime protocol;
+- child-process or multi-process workflow-state owner/coordinator; `CURRENT_ONE_PROCESS_ARCHITECTURE=PRESERVED`;
 - remote execution, remote/mobile continuation, team/cloud control plane, or service orchestration;
 - provider/model APIs, Model Mesh, automatic provider routing, credential brokerage, or new provider authentication;
 - browser automation, browser profiles, CDP, screenshots as verification, or Browser Twin;
