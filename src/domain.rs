@@ -6,6 +6,15 @@ mod t070_agentic_identity_tests;
 #[cfg(test)]
 #[path = "t083_agentic_candidate_evidence_tests.rs"]
 mod t083_agentic_candidate_evidence_tests;
+#[cfg(test)]
+#[path = "t101_workflow_domain_tests.rs"]
+mod t101_workflow_domain_tests;
+#[allow(
+    dead_code,
+    reason = "Spec 008 T101 pure workflow domain; persistence and CLI callers land in later tasks"
+)]
+#[path = "workflow.rs"]
+pub(crate) mod workflow;
 
 #[cfg_attr(
     not(unix),
