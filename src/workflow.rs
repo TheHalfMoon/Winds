@@ -422,6 +422,166 @@ pub(crate) fn workflow_completion_eligible(latest_stages: &[LatestStageTruth]) -
             | StageLifecycleState::RecoveryRequired => false,
         })
 }
+pub(crate) const MAX_CONSECUTIVE_NO_PROGRESS_RETRIES: u8 = 2;
+pub(crate) const RETRY_OUTCOME_FAILURE_RECORDED: &str = "FAILURE_RECORDED";
+pub(crate) const RETRY_OUTCOME_NO_PROGRESS: &str = "NO_PROGRESS_RETRY";
+pub(crate) const RETRY_OUTCOME_BUDGET_EXHAUSTED: &str = "RETRY_BUDGET_EXHAUSTED";
+pub(crate) const RETRY_OUTCOME_AMBIGUOUS_EFFECT: &str = "AMBIGUOUS_NON_IDEMPOTENT_EFFECT";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SideEffectTruth {
+    SafeOrIdempotent,
+    AmbiguousNonIdempotent,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RetryFailureObservation {
+    pub(crate) failure_class: String,
+    pub(crate) checkpoint_identity: Option<String>,
+    pub(crate) material_progress_basis: String,
+    pub(crate) side_effect_truth: SideEffectTruth,
+}
+
+impl RetryFailureObservation {
+    pub(crate) fn new(
+        failure_class: &str,
+        checkpoint_identity: Option<&str>,
+        material_progress_basis: &str,
+        side_effect_truth: SideEffectTruth,
+    ) -> WorkflowResult<Self> {
+        let failure_class = normalize_failure_class(failure_class)?;
+        let checkpoint_identity = checkpoint_identity
+            .map(|value| required_retry_reference(value, "retry checkpoint identity", 512))
+            .transpose()?;
+        let material_progress_basis = required_retry_reference(
+            material_progress_basis,
+            "retry material-progress basis",
+            2048,
+        )?;
+        Ok(Self {
+            failure_class,
+            checkpoint_identity,
+            material_progress_basis,
+            side_effect_truth,
+        })
+    }
+}
+
+fn normalize_failure_class(value: &str) -> WorkflowResult<String> {
+    let normalized = value.trim().to_ascii_uppercase();
+    if normalized.is_empty()
+        || normalized.len() > 128
+        || !normalized
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':' | '/'))
+    {
+        return Err(WorkflowError::new(
+            "retry failure class must be a bounded canonical token",
+        ));
+    }
+    Ok(normalized)
+}
+
+fn required_retry_reference(value: &str, field: &str, max_bytes: usize) -> WorkflowResult<String> {
+    let normalized = value.trim();
+    if normalized.is_empty()
+        || normalized.len() > max_bytes
+        || normalized.chars().any(char::is_control)
+    {
+        return Err(WorkflowError::new(format!(
+            "{field} must be non-empty bounded printable canonical metadata"
+        )));
+    }
+    Ok(normalized.to_owned())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RetryProgressComparison {
+    MaterialProgress,
+    NoProgress,
+}
+
+pub(crate) fn compare_retry_progress(
+    previous: &RetryFailureObservation,
+    current: &RetryFailureObservation,
+) -> RetryProgressComparison {
+    if previous.failure_class != current.failure_class {
+        return RetryProgressComparison::MaterialProgress;
+    }
+    if previous.checkpoint_identity != current.checkpoint_identity
+        && current.checkpoint_identity.is_some()
+        && previous.material_progress_basis != current.material_progress_basis
+    {
+        return RetryProgressComparison::MaterialProgress;
+    }
+    RetryProgressComparison::NoProgress
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RetryFailureResolution {
+    pub(crate) terminal_state: StageLifecycleState,
+    pub(crate) comparison: Option<RetryProgressComparison>,
+    pub(crate) consecutive_no_progress_retries: u8,
+    pub(crate) outcome_reason: &'static str,
+}
+
+pub(crate) fn evaluate_retry_failure(
+    is_retry_attempt: bool,
+    predecessor: Option<(&RetryFailureObservation, &str)>,
+    current: &RetryFailureObservation,
+) -> WorkflowResult<RetryFailureResolution> {
+    if current.side_effect_truth == SideEffectTruth::AmbiguousNonIdempotent {
+        return Ok(RetryFailureResolution {
+            terminal_state: StageLifecycleState::RecoveryRequired,
+            comparison: None,
+            consecutive_no_progress_retries: 0,
+            outcome_reason: RETRY_OUTCOME_AMBIGUOUS_EFFECT,
+        });
+    }
+    if !is_retry_attempt {
+        return Ok(RetryFailureResolution {
+            terminal_state: StageLifecycleState::Failed,
+            comparison: None,
+            consecutive_no_progress_retries: 0,
+            outcome_reason: RETRY_OUTCOME_FAILURE_RECORDED,
+        });
+    }
+    let (previous, previous_outcome) = predecessor.ok_or_else(|| {
+        WorkflowError::new("retry attempt requires normalized predecessor failure truth")
+    })?;
+    if previous_outcome == RETRY_OUTCOME_BUDGET_EXHAUSTED {
+        return Err(WorkflowError::new(
+            "retry budget was already exhausted for this no-progress lineage",
+        ));
+    }
+    let comparison = compare_retry_progress(previous, current);
+    if comparison == RetryProgressComparison::MaterialProgress {
+        return Ok(RetryFailureResolution {
+            terminal_state: StageLifecycleState::Failed,
+            comparison: Some(comparison),
+            consecutive_no_progress_retries: 0,
+            outcome_reason: RETRY_OUTCOME_FAILURE_RECORDED,
+        });
+    }
+    let prior_no_progress = if previous_outcome == RETRY_OUTCOME_NO_PROGRESS {
+        1
+    } else {
+        0
+    };
+    let consecutive = prior_no_progress + 1;
+    let outcome_reason = if consecutive >= MAX_CONSECUTIVE_NO_PROGRESS_RETRIES {
+        RETRY_OUTCOME_BUDGET_EXHAUSTED
+    } else {
+        RETRY_OUTCOME_NO_PROGRESS
+    };
+    Ok(RetryFailureResolution {
+        terminal_state: StageLifecycleState::Failed,
+        comparison: Some(comparison),
+        consecutive_no_progress_retries: consecutive,
+        outcome_reason,
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum ArtifactBaselineKind {
     ExactGitCandidate,

@@ -4,11 +4,13 @@ use crate::agentic_runtime::{
 };
 use crate::domain::workflow::{
     AppliedStageTransition, ArtifactBaselineIdentity, ArtifactBaselineKind,
-    ArtifactBaselineRequirement, BaselineEvaluation, CandidateBaselineIdentity, ReconstructionItem,
-    ReconstructionReport, StageAttemptRelation, StageLifecycleState, StageRunIdentity,
+    ArtifactBaselineRequirement, BaselineEvaluation, CandidateBaselineIdentity,
+    RETRY_OUTCOME_AMBIGUOUS_EFFECT, RETRY_OUTCOME_BUDGET_EXHAUSTED, RETRY_OUTCOME_FAILURE_RECORDED,
+    RETRY_OUTCOME_NO_PROGRESS, ReconstructionItem, ReconstructionReport, RetryFailureObservation,
+    RetryFailureResolution, StageAttemptRelation, StageLifecycleState, StageRunIdentity,
     StageTransitionAuthority, StageTransitionOutcome, StageTransitionRequest, TruthSource,
     WorkflowContinuationClass, WorkflowRunIdentity, build_reconstruction_preview,
-    evaluate_artifact_baseline_requirement, evaluate_stage_transition,
+    evaluate_artifact_baseline_requirement, evaluate_retry_failure, evaluate_stage_transition,
     parse_reconstruction_report_json, validate_successor_attempt,
 };
 use crate::domain::{
@@ -39,6 +41,9 @@ mod t103_workflow_baseline_tests;
 #[cfg(test)]
 #[path = "t104_workflow_continuation_tests.rs"]
 mod t104_workflow_continuation_tests;
+#[cfg(test)]
+#[path = "t105_workflow_retry_tests.rs"]
+mod t105_workflow_retry_tests;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -177,6 +182,8 @@ pub(crate) struct StoredStageRun {
     pub(crate) identity: StageRunIdentity,
     pub(crate) relation: Option<StageAttemptRelation>,
     pub(crate) lifecycle_state: StageLifecycleState,
+    pub(crate) failure_observation: Option<RetryFailureObservation>,
+    pub(crate) outcome_reason: Option<String>,
     pub(crate) last_transition: Option<AppliedStageTransition>,
     pub(crate) created_unix_ms: i64,
     pub(crate) updated_unix_ms: i64,
@@ -505,6 +512,13 @@ impl Store {
             (Some(predecessor_id), Some(relation)) => {
                 let predecessor = self.load_stage_run(predecessor_id)?;
                 validate_successor_attempt(&predecessor.identity, identity, relation)?;
+                if relation == StageAttemptRelation::Retry
+                    && predecessor.lifecycle_state == StageLifecycleState::Failed
+                {
+                    return Err(
+                        "FAILED predecessor retries must use the explicit bounded retry API".into(),
+                    );
+                }
             }
             _ => {
                 return Err(
@@ -539,6 +553,7 @@ impl Store {
             .query_row(
                 "SELECT stage_run_id, workflow_run_id, stage_key, attempt_ordinal,
                         predecessor_stage_run_id, relation_kind, lifecycle_state,
+                        failure_class, checkpoint_identity, material_progress_basis, outcome_reason,
                         last_transition_operation_id, last_transition_from_state,
                         last_transition_source, last_transition_authority,
                         created_unix_ms, updated_unix_ms
@@ -557,8 +572,12 @@ impl Store {
                         row.get::<_, Option<String>>(8)?,
                         row.get::<_, Option<String>>(9)?,
                         row.get::<_, Option<String>>(10)?,
-                        row.get::<_, i64>(11)?,
-                        row.get::<_, i64>(12)?,
+                        row.get::<_, Option<String>>(11)?,
+                        row.get::<_, Option<String>>(12)?,
+                        row.get::<_, Option<String>>(13)?,
+                        row.get::<_, Option<String>>(14)?,
+                        row.get::<_, i64>(15)?,
+                        row.get::<_, i64>(16)?,
                     ))
                 },
             )
@@ -568,7 +587,52 @@ impl Store {
         let attempt_ordinal = u32::try_from(row.3)
             .map_err(|_| format!("invalid stage attempt ordinal in store: {}", row.3))?;
         let lifecycle_state = parse_stage_state(&row.6)?;
-        let last_transition = match (&row.7, &row.8, &row.9, &row.10) {
+        let failure_observation = match (&row.7, &row.9) {
+            (None, None) if row.8.is_none() => None,
+            (Some(failure_class), Some(material_progress_basis)) => {
+                let observation = RetryFailureObservation::new(
+                    failure_class,
+                    row.8.as_deref(),
+                    material_progress_basis,
+                    if row.10.as_deref() == Some(RETRY_OUTCOME_AMBIGUOUS_EFFECT) {
+                        crate::domain::workflow::SideEffectTruth::AmbiguousNonIdempotent
+                    } else {
+                        crate::domain::workflow::SideEffectTruth::SafeOrIdempotent
+                    },
+                )?;
+                if observation.failure_class != *failure_class
+                    || observation.checkpoint_identity.as_deref() != row.8.as_deref()
+                    || observation.material_progress_basis != *material_progress_basis
+                {
+                    return Err("stored workflow retry failure truth is not canonical".into());
+                }
+                Some(observation)
+            }
+            _ => return Err("stored workflow retry failure truth is incomplete".into()),
+        };
+        match (failure_observation.as_ref(), row.10.as_deref()) {
+            (None, None) => {}
+            (Some(_), Some(RETRY_OUTCOME_FAILURE_RECORDED))
+                if lifecycle_state == StageLifecycleState::Failed => {}
+            (Some(_), Some(RETRY_OUTCOME_NO_PROGRESS | RETRY_OUTCOME_BUDGET_EXHAUSTED))
+                if lifecycle_state == StageLifecycleState::Failed
+                    && parse_stage_relation(row.5.clone())?
+                        == Some(StageAttemptRelation::Retry) => {}
+            (Some(observation), Some(RETRY_OUTCOME_AMBIGUOUS_EFFECT))
+                if lifecycle_state == StageLifecycleState::RecoveryRequired
+                    && observation.side_effect_truth
+                        == crate::domain::workflow::SideEffectTruth::AmbiguousNonIdempotent => {}
+            (None, Some(_)) => {
+                return Err("stored workflow retry outcome lacks normalized failure truth".into());
+            }
+            (Some(_), None) => {
+                return Err(
+                    "stored workflow retry failure truth lacks explicit outcome reason".into(),
+                );
+            }
+            _ => return Err("stored workflow retry failure/outcome truth is inconsistent".into()),
+        }
+        let last_transition = match (&row.11, &row.12, &row.13, &row.14) {
             (None, None, None, None) => None,
             (Some(operation_id), Some(from), Some(source), Some(authority)) => {
                 Some(AppliedStageTransition {
@@ -595,9 +659,11 @@ impl Store {
             )?,
             relation: parse_stage_relation(row.5)?,
             lifecycle_state,
+            failure_observation,
+            outcome_reason: row.10,
             last_transition,
-            created_unix_ms: row.11,
-            updated_unix_ms: row.12,
+            created_unix_ms: row.15,
+            updated_unix_ms: row.16,
         })
     }
 
@@ -648,6 +714,187 @@ impl Store {
             return Err("stage transition lost compare-and-set race".into());
         }
         Ok(StageTransitionOutcome::Apply(applied))
+    }
+
+    pub(crate) fn create_explicit_retry_stage_run(
+        &self,
+        identity: &StageRunIdentity,
+        now_ms: i64,
+    ) -> Result<()> {
+        self.validate_workflow_schema()?;
+        validate_agentic_identity_timestamp(now_ms, "retry stage creation time")?;
+        let predecessor_id = identity
+            .predecessor_stage_run_id
+            .as_deref()
+            .ok_or("explicit retry requires an exact predecessor stage run")?;
+        let canonical = StageRunIdentity::new(
+            &identity.stage_run_id,
+            &identity.workflow_run_id,
+            &identity.stage_key,
+            identity.attempt_ordinal,
+            Some(predecessor_id),
+        )?;
+        if &canonical != identity {
+            return Err("retry stage identity must be canonicalized before persistence".into());
+        }
+        let predecessor = self.load_stage_run(predecessor_id)?;
+        validate_successor_attempt(&predecessor.identity, identity, StageAttemptRelation::Retry)?;
+        if predecessor.lifecycle_state != StageLifecycleState::Failed {
+            return Err("explicit retry requires a FAILED predecessor attempt".into());
+        }
+        if predecessor.failure_observation.is_none() {
+            return Err("explicit retry predecessor lacks normalized failure truth".into());
+        }
+        if predecessor.outcome_reason.as_deref() == Some(RETRY_OUTCOME_BUDGET_EXHAUSTED) {
+            return Err("retry budget exhausted; a new retry attempt was not created".into());
+        }
+        let inserted = self.connection.execute(
+            "INSERT INTO workflow_stage_runs(
+                stage_run_id, workflow_run_id, stage_key, attempt_ordinal,
+                predecessor_stage_run_id, relation_kind, lifecycle_state,
+                created_unix_ms, updated_unix_ms)
+             SELECT ?1, ?2, ?3, ?4, predecessor.stage_run_id, 'RETRY_OF', 'PREPARED', ?6, ?6
+             FROM workflow_stage_runs predecessor
+             WHERE predecessor.stage_run_id = ?5
+               AND predecessor.workflow_run_id = ?2
+               AND predecessor.stage_key = ?3
+               AND predecessor.attempt_ordinal + 1 = ?4
+               AND predecessor.lifecycle_state = 'FAILED'
+               AND predecessor.failure_class IS NOT NULL
+               AND predecessor.material_progress_basis IS NOT NULL
+               AND predecessor.outcome_reason IN (?7, ?8)",
+            params![
+                identity.stage_run_id,
+                identity.workflow_run_id,
+                identity.stage_key,
+                i64::from(identity.attempt_ordinal),
+                predecessor_id,
+                now_ms,
+                RETRY_OUTCOME_FAILURE_RECORDED,
+                RETRY_OUTCOME_NO_PROGRESS,
+            ],
+        )?;
+        if inserted != 1 {
+            return Err(
+                "retry predecessor changed or no longer satisfies retry preconditions".into(),
+            );
+        }
+        Ok(())
+    }
+
+    pub(crate) fn record_stage_failure(
+        &self,
+        stage_run_id: &str,
+        operation_id: &str,
+        observation: &RetryFailureObservation,
+        now_ms: i64,
+    ) -> Result<RetryFailureResolution> {
+        self.validate_workflow_schema()?;
+        validate_agentic_identity_timestamp(now_ms, "stage failure time")?;
+        let current = self.load_stage_run(stage_run_id)?;
+        if now_ms < current.updated_unix_ms {
+            return Err("stage failure time cannot precede current update time".into());
+        }
+        if current.failure_observation.is_some() || current.outcome_reason.is_some() {
+            return Err(
+                "stage failure truth is already recorded and immutable through the Store API"
+                    .into(),
+            );
+        }
+        let canonical_observation = RetryFailureObservation::new(
+            &observation.failure_class,
+            observation.checkpoint_identity.as_deref(),
+            &observation.material_progress_basis,
+            observation.side_effect_truth,
+        )?;
+        if &canonical_observation != observation {
+            return Err(
+                "stage failure observation must be canonicalized before persistence".into(),
+            );
+        }
+        let predecessor = if current.relation == Some(StageAttemptRelation::Retry) {
+            let predecessor_id = current
+                .identity
+                .predecessor_stage_run_id
+                .as_deref()
+                .ok_or("retry attempt is missing its predecessor identity")?;
+            Some(self.load_stage_run(predecessor_id)?)
+        } else {
+            None
+        };
+        let predecessor_truth = predecessor
+            .as_ref()
+            .map(|stage| {
+                let failure = stage
+                    .failure_observation
+                    .as_ref()
+                    .ok_or("retry predecessor lacks normalized failure truth")?;
+                let outcome = stage
+                    .outcome_reason
+                    .as_deref()
+                    .ok_or("retry predecessor lacks explicit outcome reason")?;
+                Ok::<_, Box<dyn Error + Send + Sync>>((failure, outcome))
+            })
+            .transpose()?;
+        let resolution = evaluate_retry_failure(
+            current.relation == Some(StageAttemptRelation::Retry),
+            predecessor_truth,
+            observation,
+        )?;
+        let transition = StageTransitionRequest::new(
+            operation_id,
+            current.lifecycle_state,
+            resolution.terminal_state,
+            TruthSource::WindsObserved,
+            StageTransitionAuthority::WindsPolicy,
+        )?;
+        let StageTransitionOutcome::Apply(applied) = evaluate_stage_transition(
+            current.lifecycle_state,
+            current.last_transition.as_ref(),
+            &transition,
+        )?
+        else {
+            return Err("stage failure operation unexpectedly resolved as idempotent".into());
+        };
+        let updated = self.connection.execute(
+            "UPDATE workflow_stage_runs
+             SET lifecycle_state = ?2,
+                 failure_class = ?3,
+                 checkpoint_identity = ?4,
+                 material_progress_basis = ?5,
+                 outcome_reason = ?6,
+                 last_transition_operation_id = ?7,
+                 last_transition_from_state = ?8,
+                 last_transition_source = ?9,
+                 last_transition_authority = ?10,
+                 updated_unix_ms = ?11
+             WHERE stage_run_id = ?1
+               AND lifecycle_state = ?12
+               AND updated_unix_ms = ?13
+               AND failure_class IS NULL
+               AND checkpoint_identity IS NULL
+               AND material_progress_basis IS NULL
+               AND outcome_reason IS NULL",
+            params![
+                stage_run_id,
+                applied.to.as_db_str(),
+                observation.failure_class,
+                observation.checkpoint_identity,
+                observation.material_progress_basis,
+                resolution.outcome_reason,
+                applied.operation_id,
+                applied.from.as_db_str(),
+                applied.source.as_db_str(),
+                applied.authority.as_db_str(),
+                now_ms,
+                current.lifecycle_state.as_db_str(),
+                current.updated_unix_ms,
+            ],
+        )?;
+        if updated != 1 {
+            return Err("stage failure recording lost compare-and-set race".into());
+        }
+        Ok(resolution)
     }
 
     pub(crate) fn create_artifact_baseline(
