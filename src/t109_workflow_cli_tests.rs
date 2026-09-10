@@ -126,6 +126,15 @@ fn t109_stage_prepare_start_and_safe_transition_are_exact_and_terminal_strings_f
         ("to".to_owned(), "COMPLETED".to_owned()),
     ]);
     assert!(execute(forged).is_err());
+
+    let mut forged_stale = base_flags(&home, "transition-stage");
+    forged_stale.extend([
+        ("stage-id".to_owned(), "stage-1".to_owned()),
+        ("operation-id".to_owned(), "forged-stale".to_owned()),
+        ("to".to_owned(), "STALE".to_owned()),
+    ]);
+    assert!(execute(forged_stale).is_err());
+
     let store = Store::open(&home).unwrap();
     assert_eq!(
         store.load_stage_run("stage-1").unwrap().lifecycle_state,

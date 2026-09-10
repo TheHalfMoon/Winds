@@ -147,9 +147,8 @@ fn transition_stage(flags: HashMap<String, String>) -> Result<Value> {
         StageLifecycleState::WaitingApproval
             | StageLifecycleState::WaitingExternal
             | StageLifecycleState::Blocked
-            | StageLifecycleState::Stale
     ) {
-        return Err("workflow CLI transition-stage permits only WAITING_APPROVAL, WAITING_EXTERNAL, BLOCKED, or STALE; terminal resolution and failure/recovery require dedicated qualified paths".into());
+        return Err("workflow CLI transition-stage permits only WAITING_APPROVAL, WAITING_EXTERNAL, or BLOCKED; terminal resolution, staleness, and failure/recovery require dedicated qualified paths".into());
     }
     let request = StageTransitionRequest::new(
         required(&flags, "operation-id")?,
