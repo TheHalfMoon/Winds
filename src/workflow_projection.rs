@@ -423,6 +423,7 @@ fn validate_lifecycle_authority(
     source: TruthSource,
     authority: StageTransitionAuthority,
 ) -> ProjectionResult<()> {
+    validate_source_authority_pair(source, authority, "lifecycle truth")?;
     if source == TruthSource::AgentReported
         && matches!(
             state,
@@ -431,13 +432,21 @@ fn validate_lifecycle_authority(
     {
         return Err("agent-reported lifecycle truth cannot project terminal authority".to_owned());
     }
-    if authority == StageTransitionAuthority::HumanDecision && source != TruthSource::HumanDecided {
-        return Err("HUMAN_DECISION lifecycle authority requires HUMAN_DECIDED source".to_owned());
-    }
-    if source == TruthSource::AgentReported && authority != StageTransitionAuthority::None {
-        return Err("agent-reported lifecycle truth cannot carry canonical authority".to_owned());
-    }
     Ok(())
+}
+
+fn validate_source_authority_pair(
+    source: TruthSource,
+    authority: StageTransitionAuthority,
+    context: &str,
+) -> ProjectionResult<()> {
+    match (source, authority) {
+        (TruthSource::AgentReported, StageTransitionAuthority::None)
+        | (TruthSource::WindsObserved, StageTransitionAuthority::None)
+        | (TruthSource::WindsObserved, StageTransitionAuthority::WindsPolicy)
+        | (TruthSource::HumanDecided, StageTransitionAuthority::HumanDecision) => Ok(()),
+        _ => Err(format!("{context} source/authority pair is not canonical")),
+    }
 }
 
 fn validate_actor(input: &WorkflowProjectionInput) -> ProjectionResult<()> {
@@ -585,13 +594,7 @@ fn validate_authority_ceiling(authority: &AuthorityCeilingTruth) -> ProjectionRe
     if let Some(reference) = reference.as_deref() {
         required_reference(reference, "authority ceiling reference")?;
     }
-    match (*source, *authority) {
-        (TruthSource::AgentReported, StageTransitionAuthority::None)
-        | (TruthSource::WindsObserved, StageTransitionAuthority::None)
-        | (TruthSource::WindsObserved, StageTransitionAuthority::WindsPolicy)
-        | (TruthSource::HumanDecided, StageTransitionAuthority::HumanDecision) => Ok(()),
-        _ => Err("authority ceiling source/authority pair is not canonical".to_owned()),
-    }
+    validate_source_authority_pair(*source, *authority, "authority ceiling")
 }
 
 fn validate_prospective_reconstruction(input: &WorkflowProjectionInput) -> ProjectionResult<()> {

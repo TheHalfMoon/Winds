@@ -499,6 +499,35 @@ fn t107_reconstruction_identity_mismatch_fails_closed() {
 }
 
 #[test]
+fn t107_lifecycle_and_authority_ceiling_share_canonical_source_authority_rules() {
+    let mut invalid_lifecycle = base_input();
+    invalid_lifecycle.lifecycle_source = TruthSource::HumanDecided;
+    invalid_lifecycle.lifecycle_authority = StageTransitionAuthority::WindsPolicy;
+    assert!(project_workflow_status(&invalid_lifecycle).is_err());
+    assert!(project_reviewer_handoff(&invalid_lifecycle).is_err());
+
+    let mut invalid_ceiling = base_input();
+    invalid_ceiling.authority_ceiling = AuthorityCeilingTruth::Known {
+        source: TruthSource::HumanDecided,
+        authority: StageTransitionAuthority::WindsPolicy,
+        reference: Some("policy:invalid-human-pair".to_owned()),
+    };
+    assert!(project_workflow_status(&invalid_ceiling).is_err());
+    assert!(project_reviewer_handoff(&invalid_ceiling).is_err());
+
+    let mut valid_human = base_input();
+    valid_human.lifecycle_source = TruthSource::HumanDecided;
+    valid_human.lifecycle_authority = StageTransitionAuthority::HumanDecision;
+    valid_human.authority_ceiling = AuthorityCeilingTruth::Known {
+        source: TruthSource::HumanDecided,
+        authority: StageTransitionAuthority::HumanDecision,
+        reference: Some("human-decision:stage-authority".to_owned()),
+    };
+    assert!(project_workflow_status(&valid_human).is_ok());
+    assert!(project_reviewer_handoff(&valid_human).is_ok());
+}
+
+#[test]
 fn t107_projection_calls_are_side_effect_free_over_their_inputs() {
     let input = base_input();
     let before = input.clone();
