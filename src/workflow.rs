@@ -3,6 +3,9 @@ use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
+#[path = "workflow_projection.rs"]
+pub(crate) mod projection;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WorkflowError(String);
 
