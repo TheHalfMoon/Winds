@@ -7,6 +7,8 @@ use crate::domain::workflow::{
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Barrier};
+use std::thread;
 
 static NEXT_HOME: AtomicU64 = AtomicU64::new(0);
 
@@ -540,6 +542,110 @@ fn t106_branched_successor_lineage_is_rejected_at_write_and_read_boundaries() {
             .is_err()
     );
     assert!(store.list_workflow_decisions("workflow-1").is_err());
+    drop(store);
+    cleanup(home);
+}
+
+#[test]
+fn t106_concurrent_successors_cannot_create_branched_history() {
+    let (home, store) = seeded_store("concurrent-successors");
+    let root = decision(
+        "decision-race-root",
+        "workflow-1",
+        "ACCEPTED",
+        None,
+        Some(candidate('a')),
+        None,
+        10,
+    );
+    store.append_workflow_decision(&root).unwrap();
+    drop(store);
+
+    let store_a = Store::open(&home).unwrap();
+    let store_b = Store::open(&home).unwrap();
+    let barrier = Arc::new(Barrier::new(3));
+    let successor_a = decision(
+        "decision-race-a",
+        "workflow-1",
+        "SUPERSEDED",
+        Some("decision-race-root"),
+        Some(candidate('a')),
+        None,
+        11,
+    );
+    let successor_b = decision(
+        "decision-race-b",
+        "workflow-1",
+        "REJECTED",
+        Some("decision-race-root"),
+        Some(candidate('a')),
+        None,
+        11,
+    );
+
+    let barrier_a = Arc::clone(&barrier);
+    let handle_a = thread::spawn(move || {
+        barrier_a.wait();
+        store_a.append_workflow_decision(&successor_a)
+    });
+    let barrier_b = Arc::clone(&barrier);
+    let handle_b = thread::spawn(move || {
+        barrier_b.wait();
+        store_b.append_workflow_decision(&successor_b)
+    });
+    barrier.wait();
+
+    let result_a = handle_a.join().unwrap();
+    let result_b = handle_b.join().unwrap();
+    assert_eq!(
+        usize::from(result_a.is_ok()) + usize::from(result_b.is_ok()),
+        1
+    );
+
+    let store = Store::open(&home).unwrap();
+    let decisions = store.list_workflow_decisions("workflow-1").unwrap();
+    assert_eq!(decisions.len(), 2);
+    assert_eq!(decisions[0].decision_id, "decision-race-root");
+    assert!(
+        decisions[1].decision_id == "decision-race-a"
+            || decisions[1].decision_id == "decision-race-b"
+    );
+    drop(store);
+    cleanup(home);
+}
+
+#[test]
+fn t106_long_linear_history_bulk_listing_is_deterministic() {
+    let (home, store) = seeded_store("long-linear-history");
+    store.connection.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let mut predecessor: Option<String> = None;
+    for ordinal in 0..96 {
+        let decision_id = format!("decision-linear-{ordinal:03}");
+        store.connection.execute(
+            "INSERT INTO workflow_decisions(
+                decision_id, workflow_run_id, stage_run_id, source_class, authority_class,
+                decision_type, decision_result, predecessor_decision_id, content_state, created_unix_ms
+             ) VALUES (?1, 'workflow-1', 'stage-1', 'AGENT_REPORTED', 'NONE',
+                       'REVIEW_DECISION', 'RECORDED', ?2, 'FULL', ?3)",
+            rusqlite::params![decision_id, predecessor, 20 + i64::from(ordinal)],
+        ).unwrap();
+        predecessor = Some(format!("decision-linear-{ordinal:03}"));
+    }
+    store.connection.execute_batch("COMMIT").unwrap();
+
+    let decisions = store.list_workflow_decisions("workflow-1").unwrap();
+    assert_eq!(decisions.len(), 96);
+    assert_eq!(
+        decisions.first().unwrap().decision_id,
+        "decision-linear-000"
+    );
+    assert_eq!(decisions.last().unwrap().decision_id, "decision-linear-095");
+    for pair in decisions.windows(2) {
+        assert_eq!(
+            pair[1].predecessor_decision_id.as_deref(),
+            Some(pair[0].decision_id.as_str())
+        );
+    }
     drop(store);
     cleanup(home);
 }

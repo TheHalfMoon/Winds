@@ -21,7 +21,7 @@ use crate::domain::{
     ExecutionRecord, ExecutionStatus, FactSource, ShellCommandRecord, StoredRun,
     TerminalCloseReason, TerminalSessionRecord, WorkspaceRecord,
 };
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -1368,10 +1368,13 @@ impl Store {
                 return Err("workflow decision stage does not belong to its workflow".into());
             }
         }
+
+        let tx =
+            rusqlite::Transaction::new_unchecked(&self.connection, TransactionBehavior::Immediate)?;
         if let Some(predecessor_id) = decision.predecessor_decision_id.as_deref() {
             let predecessor = self.load_workflow_decision(predecessor_id)?;
             validate_decision_successor(&predecessor, decision)?;
-            let sibling_count: i64 = self.connection.query_row(
+            let sibling_count: i64 = tx.query_row(
                 "SELECT COUNT(*) FROM workflow_decisions
                  WHERE predecessor_decision_id = ?1 AND decision_id <> ?2",
                 params![predecessor_id, decision.decision_id],
@@ -1383,7 +1386,7 @@ impl Store {
                 );
             }
         }
-        let inserted = self.connection.execute(
+        let inserted = tx.execute(
             "INSERT INTO workflow_decisions(
                 decision_id, workflow_run_id, stage_run_id, source_class, authority_class,
                 decision_type, decision_result, predecessor_decision_id, candidate_oid,
@@ -1407,6 +1410,7 @@ impl Store {
                 decision.created_unix_ms,
             ],
         )?;
+        tx.commit()?;
         if inserted == 1 {
             return Ok(DecisionAppendOutcome::Inserted);
         }
@@ -1532,16 +1536,144 @@ impl Store {
         self.validate_workflow_schema()?;
         self.load_workflow_run(workflow_run_id)?;
         let mut statement = self.connection.prepare(
-            "SELECT decision_id FROM workflow_decisions
+            "SELECT decision_id, workflow_run_id, stage_run_id, source_class, authority_class,
+                    decision_type, decision_result, predecessor_decision_id, candidate_oid,
+                    candidate_tree, evidence_reference, content_state, safe_rationale, created_unix_ms
+             FROM workflow_decisions
              WHERE workflow_run_id = ?1 ORDER BY created_unix_ms, decision_id",
         )?;
-        let ids = statement
-            .query_map(params![workflow_run_id], |row| row.get::<_, String>(0))?
+        let rows = statement
+            .query_map(params![workflow_run_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, Option<String>>(10)?,
+                    row.get::<_, String>(11)?,
+                    row.get::<_, Option<String>>(12)?,
+                    row.get::<_, i64>(13)?,
+                ))
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         drop(statement);
-        ids.iter()
-            .map(|decision_id| self.load_workflow_decision(decision_id))
-            .collect()
+
+        let decisions = rows
+            .into_iter()
+            .map(|row| {
+                let source = TruthSource::from_db(&row.3).ok_or_else(|| {
+                    format!("unknown workflow decision source in store: {}", row.3)
+                })?;
+                let authority = StageTransitionAuthority::from_db(&row.4).ok_or_else(|| {
+                    format!("unknown workflow decision authority in store: {}", row.4)
+                })?;
+                if source == TruthSource::HumanDecided
+                    || authority == StageTransitionAuthority::HumanDecision
+                {
+                    return Err(
+                        "stored HUMAN_DECIDED workflow decision is not applicable without an accepted human-decision persistence path"
+                            .into(),
+                    );
+                }
+                let content_state = DecisionContentState::from_db(&row.11).ok_or_else(|| {
+                    format!(
+                        "unknown workflow decision content state in store: {}",
+                        row.11
+                    )
+                })?;
+                let candidate = match (row.8.as_deref(), row.9.as_deref()) {
+                    (None, None) => None,
+                    (Some(oid), Some(tree)) => Some(CandidateBaselineIdentity::new(oid, tree)?),
+                    _ => {
+                        return Err(
+                            "stored workflow decision candidate identity is incomplete".into(),
+                        );
+                    }
+                };
+                let decision = WorkflowDecisionRecord::new(WorkflowDecisionInput {
+                    decision_id: &row.0,
+                    workflow_run_id: &row.1,
+                    stage_run_id: row.2.as_deref(),
+                    source,
+                    authority,
+                    decision_type: &row.5,
+                    decision_result: &row.6,
+                    predecessor_decision_id: row.7.as_deref(),
+                    candidate,
+                    evidence_reference: row.10.as_deref(),
+                    content_state,
+                    safe_rationale: row.12.as_deref(),
+                    created_unix_ms: row.13,
+                })?;
+                if decision.workflow_run_id != workflow_run_id {
+                    return Err("workflow decision list crossed workflow identity".into());
+                }
+                if let Some(stage_run_id) = decision.stage_run_id.as_deref() {
+                    let stage = self.load_stage_run(stage_run_id)?;
+                    if stage.identity.workflow_run_id != decision.workflow_run_id {
+                        return Err(
+                            "stored workflow decision stage no longer belongs to its workflow".into(),
+                        );
+                    }
+                }
+                Ok(decision)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        self.validate_workflow_decision_set(&decisions)?;
+        Ok(decisions)
+    }
+
+    fn validate_workflow_decision_set(&self, decisions: &[WorkflowDecisionRecord]) -> Result<()> {
+        let mut by_id = BTreeMap::new();
+        for decision in decisions {
+            if by_id
+                .insert(decision.decision_id.as_str(), decision)
+                .is_some()
+            {
+                return Err("workflow decision list contains duplicate identity".into());
+            }
+        }
+        let mut successor_by_predecessor: BTreeMap<&str, &str> = BTreeMap::new();
+        let mut roots = Vec::new();
+        for decision in decisions {
+            if let Some(predecessor_id) = decision.predecessor_decision_id.as_deref() {
+                let predecessor = by_id
+                    .get(predecessor_id)
+                    .ok_or("workflow decision predecessor is missing from its workflow history")?;
+                validate_decision_successor(predecessor, decision)?;
+                if successor_by_predecessor
+                    .insert(predecessor_id, decision.decision_id.as_str())
+                    .is_some()
+                {
+                    return Err("workflow decision predecessor lineage is branched".into());
+                }
+            } else {
+                roots.push(decision.decision_id.as_str());
+            }
+        }
+        let mut visited = BTreeSet::new();
+        for root in roots {
+            let mut current = root;
+            loop {
+                if !visited.insert(current) {
+                    return Err("workflow decision predecessor lineage is cyclic".into());
+                }
+                let Some(successor) = successor_by_predecessor.get(current) else {
+                    break;
+                };
+                current = successor;
+            }
+        }
+        if visited.len() != decisions.len() {
+            return Err("workflow decision predecessor lineage is cyclic".into());
+        }
+        Ok(())
     }
 
     pub(crate) fn workflow_decision_applicability(
