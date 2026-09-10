@@ -51,6 +51,7 @@ mod t087_workbench_dependency_tests;
 #[cfg(test)]
 mod t099_workbench_adversarial_tests;
 mod workbench;
+mod workflow_projection;
 
 use crate::check::run_check;
 use crate::domain::{CheckEvidence, CheckStatus, Eligibility, PromotionReport};
