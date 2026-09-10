@@ -92,6 +92,27 @@ pub(crate) enum StageAttemptRelation {
     Recovery,
 }
 
+impl StageAttemptRelation {
+    pub(crate) fn as_db_str(self) -> &'static str {
+        match self {
+            Self::Retry => "RETRY_OF",
+            Self::Reconstruction => "RECONSTRUCTION_OF",
+            Self::Reassignment => "REASSIGNMENT_OF",
+            Self::Recovery => "RECOVERY_OF",
+        }
+    }
+
+    pub(crate) fn from_db(value: &str) -> Option<Self> {
+        match value {
+            "RETRY_OF" => Some(Self::Retry),
+            "RECONSTRUCTION_OF" => Some(Self::Reconstruction),
+            "REASSIGNMENT_OF" => Some(Self::Reassignment),
+            "RECOVERY_OF" => Some(Self::Recovery),
+            _ => None,
+        }
+    }
+}
+
 pub(crate) fn validate_successor_attempt(
     predecessor: &StageRunIdentity,
     successor: &StageRunIdentity,
@@ -163,6 +184,27 @@ impl StageLifecycleState {
             Self::Failed | Self::Stale | Self::Cancelled | Self::Completed | Self::RecoveryRequired
         )
     }
+
+    pub(crate) fn as_db_str(self) -> &'static str {
+        match self {
+            Self::Prepared => "PREPARED",
+            Self::Active => "ACTIVE",
+            Self::WaitingApproval => "WAITING_APPROVAL",
+            Self::WaitingExternal => "WAITING_EXTERNAL",
+            Self::Blocked => "BLOCKED",
+            Self::Failed => "FAILED",
+            Self::Stale => "STALE",
+            Self::Cancelled => "CANCELLED",
+            Self::Completed => "COMPLETED",
+            Self::RecoveryRequired => "RECOVERY_REQUIRED",
+        }
+    }
+
+    pub(crate) fn from_db(value: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|state| state.as_db_str() == value)
+    }
 }
 
 pub(crate) fn is_legal_stage_transition(
@@ -209,6 +251,25 @@ pub(crate) enum TruthSource {
     HumanDecided,
 }
 
+impl TruthSource {
+    pub(crate) fn as_db_str(self) -> &'static str {
+        match self {
+            Self::AgentReported => "AGENT_REPORTED",
+            Self::WindsObserved => "WINDS_OBSERVED",
+            Self::HumanDecided => "HUMAN_DECIDED",
+        }
+    }
+
+    pub(crate) fn from_db(value: &str) -> Option<Self> {
+        match value {
+            "AGENT_REPORTED" => Some(Self::AgentReported),
+            "WINDS_OBSERVED" => Some(Self::WindsObserved),
+            "HUMAN_DECIDED" => Some(Self::HumanDecided),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StageTransitionAuthority {
     None,
@@ -219,6 +280,23 @@ pub(crate) enum StageTransitionAuthority {
 impl StageTransitionAuthority {
     fn can_authorize_terminal_resolution(self) -> bool {
         matches!(self, Self::WindsPolicy | Self::HumanDecision)
+    }
+
+    pub(crate) fn as_db_str(self) -> &'static str {
+        match self {
+            Self::None => "NONE",
+            Self::WindsPolicy => "WINDS_POLICY",
+            Self::HumanDecision => "HUMAN_DECISION",
+        }
+    }
+
+    pub(crate) fn from_db(value: &str) -> Option<Self> {
+        match value {
+            "NONE" => Some(Self::None),
+            "WINDS_POLICY" => Some(Self::WindsPolicy),
+            "HUMAN_DECISION" => Some(Self::HumanDecision),
+            _ => None,
+        }
     }
 }
 
