@@ -50,6 +50,9 @@ mod t105_workflow_retry_tests;
 #[cfg(test)]
 #[path = "t106_workflow_decision_tests.rs"]
 mod t106_workflow_decision_tests;
+#[cfg(test)]
+#[path = "t108_workflow_recovery_tests.rs"]
+mod t108_workflow_recovery_tests;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 

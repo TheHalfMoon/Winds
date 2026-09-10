@@ -1103,6 +1103,16 @@ pub(crate) enum DecisionApplicability {
     Stale,
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 008 T108 required-evidence completeness gate; CLI consumer lands in T109"
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RequiredEvidenceCompleteness {
+    Complete,
+    Incomplete,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DecisionApplicabilityContext {
     pub(crate) current_candidate: Option<CandidateBaselineIdentity>,
@@ -1208,6 +1218,11 @@ impl WorkflowDecisionRecord {
                 )
             })
             .transpose()?;
+        if input.content_state != DecisionContentState::Full && input.safe_rationale.is_some() {
+            return Err(WorkflowError::new(
+                "non-FULL workflow decision content must not retain rationale payload",
+            ));
+        }
         let safe_rationale = input
             .safe_rationale
             .map(|value| {
@@ -1309,6 +1324,24 @@ pub(crate) fn evaluate_decision_applicability(
         DecisionApplicability::Applicable
     } else {
         DecisionApplicability::Stale
+    }
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 008 T108 required-evidence completeness gate; CLI consumer lands in T109"
+)]
+pub(crate) fn evaluate_required_decision_evidence_completeness(
+    decision: &WorkflowDecisionRecord,
+    context: &DecisionApplicabilityContext,
+) -> RequiredEvidenceCompleteness {
+    if decision.content_state != DecisionContentState::Full
+        || decision.evidence_reference.is_none()
+        || evaluate_decision_applicability(decision, context) != DecisionApplicability::Applicable
+    {
+        RequiredEvidenceCompleteness::Incomplete
+    } else {
+        RequiredEvidenceCompleteness::Complete
     }
 }
 
