@@ -1,4 +1,4 @@
-use crate::workflow::{
+use super::workflow::{
     AppliedStageTransition, LatestStageTruth, StageAttemptRelation, StageLifecycleState,
     StageRunIdentity, StageTransitionAuthority, StageTransitionOutcome, StageTransitionRequest,
     TruthSource, WorkflowRunIdentity, evaluate_stage_transition, is_legal_stage_transition,
