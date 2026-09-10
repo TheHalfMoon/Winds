@@ -1,3 +1,8 @@
+use crate::domain::workflow::{
+    AppliedStageTransition, StageAttemptRelation, StageLifecycleState, StageRunIdentity,
+    StageTransitionAuthority, StageTransitionOutcome, StageTransitionRequest, TruthSource,
+    WorkflowRunIdentity, evaluate_stage_transition, validate_successor_attempt,
+};
 use crate::domain::{
     BlobEvidence, CheckEvidence, Eligibility, EvidenceReport, ExecutionEventRecord, ExecutionKind,
     ExecutionRecord, ExecutionStatus, FactSource, ShellCommandRecord, StoredRun,
@@ -5,6 +10,7 @@ use crate::domain::{
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
@@ -16,6 +22,9 @@ use std::path::{Path, PathBuf};
 pub(crate) mod agentic_identity;
 #[path = "store_git_observation.rs"]
 pub(crate) mod git_observation;
+#[cfg(test)]
+#[path = "t102_workflow_store_tests.rs"]
+mod t102_workflow_store_tests;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -133,6 +142,32 @@ pub struct RecoverableRun {
     pub state: String,
 }
 
+#[allow(
+    dead_code,
+    reason = "Spec 008 T102 persistence API; product workflow callers land in later tasks"
+)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StoredWorkflowRun {
+    pub(crate) identity: WorkflowRunIdentity,
+    pub(crate) schema_version: u32,
+    pub(crate) terminal_state: Option<String>,
+    pub(crate) created_unix_ms: i64,
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 008 T102 persistence API; product workflow callers land in later tasks"
+)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StoredStageRun {
+    pub(crate) identity: StageRunIdentity,
+    pub(crate) relation: Option<StageAttemptRelation>,
+    pub(crate) lifecycle_state: StageLifecycleState,
+    pub(crate) last_transition: Option<AppliedStageTransition>,
+    pub(crate) created_unix_ms: i64,
+    pub(crate) updated_unix_ms: i64,
+}
+
 impl Store {
     pub fn open(home: &Path) -> Result<Self> {
         fs::create_dir_all(home)?;
@@ -158,11 +193,396 @@ impl Store {
         connection.execute_batch(include_str!(
             "../migrations/0008_runtime_session_bindings.sql"
         ))?;
+        initialize_workflow_schema(&connection)?;
         Ok(Self {
             connection,
             home: home.to_path_buf(),
             deferred_terminal_finalizations: Vec::new(),
         })
+    }
+}
+
+fn normalize_workflow_schema_sql(sql: &str) -> String {
+    sql.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+        .replace(" if not exists", "")
+}
+
+fn workflow_schema_objects(
+    connection: &Connection,
+) -> Result<BTreeMap<String, (String, String, String)>> {
+    let mut statement = connection.prepare(
+        "SELECT name, type, tbl_name, sql
+         FROM sqlite_master
+         WHERE name GLOB 'workflow_*'
+            OR name GLOB 'idx_workflow_*'
+            OR name GLOB 'trg_workflow_*'
+         ORDER BY name",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(3)?,
+        ))
+    })?;
+    let mut objects = BTreeMap::new();
+    for row in rows {
+        let (name, object_type, table_name, sql) = row?;
+        let sql = sql.ok_or_else(|| format!("workflow schema object has no SQL: {name}"))?;
+        objects.insert(
+            name,
+            (object_type, table_name, normalize_workflow_schema_sql(&sql)),
+        );
+    }
+    Ok(objects)
+}
+
+fn expected_workflow_schema_objects() -> Result<BTreeMap<String, (String, String, String)>> {
+    let connection = Connection::open_in_memory()?;
+    connection.pragma_update(None, "foreign_keys", "ON")?;
+    connection.execute_batch(include_str!(
+        "../migrations/0002_workspace_execution_ledger.sql"
+    ))?;
+    connection.execute_batch(include_str!("../migrations/0006_agentic_identity.sql"))?;
+    connection.execute_batch(include_str!(
+        "../migrations/0008_runtime_session_bindings.sql"
+    ))?;
+    connection.execute_batch(include_str!(
+        "../migrations/0010_resumable_workflow_ledger.sql"
+    ))?;
+    workflow_schema_objects(&connection)
+}
+
+fn validate_workflow_schema_connection(connection: &Connection) -> Result<()> {
+    let expected = expected_workflow_schema_objects()?;
+    let observed = workflow_schema_objects(connection)?;
+    if observed.keys().collect::<Vec<_>>() != expected.keys().collect::<Vec<_>>() {
+        let missing = expected
+            .keys()
+            .filter(|name| !observed.contains_key(*name))
+            .cloned()
+            .collect::<Vec<_>>();
+        let unexpected = observed
+            .keys()
+            .filter(|name| !expected.contains_key(*name))
+            .cloned()
+            .collect::<Vec<_>>();
+        return Err(format!(
+            "workflow schema object inventory mismatch; missing={missing:?}; unexpected={unexpected:?}"
+        )
+        .into());
+    }
+    for (name, expected_object) in expected {
+        let observed_object = observed
+            .get(&name)
+            .ok_or_else(|| format!("workflow schema object missing: {name}"))?;
+        if observed_object != &expected_object {
+            return Err(format!("workflow schema object definition mismatch: {name}").into());
+        }
+    }
+    Ok(())
+}
+
+fn initialize_workflow_schema(connection: &Connection) -> Result<()> {
+    let existing = workflow_schema_objects(connection)?;
+    if existing.is_empty() {
+        connection.execute_batch("BEGIN IMMEDIATE")?;
+        if let Err(error) = connection.execute_batch(include_str!(
+            "../migrations/0010_resumable_workflow_ledger.sql"
+        )) {
+            let _ = connection.execute_batch("ROLLBACK");
+            return Err(error.into());
+        }
+        if let Err(error) = validate_workflow_schema_connection(connection) {
+            let _ = connection.execute_batch("ROLLBACK");
+            return Err(error);
+        }
+        connection.execute_batch("COMMIT")?;
+    }
+    validate_workflow_schema_connection(connection)
+}
+
+fn parse_stage_state(value: &str) -> Result<StageLifecycleState> {
+    StageLifecycleState::from_db(value)
+        .ok_or_else(|| format!("unknown workflow stage lifecycle state in store: {value}").into())
+}
+
+fn parse_stage_relation(value: Option<String>) -> Result<Option<StageAttemptRelation>> {
+    value
+        .map(|value| {
+            StageAttemptRelation::from_db(&value)
+                .ok_or_else(|| format!("unknown workflow stage relation in store: {value}").into())
+        })
+        .transpose()
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 008 T102 persistence API; product workflow callers land in later tasks"
+)]
+impl Store {
+    pub(crate) fn validate_workflow_schema(&self) -> Result<()> {
+        validate_workflow_schema_connection(&self.connection)
+    }
+
+    pub(crate) fn create_workflow_run(
+        &self,
+        identity: &WorkflowRunIdentity,
+        now_ms: i64,
+    ) -> Result<()> {
+        self.validate_workflow_schema()?;
+        validate_agentic_identity_timestamp(now_ms, "workflow creation time")?;
+        let canonical = WorkflowRunIdentity::new(
+            &identity.workflow_run_id,
+            &identity.workspace_id,
+            &identity.workstream_id,
+        )?;
+        if &canonical != identity {
+            return Err("workflow identity must be canonicalized before persistence".into());
+        }
+        self.load_workspace(&identity.workspace_id)?;
+        let workstream = self.load_workstream(&identity.workstream_id)?;
+        if workstream.workspace_id != identity.workspace_id {
+            return Err("workflow workstream does not belong to the bound workspace".into());
+        }
+        self.connection.execute(
+            "INSERT INTO workflow_runs(
+                workflow_run_id, workspace_id, workstream_id, schema_version, terminal_state, created_unix_ms
+             ) VALUES (?1, ?2, ?3, 1, NULL, ?4)",
+            params![
+                identity.workflow_run_id,
+                identity.workspace_id,
+                identity.workstream_id,
+                now_ms
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn load_workflow_run(&self, workflow_run_id: &str) -> Result<StoredWorkflowRun> {
+        self.validate_workflow_schema()?;
+        let row = self
+            .connection
+            .query_row(
+                "SELECT workflow.workflow_run_id, workflow.workspace_id, workflow.workstream_id,
+                        workflow.schema_version, workflow.terminal_state, workflow.created_unix_ms,
+                        workstream.workspace_id
+                 FROM workflow_runs workflow
+                 JOIN workstreams workstream ON workstream.workstream_id = workflow.workstream_id
+                 JOIN workspaces workspace ON workspace.workspace_id = workflow.workspace_id
+                 WHERE workflow.workflow_run_id = ?1",
+                params![workflow_run_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, String>(6)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| format!("unknown workflow run: {workflow_run_id}"))?;
+        if row.3 != 1 {
+            return Err(format!("unsupported workflow schema version: {}", row.3).into());
+        }
+        if row.1 != row.6 {
+            return Err(
+                "stored workflow no longer matches canonical workspace/workstream hierarchy".into(),
+            );
+        }
+        if let Some(terminal_state) = row.4.as_deref()
+            && !matches!(
+                terminal_state,
+                "COMPLETED" | "CANCELLED" | "RECOVERY_REQUIRED"
+            )
+        {
+            return Err(
+                format!("unknown workflow terminal state in store: {terminal_state}").into(),
+            );
+        }
+        Ok(StoredWorkflowRun {
+            identity: WorkflowRunIdentity::new(&row.0, &row.1, &row.2)?,
+            schema_version: u32::try_from(row.3)?,
+            terminal_state: row.4,
+            created_unix_ms: row.5,
+        })
+    }
+
+    pub(crate) fn create_stage_run(
+        &self,
+        identity: &StageRunIdentity,
+        relation: Option<StageAttemptRelation>,
+        now_ms: i64,
+    ) -> Result<()> {
+        self.validate_workflow_schema()?;
+        validate_agentic_identity_timestamp(now_ms, "stage creation time")?;
+        let canonical = StageRunIdentity::new(
+            &identity.stage_run_id,
+            &identity.workflow_run_id,
+            &identity.stage_key,
+            identity.attempt_ordinal,
+            identity.predecessor_stage_run_id.as_deref(),
+        )?;
+        if &canonical != identity {
+            return Err("stage identity must be canonicalized before persistence".into());
+        }
+        self.load_workflow_run(&identity.workflow_run_id)?;
+        match (identity.predecessor_stage_run_id.as_deref(), relation) {
+            (None, None) if identity.attempt_ordinal == 1 => {}
+            (Some(predecessor_id), Some(relation)) => {
+                let predecessor = self.load_stage_run(predecessor_id)?;
+                validate_successor_attempt(&predecessor.identity, identity, relation)?;
+            }
+            _ => {
+                return Err(
+                    "stage predecessor, relation, and attempt ordinal do not form a canonical attempt"
+                        .into(),
+                );
+            }
+        }
+        self.connection.execute(
+            "INSERT INTO workflow_stage_runs(
+                stage_run_id, workflow_run_id, stage_key, attempt_ordinal,
+                predecessor_stage_run_id, relation_kind, lifecycle_state,
+                created_unix_ms, updated_unix_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'PREPARED', ?7, ?7)",
+            params![
+                identity.stage_run_id,
+                identity.workflow_run_id,
+                identity.stage_key,
+                i64::from(identity.attempt_ordinal),
+                identity.predecessor_stage_run_id,
+                relation.map(StageAttemptRelation::as_db_str),
+                now_ms
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn load_stage_run(&self, stage_run_id: &str) -> Result<StoredStageRun> {
+        self.validate_workflow_schema()?;
+        let row = self
+            .connection
+            .query_row(
+                "SELECT stage_run_id, workflow_run_id, stage_key, attempt_ordinal,
+                        predecessor_stage_run_id, relation_kind, lifecycle_state,
+                        last_transition_operation_id, last_transition_from_state,
+                        last_transition_source, last_transition_authority,
+                        created_unix_ms, updated_unix_ms
+                 FROM workflow_stage_runs WHERE stage_run_id = ?1",
+                params![stage_run_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, Option<String>>(7)?,
+                        row.get::<_, Option<String>>(8)?,
+                        row.get::<_, Option<String>>(9)?,
+                        row.get::<_, Option<String>>(10)?,
+                        row.get::<_, i64>(11)?,
+                        row.get::<_, i64>(12)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| format!("unknown workflow stage run: {stage_run_id}"))?;
+        self.load_workflow_run(&row.1)?;
+        let attempt_ordinal = u32::try_from(row.3)
+            .map_err(|_| format!("invalid stage attempt ordinal in store: {}", row.3))?;
+        let lifecycle_state = parse_stage_state(&row.6)?;
+        let last_transition = match (&row.7, &row.8, &row.9, &row.10) {
+            (None, None, None, None) => None,
+            (Some(operation_id), Some(from), Some(source), Some(authority)) => {
+                Some(AppliedStageTransition {
+                    operation_id: operation_id.clone(),
+                    from: parse_stage_state(from)?,
+                    to: lifecycle_state,
+                    source: TruthSource::from_db(source).ok_or_else(|| {
+                        format!("unknown workflow transition source in store: {source}")
+                    })?,
+                    authority: StageTransitionAuthority::from_db(authority).ok_or_else(|| {
+                        format!("unknown workflow transition authority in store: {authority}")
+                    })?,
+                })
+            }
+            _ => return Err("stored workflow transition provenance is incomplete".into()),
+        };
+        Ok(StoredStageRun {
+            identity: StageRunIdentity::new(
+                &row.0,
+                &row.1,
+                &row.2,
+                attempt_ordinal,
+                row.4.as_deref(),
+            )?,
+            relation: parse_stage_relation(row.5)?,
+            lifecycle_state,
+            last_transition,
+            created_unix_ms: row.11,
+            updated_unix_ms: row.12,
+        })
+    }
+
+    pub(crate) fn transition_stage_run(
+        &self,
+        stage_run_id: &str,
+        request: &StageTransitionRequest,
+        now_ms: i64,
+    ) -> Result<StageTransitionOutcome> {
+        self.validate_workflow_schema()?;
+        validate_agentic_identity_timestamp(now_ms, "stage transition time")?;
+        let current = self.load_stage_run(stage_run_id)?;
+        if now_ms < current.updated_unix_ms {
+            return Err("stage transition time cannot precede current update time".into());
+        }
+        let outcome = evaluate_stage_transition(
+            current.lifecycle_state,
+            current.last_transition.as_ref(),
+            request,
+        )?;
+        let StageTransitionOutcome::Apply(applied) = outcome else {
+            return Ok(StageTransitionOutcome::IdempotentNoChange);
+        };
+        let updated = self.connection.execute(
+            "UPDATE workflow_stage_runs
+             SET lifecycle_state = ?2,
+                 last_transition_operation_id = ?3,
+                 last_transition_from_state = ?4,
+                 last_transition_source = ?5,
+                 last_transition_authority = ?6,
+                 updated_unix_ms = ?7
+             WHERE stage_run_id = ?1
+               AND lifecycle_state = ?8
+               AND updated_unix_ms = ?9",
+            params![
+                stage_run_id,
+                applied.to.as_db_str(),
+                applied.operation_id,
+                applied.from.as_db_str(),
+                applied.source.as_db_str(),
+                applied.authority.as_db_str(),
+                now_ms,
+                current.lifecycle_state.as_db_str(),
+                current.updated_unix_ms
+            ],
+        )?;
+        if updated != 1 {
+            return Err("stage transition lost compare-and-set race".into());
+        }
+        Ok(StageTransitionOutcome::Apply(applied))
     }
 }
 
