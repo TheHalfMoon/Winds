@@ -452,6 +452,78 @@ fn t106_malformed_or_unbounded_decision_truth_fails_closed_without_mutating_hist
 }
 
 #[test]
+fn t106_decision_time_cannot_predate_workflow_or_stage_at_write_or_read_boundaries() {
+    let (home, store) = seeded_store("workflow-decision-time");
+    let workflow_scoped = WorkflowDecisionRecord::new(WorkflowDecisionInput {
+        decision_id: "workflow-scoped-predate",
+        workflow_run_id: "workflow-1",
+        stage_run_id: None,
+        source: TruthSource::AgentReported,
+        authority: StageTransitionAuthority::None,
+        decision_type: "REVIEW_DECISION",
+        decision_result: "RECORDED",
+        predecessor_decision_id: None,
+        candidate: None,
+        evidence_reference: None,
+        content_state: DecisionContentState::Full,
+        safe_rationale: Some("invalid temporal parent relation"),
+        created_unix_ms: 2,
+    })
+    .unwrap();
+    assert!(store.append_workflow_decision(&workflow_scoped).is_err());
+    store
+        .connection
+        .execute(
+            "INSERT INTO workflow_decisions(
+                decision_id, workflow_run_id, stage_run_id, source_class, authority_class,
+                decision_type, decision_result, content_state, created_unix_ms
+             ) VALUES ('workflow-scoped-predate', 'workflow-1', NULL, 'AGENT_REPORTED', 'NONE',
+                       'REVIEW_DECISION', 'RECORDED', 'FULL', 2)",
+            [],
+        )
+        .unwrap();
+    assert!(
+        store
+            .load_workflow_decision("workflow-scoped-predate")
+            .is_err()
+    );
+    assert!(store.list_workflow_decisions("workflow-1").is_err());
+    drop(store);
+    cleanup(home);
+
+    let (home, store) = seeded_store("stage-decision-time");
+    let stage_scoped = decision(
+        "stage-scoped-predate",
+        "workflow-1",
+        "RECORDED",
+        None,
+        None,
+        None,
+        3,
+    );
+    assert!(store.append_workflow_decision(&stage_scoped).is_err());
+    store
+        .connection
+        .execute(
+            "INSERT INTO workflow_decisions(
+                decision_id, workflow_run_id, stage_run_id, source_class, authority_class,
+                decision_type, decision_result, content_state, created_unix_ms
+             ) VALUES ('stage-scoped-predate', 'workflow-1', 'stage-1', 'AGENT_REPORTED', 'NONE',
+                       'REVIEW_DECISION', 'RECORDED', 'FULL', 3)",
+            [],
+        )
+        .unwrap();
+    assert!(
+        store
+            .load_workflow_decision("stage-scoped-predate")
+            .is_err()
+    );
+    assert!(store.list_workflow_decisions("workflow-1").is_err());
+    drop(store);
+    cleanup(home);
+}
+
+#[test]
 fn t106_decision_existence_grants_no_stage_or_workflow_terminal_authority() {
     let (home, store) = seeded_store("no-authority-escalation");
     let observed = WorkflowDecisionRecord::new(WorkflowDecisionInput {

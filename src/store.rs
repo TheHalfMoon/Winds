@@ -1361,11 +1361,17 @@ impl Store {
         if &canonical != decision {
             return Err("workflow decision must be canonicalized before persistence".into());
         }
-        self.load_workflow_run(&decision.workflow_run_id)?;
+        let workflow = self.load_workflow_run(&decision.workflow_run_id)?;
+        if decision.created_unix_ms < workflow.created_unix_ms {
+            return Err("workflow decision creation time cannot precede its workflow".into());
+        }
         if let Some(stage_run_id) = decision.stage_run_id.as_deref() {
             let stage = self.load_stage_run(stage_run_id)?;
             if stage.identity.workflow_run_id != decision.workflow_run_id {
                 return Err("workflow decision stage does not belong to its workflow".into());
+            }
+            if decision.created_unix_ms < stage.created_unix_ms {
+                return Err("workflow decision creation time cannot precede its stage".into());
             }
         }
 
@@ -1483,13 +1489,19 @@ impl Store {
             safe_rationale: row.12.as_deref(),
             created_unix_ms: row.13,
         })?;
-        self.load_workflow_run(&decision.workflow_run_id)?;
+        let workflow = self.load_workflow_run(&decision.workflow_run_id)?;
+        if decision.created_unix_ms < workflow.created_unix_ms {
+            return Err("stored workflow decision predates its workflow".into());
+        }
         if let Some(stage_run_id) = decision.stage_run_id.as_deref() {
             let stage = self.load_stage_run(stage_run_id)?;
             if stage.identity.workflow_run_id != decision.workflow_run_id {
                 return Err(
                     "stored workflow decision stage no longer belongs to its workflow".into(),
                 );
+            }
+            if decision.created_unix_ms < stage.created_unix_ms {
+                return Err("stored workflow decision predates its stage".into());
             }
         }
         Ok(decision)
@@ -1534,7 +1546,7 @@ impl Store {
         workflow_run_id: &str,
     ) -> Result<Vec<WorkflowDecisionRecord>> {
         self.validate_workflow_schema()?;
-        self.load_workflow_run(workflow_run_id)?;
+        let workflow = self.load_workflow_run(workflow_run_id)?;
         let mut statement = self.connection.prepare(
             "SELECT decision_id, workflow_run_id, stage_run_id, source_class, authority_class,
                     decision_type, decision_result, predecessor_decision_id, candidate_oid,
@@ -1614,12 +1626,18 @@ impl Store {
                 if decision.workflow_run_id != workflow_run_id {
                     return Err("workflow decision list crossed workflow identity".into());
                 }
+                if decision.created_unix_ms < workflow.created_unix_ms {
+                    return Err("stored workflow decision predates its workflow".into());
+                }
                 if let Some(stage_run_id) = decision.stage_run_id.as_deref() {
                     let stage = self.load_stage_run(stage_run_id)?;
                     if stage.identity.workflow_run_id != decision.workflow_run_id {
                         return Err(
                             "stored workflow decision stage no longer belongs to its workflow".into(),
                         );
+                    }
+                    if decision.created_unix_ms < stage.created_unix_ms {
+                        return Err("stored workflow decision predates its stage".into());
                     }
                 }
                 Ok(decision)
