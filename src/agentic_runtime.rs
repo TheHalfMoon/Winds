@@ -218,6 +218,38 @@ pub(crate) enum RuntimeResumeResolution {
     Ambiguous(Vec<RuntimeSessionBinding>),
 }
 
+/// Workflow-facing interpretation of accepted Spec 006 durable resume evidence.
+///
+/// This adapter deliberately has no `Resumed` variant. A revalidated durable mapping is still only
+/// a resume candidate under current canonical Spec 006 truth; physical vendor-native resume remains
+/// acceptance-deferred and cannot be invented by Spec 008 persistence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WorkflowRuntimeContinuationObservation {
+    Unavailable,
+    Stale,
+    Ambiguous,
+    ResumeCandidate(Box<RuntimeSessionBinding>),
+    OwnershipLost(Box<RuntimeSessionBinding>),
+}
+
+pub(crate) fn classify_runtime_resume_for_workflow(
+    resolution: &RuntimeResumeResolution,
+) -> WorkflowRuntimeContinuationObservation {
+    match resolution {
+        RuntimeResumeResolution::Unavailable => WorkflowRuntimeContinuationObservation::Unavailable,
+        RuntimeResumeResolution::Stale => WorkflowRuntimeContinuationObservation::Stale,
+        RuntimeResumeResolution::Ambiguous(_) => WorkflowRuntimeContinuationObservation::Ambiguous,
+        RuntimeResumeResolution::Candidate(binding)
+            if binding.ownership == RuntimeBindingOwnership::OwnershipLost =>
+        {
+            WorkflowRuntimeContinuationObservation::OwnershipLost(binding.clone())
+        }
+        RuntimeResumeResolution::Candidate(binding) => {
+            WorkflowRuntimeContinuationObservation::ResumeCandidate(binding.clone())
+        }
+    }
+}
+
 pub(crate) fn discover_runtime_from_safe_observations(
     runtime: RuntimeKind,
     executable_path: &Path,

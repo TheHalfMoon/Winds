@@ -1,3 +1,5 @@
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
@@ -613,4 +615,299 @@ pub(crate) fn evaluate_artifact_baseline_requirement(
         freshness,
         matching_baseline_ids,
     }
+}
+
+pub(crate) const RECONSTRUCTION_REPORT_SCHEMA_VERSION: u32 = 1;
+pub(crate) const MAX_RECONSTRUCTION_SOURCE_REFERENCE_BYTES: usize = 1024;
+pub(crate) const MAX_RECONSTRUCTION_REPORT_BYTES: usize = 64 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorkflowContinuationClass {
+    Resumed,
+    Reconstructed,
+    OwnershipLost,
+    Unavailable,
+    Unproven,
+}
+
+impl WorkflowContinuationClass {
+    pub(crate) fn as_db_str(self) -> &'static str {
+        match self {
+            Self::Resumed => "RESUMED",
+            Self::Reconstructed => "RECONSTRUCTED",
+            Self::OwnershipLost => "OWNERSHIP_LOST",
+            Self::Unavailable => "UNAVAILABLE",
+            Self::Unproven => "UNPROVEN",
+        }
+    }
+
+    pub(crate) fn from_db(value: &str) -> Option<Self> {
+        match value {
+            "RESUMED" => Some(Self::Resumed),
+            "RECONSTRUCTED" => Some(Self::Reconstructed),
+            "OWNERSHIP_LOST" => Some(Self::OwnershipLost),
+            "UNAVAILABLE" => Some(Self::Unavailable),
+            "UNPROVEN" => Some(Self::Unproven),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub(crate) enum ReconstructionCategory {
+    CanonicalWorkContext,
+    ObjectiveConstraints,
+    Decisions,
+    CandidateEvidence,
+    PriorStageOutputs,
+    RuntimeNativeContext,
+    ProviderPrivateState,
+}
+
+impl ReconstructionCategory {
+    pub(crate) const ALL: [Self; 7] = [
+        Self::CanonicalWorkContext,
+        Self::ObjectiveConstraints,
+        Self::Decisions,
+        Self::CandidateEvidence,
+        Self::PriorStageOutputs,
+        Self::RuntimeNativeContext,
+        Self::ProviderPrivateState,
+    ];
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub(crate) enum ReconstructionTransferState {
+    PreservedReference,
+    Reconstructed,
+    Derived,
+    Omitted,
+    Unavailable,
+    NoLongerTransferable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub(crate) enum ReconstructionSourceClass {
+    WindsObserved,
+    HumanDecided,
+    StoredCanonicalReference,
+    DerivedReconstruction,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub(crate) enum ReconstructionContentState {
+    Full,
+    Redacted,
+    Omitted,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ReconstructionItem {
+    pub(crate) category: ReconstructionCategory,
+    pub(crate) source_class: ReconstructionSourceClass,
+    pub(crate) source_reference: String,
+    pub(crate) transfer_state: ReconstructionTransferState,
+    pub(crate) content_state: ReconstructionContentState,
+}
+
+impl ReconstructionItem {
+    pub(crate) fn new(
+        category: ReconstructionCategory,
+        source_class: ReconstructionSourceClass,
+        source_reference: &str,
+        transfer_state: ReconstructionTransferState,
+        content_state: ReconstructionContentState,
+    ) -> WorkflowResult<Self> {
+        let source_reference = required_bounded_reference(
+            source_reference,
+            "reconstruction source reference",
+            MAX_RECONSTRUCTION_SOURCE_REFERENCE_BYTES,
+        )?;
+        let item = Self {
+            category,
+            source_class,
+            source_reference,
+            transfer_state,
+            content_state,
+        };
+        validate_reconstruction_item(&item)?;
+        Ok(item)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ReconstructionReport {
+    pub(crate) schema_version: u32,
+    pub(crate) binding_id: String,
+    pub(crate) stage_run_id: String,
+    pub(crate) items: Vec<ReconstructionItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReconstructionPreview {
+    pub(crate) report: ReconstructionReport,
+    pub(crate) canonical_json: String,
+}
+
+pub(crate) fn build_reconstruction_preview(
+    binding_id: &str,
+    stage_run_id: &str,
+    items: &[ReconstructionItem],
+) -> WorkflowResult<ReconstructionPreview> {
+    let mut report = ReconstructionReport {
+        schema_version: RECONSTRUCTION_REPORT_SCHEMA_VERSION,
+        binding_id: required_identity(binding_id, "reconstruction binding id")?,
+        stage_run_id: required_identity(stage_run_id, "reconstruction stage run id")?,
+        items: items.to_vec(),
+    };
+    report.items.sort_by_key(|item| item.category);
+    validate_reconstruction_report(&report)?;
+    let canonical_json = serde_json::to_string(&report).map_err(|error| {
+        WorkflowError::new(format!(
+            "reconstruction report serialization failed: {error}"
+        ))
+    })?;
+    if canonical_json.len() > MAX_RECONSTRUCTION_REPORT_BYTES {
+        return Err(WorkflowError::new(
+            "reconstruction report exceeds the bounded persistence limit",
+        ));
+    }
+    Ok(ReconstructionPreview {
+        report,
+        canonical_json,
+    })
+}
+
+pub(crate) fn parse_reconstruction_report_json(
+    canonical_json: &str,
+) -> WorkflowResult<ReconstructionReport> {
+    if canonical_json.is_empty() || canonical_json.len() > MAX_RECONSTRUCTION_REPORT_BYTES {
+        return Err(WorkflowError::new(
+            "reconstruction report JSON is empty or exceeds the bounded persistence limit",
+        ));
+    }
+    let report: ReconstructionReport = serde_json::from_str(canonical_json).map_err(|error| {
+        WorkflowError::new(format!("invalid reconstruction report JSON: {error}"))
+    })?;
+    validate_reconstruction_report(&report)?;
+    let normalized =
+        build_reconstruction_preview(&report.binding_id, &report.stage_run_id, &report.items)?;
+    if normalized.canonical_json != canonical_json {
+        return Err(WorkflowError::new(
+            "reconstruction report JSON is not in canonical deterministic form",
+        ));
+    }
+    Ok(report)
+}
+
+fn validate_reconstruction_report(report: &ReconstructionReport) -> WorkflowResult<()> {
+    if report.schema_version != RECONSTRUCTION_REPORT_SCHEMA_VERSION {
+        return Err(WorkflowError::new(
+            "unsupported reconstruction report schema version",
+        ));
+    }
+    required_identity(&report.binding_id, "reconstruction binding id")?;
+    required_identity(&report.stage_run_id, "reconstruction stage run id")?;
+    if report.items.len() != ReconstructionCategory::ALL.len() {
+        return Err(WorkflowError::new(
+            "reconstruction report must contain every first-slice category exactly once",
+        ));
+    }
+    let mut categories = BTreeSet::new();
+    for item in &report.items {
+        validate_reconstruction_item(item)?;
+        if !categories.insert(item.category) {
+            return Err(WorkflowError::new(
+                "reconstruction report contains a duplicate material-context category",
+            ));
+        }
+    }
+    if categories != ReconstructionCategory::ALL.into_iter().collect() {
+        return Err(WorkflowError::new(
+            "reconstruction report is missing a required material-context category",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_reconstruction_item(item: &ReconstructionItem) -> WorkflowResult<()> {
+    required_bounded_reference(
+        &item.source_reference,
+        "reconstruction source reference",
+        MAX_RECONSTRUCTION_SOURCE_REFERENCE_BYTES,
+    )?;
+    match item.transfer_state {
+        ReconstructionTransferState::Omitted
+            if item.content_state != ReconstructionContentState::Omitted =>
+        {
+            return Err(WorkflowError::new(
+                "omitted reconstruction context must retain an OMITTED completeness marker",
+            ));
+        }
+        ReconstructionTransferState::Unavailable
+        | ReconstructionTransferState::NoLongerTransferable
+            if item.content_state != ReconstructionContentState::Unavailable =>
+        {
+            return Err(WorkflowError::new(
+                "unavailable reconstruction context must retain an UNAVAILABLE completeness marker",
+            ));
+        }
+        ReconstructionTransferState::PreservedReference
+        | ReconstructionTransferState::Reconstructed
+        | ReconstructionTransferState::Derived
+            if matches!(
+                item.content_state,
+                ReconstructionContentState::Omitted | ReconstructionContentState::Unavailable
+            ) =>
+        {
+            return Err(WorkflowError::new(
+                "present reconstruction context cannot be marked omitted or unavailable",
+            ));
+        }
+        _ => {}
+    }
+    if item.category == ReconstructionCategory::ProviderPrivateState {
+        let expected_reference = match item.transfer_state {
+            ReconstructionTransferState::Unavailable => "provider-private-state:unavailable",
+            ReconstructionTransferState::NoLongerTransferable => {
+                "provider-private-state:no-longer-transferable"
+            }
+            _ => "",
+        };
+        if expected_reference.is_empty()
+            || item.source_class != ReconstructionSourceClass::Unavailable
+            || item.content_state != ReconstructionContentState::Unavailable
+            || item.source_reference != expected_reference
+        {
+            return Err(WorkflowError::new(
+                "provider-private state must use only bounded unavailable metadata and must never persist private payload",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn required_bounded_reference(
+    value: &str,
+    field: &str,
+    max_bytes: usize,
+) -> WorkflowResult<String> {
+    let normalized = value.trim();
+    if normalized.is_empty()
+        || normalized.len() > max_bytes
+        || normalized.chars().any(char::is_control)
+    {
+        return Err(WorkflowError::new(format!(
+            "{field} must be non-empty bounded printable reference metadata"
+        )));
+    }
+    Ok(normalized.to_owned())
 }

@@ -1,9 +1,15 @@
+use crate::agentic_runtime::{
+    RuntimeBindingOwnership, RuntimeResumeResolution, RuntimeSessionBinding,
+    WorkflowRuntimeContinuationObservation, classify_runtime_resume_for_workflow,
+};
 use crate::domain::workflow::{
     AppliedStageTransition, ArtifactBaselineIdentity, ArtifactBaselineKind,
-    ArtifactBaselineRequirement, BaselineEvaluation, CandidateBaselineIdentity,
-    StageAttemptRelation, StageLifecycleState, StageRunIdentity, StageTransitionAuthority,
-    StageTransitionOutcome, StageTransitionRequest, TruthSource, WorkflowRunIdentity,
-    evaluate_artifact_baseline_requirement, evaluate_stage_transition, validate_successor_attempt,
+    ArtifactBaselineRequirement, BaselineEvaluation, CandidateBaselineIdentity, ReconstructionItem,
+    ReconstructionReport, StageAttemptRelation, StageLifecycleState, StageRunIdentity,
+    StageTransitionAuthority, StageTransitionOutcome, StageTransitionRequest, TruthSource,
+    WorkflowContinuationClass, WorkflowRunIdentity, build_reconstruction_preview,
+    evaluate_artifact_baseline_requirement, evaluate_stage_transition,
+    parse_reconstruction_report_json, validate_successor_attempt,
 };
 use crate::domain::{
     BlobEvidence, CheckEvidence, Eligibility, EvidenceReport, ExecutionEventRecord, ExecutionKind,
@@ -30,6 +36,9 @@ mod t102_workflow_store_tests;
 #[cfg(test)]
 #[path = "t103_workflow_baseline_tests.rs"]
 mod t103_workflow_baseline_tests;
+#[cfg(test)]
+#[path = "t104_workflow_continuation_tests.rs"]
+mod t104_workflow_continuation_tests;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -181,6 +190,47 @@ pub(crate) struct StoredStageRun {
 pub(crate) struct StoredArtifactBaseline {
     pub(crate) identity: ArtifactBaselineIdentity,
     pub(crate) created_unix_ms: i64,
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 008 T104 persistence API; operator projections land in later tasks"
+)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StoredReconstructionReport {
+    pub(crate) reconstruction_report_id: String,
+    pub(crate) report: ReconstructionReport,
+    pub(crate) canonical_json: String,
+    pub(crate) created_unix_ms: i64,
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 008 T104 persistence API; operator projections land in later tasks"
+)]
+pub(crate) struct NewReconstructedActorBinding<'a> {
+    pub(crate) binding_id: &'a str,
+    pub(crate) stage_run_id: &'a str,
+    pub(crate) winds_session_id: &'a str,
+    pub(crate) runtime_binding_id: Option<&'a str>,
+    pub(crate) reconstruction_report_id: &'a str,
+    pub(crate) items: &'a [ReconstructionItem],
+    pub(crate) now_ms: i64,
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 008 T104 persistence API; operator projections land in later tasks"
+)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StoredWorkflowActorBinding {
+    pub(crate) binding_id: String,
+    pub(crate) stage_run_id: String,
+    pub(crate) winds_session_id: String,
+    pub(crate) runtime_binding_id: Option<String>,
+    pub(crate) continuation: WorkflowContinuationClass,
+    pub(crate) bound_unix_ms: i64,
+    pub(crate) reconstruction_report: Option<StoredReconstructionReport>,
 }
 
 impl Store {
@@ -721,6 +771,304 @@ impl Store {
             requirement,
             &observed,
         ))
+    }
+
+    fn validate_workflow_actor_context(
+        &self,
+        stage_run_id: &str,
+        winds_session_id: &str,
+        runtime_binding_id: Option<&str>,
+    ) -> Result<Option<RuntimeSessionBinding>> {
+        let stage = self.load_stage_run(stage_run_id)?;
+        let workflow = self.load_workflow_run(&stage.identity.workflow_run_id)?;
+        let session = self.load_winds_session(winds_session_id)?;
+        if session.workstream_id != workflow.identity.workstream_id {
+            return Err("workflow actor session does not belong to the stage workstream".into());
+        }
+        let runtime_binding = runtime_binding_id
+            .map(|binding_id| self.load_runtime_session_binding(binding_id))
+            .transpose()?;
+        if let Some(runtime_binding) = runtime_binding.as_ref()
+            && runtime_binding.session_id != winds_session_id
+        {
+            return Err(
+                "workflow actor runtime binding does not belong to the bound Winds session".into(),
+            );
+        }
+        Ok(runtime_binding)
+    }
+
+    pub(crate) fn create_actor_binding_from_runtime_resolution(
+        &self,
+        binding_id: &str,
+        stage_run_id: &str,
+        winds_session_id: &str,
+        resolution: &RuntimeResumeResolution,
+        now_ms: i64,
+    ) -> Result<WorkflowContinuationClass> {
+        validate_agentic_identity_text(binding_id, "workflow actor binding id")?;
+        validate_agentic_identity_timestamp(now_ms, "workflow actor binding time")?;
+        let observation = classify_runtime_resume_for_workflow(resolution);
+        let (continuation, runtime_binding_id, expected_binding) = match observation {
+            WorkflowRuntimeContinuationObservation::Unavailable
+            | WorkflowRuntimeContinuationObservation::Stale
+            | WorkflowRuntimeContinuationObservation::Ambiguous => {
+                (WorkflowContinuationClass::Unavailable, None, None)
+            }
+            WorkflowRuntimeContinuationObservation::ResumeCandidate(binding) => (
+                WorkflowContinuationClass::Unproven,
+                Some(binding.binding_id.clone()),
+                Some(binding),
+            ),
+            WorkflowRuntimeContinuationObservation::OwnershipLost(binding) => (
+                WorkflowContinuationClass::OwnershipLost,
+                Some(binding.binding_id.clone()),
+                Some(binding),
+            ),
+        };
+        let stored_runtime = self.validate_workflow_actor_context(
+            stage_run_id,
+            winds_session_id,
+            runtime_binding_id.as_deref(),
+        )?;
+        if let Some(expected_binding) = expected_binding.as_deref()
+            && stored_runtime.as_ref() != Some(expected_binding)
+        {
+            return Err(
+                "workflow actor runtime resolution does not match durable Spec 006 binding truth"
+                    .into(),
+            );
+        }
+        self.connection.execute(
+            "INSERT INTO workflow_actor_bindings(
+                binding_id, stage_run_id, winds_session_id, runtime_binding_id,
+                continuation_class, bound_unix_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                binding_id,
+                stage_run_id,
+                winds_session_id,
+                runtime_binding_id,
+                continuation.as_db_str(),
+                now_ms
+            ],
+        )?;
+        Ok(continuation)
+    }
+
+    pub(crate) fn preview_reconstruction(
+        &self,
+        binding_id: &str,
+        stage_run_id: &str,
+        winds_session_id: &str,
+        runtime_binding_id: Option<&str>,
+        items: &[ReconstructionItem],
+    ) -> Result<crate::domain::workflow::ReconstructionPreview> {
+        self.validate_workflow_schema()?;
+        self.validate_workflow_actor_context(stage_run_id, winds_session_id, runtime_binding_id)?;
+        Ok(build_reconstruction_preview(
+            binding_id,
+            stage_run_id,
+            items,
+        )?)
+    }
+
+    pub(crate) fn create_reconstructed_actor_binding(
+        &mut self,
+        request: NewReconstructedActorBinding<'_>,
+    ) -> Result<StoredWorkflowActorBinding> {
+        validate_agentic_identity_text(request.binding_id, "workflow actor binding id")?;
+        validate_agentic_identity_text(
+            request.reconstruction_report_id,
+            "workflow reconstruction report id",
+        )?;
+        validate_agentic_identity_timestamp(request.now_ms, "workflow reconstruction time")?;
+        self.validate_workflow_actor_context(
+            request.stage_run_id,
+            request.winds_session_id,
+            request.runtime_binding_id,
+        )?;
+        let preview =
+            build_reconstruction_preview(request.binding_id, request.stage_run_id, request.items)?;
+
+        let tx = self.connection.transaction()?;
+        tx.execute(
+            "INSERT INTO workflow_actor_bindings(
+                binding_id, stage_run_id, winds_session_id, runtime_binding_id,
+                continuation_class, bound_unix_ms
+             ) VALUES (?1, ?2, ?3, ?4, 'RECONSTRUCTED', ?5)",
+            params![
+                request.binding_id,
+                request.stage_run_id,
+                request.winds_session_id,
+                request.runtime_binding_id,
+                request.now_ms
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO workflow_reconstruction_reports(
+                reconstruction_report_id, binding_id, schema_version,
+                canonical_report_json, created_unix_ms
+             ) VALUES (?1, ?2, 1, ?3, ?4)",
+            params![
+                request.reconstruction_report_id,
+                request.binding_id,
+                preview.canonical_json,
+                request.now_ms
+            ],
+        )?;
+        tx.commit()?;
+        self.load_workflow_actor_binding(request.binding_id)
+    }
+
+    pub(crate) fn load_workflow_actor_binding(
+        &self,
+        binding_id: &str,
+    ) -> Result<StoredWorkflowActorBinding> {
+        self.validate_workflow_schema()?;
+        validate_agentic_identity_text(binding_id, "workflow actor binding id")?;
+        let row = self
+            .connection
+            .query_row(
+                "SELECT binding_id, stage_run_id, winds_session_id, runtime_binding_id,
+                        continuation_class, bound_unix_ms
+                 FROM workflow_actor_bindings WHERE binding_id = ?1",
+                params![binding_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, i64>(5)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| format!("unknown workflow actor binding: {binding_id}"))?;
+        let winds_session_id = row
+            .2
+            .ok_or("stored workflow actor binding is missing explicit Winds session identity")?;
+        validate_agentic_identity_timestamp(row.5, "stored workflow actor binding time")?;
+        let continuation = WorkflowContinuationClass::from_db(&row.4)
+            .ok_or_else(|| format!("unknown workflow continuation class in store: {}", row.4))?;
+        if continuation == WorkflowContinuationClass::Resumed {
+            return Err(
+                "stored RESUMED workflow continuation lacks an accepted physical Spec 006 resume proof"
+                    .into(),
+            );
+        }
+        let runtime_binding =
+            self.validate_workflow_actor_context(&row.1, &winds_session_id, row.3.as_deref())?;
+        match continuation {
+            WorkflowContinuationClass::OwnershipLost => {
+                let runtime_binding = runtime_binding.as_ref().ok_or(
+                    "OWNERSHIP_LOST workflow continuation requires an exact runtime binding",
+                )?;
+                if runtime_binding.ownership != RuntimeBindingOwnership::OwnershipLost {
+                    return Err(
+                        "workflow ownership-loss classification does not match durable runtime ownership truth"
+                            .into(),
+                    );
+                }
+            }
+            WorkflowContinuationClass::Unproven => {
+                let runtime_binding = runtime_binding.as_ref().ok_or(
+                    "UNPROVEN runtime continuation requires an exact runtime resume candidate binding",
+                )?;
+                if runtime_binding.ownership != RuntimeBindingOwnership::Unproven
+                    || runtime_binding.native_session_id.is_none()
+                {
+                    return Err(
+                        "workflow unproven continuation is not backed by an exact Spec 006 resume candidate"
+                            .into(),
+                    );
+                }
+            }
+            WorkflowContinuationClass::Unavailable | WorkflowContinuationClass::Reconstructed => {}
+            WorkflowContinuationClass::Resumed => unreachable!("rejected above"),
+        }
+
+        let reconstruction_report = self.load_reconstruction_report_for_binding(&row.0)?;
+        match continuation {
+            WorkflowContinuationClass::Reconstructed if reconstruction_report.is_none() => {
+                return Err(
+                    "reconstructed workflow actor binding is missing its required reconstruction report"
+                        .into(),
+                );
+            }
+            WorkflowContinuationClass::Reconstructed => {}
+            _ if reconstruction_report.is_some() => {
+                return Err(
+                    "non-reconstructed workflow actor binding cannot carry a reconstruction report"
+                        .into(),
+                );
+            }
+            _ => {}
+        }
+        if let Some(report) = reconstruction_report.as_ref() {
+            if report.report.binding_id != row.0 || report.report.stage_run_id != row.1 {
+                return Err(
+                    "reconstruction report does not match the exact actor binding and StageRun"
+                        .into(),
+                );
+            }
+            if report.created_unix_ms < row.5 {
+                return Err("reconstruction report predates its actor binding".into());
+            }
+        }
+        Ok(StoredWorkflowActorBinding {
+            binding_id: row.0,
+            stage_run_id: row.1,
+            winds_session_id,
+            runtime_binding_id: row.3,
+            continuation,
+            bound_unix_ms: row.5,
+            reconstruction_report,
+        })
+    }
+
+    fn load_reconstruction_report_for_binding(
+        &self,
+        binding_id: &str,
+    ) -> Result<Option<StoredReconstructionReport>> {
+        let row = self
+            .connection
+            .query_row(
+                "SELECT reconstruction_report_id, schema_version, canonical_report_json,
+                        created_unix_ms
+                 FROM workflow_reconstruction_reports WHERE binding_id = ?1",
+                params![binding_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        validate_agentic_identity_text(&row.0, "stored reconstruction report id")?;
+        validate_agentic_identity_timestamp(row.3, "stored reconstruction report time")?;
+        if row.1 != 1 {
+            return Err(format!(
+                "unsupported reconstruction report row schema version: {}",
+                row.1
+            )
+            .into());
+        }
+        let report = parse_reconstruction_report_json(&row.2)?;
+        Ok(Some(StoredReconstructionReport {
+            reconstruction_report_id: row.0,
+            report,
+            canonical_json: row.2,
+            created_unix_ms: row.3,
+        }))
     }
 }
 
