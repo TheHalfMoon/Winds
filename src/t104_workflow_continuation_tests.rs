@@ -10,7 +10,7 @@ use crate::domain::workflow::{
     WorkflowContinuationClass, WorkflowRunIdentity, build_reconstruction_preview,
 };
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_HOME: AtomicU64 = AtomicU64::new(0);
@@ -71,13 +71,25 @@ fn seeded_store(name: &str) -> (PathBuf, Store) {
     (home, store)
 }
 
+fn runtime_fixture_path() -> PathBuf {
+    #[cfg(windows)]
+    {
+        PathBuf::from(r"C:\winds-t104-claude.exe")
+    }
+    #[cfg(not(windows))]
+    {
+        PathBuf::from("/tmp/winds-t104-claude")
+    }
+}
+
 fn runtime_discovery() -> RuntimeDiscovery {
+    let executable_path = runtime_fixture_path();
     RuntimeDiscovery {
         runtime: RuntimeKind::Claude,
         state: RuntimeDiscoveryState::Present,
         executable: Some(RuntimeExecutableIdentity {
-            observed_path: Path::new("/tmp/winds-t104-claude").to_path_buf(),
-            canonical_path: Path::new("/tmp/winds-t104-claude").to_path_buf(),
+            observed_path: executable_path.clone(),
+            canonical_path: executable_path,
             byte_len: 7,
             sha256: "a".repeat(64),
         }),
