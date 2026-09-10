@@ -420,3 +420,197 @@ pub(crate) fn workflow_completion_eligible(latest_stages: &[LatestStageTruth]) -
             | StageLifecycleState::RecoveryRequired => false,
         })
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ArtifactBaselineKind {
+    ExactGitCandidate,
+    WindsVerificationEvidence,
+    PriorStageOutput,
+    CanonicalDecision,
+    BoundedBlobArtifact,
+}
+
+impl ArtifactBaselineKind {
+    pub(crate) fn as_db_str(self) -> &'static str {
+        match self {
+            Self::ExactGitCandidate => "EXACT_GIT_CANDIDATE",
+            Self::WindsVerificationEvidence => "WINDS_VERIFICATION_EVIDENCE",
+            Self::PriorStageOutput => "PRIOR_STAGE_OUTPUT",
+            Self::CanonicalDecision => "CANONICAL_DECISION",
+            Self::BoundedBlobArtifact => "BOUNDED_BLOB_ARTIFACT",
+        }
+    }
+
+    pub(crate) fn from_db(value: &str) -> Option<Self> {
+        match value {
+            "EXACT_GIT_CANDIDATE" => Some(Self::ExactGitCandidate),
+            "WINDS_VERIFICATION_EVIDENCE" => Some(Self::WindsVerificationEvidence),
+            "PRIOR_STAGE_OUTPUT" => Some(Self::PriorStageOutput),
+            "CANONICAL_DECISION" => Some(Self::CanonicalDecision),
+            "BOUNDED_BLOB_ARTIFACT" => Some(Self::BoundedBlobArtifact),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CandidateBaselineIdentity {
+    pub(crate) oid: String,
+    pub(crate) tree: String,
+}
+
+impl CandidateBaselineIdentity {
+    pub(crate) fn new(oid: &str, tree: &str) -> WorkflowResult<Self> {
+        Ok(Self {
+            oid: required_lower_hex_git_oid(oid, "baseline candidate OID")?,
+            tree: required_lower_hex_git_oid(tree, "baseline candidate tree")?,
+        })
+    }
+}
+
+fn required_lower_hex_git_oid(value: &str, field: &str) -> WorkflowResult<String> {
+    if !matches!(value.len(), 40 | 64)
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(WorkflowError::new(format!(
+            "{field} must be a lowercase 40- or 64-hex Git object id"
+        )));
+    }
+    Ok(value.to_owned())
+}
+
+fn required_lower_hex_sha256_reference(value: &str) -> WorkflowResult<String> {
+    let digest = value
+        .strip_prefix("sha256:")
+        .ok_or_else(|| WorkflowError::new("bounded blob baseline must use a sha256: reference"))?;
+    if digest.len() != 64
+        || !digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(WorkflowError::new(
+            "bounded blob baseline sha256 reference must contain 64 lowercase hex characters",
+        ));
+    }
+    Ok(value.to_owned())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ArtifactBaselineIdentity {
+    pub(crate) baseline_id: String,
+    pub(crate) stage_run_id: String,
+    pub(crate) kind: ArtifactBaselineKind,
+    pub(crate) stable_reference: String,
+    pub(crate) candidate: Option<CandidateBaselineIdentity>,
+}
+
+impl ArtifactBaselineIdentity {
+    pub(crate) fn new(
+        baseline_id: &str,
+        stage_run_id: &str,
+        kind: ArtifactBaselineKind,
+        stable_reference: &str,
+        candidate: Option<CandidateBaselineIdentity>,
+    ) -> WorkflowResult<Self> {
+        let stable_reference = match kind {
+            ArtifactBaselineKind::BoundedBlobArtifact => {
+                required_lower_hex_sha256_reference(stable_reference)?
+            }
+            _ => required_identity(stable_reference, "artifact baseline stable reference")?,
+        };
+        if matches!(
+            kind,
+            ArtifactBaselineKind::ExactGitCandidate
+                | ArtifactBaselineKind::WindsVerificationEvidence
+        ) && candidate.is_none()
+        {
+            return Err(WorkflowError::new(
+                "candidate-bound artifact baseline requires exact candidate OID and tree",
+            ));
+        }
+        Ok(Self {
+            baseline_id: required_identity(baseline_id, "artifact baseline id")?,
+            stage_run_id: required_identity(stage_run_id, "artifact baseline stage run id")?,
+            kind,
+            stable_reference,
+            candidate,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ArtifactBaselineRequirement {
+    pub(crate) stage_run_id: String,
+    pub(crate) kind: ArtifactBaselineKind,
+    pub(crate) stable_reference: String,
+    pub(crate) candidate: Option<CandidateBaselineIdentity>,
+}
+
+impl ArtifactBaselineRequirement {
+    pub(crate) fn new(
+        stage_run_id: &str,
+        kind: ArtifactBaselineKind,
+        stable_reference: &str,
+        candidate: Option<CandidateBaselineIdentity>,
+    ) -> WorkflowResult<Self> {
+        let identity = ArtifactBaselineIdentity::new(
+            "requirement",
+            stage_run_id,
+            kind,
+            stable_reference,
+            candidate,
+        )?;
+        Ok(Self {
+            stage_run_id: identity.stage_run_id,
+            kind: identity.kind,
+            stable_reference: identity.stable_reference,
+            candidate: identity.candidate,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BaselineFreshness {
+    Applicable,
+    Stale,
+    Missing,
+    Ambiguous,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BaselineEvaluation {
+    pub(crate) requirement: ArtifactBaselineRequirement,
+    pub(crate) freshness: BaselineFreshness,
+    pub(crate) matching_baseline_ids: Vec<String>,
+}
+
+pub(crate) fn evaluate_artifact_baseline_requirement(
+    requirement: &ArtifactBaselineRequirement,
+    observed: &[ArtifactBaselineIdentity],
+) -> BaselineEvaluation {
+    let relevant = observed
+        .iter()
+        .filter(|baseline| {
+            baseline.stage_run_id == requirement.stage_run_id
+                && baseline.kind == requirement.kind
+                && baseline.stable_reference == requirement.stable_reference
+        })
+        .collect::<Vec<_>>();
+    let mut matching_baseline_ids = relevant
+        .iter()
+        .map(|baseline| baseline.baseline_id.clone())
+        .collect::<Vec<_>>();
+    matching_baseline_ids.sort();
+    let freshness = match relevant.as_slice() {
+        [] => BaselineFreshness::Missing,
+        [baseline] if baseline.candidate == requirement.candidate => BaselineFreshness::Applicable,
+        [_] => BaselineFreshness::Stale,
+        _ => BaselineFreshness::Ambiguous,
+    };
+    BaselineEvaluation {
+        requirement: requirement.clone(),
+        freshness,
+        matching_baseline_ids,
+    }
+}

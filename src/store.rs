@@ -1,7 +1,9 @@
 use crate::domain::workflow::{
-    AppliedStageTransition, StageAttemptRelation, StageLifecycleState, StageRunIdentity,
-    StageTransitionAuthority, StageTransitionOutcome, StageTransitionRequest, TruthSource,
-    WorkflowRunIdentity, evaluate_stage_transition, validate_successor_attempt,
+    AppliedStageTransition, ArtifactBaselineIdentity, ArtifactBaselineKind,
+    ArtifactBaselineRequirement, BaselineEvaluation, CandidateBaselineIdentity,
+    StageAttemptRelation, StageLifecycleState, StageRunIdentity, StageTransitionAuthority,
+    StageTransitionOutcome, StageTransitionRequest, TruthSource, WorkflowRunIdentity,
+    evaluate_artifact_baseline_requirement, evaluate_stage_transition, validate_successor_attempt,
 };
 use crate::domain::{
     BlobEvidence, CheckEvidence, Eligibility, EvidenceReport, ExecutionEventRecord, ExecutionKind,
@@ -25,6 +27,9 @@ pub(crate) mod git_observation;
 #[cfg(test)]
 #[path = "t102_workflow_store_tests.rs"]
 mod t102_workflow_store_tests;
+#[cfg(test)]
+#[path = "t103_workflow_baseline_tests.rs"]
+mod t103_workflow_baseline_tests;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -166,6 +171,16 @@ pub(crate) struct StoredStageRun {
     pub(crate) last_transition: Option<AppliedStageTransition>,
     pub(crate) created_unix_ms: i64,
     pub(crate) updated_unix_ms: i64,
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 008 T103 persistence API; workflow consumers land in later tasks"
+)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StoredArtifactBaseline {
+    pub(crate) identity: ArtifactBaselineIdentity,
+    pub(crate) created_unix_ms: i64,
 }
 
 impl Store {
@@ -583,6 +598,129 @@ impl Store {
             return Err("stage transition lost compare-and-set race".into());
         }
         Ok(StageTransitionOutcome::Apply(applied))
+    }
+
+    pub(crate) fn create_artifact_baseline(
+        &self,
+        identity: &ArtifactBaselineIdentity,
+        now_ms: i64,
+    ) -> Result<()> {
+        self.validate_workflow_schema()?;
+        validate_agentic_identity_timestamp(now_ms, "artifact baseline creation time")?;
+        let canonical = ArtifactBaselineIdentity::new(
+            &identity.baseline_id,
+            &identity.stage_run_id,
+            identity.kind,
+            &identity.stable_reference,
+            identity.candidate.clone(),
+        )?;
+        if &canonical != identity {
+            return Err(
+                "artifact baseline identity must be canonicalized before persistence".into(),
+            );
+        }
+        self.load_stage_run(&identity.stage_run_id)?;
+        self.connection.execute(
+            "INSERT INTO workflow_artifact_baselines(
+                baseline_id, stage_run_id, baseline_kind, stable_reference,
+                candidate_oid, candidate_tree, created_unix_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                identity.baseline_id,
+                identity.stage_run_id,
+                identity.kind.as_db_str(),
+                identity.stable_reference,
+                identity
+                    .candidate
+                    .as_ref()
+                    .map(|candidate| candidate.oid.as_str()),
+                identity
+                    .candidate
+                    .as_ref()
+                    .map(|candidate| candidate.tree.as_str()),
+                now_ms
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn load_artifact_baseline(
+        &self,
+        baseline_id: &str,
+    ) -> Result<StoredArtifactBaseline> {
+        self.validate_workflow_schema()?;
+        let row = self
+            .connection
+            .query_row(
+                "SELECT baseline_id, stage_run_id, baseline_kind, stable_reference,
+                        candidate_oid, candidate_tree, created_unix_ms
+                 FROM workflow_artifact_baselines WHERE baseline_id = ?1",
+                params![baseline_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, i64>(6)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| format!("unknown workflow artifact baseline: {baseline_id}"))?;
+        self.load_stage_run(&row.1)?;
+        validate_agentic_identity_timestamp(row.6, "stored artifact baseline creation time")?;
+        let kind = ArtifactBaselineKind::from_db(&row.2).ok_or_else(|| {
+            format!(
+                "unknown workflow artifact baseline kind in store: {}",
+                row.2
+            )
+        })?;
+        let candidate = match (row.4.as_deref(), row.5.as_deref()) {
+            (None, None) => None,
+            (Some(oid), Some(tree)) => Some(CandidateBaselineIdentity::new(oid, tree)?),
+            _ => return Err("stored artifact baseline candidate identity is incomplete".into()),
+        };
+        Ok(StoredArtifactBaseline {
+            identity: ArtifactBaselineIdentity::new(&row.0, &row.1, kind, &row.3, candidate)?,
+            created_unix_ms: row.6,
+        })
+    }
+
+    pub(crate) fn list_artifact_baselines_for_stage(
+        &self,
+        stage_run_id: &str,
+    ) -> Result<Vec<StoredArtifactBaseline>> {
+        self.validate_workflow_schema()?;
+        self.load_stage_run(stage_run_id)?;
+        let mut statement = self.connection.prepare(
+            "SELECT baseline_id FROM workflow_artifact_baselines
+             WHERE stage_run_id = ?1 ORDER BY created_unix_ms, baseline_id",
+        )?;
+        let ids = statement
+            .query_map(params![stage_run_id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(statement);
+        ids.iter()
+            .map(|id| self.load_artifact_baseline(id))
+            .collect()
+    }
+
+    pub(crate) fn evaluate_artifact_baseline(
+        &self,
+        requirement: &ArtifactBaselineRequirement,
+    ) -> Result<BaselineEvaluation> {
+        let observed = self
+            .list_artifact_baselines_for_stage(&requirement.stage_run_id)?
+            .into_iter()
+            .map(|stored| stored.identity)
+            .collect::<Vec<_>>();
+        Ok(evaluate_artifact_baseline_requirement(
+            requirement,
+            &observed,
+        ))
     }
 }
 
