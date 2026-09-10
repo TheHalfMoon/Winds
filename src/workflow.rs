@@ -1055,6 +1055,260 @@ fn validate_reconstruction_item(item: &ReconstructionItem) -> WorkflowResult<()>
     Ok(())
 }
 
+const MAX_DECISION_TOKEN_BYTES: usize = 128;
+const MAX_DECISION_REFERENCE_BYTES: usize = 512;
+const MAX_DECISION_RATIONALE_BYTES: usize = 2048;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DecisionContentState {
+    Full,
+    Redacted,
+    Omitted,
+    Unavailable,
+}
+
+impl DecisionContentState {
+    pub(crate) fn as_db_str(self) -> &'static str {
+        match self {
+            Self::Full => "FULL",
+            Self::Redacted => "REDACTED",
+            Self::Omitted => "OMITTED",
+            Self::Unavailable => "UNAVAILABLE",
+        }
+    }
+
+    pub(crate) fn from_db(value: &str) -> Option<Self> {
+        match value {
+            "FULL" => Some(Self::Full),
+            "REDACTED" => Some(Self::Redacted),
+            "OMITTED" => Some(Self::Omitted),
+            "UNAVAILABLE" => Some(Self::Unavailable),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DecisionAppendOutcome {
+    Inserted,
+    IdempotentNoChange,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DecisionApplicability {
+    Applicable,
+    Stale,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DecisionApplicabilityContext {
+    pub(crate) current_candidate: Option<CandidateBaselineIdentity>,
+    pub(crate) applicable_evidence_references: BTreeSet<String>,
+}
+
+impl DecisionApplicabilityContext {
+    pub(crate) fn new(
+        current_candidate: Option<CandidateBaselineIdentity>,
+        applicable_evidence_references: &[String],
+    ) -> WorkflowResult<Self> {
+        let references = applicable_evidence_references
+            .iter()
+            .map(|value| {
+                required_bounded_reference(
+                    value,
+                    "decision applicability evidence reference",
+                    MAX_DECISION_REFERENCE_BYTES,
+                )
+            })
+            .collect::<WorkflowResult<BTreeSet<_>>>()?;
+        Ok(Self {
+            current_candidate,
+            applicable_evidence_references: references,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WorkflowDecisionRecord {
+    pub(crate) decision_id: String,
+    pub(crate) workflow_run_id: String,
+    pub(crate) stage_run_id: Option<String>,
+    pub(crate) source: TruthSource,
+    pub(crate) authority: StageTransitionAuthority,
+    pub(crate) decision_type: String,
+    pub(crate) decision_result: String,
+    pub(crate) predecessor_decision_id: Option<String>,
+    pub(crate) candidate: Option<CandidateBaselineIdentity>,
+    pub(crate) evidence_reference: Option<String>,
+    pub(crate) content_state: DecisionContentState,
+    pub(crate) safe_rationale: Option<String>,
+    pub(crate) created_unix_ms: i64,
+}
+
+pub(crate) struct WorkflowDecisionInput<'a> {
+    pub(crate) decision_id: &'a str,
+    pub(crate) workflow_run_id: &'a str,
+    pub(crate) stage_run_id: Option<&'a str>,
+    pub(crate) source: TruthSource,
+    pub(crate) authority: StageTransitionAuthority,
+    pub(crate) decision_type: &'a str,
+    pub(crate) decision_result: &'a str,
+    pub(crate) predecessor_decision_id: Option<&'a str>,
+    pub(crate) candidate: Option<CandidateBaselineIdentity>,
+    pub(crate) evidence_reference: Option<&'a str>,
+    pub(crate) content_state: DecisionContentState,
+    pub(crate) safe_rationale: Option<&'a str>,
+    pub(crate) created_unix_ms: i64,
+}
+
+impl WorkflowDecisionRecord {
+    pub(crate) fn new(input: WorkflowDecisionInput<'_>) -> WorkflowResult<Self> {
+        if input.created_unix_ms < 0 {
+            return Err(WorkflowError::new(
+                "workflow decision creation time must not be negative",
+            ));
+        }
+        validate_decision_authority(input.source, input.authority)?;
+        let decision_id = required_identity(input.decision_id, "workflow decision id")?;
+        let workflow_run_id =
+            required_identity(input.workflow_run_id, "workflow decision workflow id")?;
+        let stage_run_id = input
+            .stage_run_id
+            .map(|value| required_identity(value, "workflow decision stage id"))
+            .transpose()?;
+        let predecessor_decision_id = input
+            .predecessor_decision_id
+            .map(|value| required_identity(value, "workflow predecessor decision id"))
+            .transpose()?;
+        if predecessor_decision_id.as_deref() == Some(decision_id.as_str()) {
+            return Err(WorkflowError::new(
+                "workflow decision cannot name itself as predecessor",
+            ));
+        }
+        let decision_type = required_bounded_reference(
+            input.decision_type,
+            "workflow decision type",
+            MAX_DECISION_TOKEN_BYTES,
+        )?;
+        let decision_result = required_bounded_reference(
+            input.decision_result,
+            "workflow decision result",
+            MAX_DECISION_TOKEN_BYTES,
+        )?;
+        let evidence_reference = input
+            .evidence_reference
+            .map(|value| {
+                required_bounded_reference(
+                    value,
+                    "workflow decision evidence reference",
+                    MAX_DECISION_REFERENCE_BYTES,
+                )
+            })
+            .transpose()?;
+        let safe_rationale = input
+            .safe_rationale
+            .map(|value| {
+                required_bounded_reference(
+                    value,
+                    "workflow decision safe rationale",
+                    MAX_DECISION_RATIONALE_BYTES,
+                )
+            })
+            .transpose()?;
+        Ok(Self {
+            decision_id,
+            workflow_run_id,
+            stage_run_id,
+            source: input.source,
+            authority: input.authority,
+            decision_type,
+            decision_result,
+            predecessor_decision_id,
+            candidate: input.candidate,
+            evidence_reference,
+            content_state: input.content_state,
+            safe_rationale,
+            created_unix_ms: input.created_unix_ms,
+        })
+    }
+}
+
+fn validate_decision_authority(
+    source: TruthSource,
+    authority: StageTransitionAuthority,
+) -> WorkflowResult<()> {
+    let valid = matches!(
+        (source, authority),
+        (TruthSource::AgentReported, StageTransitionAuthority::None)
+            | (TruthSource::WindsObserved, StageTransitionAuthority::None)
+            | (
+                TruthSource::WindsObserved,
+                StageTransitionAuthority::WindsPolicy
+            )
+            | (
+                TruthSource::HumanDecided,
+                StageTransitionAuthority::HumanDecision
+            )
+    );
+    if !valid {
+        return Err(WorkflowError::new(
+            "workflow decision source and authority classes are inconsistent",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_decision_successor(
+    predecessor: &WorkflowDecisionRecord,
+    successor: &WorkflowDecisionRecord,
+) -> WorkflowResult<()> {
+    if successor.predecessor_decision_id.as_deref() != Some(&predecessor.decision_id) {
+        return Err(WorkflowError::new(
+            "workflow decision successor does not name the exact predecessor",
+        ));
+    }
+    if successor.workflow_run_id != predecessor.workflow_run_id {
+        return Err(WorkflowError::new(
+            "workflow decision predecessor crosses workflow identity",
+        ));
+    }
+    if successor.stage_run_id != predecessor.stage_run_id {
+        return Err(WorkflowError::new(
+            "workflow decision predecessor crosses stage scope",
+        ));
+    }
+    if successor.decision_type != predecessor.decision_type {
+        return Err(WorkflowError::new(
+            "workflow decision predecessor crosses decision type",
+        ));
+    }
+    if successor.created_unix_ms < predecessor.created_unix_ms {
+        return Err(WorkflowError::new(
+            "workflow decision successor predates its predecessor",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn evaluate_decision_applicability(
+    decision: &WorkflowDecisionRecord,
+    context: &DecisionApplicabilityContext,
+) -> DecisionApplicability {
+    let candidate_applicable = decision
+        .candidate
+        .as_ref()
+        .is_none_or(|expected| context.current_candidate.as_ref() == Some(expected));
+    let evidence_applicable = decision
+        .evidence_reference
+        .as_ref()
+        .is_none_or(|expected| context.applicable_evidence_references.contains(expected));
+    if candidate_applicable && evidence_applicable {
+        DecisionApplicability::Applicable
+    } else {
+        DecisionApplicability::Stale
+    }
+}
+
 fn required_bounded_reference(
     value: &str,
     field: &str,

@@ -5,13 +5,16 @@ use crate::agentic_runtime::{
 use crate::domain::workflow::{
     AppliedStageTransition, ArtifactBaselineIdentity, ArtifactBaselineKind,
     ArtifactBaselineRequirement, BaselineEvaluation, CandidateBaselineIdentity,
-    RETRY_OUTCOME_AMBIGUOUS_EFFECT, RETRY_OUTCOME_BUDGET_EXHAUSTED, RETRY_OUTCOME_FAILURE_RECORDED,
-    RETRY_OUTCOME_NO_PROGRESS, ReconstructionItem, ReconstructionReport, RetryFailureObservation,
-    RetryFailureResolution, StageAttemptRelation, StageLifecycleState, StageRunIdentity,
-    StageTransitionAuthority, StageTransitionOutcome, StageTransitionRequest, TruthSource,
-    WorkflowContinuationClass, WorkflowRunIdentity, build_reconstruction_preview,
-    evaluate_artifact_baseline_requirement, evaluate_retry_failure, evaluate_stage_transition,
-    parse_reconstruction_report_json, validate_successor_attempt,
+    DecisionAppendOutcome, DecisionApplicability, DecisionApplicabilityContext,
+    DecisionContentState, RETRY_OUTCOME_AMBIGUOUS_EFFECT, RETRY_OUTCOME_BUDGET_EXHAUSTED,
+    RETRY_OUTCOME_FAILURE_RECORDED, RETRY_OUTCOME_NO_PROGRESS, ReconstructionItem,
+    ReconstructionReport, RetryFailureObservation, RetryFailureResolution, StageAttemptRelation,
+    StageLifecycleState, StageRunIdentity, StageTransitionAuthority, StageTransitionOutcome,
+    StageTransitionRequest, TruthSource, WorkflowContinuationClass, WorkflowDecisionInput,
+    WorkflowDecisionRecord, WorkflowRunIdentity, build_reconstruction_preview,
+    evaluate_artifact_baseline_requirement, evaluate_decision_applicability,
+    evaluate_retry_failure, evaluate_stage_transition, parse_reconstruction_report_json,
+    validate_decision_successor, validate_successor_attempt,
 };
 use crate::domain::{
     BlobEvidence, CheckEvidence, Eligibility, EvidenceReport, ExecutionEventRecord, ExecutionKind,
@@ -20,7 +23,7 @@ use crate::domain::{
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
@@ -44,6 +47,9 @@ mod t104_workflow_continuation_tests;
 #[cfg(test)]
 #[path = "t105_workflow_retry_tests.rs"]
 mod t105_workflow_retry_tests;
+#[cfg(test)]
+#[path = "t106_workflow_decision_tests.rs"]
+mod t106_workflow_decision_tests;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -1316,6 +1322,235 @@ impl Store {
             canonical_json: row.2,
             created_unix_ms: row.3,
         }))
+    }
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 008 T106 decision-ledger API; operator projections land in T107"
+)]
+impl Store {
+    pub(crate) fn append_workflow_decision(
+        &self,
+        decision: &WorkflowDecisionRecord,
+    ) -> Result<DecisionAppendOutcome> {
+        self.validate_workflow_schema()?;
+        if decision.source == TruthSource::HumanDecided
+            || decision.authority == StageTransitionAuthority::HumanDecision
+        {
+            return Err(
+                "generic workflow decision persistence cannot create HUMAN_DECIDED authority; use an accepted human-decision path"
+                    .into(),
+            );
+        }
+        let canonical = WorkflowDecisionRecord::new(WorkflowDecisionInput {
+            decision_id: &decision.decision_id,
+            workflow_run_id: &decision.workflow_run_id,
+            stage_run_id: decision.stage_run_id.as_deref(),
+            source: decision.source,
+            authority: decision.authority,
+            decision_type: &decision.decision_type,
+            decision_result: &decision.decision_result,
+            predecessor_decision_id: decision.predecessor_decision_id.as_deref(),
+            candidate: decision.candidate.clone(),
+            evidence_reference: decision.evidence_reference.as_deref(),
+            content_state: decision.content_state,
+            safe_rationale: decision.safe_rationale.as_deref(),
+            created_unix_ms: decision.created_unix_ms,
+        })?;
+        if &canonical != decision {
+            return Err("workflow decision must be canonicalized before persistence".into());
+        }
+        self.load_workflow_run(&decision.workflow_run_id)?;
+        if let Some(stage_run_id) = decision.stage_run_id.as_deref() {
+            let stage = self.load_stage_run(stage_run_id)?;
+            if stage.identity.workflow_run_id != decision.workflow_run_id {
+                return Err("workflow decision stage does not belong to its workflow".into());
+            }
+        }
+        if let Some(predecessor_id) = decision.predecessor_decision_id.as_deref() {
+            let predecessor = self.load_workflow_decision(predecessor_id)?;
+            validate_decision_successor(&predecessor, decision)?;
+            let sibling_count: i64 = self.connection.query_row(
+                "SELECT COUNT(*) FROM workflow_decisions
+                 WHERE predecessor_decision_id = ?1 AND decision_id <> ?2",
+                params![predecessor_id, decision.decision_id],
+                |row| row.get(0),
+            )?;
+            if sibling_count != 0 {
+                return Err(
+                    "workflow decision predecessor already has a different successor".into(),
+                );
+            }
+        }
+        let inserted = self.connection.execute(
+            "INSERT INTO workflow_decisions(
+                decision_id, workflow_run_id, stage_run_id, source_class, authority_class,
+                decision_type, decision_result, predecessor_decision_id, candidate_oid,
+                candidate_tree, evidence_reference, content_state, safe_rationale, created_unix_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+             ON CONFLICT(decision_id) DO NOTHING",
+            params![
+                decision.decision_id,
+                decision.workflow_run_id,
+                decision.stage_run_id,
+                decision.source.as_db_str(),
+                decision.authority.as_db_str(),
+                decision.decision_type,
+                decision.decision_result,
+                decision.predecessor_decision_id,
+                decision.candidate.as_ref().map(|value| value.oid.as_str()),
+                decision.candidate.as_ref().map(|value| value.tree.as_str()),
+                decision.evidence_reference,
+                decision.content_state.as_db_str(),
+                decision.safe_rationale,
+                decision.created_unix_ms,
+            ],
+        )?;
+        if inserted == 1 {
+            return Ok(DecisionAppendOutcome::Inserted);
+        }
+        let existing = self.load_workflow_decision(&decision.decision_id)?;
+        if existing == *decision {
+            Ok(DecisionAppendOutcome::IdempotentNoChange)
+        } else {
+            Err("workflow decision replay collides with different historical meaning".into())
+        }
+    }
+
+    fn load_workflow_decision_record(&self, decision_id: &str) -> Result<WorkflowDecisionRecord> {
+        let row = self
+            .connection
+            .query_row(
+                "SELECT decision_id, workflow_run_id, stage_run_id, source_class, authority_class,
+                        decision_type, decision_result, predecessor_decision_id, candidate_oid,
+                        candidate_tree, evidence_reference, content_state, safe_rationale, created_unix_ms
+                 FROM workflow_decisions WHERE decision_id = ?1",
+                params![decision_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?, row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?, row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?, row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?, row.get::<_, Option<String>>(7)?,
+                        row.get::<_, Option<String>>(8)?, row.get::<_, Option<String>>(9)?,
+                        row.get::<_, Option<String>>(10)?, row.get::<_, String>(11)?,
+                        row.get::<_, Option<String>>(12)?, row.get::<_, i64>(13)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| format!("unknown workflow decision: {decision_id}"))?;
+        let source = TruthSource::from_db(&row.3)
+            .ok_or_else(|| format!("unknown workflow decision source in store: {}", row.3))?;
+        let authority = StageTransitionAuthority::from_db(&row.4)
+            .ok_or_else(|| format!("unknown workflow decision authority in store: {}", row.4))?;
+        if source == TruthSource::HumanDecided
+            || authority == StageTransitionAuthority::HumanDecision
+        {
+            return Err(
+                "stored HUMAN_DECIDED workflow decision is not applicable without an accepted human-decision persistence path"
+                    .into(),
+            );
+        }
+        let content_state = DecisionContentState::from_db(&row.11).ok_or_else(|| {
+            format!(
+                "unknown workflow decision content state in store: {}",
+                row.11
+            )
+        })?;
+        let candidate = match (row.8.as_deref(), row.9.as_deref()) {
+            (None, None) => None,
+            (Some(oid), Some(tree)) => Some(CandidateBaselineIdentity::new(oid, tree)?),
+            _ => return Err("stored workflow decision candidate identity is incomplete".into()),
+        };
+        let decision = WorkflowDecisionRecord::new(WorkflowDecisionInput {
+            decision_id: &row.0,
+            workflow_run_id: &row.1,
+            stage_run_id: row.2.as_deref(),
+            source,
+            authority,
+            decision_type: &row.5,
+            decision_result: &row.6,
+            predecessor_decision_id: row.7.as_deref(),
+            candidate,
+            evidence_reference: row.10.as_deref(),
+            content_state,
+            safe_rationale: row.12.as_deref(),
+            created_unix_ms: row.13,
+        })?;
+        self.load_workflow_run(&decision.workflow_run_id)?;
+        if let Some(stage_run_id) = decision.stage_run_id.as_deref() {
+            let stage = self.load_stage_run(stage_run_id)?;
+            if stage.identity.workflow_run_id != decision.workflow_run_id {
+                return Err(
+                    "stored workflow decision stage no longer belongs to its workflow".into(),
+                );
+            }
+        }
+        Ok(decision)
+    }
+
+    pub(crate) fn load_workflow_decision(
+        &self,
+        decision_id: &str,
+    ) -> Result<WorkflowDecisionRecord> {
+        self.validate_workflow_schema()?;
+        let decision = self.load_workflow_decision_record(decision_id)?;
+        self.validate_workflow_decision_lineage(&decision)?;
+        Ok(decision)
+    }
+
+    fn validate_workflow_decision_lineage(&self, decision: &WorkflowDecisionRecord) -> Result<()> {
+        let mut seen = BTreeSet::new();
+        let mut current = decision.clone();
+        loop {
+            if !seen.insert(current.decision_id.clone()) {
+                return Err("workflow decision predecessor lineage is cyclic".into());
+            }
+            let successor_count: i64 = self.connection.query_row(
+                "SELECT COUNT(*) FROM workflow_decisions WHERE predecessor_decision_id = ?1",
+                params![current.decision_id],
+                |row| row.get(0),
+            )?;
+            if successor_count > 1 {
+                return Err("workflow decision predecessor lineage is branched".into());
+            }
+            let Some(predecessor_id) = current.predecessor_decision_id.as_deref() else {
+                return Ok(());
+            };
+            let predecessor = self.load_workflow_decision_record(predecessor_id)?;
+            validate_decision_successor(&predecessor, &current)?;
+            current = predecessor;
+        }
+    }
+
+    pub(crate) fn list_workflow_decisions(
+        &self,
+        workflow_run_id: &str,
+    ) -> Result<Vec<WorkflowDecisionRecord>> {
+        self.validate_workflow_schema()?;
+        self.load_workflow_run(workflow_run_id)?;
+        let mut statement = self.connection.prepare(
+            "SELECT decision_id FROM workflow_decisions
+             WHERE workflow_run_id = ?1 ORDER BY created_unix_ms, decision_id",
+        )?;
+        let ids = statement
+            .query_map(params![workflow_run_id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(statement);
+        ids.iter()
+            .map(|decision_id| self.load_workflow_decision(decision_id))
+            .collect()
+    }
+
+    pub(crate) fn workflow_decision_applicability(
+        &self,
+        decision_id: &str,
+        context: &DecisionApplicabilityContext,
+    ) -> Result<DecisionApplicability> {
+        let decision = self.load_workflow_decision(decision_id)?;
+        Ok(evaluate_decision_applicability(&decision, context))
     }
 }
 
