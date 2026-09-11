@@ -218,8 +218,15 @@ No row grants authority to skip a dependency. The map identifies the primary imp
 - insertion recomputes descriptor digest from durable request fields plus canonical joins and validates exact Model Mesh `TARGET_SELECTION` approval content in the same transaction;
 - dedicated Model Mesh approval canonicalization/write/load/revalidation reuses `agentic_delegation_approvals` unchanged and remains distinct from generic T076 `ApprovalContent`;
 - identity claims persist exact source/dimension/value/basis and optional accepted runtime binding with exclusive request/actor subject;
-- continuity-event/association tables are fully constrained schema substrate now but remain behaviorally inert until T119;
-- schema-integrity validation recognizes every required 0011 object and fails closed on missing/modified/partial definitions;
+- `model_mesh_continuity_events` is created now with the complete frozen Plan-selected substrate: `continuity_event_id` primary key, `target_request_id` foreign key, optional `source_actor_binding_id` and `destination_actor_binding_id` foreign keys, closed `continuity_class`, optional bounded SHA-256 `context_digest`, bounded known `completeness_state`, optional bounded SHA-256 `continuity_permission_digest`, optional `authority_approval_id` foreign key to `agentic_delegation_approvals`, closed `authority_claim` (`REQUIRED` | `NO_AUTHORITY_CLAIM`), and `created_unix_ms`;
+- `model_mesh_continuity_identity_claims` is created now with `continuity_event_id`, closed `actor_role` (`SOURCE` | `DESTINATION`), `identity_claim_id`, and primary key `(continuity_event_id, actor_role, identity_claim_id)`;
+- 0011 schema constraints/triggers prove that every continuity-event source/destination actor binding is in the applicable stage lineage or qualified source-stage handoff relation, and reject orphan/cross-workflow/cross-stage coincidence;
+- role-association constraints/triggers require a `SOURCE` association to reference an ACTOR-subject identity claim bound to the event's exact `source_actor_binding_id`, and a `DESTINATION` association to reference an ACTOR-subject claim bound to the exact `destination_actor_binding_id`; any referenced runtime binding must remain consistent with that actor's canonical Winds-session/runtime context;
+- continuity authority columns have a closed nullability contract: `authority_claim=REQUIRED` requires both `continuity_permission_digest` and `authority_approval_id`; `authority_claim=NO_AUTHORITY_CLAIM` requires both to be absent and cannot represent execution permission; digest columns, when present, are exactly bounded lowercase SHA-256 hex values;
+- 0011 contains the structural foreign-key/check/trigger substrate needed to bind a required continuity approval and operation digest, while T119 remains the first task authorized to expose production Store/domain continuity-event insertion/revalidation behavior;
+- T116 schema-qualification fixtures exercise continuity tables directly at the migration/schema boundary only: they prove a valid REQUIRED row shape and a valid NO_AUTHORITY_CLAIM observation row shape are representable, while wrong actor-role association, wrong source/destination actor, orphan binding/approval, invalid authority-claim nullability, malformed digest, and invalid lineage are rejected before 0011 can freeze;
+- continuity-event insertion behavior remains otherwise inert until T119; T119 MUST be implementable over the frozen 0011 schema with zero schema modification;
+- schema-integrity validation recognizes every required 0011 table/column/index/foreign-key/check/trigger object and fails closed on missing/modified/partial definitions;
 - replay/idempotency identity for target requests/claims is deterministic and cannot manufacture duplicate current truth.
 
 **Acceptance**:
@@ -227,6 +234,10 @@ No row grants authority to skip a dependency. The map identifies the primary imp
 - append-only updates/deletes rejected at database boundary;
 - cross-stage/cross-workflow/cross-session actor coincidence rejected;
 - role mismatch and approval-target/binding/session mismatch rejected;
+- complete frozen continuity-event column inventory is proven, including source/destination actor bindings, context/completeness, continuity permission digest, approval foreign key, authority claim, and created time;
+- continuity association primary key plus SOURCE/DESTINATION actor-claim triggers are proven, including rejection of wrong actor, wrong claim subject, wrong runtime-binding context, and invalid stage/workflow lineage;
+- `REQUIRED` authority rows reject missing approval/digest and malformed digests; `NO_AUTHORITY_CLAIM` rows reject approval/digest presence and remain structurally incapable of claiming permission;
+- schema-bound fixtures prove both valid continuity row classes can be represented without exposing T119 production event APIs, and prove T119 requires no 0011 mutation;
 - generic approval/decision text cannot authorize a target request;
 - request replay with identical canonical identity is idempotent; collision with different meaning fails;
 - restart preserves exact target/claim history and stale/failed history;
