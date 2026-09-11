@@ -7,11 +7,12 @@ use crate::agentic_runtime::{
 use crate::domain::WindsSessionRecord;
 use crate::domain::workflow::{StageRunIdentity, WorkflowContinuationClass, WorkflowRunIdentity};
 use crate::model_mesh::{
-    ApprovalApplicability, AuthenticationTruth, CapabilityTruth, CurrentAuthorityTruth,
-    ExactProviderId, IdentityClaim, IdentityDimension, IdentitySourceClass,
-    ModelMeshAuthorityEnvelopeV1, ModelMeshAuthorityPurpose, ModelMeshTargetDescriptorV1,
-    SourceRequirements, TargetDimension, TargetRequest, TargetResolution, TargetResolverInput,
-    TargetSelector, adapt_actor_scope, adapt_runtime_truth, resolve_target,
+    ApprovalApplicability, AuthenticationTruth, CapabilityTruth, ContextDigest, ContinuityClass,
+    CurrentAuthorityTruth, ExactProviderId, IdentityClaim, IdentityDimension, IdentitySourceClass,
+    ModelMeshAuthorityEnvelopeV1, ModelMeshContinuityPermissionDescriptorV1,
+    ModelMeshTargetDescriptorV1, SourceRequirements, TargetDimension, TargetRequest,
+    TargetResolution, TargetResolverInput, TargetSelector, adapt_actor_scope, adapt_runtime_truth,
+    resolve_target,
 };
 use crate::store::StoredWorkflowActorBinding;
 use sha2::{Digest, Sha256};
@@ -118,8 +119,7 @@ fn target_descriptor() -> ModelMeshTargetDescriptorV1 {
 }
 
 fn target_envelope(descriptor: &ModelMeshTargetDescriptorV1) -> ModelMeshAuthorityEnvelopeV1 {
-    ModelMeshAuthorityEnvelopeV1::new(
-        ModelMeshAuthorityPurpose::TargetSelection,
+    ModelMeshAuthorityEnvelopeV1::new_target_selection(
         descriptor.workspace_id(),
         descriptor.workstream_id(),
         descriptor.winds_session_id(),
@@ -128,7 +128,6 @@ fn target_envelope(descriptor: &ModelMeshTargetDescriptorV1) -> ModelMeshAuthori
         descriptor.actor_binding_id(),
         descriptor.actor_role(),
         &descriptor.digest().unwrap(),
-        None,
     )
     .unwrap()
 }
@@ -422,6 +421,166 @@ fn t115_stored_approval_audit_scope_must_match_the_canonical_envelope() {
     stored.session_id = "other-session".into();
     assert_eq!(
         revalidate_loaded_model_mesh_approval(&stored, &envelope),
+        ApprovalApplicability::Mismatch
+    );
+}
+
+#[test]
+fn t115_continuity_authority_is_derived_from_exact_permission_scope_and_target() {
+    let descriptor = target_descriptor();
+    let target_digest = descriptor.digest().unwrap();
+    let permission = ModelMeshContinuityPermissionDescriptorV1::new(
+        descriptor.workflow_run_id(),
+        descriptor.stage_run_id(),
+        Some("actor-binding-source"),
+        Some(descriptor.actor_binding_id()),
+        ContinuityClass::Handoff,
+        &target_digest,
+        ContextDigest::exact(&"a".repeat(64)).unwrap(),
+    )
+    .unwrap();
+    let envelope = ModelMeshAuthorityEnvelopeV1::new_continuity_permission(
+        descriptor.workspace_id(),
+        descriptor.workstream_id(),
+        descriptor.winds_session_id(),
+        descriptor.workflow_run_id(),
+        descriptor.stage_run_id(),
+        descriptor.actor_binding_id(),
+        descriptor.actor_role(),
+        &target_digest,
+        &permission,
+    )
+    .unwrap();
+    assert_eq!(
+        envelope.continuity_permission_digest(),
+        Some(permission.digest().unwrap().as_str())
+    );
+
+    let wrong_workflow = ModelMeshContinuityPermissionDescriptorV1::new(
+        "workflow-other",
+        descriptor.stage_run_id(),
+        None,
+        Some(descriptor.actor_binding_id()),
+        ContinuityClass::Handoff,
+        &target_digest,
+        ContextDigest::NotApplicable,
+    )
+    .unwrap();
+    assert!(
+        ModelMeshAuthorityEnvelopeV1::new_continuity_permission(
+            descriptor.workspace_id(),
+            descriptor.workstream_id(),
+            descriptor.winds_session_id(),
+            descriptor.workflow_run_id(),
+            descriptor.stage_run_id(),
+            descriptor.actor_binding_id(),
+            descriptor.actor_role(),
+            &target_digest,
+            &wrong_workflow,
+        )
+        .is_err()
+    );
+
+    let wrong_stage = ModelMeshContinuityPermissionDescriptorV1::new(
+        descriptor.workflow_run_id(),
+        "stage-other",
+        None,
+        Some(descriptor.actor_binding_id()),
+        ContinuityClass::Handoff,
+        &target_digest,
+        ContextDigest::NotApplicable,
+    )
+    .unwrap();
+    assert!(
+        ModelMeshAuthorityEnvelopeV1::new_continuity_permission(
+            descriptor.workspace_id(),
+            descriptor.workstream_id(),
+            descriptor.winds_session_id(),
+            descriptor.workflow_run_id(),
+            descriptor.stage_run_id(),
+            descriptor.actor_binding_id(),
+            descriptor.actor_role(),
+            &target_digest,
+            &wrong_stage,
+        )
+        .is_err()
+    );
+
+    let wrong_target = ModelMeshContinuityPermissionDescriptorV1::new(
+        descriptor.workflow_run_id(),
+        descriptor.stage_run_id(),
+        None,
+        Some(descriptor.actor_binding_id()),
+        ContinuityClass::Handoff,
+        &"b".repeat(64),
+        ContextDigest::NotApplicable,
+    )
+    .unwrap();
+    assert!(
+        ModelMeshAuthorityEnvelopeV1::new_continuity_permission(
+            descriptor.workspace_id(),
+            descriptor.workstream_id(),
+            descriptor.winds_session_id(),
+            descriptor.workflow_run_id(),
+            descriptor.stage_run_id(),
+            descriptor.actor_binding_id(),
+            descriptor.actor_role(),
+            &target_digest,
+            &wrong_target,
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn t115_loaded_continuity_approval_cannot_swap_in_an_unrelated_permission_digest() {
+    let descriptor = target_descriptor();
+    let target_digest = descriptor.digest().unwrap();
+    let permission = ModelMeshContinuityPermissionDescriptorV1::new(
+        descriptor.workflow_run_id(),
+        descriptor.stage_run_id(),
+        None,
+        Some(descriptor.actor_binding_id()),
+        ContinuityClass::Handoff,
+        &target_digest,
+        ContextDigest::NotApplicable,
+    )
+    .unwrap();
+    let expected = ModelMeshAuthorityEnvelopeV1::new_continuity_permission(
+        descriptor.workspace_id(),
+        descriptor.workstream_id(),
+        descriptor.winds_session_id(),
+        descriptor.workflow_run_id(),
+        descriptor.stage_run_id(),
+        descriptor.actor_binding_id(),
+        descriptor.actor_role(),
+        &target_digest,
+        &permission,
+    )
+    .unwrap();
+    let swapped_json = format!(
+        r#"{{"schema_version":1,"purpose":"CONTINUITY_PERMISSION","workspace_id":"{}","workstream_id":"{}","session_id":"{}","workflow_run_id":"{}","stage_run_id":"{}","actor_binding_id":"{}","actor_role":"{}","target_descriptor_digest":"{}","continuity_permission_digest":"{}"}}"#,
+        descriptor.workspace_id(),
+        descriptor.workstream_id(),
+        descriptor.winds_session_id(),
+        descriptor.workflow_run_id(),
+        descriptor.stage_run_id(),
+        descriptor.actor_binding_id(),
+        descriptor.actor_role(),
+        target_digest,
+        "c".repeat(64),
+    );
+    let stored = StoredApproval {
+        approval_id: "approval-swapped".into(),
+        workstream_id: descriptor.workstream_id().into(),
+        session_id: descriptor.winds_session_id().into(),
+        workspace_id: descriptor.workspace_id().into(),
+        content_digest: sha256_hex(&swapped_json),
+        canonical_content_json: swapped_json,
+        approved_unix_ms: 20,
+    };
+    assert_eq!(
+        revalidate_loaded_model_mesh_approval(&stored, &expected),
         ApprovalApplicability::Mismatch
     );
 }

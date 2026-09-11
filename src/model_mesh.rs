@@ -661,7 +661,102 @@ pub(crate) struct ModelMeshAuthorityEnvelopeV1 {
 
 impl ModelMeshAuthorityEnvelopeV1 {
     #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_target_selection(
+        workspace_id: &str,
+        workstream_id: &str,
+        session_id: &str,
+        workflow_run_id: &str,
+        stage_run_id: &str,
+        actor_binding_id: &str,
+        actor_role: &str,
+        target_descriptor_digest: &str,
+    ) -> ModelMeshResult<Self> {
+        Self::from_parts(
+            ModelMeshAuthorityPurpose::TargetSelection,
+            workspace_id,
+            workstream_id,
+            session_id,
+            workflow_run_id,
+            stage_run_id,
+            actor_binding_id,
+            actor_role,
+            target_descriptor_digest,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_continuity_permission(
+        workspace_id: &str,
+        workstream_id: &str,
+        session_id: &str,
+        workflow_run_id: &str,
+        stage_run_id: &str,
+        actor_binding_id: &str,
+        actor_role: &str,
+        target_descriptor_digest: &str,
+        permission: &ModelMeshContinuityPermissionDescriptorV1,
+    ) -> ModelMeshResult<Self> {
+        let workflow_run_id = normalize_scope(workflow_run_id, "workflow run id")?;
+        let stage_run_id = normalize_scope(stage_run_id, "stage run id")?;
+        let target_descriptor_digest =
+            normalize_sha256(target_descriptor_digest, "target descriptor digest")?;
+        if permission.workflow_run_id != workflow_run_id {
+            return Err("continuity permission workflow does not match authority envelope".into());
+        }
+        if permission.stage_run_id != stage_run_id {
+            return Err("continuity permission stage does not match authority envelope".into());
+        }
+        if permission.target_descriptor_digest != target_descriptor_digest {
+            return Err("continuity permission target does not match authority envelope".into());
+        }
+        let continuity_permission_digest = permission.digest()?;
+        Self::from_parts(
+            ModelMeshAuthorityPurpose::ContinuityPermission,
+            workspace_id,
+            workstream_id,
+            session_id,
+            &workflow_run_id,
+            &stage_run_id,
+            actor_binding_id,
+            actor_role,
+            &target_descriptor_digest,
+            Some(&continuity_permission_digest),
+        )
+    }
+
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
+        purpose: ModelMeshAuthorityPurpose,
+        workspace_id: &str,
+        workstream_id: &str,
+        session_id: &str,
+        workflow_run_id: &str,
+        stage_run_id: &str,
+        actor_binding_id: &str,
+        actor_role: &str,
+        target_descriptor_digest: &str,
+        continuity_permission_digest: Option<&str>,
+    ) -> ModelMeshResult<Self> {
+        // T114 regression fixtures predate the safe split constructors. This compatibility seam is
+        // test-only so production callers cannot create an unbound continuity authority envelope.
+        Self::from_parts(
+            purpose,
+            workspace_id,
+            workstream_id,
+            session_id,
+            workflow_run_id,
+            stage_run_id,
+            actor_binding_id,
+            actor_role,
+            target_descriptor_digest,
+            continuity_permission_digest,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_parts(
         purpose: ModelMeshAuthorityPurpose,
         workspace_id: &str,
         workstream_id: &str,
@@ -743,7 +838,7 @@ impl ModelMeshAuthorityEnvelopeV1 {
             "CONTINUITY_PERMISSION" => ModelMeshAuthorityPurpose::ContinuityPermission,
             _ => return Err("unsupported Model Mesh authority purpose".into()),
         };
-        let envelope = Self::new(
+        let envelope = Self::from_parts(
             purpose,
             &parsed.workspace_id,
             &parsed.workstream_id,
