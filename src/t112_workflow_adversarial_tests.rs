@@ -801,6 +801,16 @@ fn t112_store_decision_replay_lineage_and_stale_history_never_gain_current_autho
     assert_eq!(handoff.verification, ExternalGateTruth::unknown());
     assert_eq!(handoff.human_acceptance, ExternalGateTruth::unknown());
 
+    let mut stale_verification = input.clone();
+    stale_verification.verification =
+        ExternalGateTruth::satisfied(TruthSource::WindsObserved, "evidence:old").unwrap();
+    assert!(project_reviewer_handoff(&stale_verification).is_err());
+
+    let mut stale_acceptance = input.clone();
+    stale_acceptance.human_acceptance =
+        ExternalGateTruth::satisfied(TruthSource::HumanDecided, "decision-root").unwrap();
+    assert!(project_reviewer_handoff(&stale_acceptance).is_err());
+
     drop(store);
     cleanup(home);
 }
