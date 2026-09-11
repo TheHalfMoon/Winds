@@ -32,7 +32,8 @@ jobs:
     env:
       CANDIDATE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.candidate_sha }}
       EXPECTED_IMAGE_OS: ubuntu24
-      EXPECTED_IMAGE_VERSION: 20260831.293.1
+      REFERENCE_IMAGE_VERSION_A: 20260831.293.1
+      REFERENCE_IMAGE_VERSION_B: 20260907.300.1
       EXPECTED_RUNNER_OS: Linux
       EXPECTED_RUNNER_ARCH: X64
 
@@ -57,11 +58,14 @@ jobs:
           test "${RUNNER_OS:-}" = "$EXPECTED_RUNNER_OS"
           test "${RUNNER_ARCH:-}" = "$EXPECTED_RUNNER_ARCH"
           test "${ImageOS:-}" = "$EXPECTED_IMAGE_OS"
-          if [[ "${ImageVersion:-}" != "$EXPECTED_IMAGE_VERSION" ]]; then
-            printf 'Pinned T097 runner image mismatch: expected=%s observed=%s\n' \
-              "$EXPECTED_IMAGE_VERSION" "${ImageVersion:-UNSET}" >&2
-            exit 1
-          fi
+          case "${ImageVersion:-}" in
+            "$REFERENCE_IMAGE_VERSION_A"|"$REFERENCE_IMAGE_VERSION_B") ;;
+            *)
+              printf 'Pinned T097 runner image outside finite cohort: accepted=%s,%s observed=%s\n' \
+                "$REFERENCE_IMAGE_VERSION_A" "$REFERENCE_IMAGE_VERSION_B" "${ImageVersion:-UNSET}" >&2
+              exit 1
+              ;;
+          esac
           test "$(. /etc/os-release && printf '%s' "$VERSION_ID")" = "24.04"
           printf 'runner_os=%s\nrunner_arch=%s\nimage_os=%s\nimage_version=%s\n' \
             "$RUNNER_OS" "$RUNNER_ARCH" "$ImageOS" "$ImageVersion"
