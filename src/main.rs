@@ -61,6 +61,8 @@ mod t111_workflow_regression_tests;
 mod t112_workflow_adversarial_tests;
 #[cfg(test)]
 mod t114_model_mesh_domain_tests;
+#[cfg(test)]
+mod t115_model_mesh_adapter_tests;
 mod workbench;
 mod workflow_cli;
 

@@ -1,3 +1,4 @@
+use crate::model_mesh::{ApprovalApplicability, ModelMeshAuthorityEnvelopeV1};
 use crate::store::{Result as StoreResult, Store};
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
@@ -484,6 +485,30 @@ pub(crate) fn load_human_approval(store: &Store, approval_id: &str) -> StoreResu
         .ok_or_else(|| format!("unknown human approval: {approval_id}"))?;
     validate_stored_approval(&stored)?;
     Ok(stored)
+}
+
+pub(crate) fn revalidate_loaded_model_mesh_approval(
+    stored: &StoredApproval,
+    expected: &ModelMeshAuthorityEnvelopeV1,
+) -> ApprovalApplicability {
+    if sha256_hex(stored.canonical_content_json.as_bytes()) != stored.content_digest {
+        return ApprovalApplicability::Stale;
+    }
+    let Ok(parsed) =
+        ModelMeshAuthorityEnvelopeV1::from_canonical_json(&stored.canonical_content_json)
+    else {
+        return ApprovalApplicability::Mismatch;
+    };
+    if parsed.workspace_id() != stored.workspace_id
+        || parsed.workstream_id() != stored.workstream_id
+        || parsed.session_id() != stored.session_id
+    {
+        return ApprovalApplicability::Mismatch;
+    }
+    if &parsed != expected {
+        return ApprovalApplicability::Mismatch;
+    }
+    ApprovalApplicability::Exact
 }
 
 pub(crate) fn revalidate_human_approval(
