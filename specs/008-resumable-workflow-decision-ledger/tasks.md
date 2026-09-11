@@ -124,7 +124,7 @@ No row grants authority to skip a dependency. The map identifies the primary imp
 
 ## Phase 1 — Canonical Workflow Domain
 
-### [ ] T101 — Workflow/stage domain, canonical context validation, and transition matrix
+### [x] T101 — Workflow/stage domain, canonical context validation, and transition matrix
 
 **Purpose**: establish the smallest pure deterministic workflow/stage truth model before persistence or CLI integration.
 
@@ -160,7 +160,7 @@ No row grants authority to skip a dependency. The map identifies the primary imp
 
 ## Phase 2 — Existing SQLite Persistence
 
-### [ ] T102 — Spec 008 schema qualification and persistent workflow/stage identity
+### [x] T102 — Spec 008 schema qualification and persistent workflow/stage identity
 
 **Purpose**: qualify the complete minimal Plan-selected Spec 008 SQLite schema once, while exposing only canonical workflow/stage identity and lifecycle Store behavior in this slice.
 
@@ -202,7 +202,7 @@ No row grants authority to skip a dependency. The map identifies the primary imp
 
 ## Phase 3 — Exact Artifact and Candidate Baselines
 
-### [ ] T103 — Artifact/candidate baseline persistence and freshness evaluator
+### [x] T103 — Artifact/candidate baseline persistence and freshness evaluator
 
 **Purpose**: make prepared-stage applicability depend on exact structured input/candidate identity rather than paths, labels, or stale artifacts.
 
@@ -236,7 +236,7 @@ No row grants authority to skip a dependency. The map identifies the primary imp
 
 ## Phase 4 — Truthful Actor Continuation and Reconstruction
 
-### [ ] T104 — Actor binding and reconstruction truth over accepted Spec 006 seams
+### [x] T104 — Actor binding and reconstruction truth over accepted Spec 006 seams
 
 **Purpose**: bind stage attempts to existing Winds/runtime identity truth without creating a competing runtime owner or upgrading live-runtime nonclaims.
 
@@ -273,7 +273,7 @@ No row grants authority to skip a dependency. The map identifies the primary imp
 
 ## Phase 5 — Finite Retry and Ambiguous Side Effects
 
-### [ ] T105 — Retry/no-progress lineage and explicit recovery
+### [x] T105 — Retry/no-progress lineage and explicit recovery
 
 **Purpose**: add bounded explicit retry semantics without background loops or ambiguous side-effect repetition.
 
@@ -314,7 +314,7 @@ AMBIGUOUS_NON_IDEMPOTENT_RETRY=FORBIDDEN_WITHOUT_EXPLICIT_RECONCILIATION
 
 ## Phase 6 — Append-Only Decision Ledger
 
-### [ ] T106 — Canonical decision persistence, lineage, replay, and authority ceiling
+### [x] T106 — Canonical decision persistence, lineage, replay, and authority ceiling
 
 **Purpose**: persist material decisions as immutable historical facts without granting lifecycle or human authority by record existence.
 
@@ -347,7 +347,7 @@ AMBIGUOUS_NON_IDEMPOTENT_RETRY=FORBIDDEN_WITHOUT_EXPLICIT_RECONCILIATION
 
 ## Phase 7 — Deterministic Operator and Reviewer Projections
 
-### [ ] T107 — Status, resume-preview, why-blocked, and reviewer-handoff projections
+### [x] T107 — Status, resume-preview, why-blocked, and reviewer-handoff projections
 
 **Purpose**: expose canonical workflow truth without persisting a competing presentation authority.
 
@@ -381,7 +381,7 @@ AMBIGUOUS_NON_IDEMPOTENT_RETRY=FORBIDDEN_WITHOUT_EXPLICIT_RECONCILIATION
 
 ## Phase 8 — Durable-State Validation, Corruption, and Redaction
 
-### [ ] T108 — Workflow schema integrity, recovery, and completeness campaign
+### [x] T108 — Workflow schema integrity, recovery, and completeness campaign
 
 **Purpose**: close the durable-state safety boundary before exposing mutating CLI commands.
 
@@ -416,7 +416,7 @@ AMBIGUOUS_NON_IDEMPOTENT_RETRY=FORBIDDEN_WITHOUT_EXPLICIT_RECONCILIATION
 
 ## Phase 9 — Narrow CLI Integration
 
-### [ ] T109 — Existing-style CLI workflow operations over qualified domain seams
+### [x] T109 — Existing-style CLI workflow operations over qualified domain seams
 
 **Purpose**: expose only the first-slice user operations required by the Plan through the existing Winds CLI without creating a new shell or generic workflow runtime.
 
@@ -455,7 +455,7 @@ AMBIGUOUS_NON_IDEMPOTENT_RETRY=FORBIDDEN_WITHOUT_EXPLICIT_RECONCILIATION
 
 ## Phase 10 — TUI Necessity Gate
 
-### [ ] T110 — Workbench/TUI necessity decision and read-only integration only if proven necessary
+### [x] T110 — Workbench/TUI necessity decision and read-only integration only if proven necessary
 
 **Purpose**: enforce the Plan's YAGNI condition that TUI integration is not built unless the qualified CLI is demonstrably insufficient for a current required Spec 008 capability.
 
@@ -481,7 +481,7 @@ AMBIGUOUS_NON_IDEMPOTENT_RETRY=FORBIDDEN_WITHOUT_EXPLICIT_RECONCILIATION
 
 ## Phase 11 — Applicable Platform and Inherited Regression Qualification
 
-### [ ] T111 — Spec 003/006/007 regression and platform-bound qualification
+### [x] T111 — Spec 003/006/007 regression and platform-bound qualification
 
 **Purpose**: prove the full canonical Spec 008 implementation has not weakened inherited terminal, identity, evidence, authority, workbench, or platform truths.
 
@@ -514,7 +514,7 @@ AMBIGUOUS_NON_IDEMPOTENT_RETRY=FORBIDDEN_WITHOUT_EXPLICIT_RECONCILIATION
 
 ## Phase 12 — Adversarial Workflow Truth Campaign
 
-### [ ] T112 — Forged truth, stale candidate, replay, corruption, and recovery campaign
+### [x] T112 — Forged truth, stale candidate, replay, corruption, and recovery campaign
 
 **Purpose**: attack the complete Spec 008 truth model before final acceptance.
 
@@ -554,7 +554,9 @@ AMBIGUOUS_NON_IDEMPOTENT_RETRY=FORBIDDEN_WITHOUT_EXPLICIT_RECONCILIATION
 
 ## Phase 13 — Final Spec 008 Reconciliation and Closeout
 
-### [ ] T113 — Spec 008 final acceptance, evidence reconciliation, and program closeout
+### [x] T113 — Spec 008 final acceptance, evidence reconciliation, and program closeout
+
+**Checked-state note**: this T113 check records the final closeout candidate. It becomes `CLOSED_CANONICAL` only after this exact candidate lands by guarded normal merge and every actually-triggered post-merge push check succeeds.
 
 **Purpose**: reconcile every Spec 008 requirement/success criterion against canonical implementation evidence and close only what is actually proven.
 
