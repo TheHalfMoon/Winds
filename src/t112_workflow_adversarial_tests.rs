@@ -703,17 +703,27 @@ fn t112_store_decision_replay_lineage_and_stale_history_never_gain_current_autho
     let semantic_collision = decision(
         "decision-root",
         "ACCEPTED",
-        Some(old_candidate),
+        Some(old_candidate.clone()),
         Some("evidence:old"),
         DecisionContentState::Full,
         10,
     );
     assert!(store.append_workflow_decision(&semantic_collision).is_err());
 
+    let reverted = successor_decision(
+        "decision-reverted",
+        "REVERTED",
+        "decision-root",
+        Some(old_candidate.clone()),
+        Some("evidence:old"),
+        15,
+    );
+    store.append_workflow_decision(&reverted).unwrap();
+
     let current = successor_decision(
         "decision-current",
         "ACCEPTED",
-        "decision-root",
+        "decision-reverted",
         Some(current_candidate.clone()),
         Some("evidence:current"),
         20,
@@ -722,7 +732,7 @@ fn t112_store_decision_replay_lineage_and_stale_history_never_gain_current_autho
 
     let competing = successor_decision(
         "decision-competing",
-        "REVERTED",
+        "ACCEPTED",
         "decision-root",
         Some(current_candidate.clone()),
         Some("evidence:current"),
@@ -733,7 +743,10 @@ fn t112_store_decision_replay_lineage_and_stale_history_never_gain_current_autho
 
     let store = Store::open(&home).unwrap();
     let history = store.list_workflow_decisions("workflow-1").unwrap();
-    assert_eq!(history, vec![rejected.clone(), current.clone()]);
+    assert_eq!(
+        history,
+        vec![rejected.clone(), reverted.clone(), current.clone()]
+    );
 
     let context = DecisionApplicabilityContext::new(
         Some(current_candidate.clone()),
@@ -752,12 +765,22 @@ fn t112_store_decision_replay_lineage_and_stale_history_never_gain_current_autho
     );
     assert_eq!(
         store
+            .workflow_decision_applicability("decision-reverted", &context)
+            .unwrap(),
+        DecisionApplicability::Stale
+    );
+    assert_eq!(
+        evaluate_required_decision_evidence_completeness(&history[1], &context),
+        RequiredEvidenceCompleteness::Incomplete
+    );
+    assert_eq!(
+        store
             .workflow_decision_applicability("decision-current", &context)
             .unwrap(),
         DecisionApplicability::Applicable
     );
     assert_eq!(
-        evaluate_required_decision_evidence_completeness(&history[1], &context),
+        evaluate_required_decision_evidence_completeness(&history[2], &context),
         RequiredEvidenceCompleteness::Complete
     );
 
@@ -793,9 +816,13 @@ fn t112_store_decision_replay_lineage_and_stale_history_never_gain_current_autho
         reassignment_proven: false,
     };
     let handoff = project_reviewer_handoff(&input).unwrap();
-    assert_eq!(handoff.decisions.len(), 2);
+    assert_eq!(handoff.decisions.len(), 3);
     assert_eq!(
         handoff.decisions[0].applicability,
+        DecisionApplicability::Stale
+    );
+    assert_eq!(
+        handoff.decisions[1].applicability,
         DecisionApplicability::Stale
     );
     assert_eq!(handoff.verification, ExternalGateTruth::unknown());
@@ -808,7 +835,7 @@ fn t112_store_decision_replay_lineage_and_stale_history_never_gain_current_autho
 
     let mut stale_acceptance = input.clone();
     stale_acceptance.human_acceptance =
-        ExternalGateTruth::satisfied(TruthSource::HumanDecided, "decision-root").unwrap();
+        ExternalGateTruth::satisfied(TruthSource::HumanDecided, "decision-reverted").unwrap();
     assert!(project_reviewer_handoff(&stale_acceptance).is_err());
 
     drop(store);
