@@ -701,6 +701,34 @@ fn t114_resolver_rejects_descriptor_digest_mismatch_even_for_otherwise_exact_tru
 }
 
 #[test]
+fn t114_descriptor_integrity_precedes_explicit_policy_resolution() {
+    let mismatched = TargetRequest::from_untrusted_parts_for_test(
+        basic_descriptor(),
+        &"f".repeat(64),
+        TargetSelector::ExplicitPolicy,
+    )
+    .expect("syntactically valid untrusted fixture");
+    let claims = [runtime_claim(
+        "CODEX",
+        IdentitySourceClass::WindsLocallyObserved,
+    )];
+
+    assert_eq!(
+        resolve(
+            &mismatched,
+            &claims,
+            SourceRequirements::winds_observed(),
+            false,
+            AuthenticationTruth::Ready,
+            CapabilityTruth::Available,
+            ApprovalApplicability::Exact,
+            CurrentAuthorityTruth::Allowed,
+        ),
+        TargetResolution::Stale
+    );
+}
+
+#[test]
 fn t114_native_session_identity_is_closed_vocabulary_but_not_a_target_dimension() {
     let native = IdentityClaim::new(
         IdentityDimension::NativeSession,

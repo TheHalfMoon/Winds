@@ -310,14 +310,14 @@ pub(crate) struct TargetResolverInput<'a> {
 }
 
 pub(crate) fn resolve_target(input: &TargetResolverInput<'_>) -> TargetResolution {
-    if input.request.selector() == TargetSelector::ExplicitPolicy {
-        return TargetResolution::PolicyNotAuthorized;
-    }
     if !input.request.descriptor_digest_matches()
         || input.stale
         || input.approval == ApprovalApplicability::Stale
     {
         return TargetResolution::Stale;
+    }
+    if input.request.selector() == TargetSelector::ExplicitPolicy {
+        return TargetResolution::PolicyNotAuthorized;
     }
 
     for (dimension, expected, required_source) in
