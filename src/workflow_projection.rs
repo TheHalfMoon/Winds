@@ -412,7 +412,9 @@ fn validate_input(input: &WorkflowProjectionInput) -> ProjectionResult<()> {
     validate_decisions(input)?;
     validate_retry_truth(input)?;
     validate_gate(&input.verification, GateKind::Verification)?;
+    validate_gate_freshness(&input.verification, &input.decisions)?;
     validate_gate(&input.human_acceptance, GateKind::HumanAcceptance)?;
+    validate_gate_freshness(&input.human_acceptance, &input.decisions)?;
     validate_authority_ceiling(&input.authority_ceiling)?;
     validate_prospective_reconstruction(input)?;
     Ok(())
@@ -578,6 +580,28 @@ fn validate_gate(gate: &ExternalGateTruth, kind: GateKind) -> ProjectionResult<(
                 _ => {}
             }
         }
+    }
+    Ok(())
+}
+
+fn validate_gate_freshness(
+    gate: &ExternalGateTruth,
+    decisions: &[DecisionProjectionInput],
+) -> ProjectionResult<()> {
+    if gate.state != ExternalGateState::Satisfied {
+        return Ok(());
+    }
+    let Some(reference) = gate.reference.as_deref() else {
+        return Ok(());
+    };
+    if decisions.iter().any(|decision| {
+        decision.applicability == DecisionApplicability::Stale
+            && (decision.record.decision_id == reference
+                || decision.record.evidence_reference.as_deref() == Some(reference))
+    }) {
+        return Err(
+            "SATISFIED external gate cannot reference stale decision/evidence truth".to_owned(),
+        );
     }
     Ok(())
 }
