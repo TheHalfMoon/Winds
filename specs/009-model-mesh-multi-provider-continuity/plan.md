@@ -187,12 +187,17 @@ model_mesh_target_requests
   requested_provider_id?
   requested_model_id?
   selector_class
+  selection_decision_id? FK -> workflow_decisions
+  selection_approval_id? FK -> agentic_delegation_approvals
   policy_reference?
+  policy_digest?
   created_unix_ms
 
 model_mesh_identity_claims
   identity_claim_id PK
-  target_request_id FK -> model_mesh_target_requests
+  target_request_id? FK -> model_mesh_target_requests
+  actor_binding_id? FK -> workflow_actor_bindings
+  claim_subject              # REQUEST_TARGET | ACTOR
   dimension
   normalized_value?
   source_class
@@ -208,22 +213,38 @@ model_mesh_continuity_events
   continuity_class
   context_digest?
   completeness_state
-  authority_basis?
+  authority_decision_id? FK -> workflow_decisions
+  authority_approval_id? FK -> agentic_delegation_approvals
+  authority_policy_reference?
+  authority_policy_digest?
   created_unix_ms
+
+model_mesh_continuity_identity_claims
+  continuity_event_id FK -> model_mesh_continuity_events
+  actor_role                # SOURCE | DESTINATION
+  identity_claim_id FK -> model_mesh_identity_claims
+  PRIMARY KEY (continuity_event_id, actor_role, identity_claim_id)
 ```
 
 Required constraints:
 
-- all three tables are historical append-only records; updates/deletes are rejected by schema-level protection;
+- all four relations are historical append-only records; updates/deletes are rejected by schema-level protection;
 - every target request is bound to exactly one canonical `StageRun` attempt;
 - insertion validates through joins that the stage belongs to its existing canonical workflow/workspace/workstream hierarchy;
-- any runtime binding referenced by an identity claim must belong to the relevant canonical Winds session/actor context; cross-workflow coincidence is rejected;
+- a target request is not applicable unless its selector is bound to an exact immutable accepted authority record: exactly one of `selection_decision_id` or `selection_approval_id`; a human-selected request must reference an accepted `HUMAN_DECIDED` workflow decision or content-bound human approval whose scope matches the exact canonical work/stage/target context;
+- `EXPLICIT_POLICY` additionally requires a bounded `policy_reference` plus exact policy version/content digest, and the referenced decision/approval must authorize that exact policy basis; a policy label by itself is never authority;
+- identity claims use an exclusive subject binding: `REQUEST_TARGET` requires `target_request_id` and forbids `actor_binding_id`, while `ACTOR` requires exactly one `actor_binding_id` and does not borrow target identity from display-name coincidence;
+- any runtime binding referenced by an actor identity claim must belong to the same canonical Winds session/actor context; cross-workflow or cross-actor coincidence is rejected;
 - any source/destination actor binding referenced by a continuity event must belong to the relevant stage lineage or an explicitly qualified source-stage handoff relation selected later by Tasks;
+- every continuity-event actor identity is role-specific: `model_mesh_continuity_identity_claims.actor_role=SOURCE` may reference only claims bound to that event's `source_actor_binding_id`, and `DESTINATION` only claims bound to its `destination_actor_binding_id`; SQL constraints/triggers must reject mismatched actor, runtime-binding, workflow/stage lineage, or event associations;
+- provider/model unknown state for either actor is preserved by an explicit source-labelled unknown/unavailable claim rather than inferred from the target request or the opposite actor;
+- any continuity event that claims an authorized mutating continuation must reference exactly one immutable existing authority record via `authority_decision_id` or `authority_approval_id`; observation-only `UNAVAILABLE`/`UNPROVEN` records may carry no authority reference only when they explicitly make `NO_AUTHORITY_CLAIM` and cannot be projected as permitted execution;
+- policy-authorized continuity additionally binds the exact policy reference and digest; revalidation failure makes permission stale/denied without altering the historical event or identity claims;
 - target request replay uses an operation/idempotency identity selected in Tasks; replay may not create duplicate current truth;
-- provider/model identifiers and policy references are bounded and validated before persistence;
+- provider/model identifiers, policy references, and policy digests are bounded and validated before persistence;
 - raw prompts, terminal transcripts, environment dumps, credentials, provider-private memory, arbitrary provider response payloads, and model output are not persisted in these tables;
 - runtime executable/version facts remain referenced from accepted runtime bindings/discovery rather than copied into a competing identity table;
-- no “current target” mutable singleton row is selected; current/applicable target truth is a deterministic projection over append-only stage-bound records.
+- no “current target” mutable singleton row is selected; current/applicable target truth is a deterministic projection over append-only stage-bound records plus revalidated immutable authority basis.
 
 The initial migration does **not** need a usage/cost table. P2 usage/cost observation may be added only in a later authorized task if an already-existing structured observation proves a concrete need; otherwise unknown satisfies the contract.
 
@@ -241,8 +262,9 @@ Evaluation order should remain explicit:
 5. detect unknown/unavailable/ambiguous/conflicting/stale identity
 6. check required capability state
 7. retain authentication readiness as its own truth dimension
-8. evaluate existing execution/delegation authority
-9. return resolution; do not execute
+8. revalidate the exact immutable selection/permission basis (workflow decision or content-bound approval, plus policy reference/digest where applicable)
+9. evaluate the current existing execution/delegation authority ceiling against that basis
+10. return resolution; do not execute
 ```
 
 Rules:
@@ -251,8 +273,8 @@ Rules:
 - `EXACT_MATCH` means only identity/capability/request applicability; it does not mean authenticated, authorized to execute, verified, accepted, or landed;
 - unavailable requested target never silently selects another target;
 - ambiguous target never triggers a score/rank/winner function;
-- `EXPLICIT_POLICY` is allowed only when the request already names an accepted policy reference whose deterministic semantics are separately authorized; Spec 009 first implementation does not invent a policy engine;
-- policy selection must remain distinguishable from human selection;
+- `EXPLICIT_POLICY` is allowed only when the request already names an accepted policy reference whose deterministic semantics are separately authorized, binds the exact version/content digest, and cites the immutable decision/approval that authorized that policy; Spec 009 first implementation does not invent a policy engine;
+- policy selection must remain distinguishable from human selection, and either selector becomes stale/denied if its referenced authority record, canonical scope, or policy digest no longer revalidates;
 - alternate-target selection is a new explicit request/event, preserving the failed/unavailable original request;
 - usage/cost observations cannot affect first-slice resolution.
 
@@ -288,9 +310,9 @@ Drift evaluation must deterministically cover:
 - native-session identity/ownership movement;
 - `WorkflowRun` / `StageRun` attempt movement;
 - candidate/artifact/evidence movement through existing Spec 008 freshness evaluation;
-- authority/policy movement.
+- authority decision/approval applicability or exact policy reference/digest movement.
 
-Drift invalidates only the claims whose observation basis depends on the moved identity and preserves every historical record.
+Drift invalidates only the claims or permissions whose observation/authority basis depends on the moved identity. Historical target requests, actor-specific identity claims, continuity-event role associations, decisions/approvals, and failed/stale permission results remain append-only and inspectable.
 
 ### 6. Direction-neutral continuity context over existing context/reconstruction seams
 
@@ -339,14 +361,14 @@ At minimum expose:
 
 - exact workflow/stage-attempt identity;
 - requested runtime/provider/model and selector source;
-- source-labelled observed/declared/agent-reported identity claims;
+- source-labelled observed/declared/agent-reported identity claims, with provider/model claims separated by exact source versus destination actor role for continuity events;
 - target resolution and explicit blocker category;
 - runtime binding/native-session identity and freshness where applicable;
 - continuity class plus source/destination actor/runtime identity;
 - context digest and bounded transfer/reconstruction completeness/loss summary;
 - candidate/artifact/evidence freshness where applicable;
 - authentication readiness as separate truth;
-- existing authority ceiling/result as separate truth;
+- exact immutable selection/permission basis (`workflow_decision` or content-bound approval, plus policy reference/digest where applicable), its revalidation state, and the current existing authority ceiling/result as separate truth;
 - verification and human acceptance as separate existing authority states when in view;
 - optional usage/cost as unknown unless a qualified observation exists.
 
@@ -422,6 +444,8 @@ Before target/continuity records are treated as applicable, Winds must validate:
 
 - referenced `StageRun` and parent workflow exist and match canonical work identity;
 - referenced runtime/actor bindings exist and belong to the applicable canonical context;
+- each actor-scoped identity claim is bound to exactly one actor binding, and each continuity-event SOURCE/DESTINATION association references a claim bound to the matching event actor;
+- each applicable request/authorized continuity event has the required immutable decision/approval authority reference, and any policy-selected record has the exact policy reference plus digest;
 - runtime/provider/model identifiers are structurally valid and bounded;
 - selector/source/dimension/continuity/completeness enums are known;
 - provider/model/native claims carry the required source and observation basis for their proof level;
@@ -446,8 +470,10 @@ The architecture remains one Winds process, but SQLite/WAL and command concurren
 Required transaction rules:
 
 - target-request insertion plus canonical stage validation occur atomically;
-- identity-claim insertion validates referenced request/runtime binding in the same transaction;
-- continuity-event insertion validates request plus actor binding relationship atomically;
+- identity-claim insertion validates its exclusive request-or-actor subject plus any runtime binding in the same transaction;
+- target-request insertion validates the exact immutable selector authority basis (decision/approval and policy digest where applicable) in the same transaction;
+- continuity-event insertion validates request, source/destination actor bindings, and exact immutable permission basis atomically;
+- continuity-event role/identity-claim association validates that each SOURCE/DESTINATION claim belongs to the exact matching event actor before commit;
 - replay/idempotency checks occur within the write transaction;
 - no transaction may hold a database write lock while waiting on a runtime child, provider, network call, reviewer, human, or terminal interaction;
 - identity observation happens before/after the transaction as appropriate, and only the bounded qualified result is persisted;
