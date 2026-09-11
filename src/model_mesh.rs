@@ -1,5 +1,11 @@
-use crate::agentic_runtime::RuntimeKind;
-use serde::Serialize;
+use crate::agentic_runtime::{
+    AuthReadiness, EvidenceSource, RuntimeDiscovery, RuntimeDiscoveryState, RuntimeKind,
+    RuntimeSessionBinding, runtime_binding_matches_discovery,
+};
+use crate::domain::WindsSessionRecord;
+use crate::domain::workflow::{StageRunIdentity, WorkflowRunIdentity};
+use crate::store::StoredWorkflowActorBinding;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
@@ -122,6 +128,34 @@ impl ModelMeshTargetDescriptorV1 {
         Ok(sha256_hex(self.canonical_json()?.as_bytes()))
     }
 
+    pub(crate) fn workspace_id(&self) -> &str {
+        &self.workspace_id
+    }
+
+    pub(crate) fn workstream_id(&self) -> &str {
+        &self.workstream_id
+    }
+
+    pub(crate) fn workflow_run_id(&self) -> &str {
+        &self.workflow_run_id
+    }
+
+    pub(crate) fn stage_run_id(&self) -> &str {
+        &self.stage_run_id
+    }
+
+    pub(crate) fn actor_binding_id(&self) -> &str {
+        &self.actor_binding_id
+    }
+
+    pub(crate) fn winds_session_id(&self) -> &str {
+        &self.winds_session_id
+    }
+
+    pub(crate) fn actor_role(&self) -> &str {
+        &self.actor_role
+    }
+
     pub(crate) fn runtime(&self) -> RuntimeKind {
         self.runtime
     }
@@ -133,6 +167,155 @@ impl ModelMeshTargetDescriptorV1 {
     pub(crate) fn model(&self) -> &TargetDimension<ExactModelId> {
         &self.model
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ModelMeshRuntimeObservation {
+    pub(crate) runtime_claim: IdentityClaim,
+    pub(crate) provider_claim: Option<IdentityClaim>,
+    pub(crate) model_claim: Option<IdentityClaim>,
+    pub(crate) authentication: AuthenticationTruth,
+    pub(crate) binding_stale: bool,
+}
+
+pub(crate) fn adapt_runtime_truth(
+    discovery: &RuntimeDiscovery,
+    binding: Option<&RuntimeSessionBinding>,
+) -> ModelMeshResult<ModelMeshRuntimeObservation> {
+    let (runtime_claim, binding_stale) = match discovery.state {
+        RuntimeDiscoveryState::Present => {
+            if discovery.executable.is_none()
+                || discovery.version.source != EvidenceSource::WindsLocallyObserved
+            {
+                return Err(
+                    "present runtime discovery lacks accepted Winds-local identity evidence".into(),
+                );
+            }
+            let stale = binding
+                .is_some_and(|binding| !runtime_binding_matches_discovery(binding, discovery));
+            (
+                IdentityClaim::new(
+                    IdentityDimension::Runtime,
+                    Some(discovery.runtime.as_str()),
+                    IdentitySourceClass::WindsLocallyObserved,
+                    Some("accepted runtime discovery"),
+                )?,
+                stale,
+            )
+        }
+        RuntimeDiscoveryState::Unavailable => (
+            IdentityClaim::new(
+                IdentityDimension::Runtime,
+                None,
+                IdentitySourceClass::Unavailable,
+                Some("runtime discovery unavailable"),
+            )?,
+            binding.is_some(),
+        ),
+        RuntimeDiscoveryState::UnsupportedVersion | RuntimeDiscoveryState::VersionUnavailable => (
+            IdentityClaim::new(
+                IdentityDimension::Runtime,
+                Some(discovery.runtime.as_str()),
+                IdentitySourceClass::WindsLocallyObserved,
+                Some("runtime discovery is not currently qualified"),
+            )?,
+            true,
+        ),
+    };
+
+    let authentication = match discovery.auth_readiness.readiness {
+        AuthReadiness::Unknown => AuthenticationTruth::Unknown,
+    };
+
+    Ok(ModelMeshRuntimeObservation {
+        runtime_claim,
+        // Canonical T115 has no accepted production provider/model observation path.
+        // Runtime kind, executable identity, version text, and native session ids never fill these.
+        provider_claim: None,
+        model_claim: None,
+        authentication,
+        binding_stale,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ModelMeshActorScope {
+    workspace_id: String,
+    workstream_id: String,
+    workflow_run_id: String,
+    stage_run_id: String,
+    actor_binding_id: String,
+    winds_session_id: String,
+    bound_runtime: Option<RuntimeKind>,
+}
+
+impl ModelMeshActorScope {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn target_descriptor(
+        &self,
+        actor_role: &str,
+        runtime: RuntimeKind,
+        provider: TargetDimension<ExactProviderId>,
+        model: TargetDimension<ExactModelId>,
+    ) -> ModelMeshResult<ModelMeshTargetDescriptorV1> {
+        if self.bound_runtime.is_some_and(|bound| bound != runtime) {
+            return Err(
+                "Model Mesh target runtime does not match the actor runtime binding".into(),
+            );
+        }
+        ModelMeshTargetDescriptorV1::new(
+            &self.workspace_id,
+            &self.workstream_id,
+            &self.workflow_run_id,
+            &self.stage_run_id,
+            &self.actor_binding_id,
+            &self.winds_session_id,
+            actor_role,
+            runtime,
+            provider,
+            model,
+        )
+    }
+}
+
+pub(crate) fn adapt_actor_scope(
+    workflow: &WorkflowRunIdentity,
+    stage: &StageRunIdentity,
+    session: &WindsSessionRecord,
+    actor: &StoredWorkflowActorBinding,
+    runtime_binding: Option<&RuntimeSessionBinding>,
+) -> ModelMeshResult<ModelMeshActorScope> {
+    if stage.workflow_run_id != workflow.workflow_run_id {
+        return Err("Model Mesh stage does not belong to the workflow".into());
+    }
+    if actor.stage_run_id != stage.stage_run_id {
+        return Err("Model Mesh actor binding does not belong to the stage".into());
+    }
+    if actor.winds_session_id != session.session_id {
+        return Err("Model Mesh actor binding does not belong to the Winds session".into());
+    }
+    if session.workstream_id != workflow.workstream_id {
+        return Err("Model Mesh Winds session does not belong to the workflow workstream".into());
+    }
+    let bound_runtime = match (actor.runtime_binding_id.as_deref(), runtime_binding) {
+        (Some(expected), Some(binding))
+            if expected == binding.binding_id && binding.session_id == session.session_id =>
+        {
+            Some(binding.runtime)
+        }
+        (None, None) => None,
+        _ => return Err("Model Mesh actor runtime binding context is inconsistent".into()),
+    };
+
+    Ok(ModelMeshActorScope {
+        workspace_id: normalize_scope(&workflow.workspace_id, "workspace id")?,
+        workstream_id: normalize_scope(&workflow.workstream_id, "workstream id")?,
+        workflow_run_id: normalize_scope(&workflow.workflow_run_id, "workflow run id")?,
+        stage_run_id: normalize_scope(&stage.stage_run_id, "stage run id")?,
+        actor_binding_id: normalize_scope(&actor.binding_id, "actor binding id")?,
+        winds_session_id: normalize_scope(&session.session_id, "Winds session id")?,
+        bound_runtime,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -477,8 +660,87 @@ pub(crate) struct ModelMeshAuthorityEnvelopeV1 {
 }
 
 impl ModelMeshAuthorityEnvelopeV1 {
+    pub(crate) fn for_target_selection(
+        target: &ModelMeshTargetDescriptorV1,
+    ) -> ModelMeshResult<Self> {
+        let target_descriptor_digest = target.digest()?;
+        Self::from_parts(
+            ModelMeshAuthorityPurpose::TargetSelection,
+            target.workspace_id(),
+            target.workstream_id(),
+            target.winds_session_id(),
+            target.workflow_run_id(),
+            target.stage_run_id(),
+            target.actor_binding_id(),
+            target.actor_role(),
+            &target_descriptor_digest,
+            None,
+        )
+    }
+
+    pub(crate) fn for_continuity_permission(
+        target: &ModelMeshTargetDescriptorV1,
+        permission: &ModelMeshContinuityPermissionDescriptorV1,
+    ) -> ModelMeshResult<Self> {
+        let target_descriptor_digest = target.digest()?;
+        if permission.workflow_run_id != target.workflow_run_id() {
+            return Err("continuity permission workflow does not match target descriptor".into());
+        }
+        if permission.stage_run_id != target.stage_run_id() {
+            return Err("continuity permission stage does not match target descriptor".into());
+        }
+        if permission.target_descriptor_digest != target_descriptor_digest {
+            return Err(
+                "continuity permission target digest does not match target descriptor".into(),
+            );
+        }
+        let continuity_permission_digest = permission.digest()?;
+        Self::from_parts(
+            ModelMeshAuthorityPurpose::ContinuityPermission,
+            target.workspace_id(),
+            target.workstream_id(),
+            target.winds_session_id(),
+            target.workflow_run_id(),
+            target.stage_run_id(),
+            target.actor_binding_id(),
+            target.actor_role(),
+            &target_descriptor_digest,
+            Some(&continuity_permission_digest),
+        )
+    }
+
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
+        purpose: ModelMeshAuthorityPurpose,
+        workspace_id: &str,
+        workstream_id: &str,
+        session_id: &str,
+        workflow_run_id: &str,
+        stage_run_id: &str,
+        actor_binding_id: &str,
+        actor_role: &str,
+        target_descriptor_digest: &str,
+        continuity_permission_digest: Option<&str>,
+    ) -> ModelMeshResult<Self> {
+        // T114 regression fixtures predate the safe split constructors. This compatibility seam is
+        // test-only so production callers cannot create an unbound continuity authority envelope.
+        Self::from_parts(
+            purpose,
+            workspace_id,
+            workstream_id,
+            session_id,
+            workflow_run_id,
+            stage_run_id,
+            actor_binding_id,
+            actor_role,
+            target_descriptor_digest,
+            continuity_permission_digest,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn from_parts(
         purpose: ModelMeshAuthorityPurpose,
         workspace_id: &str,
         workstream_id: &str,
@@ -547,6 +809,67 @@ impl ModelMeshAuthorityEnvelopeV1 {
 
     pub(crate) fn digest(&self) -> ModelMeshResult<String> {
         Ok(sha256_hex(self.canonical_json()?.as_bytes()))
+    }
+
+    pub(crate) fn from_canonical_json(value: &str) -> ModelMeshResult<Self> {
+        let parsed: OwnedCanonicalAuthorityEnvelopeV1 = serde_json::from_str(value)
+            .map_err(|error| format!("invalid Model Mesh authority envelope JSON: {error}"))?;
+        if parsed.schema_version != 1 {
+            return Err("unsupported Model Mesh authority envelope schema version".into());
+        }
+        let purpose = match parsed.purpose.as_str() {
+            "TARGET_SELECTION" => ModelMeshAuthorityPurpose::TargetSelection,
+            "CONTINUITY_PERMISSION" => ModelMeshAuthorityPurpose::ContinuityPermission,
+            _ => return Err("unsupported Model Mesh authority purpose".into()),
+        };
+        let envelope = Self::from_parts(
+            purpose,
+            &parsed.workspace_id,
+            &parsed.workstream_id,
+            &parsed.session_id,
+            &parsed.workflow_run_id,
+            &parsed.stage_run_id,
+            &parsed.actor_binding_id,
+            &parsed.actor_role,
+            &parsed.target_descriptor_digest,
+            parsed.continuity_permission_digest.as_deref(),
+        )?;
+        if envelope.canonical_json()? != value {
+            return Err("Model Mesh authority envelope is not exact canonical JSON".into());
+        }
+        Ok(envelope)
+    }
+
+    pub(crate) fn purpose(&self) -> ModelMeshAuthorityPurpose {
+        self.purpose
+    }
+
+    pub(crate) fn workspace_id(&self) -> &str {
+        &self.workspace_id
+    }
+    pub(crate) fn workstream_id(&self) -> &str {
+        &self.workstream_id
+    }
+    pub(crate) fn session_id(&self) -> &str {
+        &self.session_id
+    }
+    pub(crate) fn workflow_run_id(&self) -> &str {
+        &self.workflow_run_id
+    }
+    pub(crate) fn stage_run_id(&self) -> &str {
+        &self.stage_run_id
+    }
+    pub(crate) fn actor_binding_id(&self) -> &str {
+        &self.actor_binding_id
+    }
+    pub(crate) fn actor_role(&self) -> &str {
+        &self.actor_role
+    }
+    pub(crate) fn target_descriptor_digest(&self) -> &str {
+        &self.target_descriptor_digest
+    }
+    pub(crate) fn continuity_permission_digest(&self) -> Option<&str> {
+        self.continuity_permission_digest.as_deref()
     }
 }
 
@@ -759,4 +1082,20 @@ struct CanonicalAuthorityEnvelopeV1<'a> {
     actor_role: &'a str,
     target_descriptor_digest: &'a str,
     continuity_permission_digest: Option<&'a str>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OwnedCanonicalAuthorityEnvelopeV1 {
+    schema_version: u8,
+    purpose: String,
+    workspace_id: String,
+    workstream_id: String,
+    session_id: String,
+    workflow_run_id: String,
+    stage_run_id: String,
+    actor_binding_id: String,
+    actor_role: String,
+    target_descriptor_digest: String,
+    continuity_permission_digest: Option<String>,
 }
