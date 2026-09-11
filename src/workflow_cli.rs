@@ -120,7 +120,7 @@ fn start_stage(flags: HashMap<String, String>) -> Result<Value> {
     let stage = require_stage(&store, &flags)?;
     let request = StageTransitionRequest::new(
         required(&flags, "operation-id")?,
-        stage.lifecycle_state,
+        StageLifecycleState::Prepared,
         StageLifecycleState::Active,
         TruthSource::WindsObserved,
         StageTransitionAuthority::None,

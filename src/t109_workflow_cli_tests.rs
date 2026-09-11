@@ -119,6 +119,13 @@ fn t109_stage_prepare_start_and_safe_transition_are_exact_and_terminal_strings_f
     assert_eq!(waiting["outcome"]["source"], "WINDS_OBSERVED");
     assert_eq!(waiting["outcome"]["authority"], "NONE");
 
+    let mut forged_restart = base_flags(&home, "start-stage");
+    forged_restart.extend([
+        ("stage-id".to_owned(), "stage-1".to_owned()),
+        ("operation-id".to_owned(), "restart-from-waiting".to_owned()),
+    ]);
+    assert!(execute(forged_restart).is_err());
+
     let mut forged = base_flags(&home, "transition-stage");
     forged.extend([
         ("stage-id".to_owned(), "stage-1".to_owned()),
