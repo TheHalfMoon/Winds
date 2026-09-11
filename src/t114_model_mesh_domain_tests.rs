@@ -554,7 +554,7 @@ fn t114_continuity_permission_and_authority_envelopes_are_content_bound() {
         Some("binding-source"),
         Some("binding-1"),
         ContinuityClass::Handoff,
-        &target.target_descriptor_digest,
+        target.target_descriptor_digest(),
         ContextDigest::exact(&"a".repeat(64)).unwrap(),
     )
     .unwrap();
@@ -568,7 +568,7 @@ fn t114_continuity_permission_and_authority_envelopes_are_content_bound() {
         "stage-1",
         "binding-1",
         "planner",
-        &target.target_descriptor_digest,
+        target.target_descriptor_digest(),
         Some(&permission_digest),
     )
     .unwrap();
@@ -581,7 +581,7 @@ fn t114_continuity_permission_and_authority_envelopes_are_content_bound() {
         Some("binding-source"),
         Some("binding-1"),
         ContinuityClass::Reconstructed,
-        &target.target_descriptor_digest,
+        target.target_descriptor_digest(),
         ContextDigest::exact(&"a".repeat(64)).unwrap(),
     )
     .unwrap();
@@ -668,7 +668,36 @@ fn t114_exact_match_is_only_target_resolution_not_verification_acceptance_or_lan
         ),
         TargetResolution::ExactMatch
     );
-    assert_eq!(request.selector, TargetSelector::Human);
+    assert_eq!(request.selector(), TargetSelector::Human);
+}
+
+#[test]
+fn t114_resolver_rejects_descriptor_digest_mismatch_even_for_otherwise_exact_truth() {
+    let descriptor = basic_descriptor();
+    let mismatched = TargetRequest::from_untrusted_parts_for_test(
+        descriptor,
+        &"f".repeat(64),
+        TargetSelector::Human,
+    )
+    .expect("syntactically valid untrusted fixture");
+    let claims = [runtime_claim(
+        "CODEX",
+        IdentitySourceClass::WindsLocallyObserved,
+    )];
+
+    assert_eq!(
+        resolve(
+            &mismatched,
+            &claims,
+            SourceRequirements::winds_observed(),
+            false,
+            AuthenticationTruth::Ready,
+            CapabilityTruth::Available,
+            ApprovalApplicability::Exact,
+            CurrentAuthorityTruth::Allowed,
+        ),
+        TargetResolution::Stale
+    );
 }
 
 #[test]

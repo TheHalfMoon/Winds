@@ -137,9 +137,9 @@ impl ModelMeshTargetDescriptorV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TargetRequest {
-    pub(crate) descriptor: ModelMeshTargetDescriptorV1,
-    pub(crate) target_descriptor_digest: String,
-    pub(crate) selector: TargetSelector,
+    descriptor: ModelMeshTargetDescriptorV1,
+    target_descriptor_digest: String,
+    selector: TargetSelector,
 }
 
 impl TargetRequest {
@@ -151,6 +151,40 @@ impl TargetRequest {
         Ok(Self {
             descriptor,
             target_descriptor_digest,
+            selector,
+        })
+    }
+
+    pub(crate) fn descriptor(&self) -> &ModelMeshTargetDescriptorV1 {
+        &self.descriptor
+    }
+
+    pub(crate) fn target_descriptor_digest(&self) -> &str {
+        &self.target_descriptor_digest
+    }
+
+    pub(crate) fn selector(&self) -> TargetSelector {
+        self.selector
+    }
+
+    fn descriptor_digest_matches(&self) -> bool {
+        self.descriptor
+            .digest()
+            .is_ok_and(|digest| digest == self.target_descriptor_digest)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_untrusted_parts_for_test(
+        descriptor: ModelMeshTargetDescriptorV1,
+        target_descriptor_digest: &str,
+        selector: TargetSelector,
+    ) -> ModelMeshResult<Self> {
+        Ok(Self {
+            descriptor,
+            target_descriptor_digest: normalize_sha256(
+                target_descriptor_digest,
+                "target descriptor digest",
+            )?,
             selector,
         })
     }
@@ -276,10 +310,13 @@ pub(crate) struct TargetResolverInput<'a> {
 }
 
 pub(crate) fn resolve_target(input: &TargetResolverInput<'_>) -> TargetResolution {
-    if input.request.selector == TargetSelector::ExplicitPolicy {
+    if input.request.selector() == TargetSelector::ExplicitPolicy {
         return TargetResolution::PolicyNotAuthorized;
     }
-    if input.stale || input.approval == ApprovalApplicability::Stale {
+    if !input.request.descriptor_digest_matches()
+        || input.stale
+        || input.approval == ApprovalApplicability::Stale
+    {
         return TargetResolution::Stale;
     }
 
