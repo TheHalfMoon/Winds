@@ -1,6 +1,12 @@
+use crate::agentic_runtime::{
+    AgentExecutionObservation, AuthReadiness, AuthReadinessEvidence, EvidenceSource,
+    RuntimeDiscovery, RuntimeDiscoveryState, RuntimeExecutableIdentity, RuntimeKind,
+    RuntimeResumeResolution, RuntimeVersionEvidence, RuntimeVersionState,
+};
 use crate::domain::workflow::projection::{
-    AuthorityCeilingTruth, DecisionProjectionInput, ExternalGateTruth, ResumeDisposition,
-    WorkflowProjectionInput, project_resume_preview, project_reviewer_handoff,
+    ActorBindingProjectionInput, ActorRoleTruth, AuthorityCeilingTruth, DecisionProjectionInput,
+    ExternalGateTruth, ResumeDisposition, WorkflowProjectionInput, project_resume_preview,
+    project_reviewer_handoff,
 };
 use crate::domain::workflow::{
     ArtifactBaselineIdentity, ArtifactBaselineKind, ArtifactBaselineRequirement, BaselineFreshness,
@@ -11,13 +17,13 @@ use crate::domain::workflow::{
     ReconstructionTransferState, RequiredEvidenceCompleteness, RetryFailureObservation,
     SideEffectTruth, StageAttemptRelation, StageLifecycleState, StageRunIdentity,
     StageTransitionAuthority, StageTransitionOutcome, StageTransitionRequest, TruthSource,
-    WorkflowDecisionInput, WorkflowDecisionRecord, WorkflowRunIdentity,
+    WorkflowContinuationClass, WorkflowDecisionInput, WorkflowDecisionRecord, WorkflowRunIdentity,
     build_reconstruction_preview, evaluate_artifact_baseline_requirement,
     evaluate_decision_applicability, evaluate_required_decision_evidence_completeness,
     evaluate_retry_failure, evaluate_stage_transition, parse_reconstruction_report_json,
     validate_successor_attempt,
 };
-use crate::store::{NewWorkspace, NewWorkstream, Store};
+use crate::store::{NewWindsSession, NewWorkspace, NewWorkstream, Store};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -363,6 +369,34 @@ fn t112_retry_exhaustion_and_ambiguous_effects_never_silently_reset_or_repeat() 
     assert_eq!(resolution.outcome_reason, RETRY_OUTCOME_AMBIGUOUS_EFFECT);
 }
 
+fn runtime_discovery() -> RuntimeDiscovery {
+    #[cfg(windows)]
+    let executable_path = PathBuf::from(r"C:\winds-t112-claude.exe");
+    #[cfg(not(windows))]
+    let executable_path = PathBuf::from("/tmp/winds-t112-claude");
+    RuntimeDiscovery {
+        runtime: RuntimeKind::Claude,
+        state: RuntimeDiscoveryState::Present,
+        executable: Some(RuntimeExecutableIdentity {
+            observed_path: executable_path.clone(),
+            canonical_path: executable_path,
+            byte_len: 7,
+            sha256: "a".repeat(64),
+        }),
+        version: RuntimeVersionEvidence {
+            state: RuntimeVersionState::Observed,
+            value: Some("2.1.248-t112-fixture".to_owned()),
+            source: EvidenceSource::WindsLocallyObserved,
+        },
+        capabilities: Vec::new(),
+        auth_readiness: AuthReadinessEvidence {
+            readiness: AuthReadiness::Unknown,
+            source: EvidenceSource::Unavailable,
+        },
+        agent_execution: AgentExecutionObservation::NotPerformed,
+    }
+}
+
 fn seeded_store(name: &str) -> (PathBuf, Store) {
     let home = test_home(name);
     let store = Store::open(&home).unwrap();
@@ -522,6 +556,252 @@ fn t112_corrupt_database_bytes_are_preserved_without_clean_reinitialization() {
 
     assert!(Store::open(&home).is_err());
     assert_eq!(fs::read(&database).unwrap(), sentinel);
+    cleanup(home);
+}
+
+#[test]
+fn t112_store_runtime_identity_never_self_promotes_to_exact_native_resume_after_restart() {
+    let (home, store) = seeded_store("runtime-identity");
+    for (session_id, display_name) in [
+        ("session-1", "T112 runtime session"),
+        ("session-2", "T112 reused runtime session"),
+    ] {
+        store
+            .create_winds_session(
+                NewWindsSession {
+                    session_id,
+                    workstream_id: "workstream-1",
+                    display_name,
+                },
+                5,
+            )
+            .unwrap();
+    }
+
+    store
+        .create_runtime_session_binding(
+            "runtime-1",
+            "session-1",
+            &runtime_discovery(),
+            Some("native-session-1"),
+            6,
+        )
+        .unwrap();
+    let runtime = store.load_runtime_session_binding("runtime-1").unwrap();
+    let candidate_resolution = RuntimeResumeResolution::Candidate(Box::new(runtime));
+
+    assert_eq!(
+        store
+            .create_actor_binding_from_runtime_resolution(
+                "binding-unproven",
+                "stage-1",
+                "session-1",
+                &candidate_resolution,
+                7,
+            )
+            .unwrap(),
+        WorkflowContinuationClass::Unproven
+    );
+    assert!(
+        store
+            .create_actor_binding_from_runtime_resolution(
+                "binding-reused",
+                "stage-1",
+                "session-2",
+                &candidate_resolution,
+                7,
+            )
+            .is_err()
+    );
+    drop(store);
+
+    let store = Store::open(&home).unwrap();
+    let reopened = store
+        .load_workflow_actor_binding("binding-unproven")
+        .unwrap();
+    assert_eq!(reopened.continuation, WorkflowContinuationClass::Unproven);
+    assert_eq!(reopened.runtime_binding_id.as_deref(), Some("runtime-1"));
+
+    let input = WorkflowProjectionInput {
+        expected_workspace_id: "workspace-1".to_owned(),
+        expected_workstream_id: "workstream-1".to_owned(),
+        workflow: WorkflowRunIdentity::new("workflow-1", "workspace-1", "workstream-1").unwrap(),
+        stage: StageRunIdentity::new("stage-1", "workflow-1", "review", 1, None).unwrap(),
+        lifecycle_state: StageLifecycleState::Active,
+        lifecycle_source: TruthSource::WindsObserved,
+        lifecycle_authority: StageTransitionAuthority::None,
+        actor: Some(ActorBindingProjectionInput {
+            binding_id: reopened.binding_id,
+            stage_run_id: reopened.stage_run_id,
+            winds_session_id: reopened.winds_session_id,
+            runtime_binding_id: reopened.runtime_binding_id,
+            continuation: reopened.continuation,
+            role: ActorRoleTruth::Unknown,
+            reconstruction_report: None,
+        }),
+        current_candidate: None,
+        baselines: Vec::new(),
+        decisions: Vec::new(),
+        retry_failure: None,
+        retry_outcome_reason: None,
+        verification: ExternalGateTruth::unknown(),
+        human_acceptance: ExternalGateTruth::unknown(),
+        authority_ceiling: AuthorityCeilingTruth::Unknown,
+        prospective_reconstruction: None,
+        reassignment_proven: false,
+    };
+    let resume = project_resume_preview(&input).unwrap();
+    assert_eq!(resume.disposition, ResumeDisposition::Unavailable);
+    assert_ne!(resume.disposition, ResumeDisposition::ExactNativeResume);
+
+    store
+        .mark_runtime_binding_ownership_lost("runtime-1", 8)
+        .unwrap();
+    assert!(
+        store
+            .load_workflow_actor_binding("binding-unproven")
+            .is_err()
+    );
+
+    store
+        .connection
+        .execute(
+            "INSERT INTO workflow_actor_bindings(
+                binding_id, stage_run_id, winds_session_id, runtime_binding_id,
+                continuation_class, bound_unix_ms
+             ) VALUES (
+                'binding-forged-resumed', 'stage-1', 'session-1', 'runtime-1',
+                'RESUMED', 9
+             )",
+            [],
+        )
+        .unwrap();
+    assert!(
+        store
+            .load_workflow_actor_binding("binding-forged-resumed")
+            .is_err()
+    );
+    drop(store);
+    cleanup(home);
+}
+
+#[test]
+fn t112_store_decision_replay_lineage_and_stale_history_never_gain_current_authority() {
+    let (home, store) = seeded_store("decision-history");
+    let old_candidate = candidate('a', 'b');
+    let current_candidate = candidate('c', 'd');
+    let rejected = decision(
+        "decision-root",
+        "REJECTED",
+        Some(old_candidate.clone()),
+        Some("evidence:old"),
+        DecisionContentState::Full,
+        10,
+    );
+    store.append_workflow_decision(&rejected).unwrap();
+
+    let semantic_collision = decision(
+        "decision-root",
+        "ACCEPTED",
+        Some(old_candidate),
+        Some("evidence:old"),
+        DecisionContentState::Full,
+        10,
+    );
+    assert!(store.append_workflow_decision(&semantic_collision).is_err());
+
+    let current = successor_decision(
+        "decision-current",
+        "ACCEPTED",
+        "decision-root",
+        Some(current_candidate.clone()),
+        Some("evidence:current"),
+        20,
+    );
+    store.append_workflow_decision(&current).unwrap();
+
+    let competing = successor_decision(
+        "decision-competing",
+        "REVERTED",
+        "decision-root",
+        Some(current_candidate.clone()),
+        Some("evidence:current"),
+        21,
+    );
+    assert!(store.append_workflow_decision(&competing).is_err());
+    drop(store);
+
+    let store = Store::open(&home).unwrap();
+    let history = store.list_workflow_decisions("workflow-1").unwrap();
+    assert_eq!(history, vec![rejected.clone(), current.clone()]);
+
+    let context = DecisionApplicabilityContext::new(
+        Some(current_candidate.clone()),
+        &["evidence:current".to_owned()],
+    )
+    .unwrap();
+    assert_eq!(
+        store
+            .workflow_decision_applicability("decision-root", &context)
+            .unwrap(),
+        DecisionApplicability::Stale
+    );
+    assert_eq!(
+        evaluate_required_decision_evidence_completeness(&history[0], &context),
+        RequiredEvidenceCompleteness::Incomplete
+    );
+    assert_eq!(
+        store
+            .workflow_decision_applicability("decision-current", &context)
+            .unwrap(),
+        DecisionApplicability::Applicable
+    );
+    assert_eq!(
+        evaluate_required_decision_evidence_completeness(&history[1], &context),
+        RequiredEvidenceCompleteness::Complete
+    );
+
+    let projected_decisions = history
+        .iter()
+        .cloned()
+        .map(|record| {
+            let applicability = evaluate_decision_applicability(&record, &context);
+            DecisionProjectionInput {
+                record,
+                applicability,
+            }
+        })
+        .collect();
+    let input = WorkflowProjectionInput {
+        expected_workspace_id: "workspace-1".to_owned(),
+        expected_workstream_id: "workstream-1".to_owned(),
+        workflow: WorkflowRunIdentity::new("workflow-1", "workspace-1", "workstream-1").unwrap(),
+        stage: StageRunIdentity::new("stage-1", "workflow-1", "review", 1, None).unwrap(),
+        lifecycle_state: StageLifecycleState::Active,
+        lifecycle_source: TruthSource::WindsObserved,
+        lifecycle_authority: StageTransitionAuthority::None,
+        actor: None,
+        current_candidate: Some(current_candidate),
+        baselines: Vec::new(),
+        decisions: projected_decisions,
+        retry_failure: None,
+        retry_outcome_reason: None,
+        verification: ExternalGateTruth::unknown(),
+        human_acceptance: ExternalGateTruth::unknown(),
+        authority_ceiling: AuthorityCeilingTruth::Unknown,
+        prospective_reconstruction: None,
+        reassignment_proven: false,
+    };
+    let handoff = project_reviewer_handoff(&input).unwrap();
+    assert_eq!(handoff.decisions.len(), 2);
+    assert_eq!(
+        handoff.decisions[0].applicability,
+        DecisionApplicability::Stale
+    );
+    assert_eq!(handoff.verification, ExternalGateTruth::unknown());
+    assert_eq!(handoff.human_acceptance, ExternalGateTruth::unknown());
+
+    drop(store);
     cleanup(home);
 }
 
