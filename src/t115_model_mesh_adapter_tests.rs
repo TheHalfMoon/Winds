@@ -119,17 +119,7 @@ fn target_descriptor() -> ModelMeshTargetDescriptorV1 {
 }
 
 fn target_envelope(descriptor: &ModelMeshTargetDescriptorV1) -> ModelMeshAuthorityEnvelopeV1 {
-    ModelMeshAuthorityEnvelopeV1::new_target_selection(
-        descriptor.workspace_id(),
-        descriptor.workstream_id(),
-        descriptor.winds_session_id(),
-        descriptor.workflow_run_id(),
-        descriptor.stage_run_id(),
-        descriptor.actor_binding_id(),
-        descriptor.actor_role(),
-        &descriptor.digest().unwrap(),
-    )
-    .unwrap()
+    ModelMeshAuthorityEnvelopeV1::for_target_selection(descriptor).unwrap()
 }
 
 fn stored_for(envelope: &ModelMeshAuthorityEnvelopeV1) -> StoredApproval {
@@ -439,18 +429,8 @@ fn t115_continuity_authority_is_derived_from_exact_permission_scope_and_target()
         ContextDigest::exact(&"a".repeat(64)).unwrap(),
     )
     .unwrap();
-    let envelope = ModelMeshAuthorityEnvelopeV1::new_continuity_permission(
-        descriptor.workspace_id(),
-        descriptor.workstream_id(),
-        descriptor.winds_session_id(),
-        descriptor.workflow_run_id(),
-        descriptor.stage_run_id(),
-        descriptor.actor_binding_id(),
-        descriptor.actor_role(),
-        &target_digest,
-        &permission,
-    )
-    .unwrap();
+    let envelope =
+        ModelMeshAuthorityEnvelopeV1::for_continuity_permission(&descriptor, &permission).unwrap();
     assert_eq!(
         envelope.continuity_permission_digest(),
         Some(permission.digest().unwrap().as_str())
@@ -467,18 +447,8 @@ fn t115_continuity_authority_is_derived_from_exact_permission_scope_and_target()
     )
     .unwrap();
     assert!(
-        ModelMeshAuthorityEnvelopeV1::new_continuity_permission(
-            descriptor.workspace_id(),
-            descriptor.workstream_id(),
-            descriptor.winds_session_id(),
-            descriptor.workflow_run_id(),
-            descriptor.stage_run_id(),
-            descriptor.actor_binding_id(),
-            descriptor.actor_role(),
-            &target_digest,
-            &wrong_workflow,
-        )
-        .is_err()
+        ModelMeshAuthorityEnvelopeV1::for_continuity_permission(&descriptor, &wrong_workflow)
+            .is_err()
     );
 
     let wrong_stage = ModelMeshContinuityPermissionDescriptorV1::new(
@@ -492,18 +462,7 @@ fn t115_continuity_authority_is_derived_from_exact_permission_scope_and_target()
     )
     .unwrap();
     assert!(
-        ModelMeshAuthorityEnvelopeV1::new_continuity_permission(
-            descriptor.workspace_id(),
-            descriptor.workstream_id(),
-            descriptor.winds_session_id(),
-            descriptor.workflow_run_id(),
-            descriptor.stage_run_id(),
-            descriptor.actor_binding_id(),
-            descriptor.actor_role(),
-            &target_digest,
-            &wrong_stage,
-        )
-        .is_err()
+        ModelMeshAuthorityEnvelopeV1::for_continuity_permission(&descriptor, &wrong_stage).is_err()
     );
 
     let wrong_target = ModelMeshContinuityPermissionDescriptorV1::new(
@@ -517,18 +476,8 @@ fn t115_continuity_authority_is_derived_from_exact_permission_scope_and_target()
     )
     .unwrap();
     assert!(
-        ModelMeshAuthorityEnvelopeV1::new_continuity_permission(
-            descriptor.workspace_id(),
-            descriptor.workstream_id(),
-            descriptor.winds_session_id(),
-            descriptor.workflow_run_id(),
-            descriptor.stage_run_id(),
-            descriptor.actor_binding_id(),
-            descriptor.actor_role(),
-            &target_digest,
-            &wrong_target,
-        )
-        .is_err()
+        ModelMeshAuthorityEnvelopeV1::for_continuity_permission(&descriptor, &wrong_target)
+            .is_err()
     );
 }
 
@@ -546,18 +495,8 @@ fn t115_loaded_continuity_approval_cannot_swap_in_an_unrelated_permission_digest
         ContextDigest::NotApplicable,
     )
     .unwrap();
-    let expected = ModelMeshAuthorityEnvelopeV1::new_continuity_permission(
-        descriptor.workspace_id(),
-        descriptor.workstream_id(),
-        descriptor.winds_session_id(),
-        descriptor.workflow_run_id(),
-        descriptor.stage_run_id(),
-        descriptor.actor_binding_id(),
-        descriptor.actor_role(),
-        &target_digest,
-        &permission,
-    )
-    .unwrap();
+    let expected =
+        ModelMeshAuthorityEnvelopeV1::for_continuity_permission(&descriptor, &permission).unwrap();
     let swapped_json = format!(
         r#"{{"schema_version":1,"purpose":"CONTINUITY_PERMISSION","workspace_id":"{}","workstream_id":"{}","session_id":"{}","workflow_run_id":"{}","stage_run_id":"{}","actor_binding_id":"{}","actor_role":"{}","target_descriptor_digest":"{}","continuity_permission_digest":"{}"}}"#,
         descriptor.workspace_id(),

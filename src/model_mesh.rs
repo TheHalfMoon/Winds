@@ -660,66 +660,50 @@ pub(crate) struct ModelMeshAuthorityEnvelopeV1 {
 }
 
 impl ModelMeshAuthorityEnvelopeV1 {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new_target_selection(
-        workspace_id: &str,
-        workstream_id: &str,
-        session_id: &str,
-        workflow_run_id: &str,
-        stage_run_id: &str,
-        actor_binding_id: &str,
-        actor_role: &str,
-        target_descriptor_digest: &str,
+    pub(crate) fn for_target_selection(
+        target: &ModelMeshTargetDescriptorV1,
     ) -> ModelMeshResult<Self> {
+        let target_descriptor_digest = target.digest()?;
         Self::from_parts(
             ModelMeshAuthorityPurpose::TargetSelection,
-            workspace_id,
-            workstream_id,
-            session_id,
-            workflow_run_id,
-            stage_run_id,
-            actor_binding_id,
-            actor_role,
-            target_descriptor_digest,
+            target.workspace_id(),
+            target.workstream_id(),
+            target.winds_session_id(),
+            target.workflow_run_id(),
+            target.stage_run_id(),
+            target.actor_binding_id(),
+            target.actor_role(),
+            &target_descriptor_digest,
             None,
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new_continuity_permission(
-        workspace_id: &str,
-        workstream_id: &str,
-        session_id: &str,
-        workflow_run_id: &str,
-        stage_run_id: &str,
-        actor_binding_id: &str,
-        actor_role: &str,
-        target_descriptor_digest: &str,
+    pub(crate) fn for_continuity_permission(
+        target: &ModelMeshTargetDescriptorV1,
         permission: &ModelMeshContinuityPermissionDescriptorV1,
     ) -> ModelMeshResult<Self> {
-        let workflow_run_id = normalize_scope(workflow_run_id, "workflow run id")?;
-        let stage_run_id = normalize_scope(stage_run_id, "stage run id")?;
-        let target_descriptor_digest =
-            normalize_sha256(target_descriptor_digest, "target descriptor digest")?;
-        if permission.workflow_run_id != workflow_run_id {
-            return Err("continuity permission workflow does not match authority envelope".into());
+        let target_descriptor_digest = target.digest()?;
+        if permission.workflow_run_id != target.workflow_run_id() {
+            return Err("continuity permission workflow does not match target descriptor".into());
         }
-        if permission.stage_run_id != stage_run_id {
-            return Err("continuity permission stage does not match authority envelope".into());
+        if permission.stage_run_id != target.stage_run_id() {
+            return Err("continuity permission stage does not match target descriptor".into());
         }
         if permission.target_descriptor_digest != target_descriptor_digest {
-            return Err("continuity permission target does not match authority envelope".into());
+            return Err(
+                "continuity permission target digest does not match target descriptor".into(),
+            );
         }
         let continuity_permission_digest = permission.digest()?;
         Self::from_parts(
             ModelMeshAuthorityPurpose::ContinuityPermission,
-            workspace_id,
-            workstream_id,
-            session_id,
-            &workflow_run_id,
-            &stage_run_id,
-            actor_binding_id,
-            actor_role,
+            target.workspace_id(),
+            target.workstream_id(),
+            target.winds_session_id(),
+            target.workflow_run_id(),
+            target.stage_run_id(),
+            target.actor_binding_id(),
+            target.actor_role(),
             &target_descriptor_digest,
             Some(&continuity_permission_digest),
         )
