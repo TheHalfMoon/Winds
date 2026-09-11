@@ -114,12 +114,20 @@ Add a small domain module, expected to be `src/model_mesh.rs` unless Tasks find 
 Logical first-slice types:
 
 ```text
-TargetRequest {
+ModelMeshTargetDescriptorV1 {
+  schema_version: 1,
+  workflow_run_id,
+  stage_run_id,
+  actor_role,
   runtime: RuntimeKind,
-  provider_id?: ExactProviderId,
-  model_id?: ExactModelId,
-  selector: HUMAN | EXPLICIT_POLICY,
-  policy_reference?,
+  provider: UNSPECIFIED | EXACT(ExactProviderId),
+  model: UNSPECIFIED | EXACT(ExactModelId),
+}
+
+TargetRequest {
+  descriptor: ModelMeshTargetDescriptorV1,
+  target_descriptor_digest: SHA256(canonical_descriptor_json),
+  selector: HUMAN,
 }
 
 IdentityClaim {
@@ -139,14 +147,53 @@ TargetResolution {
   AUTHENTICATION_UNKNOWN,
   CAPABILITY_UNAVAILABLE,
   AUTHORITY_DENIED,
+  POLICY_NOT_AUTHORIZED,
+}
+
+ModelMeshContinuityPermissionDescriptorV1 {
+  schema_version: 1,
+  workflow_run_id,
+  stage_run_id,
+  source_actor_binding_id?,
+  destination_actor_binding_id?,
+  continuity_class,
+  target_descriptor_digest,
+  context_digest: NOT_APPLICABLE | EXACT(SHA256),
+}
+
+ModelMeshAuthorityEnvelopeV1 {
+  schema_version: 1,
+  purpose: TARGET_SELECTION | CONTINUITY_PERMISSION,
+  workspace_id,
+  workstream_id,
+  session_id,
+  workflow_run_id,
+  stage_run_id,
+  actor_role,
+  target_descriptor_digest,
+  continuity_permission_digest?,
 }
 ```
+
+The exact target authority binding is content-bound, not label-bound:
+
+- `ModelMeshTargetDescriptorV1` has one deterministic canonical JSON representation; normalization includes exact workflow/stage/actor-role scope and uses explicit `UNSPECIFIED` rather than omitted/guessed provider/model values;
+- `target_descriptor_digest` is SHA-256 of that canonical representation and is stored with the target request;
+- the first implementation accepts **human selection only**. `EXPLICIT_POLICY` remains specification vocabulary but is fail-closed as `POLICY_NOT_AUTHORIZED` until a separately accepted Plan/Tasks amendment defines an actual policy and its exact inputs/authority semantics;
+- human target selection and any authorized mutating continuity operation require a content-bound `agentic_delegation_approvals` row whose `canonical_content_json` uses a dedicated versioned `ModelMeshAuthorityEnvelopeV1` canonicalizer and includes the exact target descriptor digest;
+- `ModelMeshContinuityPermissionDescriptorV1` also has one deterministic canonical JSON representation; `CONTINUITY_PERMISSION` approval content includes its digest, binding continuity class, exact source/destination actor bindings as applicable, target descriptor digest, and explicit `NOT_APPLICABLE` versus exact context digest;
+- the existing approval table is reused unchanged; Tasks may add a narrow Model Mesh approval canonicalizer/write/load/revalidation helper, but MUST NOT reinterpret generic T076 `ApprovalContent` or a generic workflow decision as Model Mesh target authorization;
+- `load_human_approval`-style digest validation remains required: stored `content_digest` must equal SHA-256 of the exact canonical approval JSON before any Model Mesh authority basis is applicable;
+- the resolver must compare the approval envelope's descriptor/digest with the exact persisted target/continuity descriptor. Mismatch returns `STALE` or `AUTHORITY_DENIED` and never mutates historical records;
+- generic `workflow_decisions` may remain explanatory/history evidence, but they are **not** a first-slice Model Mesh selection/permission authority path because current canonical workflow-decision storage has no accepted structured human target-decision schema/load path. Adding such a path later requires an explicit canonical Plan/Tasks amendment.
+
 
 Rules:
 
 - `RuntimeKind` is reused; no `Provider` trait hierarchy or generic adapter registry is created;
 - provider/model IDs are bounded normalized exact identifiers, not display labels and not arbitrary executable names;
-- unspecified target dimensions stay unspecified;
+- canonical target descriptor serialization and digesting are deterministic; two semantically identical normalized targets in the same workflow/stage/actor role produce the same descriptor digest, while any material target or scope change produces a different digest;
+- unspecified target dimensions stay explicitly `UNSPECIFIED` and stay unspecified;
 - a runtime kind never implies provider/model identity;
 - model/provider text emitted by an agent remains `AGENT_REPORTED` and cannot satisfy a request requiring Winds-observed identity;
 - equality/matching uses stable normalized exact values and source/proof applicability, never fuzzy matching, ranking, reputation, cost, latency, or prior success;
@@ -186,11 +233,9 @@ model_mesh_target_requests
   runtime_kind
   requested_provider_id?
   requested_model_id?
-  selector_class
-  selection_decision_id? FK -> workflow_decisions
-  selection_approval_id? FK -> agentic_delegation_approvals
-  policy_reference?
-  policy_digest?
+  selector_class              # HUMAN in first slice
+  target_descriptor_digest
+  selection_approval_id FK -> agentic_delegation_approvals
   created_unix_ms
 
 model_mesh_identity_claims
@@ -213,10 +258,9 @@ model_mesh_continuity_events
   continuity_class
   context_digest?
   completeness_state
-  authority_decision_id? FK -> workflow_decisions
+  continuity_permission_digest?
   authority_approval_id? FK -> agentic_delegation_approvals
-  authority_policy_reference?
-  authority_policy_digest?
+  authority_claim             # REQUIRED | NO_AUTHORITY_CLAIM
   created_unix_ms
 
 model_mesh_continuity_identity_claims
@@ -231,20 +275,21 @@ Required constraints:
 - all four relations are historical append-only records; updates/deletes are rejected by schema-level protection;
 - every target request is bound to exactly one canonical `StageRun` attempt;
 - insertion validates through joins that the stage belongs to its existing canonical workflow/workspace/workstream hierarchy;
-- a target request is not applicable unless its selector is bound to an exact immutable accepted authority record: exactly one of `selection_decision_id` or `selection_approval_id`; a human-selected request must reference an accepted `HUMAN_DECIDED` workflow decision or content-bound human approval whose scope matches the exact canonical work/stage/target context;
-- `EXPLICIT_POLICY` additionally requires a bounded `policy_reference` plus exact policy version/content digest, and the referenced decision/approval must authorize that exact policy basis; a policy label by itself is never authority;
+- every target request persists the exact canonical `target_descriptor_digest` and is not applicable unless `selection_approval_id` resolves to a digest-valid `ModelMeshAuthorityEnvelopeV1` with purpose `TARGET_SELECTION`, identical workflow/stage/actor-role scope, and the identical target descriptor digest;
+- the first slice rejects `EXPLICIT_POLICY`; no policy label/reference/digest is accepted as selection authority until a separately canonical amendment defines a real policy path;
 - identity claims use an exclusive subject binding: `REQUEST_TARGET` requires `target_request_id` and forbids `actor_binding_id`, while `ACTOR` requires exactly one `actor_binding_id` and does not borrow target identity from display-name coincidence;
 - any runtime binding referenced by an actor identity claim must belong to the same canonical Winds session/actor context; cross-workflow or cross-actor coincidence is rejected;
 - any source/destination actor binding referenced by a continuity event must belong to the relevant stage lineage or an explicitly qualified source-stage handoff relation selected later by Tasks;
 - every continuity-event actor identity is role-specific: `model_mesh_continuity_identity_claims.actor_role=SOURCE` may reference only claims bound to that event's `source_actor_binding_id`, and `DESTINATION` only claims bound to its `destination_actor_binding_id`; SQL constraints/triggers must reject mismatched actor, runtime-binding, workflow/stage lineage, or event associations;
 - provider/model unknown state for either actor is preserved by an explicit source-labelled unknown/unavailable claim rather than inferred from the target request or the opposite actor;
-- any continuity event that claims an authorized mutating continuation must reference exactly one immutable existing authority record via `authority_decision_id` or `authority_approval_id`; observation-only `UNAVAILABLE`/`UNPROVEN` records may carry no authority reference only when they explicitly make `NO_AUTHORITY_CLAIM` and cannot be projected as permitted execution;
-- policy-authorized continuity additionally binds the exact policy reference and digest; revalidation failure makes permission stale/denied without altering the historical event or identity claims;
+- any continuity event that claims an authorized mutating continuation uses `authority_claim=REQUIRED`, persists the canonical `continuity_permission_digest`, and must reference one digest-valid `authority_approval_id` whose `ModelMeshAuthorityEnvelopeV1` has purpose `CONTINUITY_PERMISSION`, the identical target descriptor digest, identical canonical operation descriptor digest, and matching canonical work/stage/actor scope;
+- observation-only `UNAVAILABLE`/`UNPROVEN` records may omit authority approval only with `authority_claim=NO_AUTHORITY_CLAIM`; such rows cannot be projected as permitted execution;
+- generic workflow-decision text, safe rationale, decision type/result labels, runtime labels, or an approval that lacks the exact Model Mesh descriptor digest can never satisfy Model Mesh selection/permission authority;
 - target request replay uses an operation/idempotency identity selected in Tasks; replay may not create duplicate current truth;
-- provider/model identifiers, policy references, and policy digests are bounded and validated before persistence;
+- provider/model identifiers and all canonical target/continuity descriptor digests are bounded and validated before persistence;
 - raw prompts, terminal transcripts, environment dumps, credentials, provider-private memory, arbitrary provider response payloads, and model output are not persisted in these tables;
 - runtime executable/version facts remain referenced from accepted runtime bindings/discovery rather than copied into a competing identity table;
-- no “current target” mutable singleton row is selected; current/applicable target truth is a deterministic projection over append-only stage-bound records plus revalidated immutable authority basis.
+- no “current target” mutable singleton row is selected; current/applicable target truth is a deterministic projection over append-only stage-bound records plus revalidated content-bound approval authority basis.
 
 The initial migration does **not** need a usage/cost table. P2 usage/cost observation may be added only in a later authorized task if an already-existing structured observation proves a concrete need; otherwise unknown satisfies the contract.
 
@@ -262,8 +307,8 @@ Evaluation order should remain explicit:
 5. detect unknown/unavailable/ambiguous/conflicting/stale identity
 6. check required capability state
 7. retain authentication readiness as its own truth dimension
-8. revalidate the exact immutable selection/permission basis (workflow decision or content-bound approval, plus policy reference/digest where applicable)
-9. evaluate the current existing execution/delegation authority ceiling against that basis
+8. recompute the canonical target/continuity descriptor digest and revalidate the exact content-bound Model Mesh human approval envelope
+9. evaluate the current existing execution/delegation authority ceiling independently; the approval cannot exceed it
 10. return resolution; do not execute
 ```
 
@@ -273,8 +318,8 @@ Rules:
 - `EXACT_MATCH` means only identity/capability/request applicability; it does not mean authenticated, authorized to execute, verified, accepted, or landed;
 - unavailable requested target never silently selects another target;
 - ambiguous target never triggers a score/rank/winner function;
-- `EXPLICIT_POLICY` is allowed only when the request already names an accepted policy reference whose deterministic semantics are separately authorized, binds the exact version/content digest, and cites the immutable decision/approval that authorized that policy; Spec 009 first implementation does not invent a policy engine;
-- policy selection must remain distinguishable from human selection, and either selector becomes stale/denied if its referenced authority record, canonical scope, or policy digest no longer revalidates;
+- `EXPLICIT_POLICY` is not authorized in the first implementation and resolves fail-closed as `POLICY_NOT_AUTHORIZED`; enabling policy selection requires a separately accepted Plan/Tasks amendment satisfying FR-024..FR-029;
+- human selection becomes stale/denied if the referenced Model Mesh approval content digest, target descriptor digest, canonical scope, or current authority ceiling no longer revalidates;
 - alternate-target selection is a new explicit request/event, preserving the failed/unavailable original request;
 - usage/cost observations cannot affect first-slice resolution.
 
@@ -310,9 +355,9 @@ Drift evaluation must deterministically cover:
 - native-session identity/ownership movement;
 - `WorkflowRun` / `StageRun` attempt movement;
 - candidate/artifact/evidence movement through existing Spec 008 freshness evaluation;
-- authority decision/approval applicability or exact policy reference/digest movement.
+- content-bound Model Mesh approval applicability/content digest, exact target/continuity descriptor digest, or current authority-ceiling movement.
 
-Drift invalidates only the claims or permissions whose observation/authority basis depends on the moved identity. Historical target requests, actor-specific identity claims, continuity-event role associations, decisions/approvals, and failed/stale permission results remain append-only and inspectable.
+Drift invalidates only the claims or permissions whose observation/authority basis depends on the moved identity. Historical target requests, actor-specific identity claims, continuity-event role associations, approvals, generic decisions, and failed/stale permission results remain append-only and inspectable.
 
 ### 6. Direction-neutral continuity context over existing context/reconstruction seams
 
@@ -327,7 +372,7 @@ ModelMeshContinuityContext {
   canonical work identity,
   exact target request/reference,
   exact candidate/artifact/evidence references,
-  accepted decisions/authority basis,
+  content-bound Model Mesh approval authority basis plus separately re-evaluated current authority ceiling,
   bounded reconstruction/transfer report,
   unavailable/redacted/material-loss markers,
 }
@@ -368,7 +413,7 @@ At minimum expose:
 - context digest and bounded transfer/reconstruction completeness/loss summary;
 - candidate/artifact/evidence freshness where applicable;
 - authentication readiness as separate truth;
-- exact immutable selection/permission basis (`workflow_decision` or content-bound approval, plus policy reference/digest where applicable), its revalidation state, and the current existing authority ceiling/result as separate truth;
+- exact content-bound Model Mesh approval basis, target/continuity descriptor digest match, approval revalidation state, and the current existing authority ceiling/result as separate truth; generic workflow decisions remain history/explanation only;
 - verification and human acceptance as separate existing authority states when in view;
 - optional usage/cost as unknown unless a qualified observation exists.
 
@@ -445,7 +490,9 @@ Before target/continuity records are treated as applicable, Winds must validate:
 - referenced `StageRun` and parent workflow exist and match canonical work identity;
 - referenced runtime/actor bindings exist and belong to the applicable canonical context;
 - each actor-scoped identity claim is bound to exactly one actor binding, and each continuity-event SOURCE/DESTINATION association references a claim bound to the matching event actor;
-- each applicable request/authorized continuity event has the required immutable decision/approval authority reference, and any policy-selected record has the exact policy reference plus digest;
+- each applicable target request has a digest-valid `TARGET_SELECTION` Model Mesh approval whose canonical target descriptor digest exactly matches the request;
+- each authorized mutating continuity event has a digest-valid `CONTINUITY_PERMISSION` Model Mesh approval whose canonical target and operation descriptor digests exactly match the event; `NO_AUTHORITY_CLAIM` events cannot project execution permission;
+- no first-slice record is applicable through generic workflow-decision text or policy selection;
 - runtime/provider/model identifiers are structurally valid and bounded;
 - selector/source/dimension/continuity/completeness enums are known;
 - provider/model/native claims carry the required source and observation basis for their proof level;
@@ -471,8 +518,8 @@ Required transaction rules:
 
 - target-request insertion plus canonical stage validation occur atomically;
 - identity-claim insertion validates its exclusive request-or-actor subject plus any runtime binding in the same transaction;
-- target-request insertion validates the exact immutable selector authority basis (decision/approval and policy digest where applicable) in the same transaction;
-- continuity-event insertion validates request, source/destination actor bindings, and exact immutable permission basis atomically;
+- target-request insertion recomputes the canonical target descriptor digest and validates an exact digest-valid `TARGET_SELECTION` Model Mesh approval in the same transaction;
+- continuity-event insertion recomputes the canonical operation descriptor digest and validates request, source/destination actor bindings, exact target digest, and digest-valid `CONTINUITY_PERMISSION` Model Mesh approval atomically;
 - continuity-event role/identity-claim association validates that each SOURCE/DESTINATION claim belongs to the exact matching event actor before commit;
 - replay/idempotency checks occur within the write transaction;
 - no transaction may hold a database write lock while waiting on a runtime child, provider, network call, reviewer, human, or terminal interaction;
@@ -546,11 +593,16 @@ Prove:
 
 Prove:
 
+- canonical `ModelMeshTargetDescriptorV1` serialization/digest is stable for identical normalized input and changes for runtime/provider/model/workflow/stage/actor-role movement;
+- only a digest-valid `ModelMeshAuthorityEnvelopeV1` `TARGET_SELECTION` approval with exact descriptor digest/scope can authorize an applicable human target request;
+- only a digest-valid `CONTINUITY_PERMISSION` approval with exact target + continuity permission descriptor digests can authorize a mutating continuity event;
+- a generic `workflow_decision`, generic T076 approval content, mismatched approval, stale approval digest, or same-stage approval for a different provider/model target cannot authorize selection/continuity;
+- `EXPLICIT_POLICY` fails closed as not authorized in the first slice;
 - exact request match never grants execution/delegation/filesystem/network/secret/Git/verification/human authority;
 - unavailable target never silently falls back;
 - ambiguous target requires explicit new decision/request;
 - authentication unknown remains separate from availability;
-- changed authority/policy invalidates prior permission without rewriting identity history;
+- changed Model Mesh approval content/descriptor digest or current authority ceiling invalidates prior permission without rewriting identity history;
 - alternate target success preserves original target failure/unavailability evidence.
 
 ### Continuity and handoff fixtures
@@ -682,6 +734,8 @@ Examples:
 - runtime executable/version moved -> stale/requalification required;
 - authentication unproven -> authentication unknown, not authenticated;
 - requested capability unproven -> unavailable/unsupported as applicable;
+- missing/mismatched/non-Model-Mesh approval or changed descriptor digest -> target identity may still match, but selection/continuity permission is stale or denied;
+- generic workflow decision or generic T076 approval -> explanatory/history evidence only, never exact Model Mesh target authorization;
 - authority denied -> identity may still be an exact match, but execution remains denied;
 - native resume unproven -> reconstructed/reassigned/unproven/unavailable as applicable, never guessed resumed;
 - provider/model/native-session/stage/candidate drift -> exact dependent continuity/evidence stale;
@@ -733,6 +787,7 @@ Explicitly reject during the first Spec 009 implementation program unless an acc
 
 - generic provider/plugin trait hierarchy merely for hypothetical providers;
 - provider marketplace/integration SDK/dynamic code loading;
+- first-slice policy engine or generic workflow-decision-as-target-authority path;
 - broad provider fleet admission;
 - mandatory LiteLLM or equivalent provider gateway/proxy;
 - provider billing/pricing database or telemetry SaaS;
@@ -770,6 +825,7 @@ This Plan can land only if all are true on its exact final candidate:
 - no `Cargo.toml`, lockfile, migration, source, workflow semantic, runtime/provider execution, credential, gateway, browser, daemon, IPC, remote, learning, plugin, or automatic landing change occurs;
 - the Plan proves direct reuse of accepted runtime/workflow/context/SQLite seams and selects no new dependency;
 - runtime/provider/model/canonical/native identities remain distinct and no display label becomes authority;
+- exact target selection/continuity permission is content-bound through versioned Model Mesh approval canonicalization and descriptor digests; generic decisions/approvals cannot be reused across targets;
 - no automatic provider/model routing, ranking, winner, or silent fallback is introduced;
 - the Plan provides a plausible implementation/evidence path for FR-001..FR-095 and SC-001..SC-025;
 - Spec 006 live-runtime nonclaims remain unchanged;
