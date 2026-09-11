@@ -160,6 +160,7 @@ WHEN NOT EXISTS (
       AND approval.workspace_id = workflow.workspace_id
       AND approval.workstream_id = workflow.workstream_id
       AND approval.session_id = session.session_id
+      AND approval.approved_unix_ms <= NEW.created_unix_ms
       AND json_valid(approval.canonical_content_json)
       AND json_extract(approval.canonical_content_json, '$.schema_version') = 1
       AND json_extract(approval.canonical_content_json, '$.purpose') = 'TARGET_SELECTION'
@@ -300,6 +301,7 @@ WHEN NEW.authority_claim = 'REQUIRED' AND NOT EXISTS (
       AND approval.workspace_id = workflow.workspace_id
       AND approval.workstream_id = workflow.workstream_id
       AND approval.session_id = session.session_id
+      AND approval.approved_unix_ms <= NEW.created_unix_ms
       AND json_valid(approval.canonical_content_json)
       AND json_extract(approval.canonical_content_json, '$.schema_version') = 1
       AND json_extract(approval.canonical_content_json, '$.purpose') = 'CONTINUITY_PERMISSION'

@@ -423,6 +423,24 @@ fn t116_target_request_rejects_policy_cross_scope_wrong_and_generic_approval() {
             .is_err()
     );
 
+    approve_target(&store, "late-target-approval", &request, 20);
+    assert!(
+        store
+            .connection
+            .execute(
+                "INSERT INTO model_mesh_target_requests(
+                    target_request_id, stage_run_id, actor_binding_id, actor_role, runtime_kind,
+                    requested_provider_id, requested_model_id, selector_class,
+                    target_descriptor_digest, selection_approval_id, created_unix_ms
+                 ) VALUES (
+                    'retrospective-target', 'stage-1', 'actor-binding-1', 'WORKER', 'CODEX',
+                    'openai', 'model-t116', 'HUMAN', ?1, 'late-target-approval', 19
+                 )",
+                params![request.target_descriptor_digest()],
+            )
+            .is_err()
+    );
+
     let cross_stage = ModelMeshTargetDescriptorV1::new(
         "workspace-1",
         "workstream-1",
@@ -919,6 +937,48 @@ fn t116_continuity_schema_rejects_bad_authority_digest_actor_role_and_lineage() 
                  ) VALUES ('malformed-permission-digest', 'target-request-1', 'HANDOFF',
                            'COMPLETE', 'NOT-A-SHA256', 'selection-approval-1', 'REQUIRED', 11)",
                 [],
+            )
+            .is_err()
+    );
+    let retrospective_context = "e".repeat(64);
+    let retrospective_permission = ModelMeshContinuityPermissionDescriptorV1::new(
+        "workflow-1",
+        "stage-1",
+        Some("actor-binding-1"),
+        Some("actor-binding-1"),
+        ContinuityClass::Handoff,
+        request.target_descriptor_digest(),
+        ContextDigest::exact(&retrospective_context).unwrap(),
+    )
+    .unwrap();
+    let retrospective_permission_digest = retrospective_permission.digest().unwrap();
+    let retrospective_authority = ModelMeshAuthorityEnvelopeV1::for_continuity_permission(
+        request.descriptor(),
+        &retrospective_permission,
+    )
+    .unwrap();
+    record_model_mesh_approval(
+        &store,
+        "late-continuity-approval",
+        &retrospective_authority,
+        20,
+    )
+    .unwrap();
+    assert!(
+        store
+            .connection
+            .execute(
+                "INSERT INTO model_mesh_continuity_events(
+                    continuity_event_id, target_request_id, source_actor_binding_id,
+                    destination_actor_binding_id, continuity_class, context_digest,
+                    completeness_state, continuity_permission_digest,
+                    authority_approval_id, authority_claim, created_unix_ms
+                 ) VALUES (
+                    'retrospective-continuity', 'target-request-1', 'actor-binding-1',
+                    'actor-binding-1', 'HANDOFF', ?1, 'COMPLETE', ?2,
+                    'late-continuity-approval', 'REQUIRED', 19
+                 )",
+                params![retrospective_context, retrospective_permission_digest],
             )
             .is_err()
     );
