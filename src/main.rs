@@ -50,6 +50,8 @@ mod t085_agentic_hardening_tests;
 mod t087_workbench_dependency_tests;
 #[cfg(test)]
 mod t099_workbench_adversarial_tests;
+#[cfg(test)]
+mod t111_workflow_regression_tests;
 mod workbench;
 mod workflow_cli;
 
