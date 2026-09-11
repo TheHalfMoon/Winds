@@ -73,109 +73,109 @@ T106 has an unrelated canonical first-parent cleanup commit `5d861eabde7e7a97cc1
 
 | Requirement | Classification | Canonical evidence path / truthful boundary |
 | --- | --- | --- |
-| FR-001 | `PROVEN_DETERMINISTIC` | T101/T102 + T112 adversarial |
-| FR-002 | `PROVEN_DETERMINISTIC` | T101/T102 + T112 adversarial |
-| FR-003 | `PROVEN_DETERMINISTIC` | T101/T102 + T112 adversarial |
-| FR-004 | `PROVEN_DETERMINISTIC` | T101/T102 + T112 adversarial |
-| FR-005 | `PROVEN_DETERMINISTIC` | T101/T102 + T112 adversarial |
-| FR-006 | `PROVEN_DETERMINISTIC` | T101/T102 + T112 adversarial |
-| FR-007 | `PROVEN_DETERMINISTIC` | T101/T102 + T112 adversarial |
-| FR-008 | `PROVEN_DETERMINISTIC` | T101/T102 + T112 adversarial |
-| FR-009 | `PROVEN_DETERMINISTIC` | T101/T102 + T112 adversarial |
-| FR-010 | `PROVEN_DETERMINISTIC` | T103 + T112 adversarial |
-| FR-011 | `PROVEN_DETERMINISTIC` | T103 + T112 adversarial |
-| FR-012 | `PROVEN_DETERMINISTIC` | T103 + T112 adversarial |
-| FR-013 | `PROVEN_DETERMINISTIC` | T103 + T112 adversarial |
-| FR-014 | `PROVEN_DETERMINISTIC` | T103 + T112 adversarial |
-| FR-015 | `PROVEN_DETERMINISTIC` | T103 + T112 adversarial |
-| FR-016 | `PROVEN_DETERMINISTIC` | T103 + T112 adversarial |
-| FR-017 | `PROVEN_DETERMINISTIC` | T103 + T112 adversarial |
-| FR-018 | `PROVEN_DETERMINISTIC` | T104 + T111/T112; Spec 006 live-runtime nonclaims preserved |
-| FR-019 | `PROVEN_DETERMINISTIC` | T104 + T111/T112; Spec 006 live-runtime nonclaims preserved |
-| FR-020 | `PROVEN_DETERMINISTIC` | T104 + T111/T112; Spec 006 live-runtime nonclaims preserved |
-| FR-021 | `PROVEN_DETERMINISTIC` | T104 + T111/T112; Spec 006 live-runtime nonclaims preserved |
-| FR-022 | `PROVEN_DETERMINISTIC` | T104 + T111/T112; Spec 006 live-runtime nonclaims preserved |
-| FR-023 | `PROVEN_DETERMINISTIC` | T104 + T111/T112; Spec 006 live-runtime nonclaims preserved |
-| FR-024 | `PROVEN_DETERMINISTIC` | T104 + T111/T112; Spec 006 live-runtime nonclaims preserved |
-| FR-025 | `PROVEN_DETERMINISTIC` | T104 + T111/T112; Spec 006 live-runtime nonclaims preserved |
-| FR-026 | `PROVEN_DETERMINISTIC` | T104 + T111/T112; Spec 006 live-runtime nonclaims preserved |
-| FR-027 | `PROVEN_DETERMINISTIC` | T105 + T112 adversarial |
-| FR-028 | `PROVEN_DETERMINISTIC` | T105 + T112 adversarial |
-| FR-029 | `PROVEN_DETERMINISTIC` | T105 + T112 adversarial |
-| FR-030 | `PROVEN_DETERMINISTIC` | T105 + T112 adversarial |
-| FR-031 | `PROVEN_DETERMINISTIC` | T105 + T112 adversarial |
-| FR-032 | `PROVEN_DETERMINISTIC` | T105 + T112 adversarial |
-| FR-033 | `PROVEN_DETERMINISTIC` | T105 + T112 adversarial |
-| FR-034 | `PROVEN_DETERMINISTIC` | T105 + T112 adversarial |
-| FR-035 | `PROVEN_DETERMINISTIC` | T106 + T112 adversarial |
-| FR-036 | `PROVEN_DETERMINISTIC` | T106 + T112 adversarial |
-| FR-037 | `PROVEN_DETERMINISTIC` | T106 + T112 adversarial |
-| FR-038 | `PROVEN_DETERMINISTIC` | T106 + T112 adversarial |
-| FR-039 | `PROVEN_DETERMINISTIC` | T106 + T112 adversarial |
-| FR-040 | `PROVEN_DETERMINISTIC` | T106 + T112 adversarial |
-| FR-041 | `PROVEN_DETERMINISTIC` | T106 + T112 adversarial |
-| FR-042 | `PROVEN_DETERMINISTIC` | T106 + T112 adversarial |
-| FR-043 | `PROVEN_DETERMINISTIC` | T106 + T112 adversarial |
-| FR-044 | `PROVEN_DETERMINISTIC` | T107 + T112 adversarial |
-| FR-045 | `PROVEN_DETERMINISTIC` | T107 + T112 adversarial |
-| FR-046 | `PROVEN_DETERMINISTIC` | T107 + T112 adversarial |
-| FR-047 | `PROVEN_DETERMINISTIC` | T107 + T112 adversarial |
-| FR-048 | `PROVEN_DETERMINISTIC` | T107 + T112 adversarial |
-| FR-049 | `PROVEN_DETERMINISTIC` | T107 + T112 adversarial |
-| FR-050 | `PROVEN_DETERMINISTIC` | T107 + T112 adversarial |
-| FR-051 | `PROVEN_DETERMINISTIC` | T102/T108 + T112 adversarial |
-| FR-052 | `PROVEN_DETERMINISTIC` | T102/T108 + T112 adversarial |
-| FR-053 | `PROVEN_DETERMINISTIC` | T102/T108 + T112 adversarial |
-| FR-054 | `PROVEN_DETERMINISTIC` | T102/T108 + T112 adversarial |
-| FR-055 | `PROVEN_DETERMINISTIC` | T102/T108 + T112 adversarial |
-| FR-056 | `PROVEN_DETERMINISTIC` | T102/T108 + T112 adversarial |
-| FR-057 | `PROVEN_DETERMINISTIC` | T102/T108 + T112 adversarial |
-| FR-058 | `PROVEN_DETERMINISTIC` | T102/T108 + T112 adversarial |
-| FR-059 | `PROVEN_DETERMINISTIC` | T102/T108 + T112 adversarial |
-| FR-060 | `PROVEN_GOVERNANCE_BOUNDARY` | Global Rules 6/8 + negative scope/dependency reconciliation |
-| FR-061 | `PROVEN_DETERMINISTIC` | T107/T109 + T112 adversarial |
-| FR-062 | `PROVEN_DETERMINISTIC` | T107/T109 + T112 adversarial |
-| FR-063 | `PROVEN_DETERMINISTIC` | T107/T109 + T112 adversarial |
-| FR-064 | `PROVEN_DETERMINISTIC` | T107/T109 + T112 adversarial |
-| FR-065 | `PROVEN_DETERMINISTIC` | T107/T109 + T112 adversarial |
-| FR-066 | `PROVEN_DETERMINISTIC` | T107/T109 + T112 adversarial |
-| FR-067 | `PROVEN_DETERMINISTIC` | T107/T109 + T112 adversarial |
-| FR-068 | `PROVEN_GOVERNANCE_BOUNDARY` | Global Rules + T110/T111/T112 scope reconciliation |
-| FR-069 | `PROVEN_GOVERNANCE_BOUNDARY` | Global Rules + T110/T111/T112 scope reconciliation |
-| FR-070 | `PROVEN_GOVERNANCE_BOUNDARY` | Global Rules + T110/T111/T112 scope reconciliation |
-| FR-071 | `PROVEN_GOVERNANCE_BOUNDARY` | Global Rules + T110/T111/T112 scope reconciliation |
-| FR-072 | `PROVEN_GOVERNANCE_BOUNDARY` | Global Rules + T110/T111/T112 scope reconciliation |
-| FR-073 | `PROVEN_GOVERNANCE_BOUNDARY` | Global Rules + T110/T111/T112 scope reconciliation |
-| FR-074 | `PROVEN_GOVERNANCE_BOUNDARY` | Global Rules + T110/T111/T112 scope reconciliation |
-| FR-075 | `PROVEN_GOVERNANCE_BOUNDARY` | Global Rules + T110/T111/T112 scope reconciliation |
-| FR-076 | `PROVEN_GOVERNANCE_BOUNDARY` | Global Rules + T110/T111/T112 scope reconciliation |
-| FR-077 | `PROVEN_PLATFORM_BOUND` | T111 direct platform qualification + T112 exact-candidate gates |
-| FR-078 | `PROVEN_GOVERNANCE_BOUNDARY` | T111 inherited-invariant qualification + T112 adversarial + final scope reconciliation |
+| FR-001 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/t101_workflow_domain_tests.rs`; `src/store.rs`; `src/t102_workflow_store_tests.rs`; merges `ec841b99b0c6adc881e28e307fc4cf32ba3a91ea` and `2b9e98a1f4678acd0e78e77875ff43f6b07b6f13`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-002 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/t101_workflow_domain_tests.rs`; `src/store.rs`; `src/t102_workflow_store_tests.rs`; merges `ec841b99b0c6adc881e28e307fc4cf32ba3a91ea` and `2b9e98a1f4678acd0e78e77875ff43f6b07b6f13`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-003 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/t101_workflow_domain_tests.rs`; `src/store.rs`; `src/t102_workflow_store_tests.rs`; merges `ec841b99b0c6adc881e28e307fc4cf32ba3a91ea` and `2b9e98a1f4678acd0e78e77875ff43f6b07b6f13`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-004 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/t101_workflow_domain_tests.rs`; `src/store.rs`; `src/t102_workflow_store_tests.rs`; merges `ec841b99b0c6adc881e28e307fc4cf32ba3a91ea` and `2b9e98a1f4678acd0e78e77875ff43f6b07b6f13`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-005 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/t101_workflow_domain_tests.rs`; `src/store.rs`; `src/t102_workflow_store_tests.rs`; merges `ec841b99b0c6adc881e28e307fc4cf32ba3a91ea` and `2b9e98a1f4678acd0e78e77875ff43f6b07b6f13`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-006 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/t101_workflow_domain_tests.rs`; `src/store.rs`; `src/t102_workflow_store_tests.rs`; merges `ec841b99b0c6adc881e28e307fc4cf32ba3a91ea` and `2b9e98a1f4678acd0e78e77875ff43f6b07b6f13`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-007 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/t101_workflow_domain_tests.rs`; `src/store.rs`; `src/t102_workflow_store_tests.rs`; merges `ec841b99b0c6adc881e28e307fc4cf32ba3a91ea` and `2b9e98a1f4678acd0e78e77875ff43f6b07b6f13`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-008 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/t101_workflow_domain_tests.rs`; `src/store.rs`; `src/t102_workflow_store_tests.rs`; merges `ec841b99b0c6adc881e28e307fc4cf32ba3a91ea` and `2b9e98a1f4678acd0e78e77875ff43f6b07b6f13`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-009 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/t101_workflow_domain_tests.rs`; `src/store.rs`; `src/t102_workflow_store_tests.rs`; merges `ec841b99b0c6adc881e28e307fc4cf32ba3a91ea` and `2b9e98a1f4678acd0e78e77875ff43f6b07b6f13`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-010 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/t103_workflow_baseline_tests.rs`; canonical T103 merge `7490aa2eba9472c767c77de6799d7be0c7bc672f`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-011 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/t103_workflow_baseline_tests.rs`; canonical T103 merge `7490aa2eba9472c767c77de6799d7be0c7bc672f`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-012 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/t103_workflow_baseline_tests.rs`; canonical T103 merge `7490aa2eba9472c767c77de6799d7be0c7bc672f`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-013 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/t103_workflow_baseline_tests.rs`; canonical T103 merge `7490aa2eba9472c767c77de6799d7be0c7bc672f`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-014 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/t103_workflow_baseline_tests.rs`; canonical T103 merge `7490aa2eba9472c767c77de6799d7be0c7bc672f`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-015 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/t103_workflow_baseline_tests.rs`; canonical T103 merge `7490aa2eba9472c767c77de6799d7be0c7bc672f`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-016 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/t103_workflow_baseline_tests.rs`; canonical T103 merge `7490aa2eba9472c767c77de6799d7be0c7bc672f`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-017 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/t103_workflow_baseline_tests.rs`; canonical T103 merge `7490aa2eba9472c767c77de6799d7be0c7bc672f`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-018 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/agentic_runtime.rs`; `src/t104_workflow_continuation_tests.rs`; T104 merge `fdb222050678ccaf443838ae236dacf7294ac075`; `src/t111_workflow_regression_tests.rs`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1`; Spec 006 live-runtime nonclaims remain in `specs/008-resumable-workflow-decision-ledger/tasks.md` lines 34-44 |
+| FR-019 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/agentic_runtime.rs`; `src/t104_workflow_continuation_tests.rs`; T104 merge `fdb222050678ccaf443838ae236dacf7294ac075`; `src/t111_workflow_regression_tests.rs`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1`; Spec 006 live-runtime nonclaims remain in `specs/008-resumable-workflow-decision-ledger/tasks.md` lines 34-44 |
+| FR-020 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/agentic_runtime.rs`; `src/t104_workflow_continuation_tests.rs`; T104 merge `fdb222050678ccaf443838ae236dacf7294ac075`; `src/t111_workflow_regression_tests.rs`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1`; Spec 006 live-runtime nonclaims remain in `specs/008-resumable-workflow-decision-ledger/tasks.md` lines 34-44 |
+| FR-021 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/agentic_runtime.rs`; `src/t104_workflow_continuation_tests.rs`; T104 merge `fdb222050678ccaf443838ae236dacf7294ac075`; `src/t111_workflow_regression_tests.rs`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1`; Spec 006 live-runtime nonclaims remain in `specs/008-resumable-workflow-decision-ledger/tasks.md` lines 34-44 |
+| FR-022 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/agentic_runtime.rs`; `src/t104_workflow_continuation_tests.rs`; T104 merge `fdb222050678ccaf443838ae236dacf7294ac075`; `src/t111_workflow_regression_tests.rs`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1`; Spec 006 live-runtime nonclaims remain in `specs/008-resumable-workflow-decision-ledger/tasks.md` lines 34-44 |
+| FR-023 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/agentic_runtime.rs`; `src/t104_workflow_continuation_tests.rs`; T104 merge `fdb222050678ccaf443838ae236dacf7294ac075`; `src/t111_workflow_regression_tests.rs`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1`; Spec 006 live-runtime nonclaims remain in `specs/008-resumable-workflow-decision-ledger/tasks.md` lines 34-44 |
+| FR-024 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/agentic_runtime.rs`; `src/t104_workflow_continuation_tests.rs`; T104 merge `fdb222050678ccaf443838ae236dacf7294ac075`; `src/t111_workflow_regression_tests.rs`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1`; Spec 006 live-runtime nonclaims remain in `specs/008-resumable-workflow-decision-ledger/tasks.md` lines 34-44 |
+| FR-025 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/agentic_runtime.rs`; `src/t104_workflow_continuation_tests.rs`; T104 merge `fdb222050678ccaf443838ae236dacf7294ac075`; `src/t111_workflow_regression_tests.rs`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1`; Spec 006 live-runtime nonclaims remain in `specs/008-resumable-workflow-decision-ledger/tasks.md` lines 34-44 |
+| FR-026 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/agentic_runtime.rs`; `src/t104_workflow_continuation_tests.rs`; T104 merge `fdb222050678ccaf443838ae236dacf7294ac075`; `src/t111_workflow_regression_tests.rs`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1`; Spec 006 live-runtime nonclaims remain in `specs/008-resumable-workflow-decision-ledger/tasks.md` lines 34-44 |
+| FR-027 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/t105_workflow_retry_tests.rs`; T105 merge `4544bf8c47f13bb15d586bf3f6be91dc881b6333`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-028 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/t105_workflow_retry_tests.rs`; T105 merge `4544bf8c47f13bb15d586bf3f6be91dc881b6333`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-029 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/t105_workflow_retry_tests.rs`; T105 merge `4544bf8c47f13bb15d586bf3f6be91dc881b6333`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-030 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/t105_workflow_retry_tests.rs`; T105 merge `4544bf8c47f13bb15d586bf3f6be91dc881b6333`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-031 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/t105_workflow_retry_tests.rs`; T105 merge `4544bf8c47f13bb15d586bf3f6be91dc881b6333`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-032 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/t105_workflow_retry_tests.rs`; T105 merge `4544bf8c47f13bb15d586bf3f6be91dc881b6333`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-033 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/t105_workflow_retry_tests.rs`; T105 merge `4544bf8c47f13bb15d586bf3f6be91dc881b6333`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-034 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/t105_workflow_retry_tests.rs`; T105 merge `4544bf8c47f13bb15d586bf3f6be91dc881b6333`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-035 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/t106_workflow_decision_tests.rs`; T106 merge `1828a9d8c48144a1ed9cd519cbd9527b981f1457`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-036 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/t106_workflow_decision_tests.rs`; T106 merge `1828a9d8c48144a1ed9cd519cbd9527b981f1457`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-037 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/t106_workflow_decision_tests.rs`; T106 merge `1828a9d8c48144a1ed9cd519cbd9527b981f1457`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-038 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/t106_workflow_decision_tests.rs`; T106 merge `1828a9d8c48144a1ed9cd519cbd9527b981f1457`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-039 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/t106_workflow_decision_tests.rs`; T106 merge `1828a9d8c48144a1ed9cd519cbd9527b981f1457`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-040 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/t106_workflow_decision_tests.rs`; T106 merge `1828a9d8c48144a1ed9cd519cbd9527b981f1457`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-041 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/t106_workflow_decision_tests.rs`; T106 merge `1828a9d8c48144a1ed9cd519cbd9527b981f1457`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-042 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/t106_workflow_decision_tests.rs`; T106 merge `1828a9d8c48144a1ed9cd519cbd9527b981f1457`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-043 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/store.rs`; `src/t106_workflow_decision_tests.rs`; T106 merge `1828a9d8c48144a1ed9cd519cbd9527b981f1457`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-044 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/workflow_projection.rs`; `src/t107_workflow_projection_tests.rs`; T107 merge `987cbed5f01f8890ece61cbe39c45e487ade9a66`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-045 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/workflow_projection.rs`; `src/t107_workflow_projection_tests.rs`; T107 merge `987cbed5f01f8890ece61cbe39c45e487ade9a66`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-046 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/workflow_projection.rs`; `src/t107_workflow_projection_tests.rs`; T107 merge `987cbed5f01f8890ece61cbe39c45e487ade9a66`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-047 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/workflow_projection.rs`; `src/t107_workflow_projection_tests.rs`; T107 merge `987cbed5f01f8890ece61cbe39c45e487ade9a66`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-048 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/workflow_projection.rs`; `src/t107_workflow_projection_tests.rs`; T107 merge `987cbed5f01f8890ece61cbe39c45e487ade9a66`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-049 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/workflow_projection.rs`; `src/t107_workflow_projection_tests.rs`; T107 merge `987cbed5f01f8890ece61cbe39c45e487ade9a66`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-050 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/workflow_projection.rs`; `src/t107_workflow_projection_tests.rs`; T107 merge `987cbed5f01f8890ece61cbe39c45e487ade9a66`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-051 | `PROVEN_DETERMINISTIC` | `migrations/0010_resumable_workflow_ledger.sql`; `src/store.rs`; `src/t102_workflow_store_tests.rs`; `src/t108_workflow_recovery_tests.rs`; T108 merge `5c8f5259c53aedb3f12fc30f237887949740147a`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-052 | `PROVEN_DETERMINISTIC` | `migrations/0010_resumable_workflow_ledger.sql`; `src/store.rs`; `src/t102_workflow_store_tests.rs`; `src/t108_workflow_recovery_tests.rs`; T108 merge `5c8f5259c53aedb3f12fc30f237887949740147a`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-053 | `PROVEN_DETERMINISTIC` | `migrations/0010_resumable_workflow_ledger.sql`; `src/store.rs`; `src/t102_workflow_store_tests.rs`; `src/t108_workflow_recovery_tests.rs`; T108 merge `5c8f5259c53aedb3f12fc30f237887949740147a`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-054 | `PROVEN_DETERMINISTIC` | `migrations/0010_resumable_workflow_ledger.sql`; `src/store.rs`; `src/t102_workflow_store_tests.rs`; `src/t108_workflow_recovery_tests.rs`; T108 merge `5c8f5259c53aedb3f12fc30f237887949740147a`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-055 | `PROVEN_DETERMINISTIC` | `migrations/0010_resumable_workflow_ledger.sql`; `src/store.rs`; `src/t102_workflow_store_tests.rs`; `src/t108_workflow_recovery_tests.rs`; T108 merge `5c8f5259c53aedb3f12fc30f237887949740147a`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-056 | `PROVEN_DETERMINISTIC` | `migrations/0010_resumable_workflow_ledger.sql`; `src/store.rs`; `src/t102_workflow_store_tests.rs`; `src/t108_workflow_recovery_tests.rs`; T108 merge `5c8f5259c53aedb3f12fc30f237887949740147a`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-057 | `PROVEN_DETERMINISTIC` | `migrations/0010_resumable_workflow_ledger.sql`; `src/store.rs`; `src/t102_workflow_store_tests.rs`; `src/t108_workflow_recovery_tests.rs`; T108 merge `5c8f5259c53aedb3f12fc30f237887949740147a`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-058 | `PROVEN_DETERMINISTIC` | `migrations/0010_resumable_workflow_ledger.sql`; `src/store.rs`; `src/t102_workflow_store_tests.rs`; `src/t108_workflow_recovery_tests.rs`; T108 merge `5c8f5259c53aedb3f12fc30f237887949740147a`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-059 | `PROVEN_DETERMINISTIC` | `migrations/0010_resumable_workflow_ledger.sql`; `src/store.rs`; `src/t102_workflow_store_tests.rs`; `src/t108_workflow_recovery_tests.rs`; T108 merge `5c8f5259c53aedb3f12fc30f237887949740147a`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-060 | `PROVEN_GOVERNANCE_BOUNDARY` | `specs/008-resumable-workflow-decision-ledger/tasks.md` Global Rules 6-8; `Cargo.toml`; `Cargo.lock`; `migrations/0010_resumable_workflow_ledger.sql`; canonical T112 tree `4aac451c4e36e04341223bdf5d2bbf40bca506ef` contains no second durable store or newly authorized subsystem |
+| FR-061 | `PROVEN_DETERMINISTIC` | `src/workflow_projection.rs`; `src/workflow_cli.rs`; `src/t107_workflow_projection_tests.rs`; `src/t109_workflow_cli_tests.rs`; T109 merge `d13e2931cfb39cbc0f48b8602904873c47cd350a`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-062 | `PROVEN_DETERMINISTIC` | `src/workflow_projection.rs`; `src/workflow_cli.rs`; `src/t107_workflow_projection_tests.rs`; `src/t109_workflow_cli_tests.rs`; T109 merge `d13e2931cfb39cbc0f48b8602904873c47cd350a`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-063 | `PROVEN_DETERMINISTIC` | `src/workflow_projection.rs`; `src/workflow_cli.rs`; `src/t107_workflow_projection_tests.rs`; `src/t109_workflow_cli_tests.rs`; T109 merge `d13e2931cfb39cbc0f48b8602904873c47cd350a`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-064 | `PROVEN_DETERMINISTIC` | `src/workflow_projection.rs`; `src/workflow_cli.rs`; `src/t107_workflow_projection_tests.rs`; `src/t109_workflow_cli_tests.rs`; T109 merge `d13e2931cfb39cbc0f48b8602904873c47cd350a`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-065 | `PROVEN_DETERMINISTIC` | `src/workflow_projection.rs`; `src/workflow_cli.rs`; `src/t107_workflow_projection_tests.rs`; `src/t109_workflow_cli_tests.rs`; T109 merge `d13e2931cfb39cbc0f48b8602904873c47cd350a`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-066 | `PROVEN_DETERMINISTIC` | `src/workflow_projection.rs`; `src/workflow_cli.rs`; `src/t107_workflow_projection_tests.rs`; `src/t109_workflow_cli_tests.rs`; T109 merge `d13e2931cfb39cbc0f48b8602904873c47cd350a`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-067 | `PROVEN_DETERMINISTIC` | `src/workflow_projection.rs`; `src/workflow_cli.rs`; `src/t107_workflow_projection_tests.rs`; `src/t109_workflow_cli_tests.rs`; T109 merge `d13e2931cfb39cbc0f48b8602904873c47cd350a`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| FR-068 | `PROVEN_GOVERNANCE_BOUNDARY` | `specs/008-resumable-workflow-decision-ledger/tasks.md` Global Rules 6-8, 19-21; `specs/008-resumable-workflow-decision-ledger/t110-tui-necessity.md`; `Cargo.toml`; `Cargo.lock`; canonical T112 tree `4aac451c4e36e04341223bdf5d2bbf40bca506ef`; no forbidden expansion is present in the landed Spec 008 source inventory |
+| FR-069 | `PROVEN_GOVERNANCE_BOUNDARY` | `specs/008-resumable-workflow-decision-ledger/tasks.md` Global Rules 6-8, 19-21; `specs/008-resumable-workflow-decision-ledger/t110-tui-necessity.md`; `Cargo.toml`; `Cargo.lock`; canonical T112 tree `4aac451c4e36e04341223bdf5d2bbf40bca506ef`; no forbidden expansion is present in the landed Spec 008 source inventory |
+| FR-070 | `PROVEN_GOVERNANCE_BOUNDARY` | `specs/008-resumable-workflow-decision-ledger/tasks.md` Global Rules 6-8, 19-21; `specs/008-resumable-workflow-decision-ledger/t110-tui-necessity.md`; `Cargo.toml`; `Cargo.lock`; canonical T112 tree `4aac451c4e36e04341223bdf5d2bbf40bca506ef`; no forbidden expansion is present in the landed Spec 008 source inventory |
+| FR-071 | `PROVEN_GOVERNANCE_BOUNDARY` | `specs/008-resumable-workflow-decision-ledger/tasks.md` Global Rules 6-8, 19-21; `specs/008-resumable-workflow-decision-ledger/t110-tui-necessity.md`; `Cargo.toml`; `Cargo.lock`; canonical T112 tree `4aac451c4e36e04341223bdf5d2bbf40bca506ef`; no forbidden expansion is present in the landed Spec 008 source inventory |
+| FR-072 | `PROVEN_GOVERNANCE_BOUNDARY` | `specs/008-resumable-workflow-decision-ledger/tasks.md` Global Rules 6-8, 19-21; `specs/008-resumable-workflow-decision-ledger/t110-tui-necessity.md`; `Cargo.toml`; `Cargo.lock`; canonical T112 tree `4aac451c4e36e04341223bdf5d2bbf40bca506ef`; no forbidden expansion is present in the landed Spec 008 source inventory |
+| FR-073 | `PROVEN_GOVERNANCE_BOUNDARY` | `specs/008-resumable-workflow-decision-ledger/tasks.md` Global Rules 6-8, 19-21; `specs/008-resumable-workflow-decision-ledger/t110-tui-necessity.md`; `Cargo.toml`; `Cargo.lock`; canonical T112 tree `4aac451c4e36e04341223bdf5d2bbf40bca506ef`; no forbidden expansion is present in the landed Spec 008 source inventory |
+| FR-074 | `PROVEN_GOVERNANCE_BOUNDARY` | `specs/008-resumable-workflow-decision-ledger/tasks.md` Global Rules 6-8, 19-21; `specs/008-resumable-workflow-decision-ledger/t110-tui-necessity.md`; `Cargo.toml`; `Cargo.lock`; canonical T112 tree `4aac451c4e36e04341223bdf5d2bbf40bca506ef`; no forbidden expansion is present in the landed Spec 008 source inventory |
+| FR-075 | `PROVEN_GOVERNANCE_BOUNDARY` | `specs/008-resumable-workflow-decision-ledger/tasks.md` Global Rules 6-8, 19-21; `specs/008-resumable-workflow-decision-ledger/t110-tui-necessity.md`; `Cargo.toml`; `Cargo.lock`; canonical T112 tree `4aac451c4e36e04341223bdf5d2bbf40bca506ef`; no forbidden expansion is present in the landed Spec 008 source inventory |
+| FR-076 | `PROVEN_GOVERNANCE_BOUNDARY` | `specs/008-resumable-workflow-decision-ledger/tasks.md` Global Rules 6-8, 19-21; `specs/008-resumable-workflow-decision-ledger/t110-tui-necessity.md`; `Cargo.toml`; `Cargo.lock`; canonical T112 tree `4aac451c4e36e04341223bdf5d2bbf40bca506ef`; no forbidden expansion is present in the landed Spec 008 source inventory |
+| FR-077 | `PROVEN_PLATFORM_BOUND` | `src/t111_workflow_regression_tests.rs`; `.github/workflows/quality.yml`; `.github/workflows/windows-terminal.yml`; T111 merge `0a247394fa4e060cd7fbef31af2e2b530b1bbf41` with post-merge quality #1190 and windows-terminal #795; T112 post-merge quality #1195 and windows-terminal #800 |
+| FR-078 | `PROVEN_GOVERNANCE_BOUNDARY` | `src/t111_workflow_regression_tests.rs`; `src/t112_workflow_adversarial_tests.rs`; `specs/008-resumable-workflow-decision-ledger/tasks.md` Standard Acceptance Gate and Global Rules; canonical T111/T112 merges `0a247394fa4e060cd7fbef31af2e2b530b1bbf41` / `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1`; final T113 scope remains documentation-only |
 
 ## SC-001..SC-020 reconciliation
 
 | Criterion | Classification | Canonical evidence path |
 | --- | --- | --- |
-| SC-001 | `PROVEN_DETERMINISTIC` | T101/T102/T112 |
-| SC-002 | `PROVEN_DETERMINISTIC` | T101/T112 |
-| SC-003 | `PROVEN_DETERMINISTIC` | T103/T112 |
-| SC-004 | `PROVEN_DETERMINISTIC` | T104/T111/T112 |
-| SC-005 | `PROVEN_DETERMINISTIC` | T105/T112 |
-| SC-006 | `PROVEN_DETERMINISTIC` | T105/T112 |
-| SC-007 | `PROVEN_DETERMINISTIC` | T101/T105/T106/T112 |
-| SC-008 | `PROVEN_DETERMINISTIC` | T106/T112 |
-| SC-009 | `PROVEN_DETERMINISTIC` | T107/T112 |
-| SC-010 | `PROVEN_DETERMINISTIC` | T104/T108/T112 |
-| SC-011 | `PROVEN_DETERMINISTIC` | T108/T112 |
-| SC-012 | `PROVEN_DETERMINISTIC` | T108/T112 |
-| SC-013 | `PROVEN_DETERMINISTIC` | T107/T109/T112 |
-| SC-014 | `PROVEN_DETERMINISTIC` | T101/T106/T112 |
-| SC-015 | `PROVEN_DETERMINISTIC` | T101/T107/T112 |
-| SC-016 | `PROVEN_PLATFORM_BOUND` | T111 exact platform/regression qualification + final candidate CI |
-| SC-017 | `PROVEN_GOVERNANCE_BOUNDARY` | T112 review stack + T113 exact-head review stack |
-| SC-018 | `PROVEN_GOVERNANCE_BOUNDARY` | T110/T111/T112 and final negative-scope reconciliation |
-| SC-019 | `PROVEN_PLATFORM_BOUND` | T111 direct Windows/WSL2/Linux/macOS evidence only |
-| SC-020 | `PROVEN_DETERMINISTIC` | Global Rule 18 + T105/T106/T108/T112 historical evidence |
+| SC-001 | `PROVEN_DETERMINISTIC` | `src/workflow.rs`; `src/t101_workflow_domain_tests.rs`; `src/t102_workflow_store_tests.rs`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| SC-002 | `PROVEN_DETERMINISTIC` | `src/t101_workflow_domain_tests.rs`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| SC-003 | `PROVEN_DETERMINISTIC` | `src/t103_workflow_baseline_tests.rs`; `src/store.rs`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| SC-004 | `PROVEN_DETERMINISTIC` | `src/t104_workflow_continuation_tests.rs`; `src/t111_workflow_regression_tests.rs`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1`; Spec 006 nonclaims in `specs/008-resumable-workflow-decision-ledger/tasks.md` |
+| SC-005 | `PROVEN_DETERMINISTIC` | `src/t105_workflow_retry_tests.rs`; `src/workflow.rs`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| SC-006 | `PROVEN_DETERMINISTIC` | `src/t105_workflow_retry_tests.rs`; `src/store.rs`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| SC-007 | `PROVEN_DETERMINISTIC` | `src/t101_workflow_domain_tests.rs`; `src/t105_workflow_retry_tests.rs`; `src/t106_workflow_decision_tests.rs`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| SC-008 | `PROVEN_DETERMINISTIC` | `src/t106_workflow_decision_tests.rs`; `src/store.rs`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| SC-009 | `PROVEN_DETERMINISTIC` | `src/t107_workflow_projection_tests.rs`; `src/workflow_projection.rs`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| SC-010 | `PROVEN_DETERMINISTIC` | `src/t104_workflow_continuation_tests.rs`; `src/t108_workflow_recovery_tests.rs`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| SC-011 | `PROVEN_DETERMINISTIC` | `src/t108_workflow_recovery_tests.rs`; `src/store.rs`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| SC-012 | `PROVEN_DETERMINISTIC` | `src/t108_workflow_recovery_tests.rs`; `src/workflow.rs`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| SC-013 | `PROVEN_DETERMINISTIC` | `src/t107_workflow_projection_tests.rs`; `src/t109_workflow_cli_tests.rs`; `src/workflow_cli.rs`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| SC-014 | `PROVEN_DETERMINISTIC` | `src/t101_workflow_domain_tests.rs`; `src/t106_workflow_decision_tests.rs`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| SC-015 | `PROVEN_DETERMINISTIC` | `src/t101_workflow_domain_tests.rs`; `src/t107_workflow_projection_tests.rs`; `src/t112_workflow_adversarial_tests.rs`; canonical T112 merge `6e8ca96070ee2b56c231f6b4c1f101d5fa589ab1` |
+| SC-016 | `PROVEN_PLATFORM_BOUND` | `src/t111_workflow_regression_tests.rs`; `.github/workflows/quality.yml`; `.github/workflows/windows-terminal.yml`; T111 post-merge quality #1190/windows-terminal #795 and T112 post-merge quality #1195/windows-terminal #800 |
+| SC-017 | `PROVEN_GOVERNANCE_BOUNDARY` | `specs/008-resumable-workflow-decision-ledger/tasks.md` Standard Acceptance Gate; PR #165 exact-head Author/Ponytail/independent-review trail; exact-head `quality` run is candidate-bound and must be requalified after any head movement |
+| SC-018 | `PROVEN_GOVERNANCE_BOUNDARY` | `specs/008-resumable-workflow-decision-ledger/t110-tui-necessity.md`; `specs/008-resumable-workflow-decision-ledger/tasks.md` Global Rules 6-8; `Cargo.toml`; `Cargo.lock`; canonical T112 tree `4aac451c4e36e04341223bdf5d2bbf40bca506ef` |
+| SC-019 | `PROVEN_PLATFORM_BOUND` | `src/t111_workflow_regression_tests.rs`; `.github/workflows/windows-terminal.yml`; T111 windows-terminal #795 and T112 windows-terminal #800; no cross-platform substitution claimed |
+| SC-020 | `PROVEN_DETERMINISTIC` | `src/t105_workflow_retry_tests.rs`; `src/t106_workflow_decision_tests.rs`; `src/t108_workflow_recovery_tests.rs`; `src/t112_workflow_adversarial_tests.rs`; `specs/008-resumable-workflow-decision-ledger/plan-amendment-001-t057-fail-closed-cli-fixture.md` preserves Plan failure run `34395694562` |
 
 ## Final negative-scope reconciliation
 
