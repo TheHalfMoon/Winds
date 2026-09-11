@@ -52,6 +52,8 @@ mod t087_workbench_dependency_tests;
 mod t099_workbench_adversarial_tests;
 #[cfg(test)]
 mod t111_workflow_regression_tests;
+#[cfg(test)]
+mod t112_workflow_adversarial_tests;
 mod workbench;
 mod workflow_cli;
 
