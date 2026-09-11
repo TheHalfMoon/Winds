@@ -31,6 +31,11 @@ mod domain;
 )]
 mod execution;
 mod git;
+#[allow(
+    dead_code,
+    reason = "Spec 009 T114 pure Model Mesh domain; product adapters land in later tasks"
+)]
+mod model_mesh;
 mod store;
 #[cfg(test)]
 mod t068_store_regression_tests;
@@ -54,6 +59,8 @@ mod t099_workbench_adversarial_tests;
 mod t111_workflow_regression_tests;
 #[cfg(test)]
 mod t112_workflow_adversarial_tests;
+#[cfg(test)]
+mod t114_model_mesh_domain_tests;
 mod workbench;
 mod workflow_cli;
 
