@@ -22,7 +22,8 @@ The entry decision is bounded by:
 - canonical Spec 008 closeout through T113;
 - `docs/research/014-loopforge-skillhone-roadmap-reconciliation.md`;
 - `docs/research/015-selective-code-adoption-master-plan.md`;
-- `docs/research/016-post-spec-007-roadmap-status-reconciliation.md`;- `docs/research/017-spec-008-entry-gate.md`;
+- `docs/research/016-post-spec-007-roadmap-status-reconciliation.md`;
+- `docs/research/017-spec-008-entry-gate.md`;
 - research RFC #91, which remains non-canonical input;
 - Draft PR #21, which remains a research archive rather than an acceptance surface;
 - current accepted runtime/context implementation, including `src/agentic_runtime.rs` and `src/agentic_context.rs`, as repository truth rather than future authority.
@@ -46,7 +47,9 @@ REAL_CODEX_WORKER_EXECUTION=NO
 
 Those live-runtime nonclaims remain unchanged. Model Mesh planning must not retroactively upgrade any earlier runtime proof level.
 
-## 3. Founder decisionThe Founder authorizes only the next canonical formal specification stage under the mandatory `Constitution -> Spec -> Plan -> Tasks -> Implement -> Verify -> Review -> Human landing` discipline.
+## 3. Founder decision
+
+The Founder authorizes only the next canonical formal specification stage under the mandatory `Constitution -> Spec -> Plan -> Tasks -> Implement -> Verify -> Review -> Human landing` discipline.
 
 The next formal specification is:
 
@@ -70,7 +73,9 @@ Spec 008 now supplies the missing canonical workflow target: provider/runtime co
 
 The next missing layer is:
 
-> **Explicit multi-runtime/provider/model identity and continuity without silent routing or authority expansion.**## 5. Current repository baseline
+> **Explicit multi-runtime/provider/model identity and continuity without silent routing or authority expansion.**
+
+## 5. Current repository baseline
 
 The current accepted implementation already proves several inputs that Spec 009 must preserve rather than redesign:
 
@@ -94,7 +99,8 @@ The separate Spec 009 specification may define implementation-agnostic user scen
 - a direction-neutral continuity contract over the currently accepted Codex and Claude runtime families before broader runtime admission;
 - exact provider/model/runtime provenance on handoff, execution observation, and returned agent material where such identity is locally observable;
 - truthful `UNKNOWN`/`UNAVAILABLE` states when provider or model identity cannot be proven;
-- capability declarations and local observations that cannot self-authorize execution;- exact binding of provider/model continuity to canonical `WorkflowRun` / `StageRun`, candidate, artifact, evidence, and decision context;
+- capability declarations and local observations that cannot self-authorize execution;
+- exact binding of provider/model continuity to canonical `WorkflowRun` / `StageRun`, candidate, artifact, evidence, and decision context;
 - stale-state rules when runtime executable, runtime version, provider/model identity, native session identity, authority, workflow attempt, or candidate identity moves;
 - explicit reconstruction and reassignment semantics when exact native continuation is unavailable;
 - deterministic handoff context assembled from canonical structured state rather than provider-private memory or transcript replay;
@@ -124,7 +130,9 @@ HANDOFF != NATIVE_RESUME
 RECONSTRUCTED != RESUMED
 PROVIDER_OR_MODEL_DRIFT => PRIOR_PROVIDER_BOUND_CONTINUITY_STALE
 AGENT_REPORTED_MODEL_NAME != WINDS_OBSERVED_MODEL_IDENTITY
-```## 8. Explicit Spec 009 non-goals
+```
+
+## 8. Explicit Spec 009 non-goals
 
 Unless a later accepted amendment changes this boundary, Spec 009 does not authorize:
 
@@ -150,7 +158,9 @@ Any later Plan/Tasks unit that proposes a new runtime/provider integration or de
 
 Provider/model catalog declarations remain non-authoritative until locally observed at the proof level required by the accepted slice. Raw credentials must never become canonical workflow context or verification evidence.
 
-## 10. Provisional future sequenceThis is a governance ordering decision, not Tasks authorization for downstream specifications:
+## 10. Provisional future sequence
+
+This is a governance ordering decision, not Tasks authorization for downstream specifications:
 
 ```text
 SPEC_009  Model Mesh & explicit multi-provider continuity
@@ -180,7 +190,8 @@ This entry gate may land only if the exact final candidate proves:
 - correctness/governance/evidence-integrity author review passes;
 - Ponytail/YAGNI review finds no premature abstraction, provider fleet, gateway, or protocol framework;
 - a fresh independent reviewer challenges the exact candidate, sequence, current-runtime claims, identity model, secret boundary, and non-authorization claims;
-- zero unresolved material findings/threads;- final base/head/tree/scope/ruleset/mergeability reconciliation;
+- zero unresolved material findings/threads;
+- final base/head/tree/scope/ruleset/mergeability reconciliation;
 - guarded expected-head normal landing;
 - canonical merge identity/tree/ordered parents/signature verification;
 - every actually triggered applicable post-merge push workflow succeeds.
