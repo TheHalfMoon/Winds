@@ -21,15 +21,22 @@ use crate::domain::{
     ExecutionRecord, ExecutionStatus, FactSource, ShellCommandRecord, StoredRun,
     TerminalCloseReason, TerminalSessionRecord, WorkspaceRecord,
 };
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use crate::model_mesh::{
+    ExactModelId, ExactProviderId, IdentityClaim, IdentityDimension, IdentitySourceClass,
+    ModelMeshAuthorityEnvelopeV1, ModelMeshTargetDescriptorV1, TargetDimension, TargetRequest,
+    TargetSelector, model_mesh_authority_json_matches_digest,
+};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, ffi, params};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
+use std::ffi::c_int;
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::{slice, str};
 
 #[path = "agentic_identity.rs"]
 pub(crate) mod agentic_identity;
@@ -53,6 +60,9 @@ mod t106_workflow_decision_tests;
 #[cfg(test)]
 #[path = "t108_workflow_recovery_tests.rs"]
 mod t108_workflow_recovery_tests;
+#[cfg(test)]
+#[path = "t116_model_mesh_store_tests.rs"]
+mod t116_model_mesh_store_tests;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -249,11 +259,59 @@ pub(crate) struct StoredWorkflowActorBinding {
     pub(crate) reconstruction_report: Option<StoredReconstructionReport>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ModelMeshClaimSubject {
+    RequestTarget(String),
+    Actor(String),
+}
+
+impl ModelMeshClaimSubject {
+    fn as_db_parts(&self) -> (&'static str, Option<&str>, Option<&str>) {
+        match self {
+            Self::RequestTarget(id) => ("REQUEST_TARGET", Some(id.as_str()), None),
+            Self::Actor(id) => ("ACTOR", None, Some(id.as_str())),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StoredModelMeshTargetRequest {
+    pub(crate) target_request_id: String,
+    pub(crate) request: TargetRequest,
+    pub(crate) selection_approval_id: String,
+    pub(crate) created_unix_ms: i64,
+}
+
+pub(crate) struct NewModelMeshTargetRequest<'a> {
+    pub(crate) target_request_id: &'a str,
+    pub(crate) request: &'a TargetRequest,
+    pub(crate) selection_approval_id: &'a str,
+    pub(crate) created_unix_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StoredModelMeshIdentityClaim {
+    pub(crate) identity_claim_id: String,
+    pub(crate) subject: ModelMeshClaimSubject,
+    pub(crate) claim: IdentityClaim,
+    pub(crate) runtime_binding_id: Option<String>,
+    pub(crate) observed_unix_ms: i64,
+}
+
+pub(crate) struct NewModelMeshIdentityClaim<'a> {
+    pub(crate) identity_claim_id: &'a str,
+    pub(crate) subject: ModelMeshClaimSubject,
+    pub(crate) claim: &'a IdentityClaim,
+    pub(crate) runtime_binding_id: Option<&'a str>,
+    pub(crate) observed_unix_ms: i64,
+}
+
 impl Store {
     pub fn open(home: &Path) -> Result<Self> {
         fs::create_dir_all(home)?;
         fs::create_dir_all(home.join("blobs"))?;
         let connection = Connection::open(home.join("winds.db"))?;
+        register_model_mesh_approval_integrity_function(&connection)?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.execute_batch(include_str!("../migrations/0001_init.sql"))?;
@@ -275,6 +333,7 @@ impl Store {
             "../migrations/0008_runtime_session_bindings.sql"
         ))?;
         initialize_workflow_schema(&connection)?;
+        initialize_model_mesh_schema(&connection)?;
         Ok(Self {
             connection,
             home: home.to_path_buf(),
@@ -385,6 +444,692 @@ fn initialize_workflow_schema(connection: &Connection) -> Result<()> {
         connection.execute_batch("COMMIT")?;
     }
     validate_workflow_schema_connection(connection)
+}
+
+fn model_mesh_schema_objects(
+    connection: &Connection,
+) -> Result<BTreeMap<String, (String, String, String)>> {
+    let mut statement = connection.prepare(
+        "SELECT name, type, tbl_name, sql
+         FROM sqlite_master
+         WHERE name GLOB 'model_mesh_*'
+            OR name GLOB 'idx_model_mesh_*'
+            OR name GLOB 'trg_model_mesh_*'
+         ORDER BY name",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(3)?,
+        ))
+    })?;
+    let mut objects = BTreeMap::new();
+    for row in rows {
+        let (name, object_type, table_name, sql) = row?;
+        let sql = sql.ok_or_else(|| format!("Model Mesh schema object has no SQL: {name}"))?;
+        objects.insert(
+            name,
+            (object_type, table_name, normalize_workflow_schema_sql(&sql)),
+        );
+    }
+    Ok(objects)
+}
+
+fn expected_model_mesh_schema_objects() -> Result<BTreeMap<String, (String, String, String)>> {
+    let connection = Connection::open_in_memory()?;
+    register_model_mesh_approval_integrity_function(&connection)?;
+    connection.pragma_update(None, "foreign_keys", "ON")?;
+    connection.execute_batch(include_str!(
+        "../migrations/0002_workspace_execution_ledger.sql"
+    ))?;
+    connection.execute_batch(include_str!("../migrations/0006_agentic_identity.sql"))?;
+    connection.execute_batch(include_str!(
+        "../migrations/0008_runtime_session_bindings.sql"
+    ))?;
+    connection.execute_batch(include_str!(
+        "../migrations/0009_agentic_delegation_audit.sql"
+    ))?;
+    connection.execute_batch(include_str!(
+        "../migrations/0010_resumable_workflow_ledger.sql"
+    ))?;
+    connection.execute_batch(include_str!("../migrations/0011_model_mesh_continuity.sql"))?;
+    model_mesh_schema_objects(&connection)
+}
+
+fn validate_model_mesh_schema_connection(connection: &Connection) -> Result<()> {
+    let expected = expected_model_mesh_schema_objects()?;
+    let observed = model_mesh_schema_objects(connection)?;
+    if observed.keys().collect::<Vec<_>>() != expected.keys().collect::<Vec<_>>() {
+        let missing = expected
+            .keys()
+            .filter(|name| !observed.contains_key(*name))
+            .cloned()
+            .collect::<Vec<_>>();
+        let unexpected = observed
+            .keys()
+            .filter(|name| !expected.contains_key(*name))
+            .cloned()
+            .collect::<Vec<_>>();
+        return Err(format!(
+            "Model Mesh schema object inventory mismatch; missing={missing:?}; unexpected={unexpected:?}"
+        )
+        .into());
+    }
+    for (name, expected_object) in expected {
+        let observed_object = observed
+            .get(&name)
+            .ok_or_else(|| format!("Model Mesh schema object missing: {name}"))?;
+        if observed_object != &expected_object {
+            return Err(format!("Model Mesh schema object definition mismatch: {name}").into());
+        }
+    }
+    Ok(())
+}
+
+const MODEL_MESH_APPROVAL_INTEGRITY_SQL_FUNCTION: &[u8] = b"winds_model_mesh_approval_integrity\0";
+
+fn register_model_mesh_approval_integrity_function(connection: &Connection) -> Result<()> {
+    // T116 cannot add a rusqlite feature/dependency. Register one narrow deterministic function
+    // through rusqlite's public SQLite FFI so the frozen schema can fail closed on approval bytes,
+    // not only on selected JSON fields. Connections without this function cannot satisfy the
+    // Model Mesh authority triggers and therefore cannot append authorized target/event truth.
+    let result = unsafe {
+        ffi::sqlite3_create_function_v2(
+            connection.handle(),
+            MODEL_MESH_APPROVAL_INTEGRITY_SQL_FUNCTION.as_ptr().cast(),
+            2,
+            ffi::SQLITE_UTF8 | ffi::SQLITE_DETERMINISTIC | ffi::SQLITE_INNOCUOUS,
+            std::ptr::null_mut(),
+            Some(model_mesh_approval_integrity_sqlite),
+            None,
+            None,
+            None,
+        )
+    };
+    if result != ffi::SQLITE_OK {
+        return Err(format!(
+            "could not register Model Mesh approval-integrity SQL function: SQLite code {result}"
+        )
+        .into());
+    }
+    Ok(())
+}
+
+unsafe extern "C" fn model_mesh_approval_integrity_sqlite(
+    context: *mut ffi::sqlite3_context,
+    argument_count: c_int,
+    arguments: *mut *mut ffi::sqlite3_value,
+) {
+    let valid = if argument_count == 2 && !arguments.is_null() {
+        let values = unsafe { slice::from_raw_parts(arguments, 2) };
+        match (unsafe { model_mesh_sql_text(values[0]) }, unsafe {
+            model_mesh_sql_text(values[1])
+        }) {
+            (Some(canonical_content_json), Some(content_digest)) => {
+                model_mesh_authority_json_matches_digest(&canonical_content_json, &content_digest)
+            }
+            _ => false,
+        }
+    } else {
+        false
+    };
+    unsafe { ffi::sqlite3_result_int(context, i32::from(valid)) };
+}
+
+unsafe fn model_mesh_sql_text(value: *mut ffi::sqlite3_value) -> Option<String> {
+    if value.is_null() || unsafe { ffi::sqlite3_value_type(value) } != ffi::SQLITE_TEXT {
+        return None;
+    }
+    let text = unsafe { ffi::sqlite3_value_text(value) };
+    if text.is_null() {
+        return None;
+    }
+    let bytes = unsafe { ffi::sqlite3_value_bytes(value) };
+    if bytes < 0 {
+        return None;
+    }
+    let bytes = unsafe { slice::from_raw_parts(text, bytes as usize) };
+    str::from_utf8(bytes).ok().map(str::to_owned)
+}
+
+fn initialize_model_mesh_schema(connection: &Connection) -> Result<()> {
+    let existing = model_mesh_schema_objects(connection)?;
+    if existing.is_empty() {
+        connection.execute_batch("BEGIN IMMEDIATE")?;
+        if let Err(error) =
+            connection.execute_batch(include_str!("../migrations/0011_model_mesh_continuity.sql"))
+        {
+            let _ = connection.execute_batch("ROLLBACK");
+            return Err(error.into());
+        }
+        if let Err(error) = validate_model_mesh_schema_connection(connection) {
+            let _ = connection.execute_batch("ROLLBACK");
+            return Err(error);
+        }
+        connection.execute_batch("COMMIT")?;
+    }
+    validate_model_mesh_schema_connection(connection)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StoredModelMeshApprovalAudit {
+    workstream_id: String,
+    session_id: String,
+    workspace_id: String,
+    content_digest: String,
+    canonical_content_json: String,
+    approved_unix_ms: i64,
+}
+
+fn model_mesh_error(error: String) -> Box<dyn Error + Send + Sync> {
+    error.into()
+}
+
+fn model_mesh_target_dimension_provider(value: &TargetDimension<ExactProviderId>) -> Option<&str> {
+    match value {
+        TargetDimension::Unspecified => None,
+        TargetDimension::Exact(value) => Some(value.as_str()),
+    }
+}
+
+fn model_mesh_target_dimension_model(value: &TargetDimension<ExactModelId>) -> Option<&str> {
+    match value {
+        TargetDimension::Unspecified => None,
+        TargetDimension::Exact(value) => Some(value.as_str()),
+    }
+}
+
+fn load_stored_model_mesh_approval_connection(
+    connection: &Connection,
+    approval_id: &str,
+) -> Result<StoredModelMeshApprovalAudit> {
+    connection
+        .query_row(
+            "SELECT workstream_id, session_id, workspace_id, content_digest,
+                    canonical_content_json, approved_unix_ms
+             FROM agentic_delegation_approvals WHERE approval_id = ?1",
+            params![approval_id],
+            |row| {
+                Ok(StoredModelMeshApprovalAudit {
+                    workstream_id: row.get(0)?,
+                    session_id: row.get(1)?,
+                    workspace_id: row.get(2)?,
+                    content_digest: row.get(3)?,
+                    canonical_content_json: row.get(4)?,
+                    approved_unix_ms: row.get(5)?,
+                })
+            },
+        )
+        .optional()?
+        .ok_or_else(|| format!("unknown Model Mesh approval: {approval_id}").into())
+}
+
+fn model_mesh_approval_matches(
+    stored: &StoredModelMeshApprovalAudit,
+    expected: &ModelMeshAuthorityEnvelopeV1,
+) -> Result<bool> {
+    let observed_digest = format!(
+        "{:x}",
+        Sha256::digest(stored.canonical_content_json.as_bytes())
+    );
+    if observed_digest != stored.content_digest {
+        return Ok(false);
+    }
+    let parsed =
+        match ModelMeshAuthorityEnvelopeV1::from_canonical_json(&stored.canonical_content_json) {
+            Ok(parsed) => parsed,
+            Err(_) => return Ok(false),
+        };
+    Ok(parsed.workspace_id() == stored.workspace_id
+        && parsed.workstream_id() == stored.workstream_id
+        && parsed.session_id() == stored.session_id
+        && &parsed == expected)
+}
+
+fn load_model_mesh_target_request_connection(
+    connection: &Connection,
+    target_request_id: &str,
+) -> Result<StoredModelMeshTargetRequest> {
+    let row = connection
+        .query_row(
+            "SELECT request.target_request_id, request.actor_role, request.runtime_kind,
+                    request.requested_provider_id, request.requested_model_id,
+                    request.selector_class, request.target_descriptor_digest,
+                    request.selection_approval_id, request.created_unix_ms,
+                    workflow.workspace_id, workflow.workstream_id, workflow.workflow_run_id,
+                    stage.stage_run_id, actor.binding_id, actor.winds_session_id
+             FROM model_mesh_target_requests request
+             JOIN workflow_actor_bindings actor
+               ON actor.binding_id = request.actor_binding_id
+              AND actor.stage_run_id = request.stage_run_id
+             JOIN workflow_stage_runs stage ON stage.stage_run_id = request.stage_run_id
+             JOIN workflow_runs workflow ON workflow.workflow_run_id = stage.workflow_run_id
+             JOIN winds_sessions session
+               ON session.session_id = actor.winds_session_id
+              AND session.workstream_id = workflow.workstream_id
+             LEFT JOIN runtime_session_bindings runtime ON runtime.binding_id = actor.runtime_binding_id
+             WHERE request.target_request_id = ?1
+               AND (actor.runtime_binding_id IS NULL OR (
+                    runtime.session_id = actor.winds_session_id
+                    AND runtime.runtime_kind = request.runtime_kind
+               ))",
+            params![target_request_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, i64>(8)?,
+                    row.get::<_, String>(9)?,
+                    row.get::<_, String>(10)?,
+                    row.get::<_, String>(11)?,
+                    row.get::<_, String>(12)?,
+                    row.get::<_, String>(13)?,
+                    row.get::<_, String>(14)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or_else(|| format!("unknown or invalid Model Mesh target request: {target_request_id}"))?;
+
+    let runtime = crate::agentic_runtime::RuntimeKind::from_db(&row.2)
+        .ok_or_else(|| format!("unknown Model Mesh target runtime: {}", row.2))?;
+    let provider = row
+        .3
+        .as_deref()
+        .map(ExactProviderId::new)
+        .transpose()
+        .map_err(model_mesh_error)?
+        .map_or(TargetDimension::Unspecified, TargetDimension::Exact);
+    let model = row
+        .4
+        .as_deref()
+        .map(ExactModelId::new)
+        .transpose()
+        .map_err(model_mesh_error)?
+        .map_or(TargetDimension::Unspecified, TargetDimension::Exact);
+    let selector = TargetSelector::from_db(&row.5)
+        .ok_or_else(|| format!("unknown Model Mesh target selector: {}", row.5))?;
+    let descriptor = ModelMeshTargetDescriptorV1::new(
+        &row.9, &row.10, &row.11, &row.12, &row.13, &row.14, &row.1, runtime, provider, model,
+    )
+    .map_err(model_mesh_error)?;
+    let request = TargetRequest::new(descriptor, selector).map_err(model_mesh_error)?;
+    if request.target_descriptor_digest() != row.6 {
+        return Err(
+            "stored Model Mesh target descriptor digest does not match canonical joins".into(),
+        );
+    }
+    validate_agentic_identity_timestamp(row.8, "stored Model Mesh target creation time")?;
+    Ok(StoredModelMeshTargetRequest {
+        target_request_id: row.0,
+        request,
+        selection_approval_id: row.7,
+        created_unix_ms: row.8,
+    })
+}
+
+fn load_model_mesh_identity_claim_connection(
+    connection: &Connection,
+    identity_claim_id: &str,
+) -> Result<StoredModelMeshIdentityClaim> {
+    let row = connection
+        .query_row(
+            "SELECT identity_claim_id, claim_subject, target_request_id, actor_binding_id,
+                    dimension, normalized_value, source_class, observation_basis,
+                    runtime_binding_id, observed_unix_ms
+             FROM model_mesh_identity_claims WHERE identity_claim_id = ?1",
+            params![identity_claim_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, i64>(9)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or_else(|| format!("unknown Model Mesh identity claim: {identity_claim_id}"))?;
+    let subject = match row.1.as_str() {
+        "REQUEST_TARGET" => ModelMeshClaimSubject::RequestTarget(
+            row.2
+                .ok_or("REQUEST_TARGET claim is missing target request identity")?,
+        ),
+        "ACTOR" => ModelMeshClaimSubject::Actor(
+            row.3
+                .ok_or("ACTOR claim is missing actor binding identity")?,
+        ),
+        _ => return Err(format!("unknown Model Mesh claim subject: {}", row.1).into()),
+    };
+    let dimension = IdentityDimension::from_db(&row.4)
+        .ok_or_else(|| format!("unknown Model Mesh identity dimension: {}", row.4))?;
+    let source = IdentitySourceClass::from_db(&row.6)
+        .ok_or_else(|| format!("unknown Model Mesh identity source: {}", row.6))?;
+    let claim = IdentityClaim::new(dimension, row.5.as_deref(), source, row.7.as_deref())
+        .map_err(model_mesh_error)?;
+    validate_agentic_identity_timestamp(row.9, "stored Model Mesh identity observation time")?;
+    Ok(StoredModelMeshIdentityClaim {
+        identity_claim_id: row.0,
+        subject,
+        claim,
+        runtime_binding_id: row.8,
+        observed_unix_ms: row.9,
+    })
+}
+
+fn validate_model_mesh_claim_subject_connection(
+    connection: &Connection,
+    subject: &ModelMeshClaimSubject,
+    runtime_binding_id: Option<&str>,
+) -> Result<()> {
+    let valid = match subject {
+        ModelMeshClaimSubject::Actor(actor_binding_id) => connection.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM workflow_actor_bindings actor
+                LEFT JOIN runtime_session_bindings runtime ON runtime.binding_id = actor.runtime_binding_id
+                WHERE actor.binding_id = ?1
+                  AND actor.winds_session_id IS NOT NULL
+                  AND (?2 IS NULL OR (
+                      actor.runtime_binding_id = ?2
+                      AND runtime.session_id = actor.winds_session_id
+                  ))
+             )",
+            params![actor_binding_id, runtime_binding_id],
+            |row| row.get::<_, bool>(0),
+        )?,
+        ModelMeshClaimSubject::RequestTarget(target_request_id) => connection.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM model_mesh_target_requests request
+                JOIN workflow_actor_bindings actor ON actor.binding_id = request.actor_binding_id
+                LEFT JOIN runtime_session_bindings runtime ON runtime.binding_id = actor.runtime_binding_id
+                WHERE request.target_request_id = ?1
+                  AND actor.winds_session_id IS NOT NULL
+                  AND (?2 IS NULL OR (
+                      actor.runtime_binding_id = ?2
+                      AND runtime.session_id = actor.winds_session_id
+                      AND runtime.runtime_kind = request.runtime_kind
+                  ))
+             )",
+            params![target_request_id, runtime_binding_id],
+            |row| row.get::<_, bool>(0),
+        )?,
+    };
+    if !valid {
+        return Err("Model Mesh identity claim subject/runtime scope is not canonical".into());
+    }
+    Ok(())
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 009 T116 persistence API; projections and continuity consumers land later"
+)]
+impl Store {
+    pub(crate) fn validate_model_mesh_schema(&self) -> Result<()> {
+        validate_model_mesh_schema_connection(&self.connection)
+    }
+
+    pub(crate) fn load_model_mesh_target_request(
+        &self,
+        target_request_id: &str,
+    ) -> Result<StoredModelMeshTargetRequest> {
+        self.validate_model_mesh_schema()?;
+        validate_agentic_identity_text(target_request_id, "Model Mesh target request id")?;
+        load_model_mesh_target_request_connection(&self.connection, target_request_id)
+    }
+
+    pub(crate) fn create_model_mesh_target_request(
+        &mut self,
+        new_request: NewModelMeshTargetRequest<'_>,
+    ) -> Result<StoredModelMeshTargetRequest> {
+        self.validate_model_mesh_schema()?;
+        validate_agentic_identity_text(
+            new_request.target_request_id,
+            "Model Mesh target request id",
+        )?;
+        validate_agentic_identity_text(
+            new_request.selection_approval_id,
+            "Model Mesh selection approval id",
+        )?;
+        validate_agentic_identity_timestamp(
+            new_request.created_unix_ms,
+            "Model Mesh target request creation time",
+        )?;
+        if new_request.request.selector() != TargetSelector::Human {
+            return Err("EXPLICIT_POLICY Model Mesh target selection is not authorized".into());
+        }
+        let requested = new_request.request.descriptor();
+        let requested_digest = requested.digest().map_err(model_mesh_error)?;
+        if requested_digest != new_request.request.target_descriptor_digest() {
+            return Err("Model Mesh target request carries a stale descriptor digest".into());
+        }
+
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if tx
+            .query_row(
+                "SELECT 1 FROM model_mesh_target_requests WHERE target_request_id = ?1",
+                params![new_request.target_request_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some()
+        {
+            let existing =
+                load_model_mesh_target_request_connection(&tx, new_request.target_request_id)?;
+            if existing.request != *new_request.request
+                || existing.selection_approval_id != new_request.selection_approval_id
+                || existing.created_unix_ms != new_request.created_unix_ms
+            {
+                return Err("Model Mesh target request idempotency collision".into());
+            }
+            tx.commit()?;
+            return Ok(existing);
+        }
+
+        let scope = tx
+            .query_row(
+                "SELECT workflow.workspace_id, workflow.workstream_id,
+                        workflow.workflow_run_id, stage.stage_run_id, actor.binding_id,
+                        actor.winds_session_id, runtime.runtime_kind
+                 FROM workflow_actor_bindings actor
+                 JOIN workflow_stage_runs stage ON stage.stage_run_id = actor.stage_run_id
+                 JOIN workflow_runs workflow ON workflow.workflow_run_id = stage.workflow_run_id
+                 JOIN workstreams workstream ON workstream.workstream_id = workflow.workstream_id
+                 JOIN winds_sessions session
+                   ON session.session_id = actor.winds_session_id
+                  AND session.workstream_id = workflow.workstream_id
+                 LEFT JOIN runtime_session_bindings runtime ON runtime.binding_id = actor.runtime_binding_id
+                 WHERE actor.binding_id = ?1
+                   AND workstream.workspace_id = workflow.workspace_id",
+                params![requested.actor_binding_id()],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, Option<String>>(6)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or("Model Mesh target actor does not resolve to canonical stage/session/work scope")?;
+        if let Some(bound_runtime) = scope.6.as_deref()
+            && crate::agentic_runtime::RuntimeKind::from_db(bound_runtime)
+                != Some(requested.runtime())
+        {
+            return Err(
+                "Model Mesh target runtime does not match durable actor runtime binding".into(),
+            );
+        }
+        let rebuilt = ModelMeshTargetDescriptorV1::new(
+            &scope.0,
+            &scope.1,
+            &scope.2,
+            &scope.3,
+            &scope.4,
+            &scope.5,
+            requested.actor_role(),
+            requested.runtime(),
+            requested.provider().clone(),
+            requested.model().clone(),
+        )
+        .map_err(model_mesh_error)?;
+        if &rebuilt != requested || rebuilt.digest().map_err(model_mesh_error)? != requested_digest
+        {
+            return Err(
+                "Model Mesh target descriptor does not match canonical durable joins".into(),
+            );
+        }
+
+        let expected_approval = ModelMeshAuthorityEnvelopeV1::for_target_selection(&rebuilt)
+            .map_err(model_mesh_error)?;
+        let stored_approval =
+            load_stored_model_mesh_approval_connection(&tx, new_request.selection_approval_id)?;
+        if !model_mesh_approval_matches(&stored_approval, &expected_approval)? {
+            return Err("Model Mesh target request lacks exact content-bound approval".into());
+        }
+        if new_request.created_unix_ms < stored_approval.approved_unix_ms {
+            return Err("Model Mesh target request cannot predate its selection approval".into());
+        }
+
+        tx.execute(
+            "INSERT INTO model_mesh_target_requests(
+                target_request_id, stage_run_id, actor_binding_id, actor_role, runtime_kind,
+                requested_provider_id, requested_model_id, selector_class,
+                target_descriptor_digest, selection_approval_id, created_unix_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                new_request.target_request_id,
+                rebuilt.stage_run_id(),
+                rebuilt.actor_binding_id(),
+                rebuilt.actor_role(),
+                rebuilt.runtime().as_str(),
+                model_mesh_target_dimension_provider(rebuilt.provider()),
+                model_mesh_target_dimension_model(rebuilt.model()),
+                new_request.request.selector().as_str(),
+                requested_digest,
+                new_request.selection_approval_id,
+                new_request.created_unix_ms,
+            ],
+        )?;
+        let stored = load_model_mesh_target_request_connection(&tx, new_request.target_request_id)?;
+        tx.commit()?;
+        Ok(stored)
+    }
+
+    pub(crate) fn load_model_mesh_identity_claim(
+        &self,
+        identity_claim_id: &str,
+    ) -> Result<StoredModelMeshIdentityClaim> {
+        self.validate_model_mesh_schema()?;
+        validate_agentic_identity_text(identity_claim_id, "Model Mesh identity claim id")?;
+        let stored =
+            load_model_mesh_identity_claim_connection(&self.connection, identity_claim_id)?;
+        validate_model_mesh_claim_subject_connection(
+            &self.connection,
+            &stored.subject,
+            stored.runtime_binding_id.as_deref(),
+        )?;
+        Ok(stored)
+    }
+
+    pub(crate) fn create_model_mesh_identity_claim(
+        &mut self,
+        new_claim: NewModelMeshIdentityClaim<'_>,
+    ) -> Result<StoredModelMeshIdentityClaim> {
+        self.validate_model_mesh_schema()?;
+        validate_agentic_identity_text(
+            new_claim.identity_claim_id,
+            "Model Mesh identity claim id",
+        )?;
+        validate_agentic_identity_timestamp(
+            new_claim.observed_unix_ms,
+            "Model Mesh identity observation time",
+        )?;
+        if let Some(runtime_binding_id) = new_claim.runtime_binding_id {
+            validate_agentic_identity_text(runtime_binding_id, "Model Mesh runtime binding id")?;
+        }
+        let (_, target_request_id, actor_binding_id) = new_claim.subject.as_db_parts();
+        if let Some(id) = target_request_id {
+            validate_agentic_identity_text(id, "Model Mesh target request id")?;
+        }
+        if let Some(id) = actor_binding_id {
+            validate_agentic_identity_text(id, "Model Mesh actor binding id")?;
+        }
+
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if tx
+            .query_row(
+                "SELECT 1 FROM model_mesh_identity_claims WHERE identity_claim_id = ?1",
+                params![new_claim.identity_claim_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some()
+        {
+            let existing =
+                load_model_mesh_identity_claim_connection(&tx, new_claim.identity_claim_id)?;
+            if existing.subject != new_claim.subject
+                || existing.claim != *new_claim.claim
+                || existing.runtime_binding_id.as_deref() != new_claim.runtime_binding_id
+                || existing.observed_unix_ms != new_claim.observed_unix_ms
+            {
+                return Err("Model Mesh identity claim idempotency collision".into());
+            }
+            tx.commit()?;
+            return Ok(existing);
+        }
+
+        validate_model_mesh_claim_subject_connection(
+            &tx,
+            &new_claim.subject,
+            new_claim.runtime_binding_id,
+        )?;
+        let (subject_class, target_request_id, actor_binding_id) = new_claim.subject.as_db_parts();
+        tx.execute(
+            "INSERT INTO model_mesh_identity_claims(
+                identity_claim_id, target_request_id, actor_binding_id, claim_subject,
+                dimension, normalized_value, source_class, observation_basis,
+                runtime_binding_id, observed_unix_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                new_claim.identity_claim_id,
+                target_request_id,
+                actor_binding_id,
+                subject_class,
+                new_claim.claim.dimension.as_str(),
+                new_claim.claim.value.as_deref(),
+                new_claim.claim.source.as_str(),
+                new_claim.claim.observation_basis.as_deref(),
+                new_claim.runtime_binding_id,
+                new_claim.observed_unix_ms,
+            ],
+        )?;
+        let stored = load_model_mesh_identity_claim_connection(&tx, new_claim.identity_claim_id)?;
+        tx.commit()?;
+        Ok(stored)
+    }
 }
 
 fn parse_stage_state(value: &str) -> Result<StageLifecycleState> {

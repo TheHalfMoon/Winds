@@ -56,10 +56,18 @@ pub(crate) enum TargetSelector {
 }
 
 impl TargetSelector {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Human => "HUMAN",
             Self::ExplicitPolicy => "EXPLICIT_POLICY",
+        }
+    }
+
+    pub(crate) fn from_db(value: &str) -> Option<Self> {
+        match value {
+            "HUMAN" => Some(Self::Human),
+            "EXPLICIT_POLICY" => Some(Self::ExplicitPolicy),
+            _ => None,
         }
     }
 }
@@ -381,6 +389,27 @@ pub(crate) enum IdentityDimension {
     NativeSession,
 }
 
+impl IdentityDimension {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Runtime => "RUNTIME",
+            Self::Provider => "PROVIDER",
+            Self::Model => "MODEL",
+            Self::NativeSession => "NATIVE_SESSION",
+        }
+    }
+
+    pub(crate) fn from_db(value: &str) -> Option<Self> {
+        match value {
+            "RUNTIME" => Some(Self::Runtime),
+            "PROVIDER" => Some(Self::Provider),
+            "MODEL" => Some(Self::Model),
+            "NATIVE_SESSION" => Some(Self::NativeSession),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum IdentitySourceClass {
     WindsLocallyObserved,
@@ -389,6 +418,31 @@ pub(crate) enum IdentitySourceClass {
     AgentReported,
     HumanDecided,
     Unavailable,
+}
+
+impl IdentitySourceClass {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::WindsLocallyObserved => "WINDS_LOCALLY_OBSERVED",
+            Self::VendorDeclared => "VENDOR_DECLARED",
+            Self::CatalogDeclared => "CATALOG_DECLARED",
+            Self::AgentReported => "AGENT_REPORTED",
+            Self::HumanDecided => "HUMAN_DECIDED",
+            Self::Unavailable => "UNAVAILABLE",
+        }
+    }
+
+    pub(crate) fn from_db(value: &str) -> Option<Self> {
+        match value {
+            "WINDS_LOCALLY_OBSERVED" => Some(Self::WindsLocallyObserved),
+            "VENDOR_DECLARED" => Some(Self::VendorDeclared),
+            "CATALOG_DECLARED" => Some(Self::CatalogDeclared),
+            "AGENT_REPORTED" => Some(Self::AgentReported),
+            "HUMAN_DECIDED" => Some(Self::HumanDecided),
+            "UNAVAILABLE" => Some(Self::Unavailable),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -410,7 +464,7 @@ impl IdentityClaim {
             .map(|value| normalize_claim_value(value, "identity claim value"))
             .transpose()?;
         let observation_basis = observation_basis
-            .map(|value| normalize_bounded(value, "observation basis", MAX_OBSERVATION_BASIS_BYTES))
+            .map(normalize_observation_basis)
             .transpose()?;
         if source == IdentitySourceClass::Unavailable && value.is_some() {
             return Err("UNAVAILABLE identity claim cannot carry a value".into());
@@ -545,7 +599,7 @@ pub(crate) enum ContinuityClass {
 }
 
 impl ContinuityClass {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::NativeResume => "NATIVE_RESUME",
             Self::Reconstructed => "RECONSTRUCTED",
@@ -554,6 +608,19 @@ impl ContinuityClass {
             Self::OwnershipLost => "OWNERSHIP_LOST",
             Self::Unavailable => "UNAVAILABLE",
             Self::Unproven => "UNPROVEN",
+        }
+    }
+
+    pub(crate) fn from_db(value: &str) -> Option<Self> {
+        match value {
+            "NATIVE_RESUME" => Some(Self::NativeResume),
+            "RECONSTRUCTED" => Some(Self::Reconstructed),
+            "REASSIGNED" => Some(Self::Reassigned),
+            "HANDOFF" => Some(Self::Handoff),
+            "OWNERSHIP_LOST" => Some(Self::OwnershipLost),
+            "UNAVAILABLE" => Some(Self::Unavailable),
+            "UNPROVEN" => Some(Self::Unproven),
+            _ => None,
         }
     }
 }
@@ -955,6 +1022,21 @@ fn resolve_identity_dimension(
     TargetResolution::ExactMatch
 }
 
+pub(crate) fn model_mesh_authority_json_matches_digest(
+    canonical_content_json: &str,
+    content_digest: &str,
+) -> bool {
+    if content_digest.len() != SHA256_HEX_BYTES
+        || !content_digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || sha256_hex(canonical_content_json.as_bytes()) != content_digest
+    {
+        return false;
+    }
+    ModelMeshAuthorityEnvelopeV1::from_canonical_json(canonical_content_json).is_ok()
+}
+
 fn normalize_scope(value: &str, label: &str) -> ModelMeshResult<String> {
     normalize_bounded(value, label, MAX_SCOPE_ID_BYTES)
 }
@@ -965,6 +1047,33 @@ fn normalize_exact_id(value: &str, label: &str) -> ModelMeshResult<String> {
 
 fn normalize_claim_value(value: &str, label: &str) -> ModelMeshResult<String> {
     normalize_bounded(value, label, MAX_TARGET_ID_BYTES)
+}
+
+fn normalize_observation_basis(value: &str) -> ModelMeshResult<String> {
+    let normalized = normalize_bounded(value, "observation basis", MAX_OBSERVATION_BASIS_BYTES)?;
+    let lower = normalized.to_ascii_lowercase();
+    if normalized.contains(['=', '{', '}', '[', ']'])
+        || [
+            "api_key",
+            "apikey",
+            "authorization",
+            "bearer ",
+            "credential",
+            "password",
+            "secret",
+            "token",
+            "provider-private",
+            "provider_private",
+        ]
+        .iter()
+        .any(|marker| lower.contains(marker))
+    {
+        return Err(
+            "observation basis must be bounded metadata and must not contain credential or provider-private payload"
+                .into(),
+        );
+    }
+    Ok(normalized)
 }
 
 fn normalize_actor_role(value: &str) -> ModelMeshResult<String> {

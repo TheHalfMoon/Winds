@@ -386,6 +386,82 @@ pub(crate) fn approval_json_and_digest(content: &ApprovalContent) -> StoreResult
     Ok((json, digest))
 }
 
+pub(crate) fn record_model_mesh_approval(
+    store: &Store,
+    approval_id: &str,
+    envelope: &ModelMeshAuthorityEnvelopeV1,
+    approved_unix_ms: i64,
+) -> StoreResult<StoredApproval> {
+    let approval_id = normalize_label(approval_id, "approval id")?;
+    if approved_unix_ms < 0 {
+        return Err("approval time must not be negative".into());
+    }
+    ensure_approval_schema(store)?;
+
+    let session_created_unix_ms = store
+        .connection
+        .query_row(
+            "SELECT session.created_unix_ms
+             FROM winds_sessions session
+             INNER JOIN workstreams workstream
+                ON workstream.workstream_id = session.workstream_id
+             WHERE session.session_id = ?1
+               AND session.workstream_id = ?2
+               AND workstream.workspace_id = ?3",
+            params![
+                envelope.session_id(),
+                envelope.workstream_id(),
+                envelope.workspace_id()
+            ],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .ok_or("Model Mesh approval identity does not match canonical Winds hierarchy")?;
+    if approved_unix_ms < session_created_unix_ms {
+        return Err("Model Mesh approval time cannot precede Winds session creation".into());
+    }
+
+    let canonical_content_json = envelope
+        .canonical_json()
+        .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
+    let content_digest = sha256_hex(canonical_content_json.as_bytes());
+    store.connection.execute(
+        "INSERT INTO agentic_delegation_approvals(
+            approval_id, workstream_id, session_id, workspace_id,
+            content_digest, canonical_content_json, approved_unix_ms
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            approval_id,
+            envelope.workstream_id(),
+            envelope.session_id(),
+            envelope.workspace_id(),
+            content_digest,
+            canonical_content_json,
+            approved_unix_ms
+        ],
+    )?;
+
+    Ok(StoredApproval {
+        approval_id,
+        workstream_id: envelope.workstream_id().to_owned(),
+        session_id: envelope.session_id().to_owned(),
+        workspace_id: envelope.workspace_id().to_owned(),
+        content_digest,
+        canonical_content_json,
+        approved_unix_ms,
+    })
+}
+
+pub(crate) fn load_model_mesh_approval(
+    store: &Store,
+    approval_id: &str,
+) -> StoreResult<StoredApproval> {
+    let stored = load_human_approval(store, approval_id)?;
+    ModelMeshAuthorityEnvelopeV1::from_canonical_json(&stored.canonical_content_json)
+        .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
+    Ok(stored)
+}
+
 pub(crate) fn record_human_approval(
     store: &Store,
     approval_id: &str,
