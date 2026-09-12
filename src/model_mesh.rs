@@ -1,9 +1,12 @@
 use crate::agentic_runtime::{
-    AuthReadiness, EvidenceSource, RuntimeDiscovery, RuntimeDiscoveryState, RuntimeKind,
-    RuntimeSessionBinding, runtime_binding_matches_discovery,
+    AuthReadiness, EvidenceSource, RuntimeBindingOwnership, RuntimeDiscovery,
+    RuntimeDiscoveryState, RuntimeKind, RuntimeSessionBinding, runtime_binding_matches_discovery,
 };
 use crate::domain::WindsSessionRecord;
-use crate::domain::workflow::{StageRunIdentity, WorkflowRunIdentity};
+use crate::domain::workflow::{
+    ArtifactBaselineIdentity, ArtifactBaselineRequirement, BaselineEvaluation, BaselineFreshness,
+    StageRunIdentity, WorkflowRunIdentity, evaluate_artifact_baseline_requirement,
+};
 use crate::store::StoredWorkflowActorBinding;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -1020,6 +1023,377 @@ fn resolve_identity_dimension(
         return TargetResolution::Unavailable;
     }
     TargetResolution::ExactMatch
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DriftApplicability {
+    Applicable,
+    NotApplicable,
+    Missing,
+    Unproven,
+    Stale,
+    Ambiguous,
+    Conflict,
+    Denied,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ModelMeshBaselineDrift {
+    pub(crate) applicability: DriftApplicability,
+    pub(crate) evaluations: Vec<BaselineEvaluation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ModelMeshDriftEvaluation {
+    pub(crate) runtime: DriftApplicability,
+    pub(crate) provider: DriftApplicability,
+    pub(crate) model: DriftApplicability,
+    pub(crate) native_session: DriftApplicability,
+    pub(crate) scope: DriftApplicability,
+    pub(crate) baseline: ModelMeshBaselineDrift,
+    pub(crate) approval: DriftApplicability,
+    pub(crate) current_authority: DriftApplicability,
+    pub(crate) overall: DriftApplicability,
+}
+
+pub(crate) struct ModelMeshDriftInput<'a> {
+    pub(crate) request: &'a TargetRequest,
+    pub(crate) current_descriptor: &'a ModelMeshTargetDescriptorV1,
+    pub(crate) current_claims: &'a [IdentityClaim],
+    pub(crate) source_requirements: SourceRequirements,
+    pub(crate) historical_runtime_binding: Option<&'a RuntimeSessionBinding>,
+    pub(crate) current_runtime_binding: Option<&'a RuntimeSessionBinding>,
+    pub(crate) current_runtime_discovery: Option<&'a RuntimeDiscovery>,
+    pub(crate) require_native_session: bool,
+    pub(crate) baseline_requirements: &'a [ArtifactBaselineRequirement],
+    pub(crate) observed_baselines: &'a [ArtifactBaselineIdentity],
+    pub(crate) approval: ApprovalApplicability,
+    pub(crate) current_authority: CurrentAuthorityTruth,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ModelMeshEvaluatedTargetRecord {
+    pub(crate) stage_run_id: String,
+    pub(crate) target_request_id: String,
+    pub(crate) created_unix_ms: i64,
+    pub(crate) drift: ModelMeshDriftEvaluation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ModelMeshCurrentTargetState {
+    None,
+    Exact(String),
+    Ambiguous(Vec<String>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ModelMeshCurrentTargetProjection {
+    pub(crate) stage_run_id: Option<String>,
+    pub(crate) state: ModelMeshCurrentTargetState,
+    pub(crate) historical: Vec<ModelMeshEvaluatedTargetRecord>,
+}
+
+pub(crate) fn evaluate_identity_claim_drift(
+    historical: &IdentityClaim,
+    current_claims: &[IdentityClaim],
+) -> DriftApplicability {
+    let relevant = current_claims
+        .iter()
+        .filter(|claim| claim.dimension == historical.dimension)
+        .collect::<Vec<_>>();
+    if relevant.is_empty() {
+        return DriftApplicability::Missing;
+    }
+    let values = relevant
+        .iter()
+        .filter(|claim| claim.source != IdentitySourceClass::Unavailable)
+        .filter_map(|claim| claim.value.as_deref())
+        .collect::<BTreeSet<_>>();
+    if values.len() > 1 {
+        return DriftApplicability::Conflict;
+    }
+    if relevant.contains(&historical) {
+        return DriftApplicability::Applicable;
+    }
+    DriftApplicability::Stale
+}
+
+fn evaluate_exact_identity_dimension(
+    claims: &[IdentityClaim],
+    dimension: IdentityDimension,
+    expected: &str,
+    required_source: IdentitySourceClass,
+) -> DriftApplicability {
+    let relevant = claims
+        .iter()
+        .filter(|claim| claim.dimension == dimension)
+        .collect::<Vec<_>>();
+    if relevant.is_empty() {
+        return DriftApplicability::Missing;
+    }
+    if relevant
+        .iter()
+        .all(|claim| claim.source == IdentitySourceClass::Unavailable)
+    {
+        return DriftApplicability::Stale;
+    }
+    let qualified = relevant
+        .iter()
+        .copied()
+        .filter(|claim| claim.source == required_source)
+        .collect::<Vec<_>>();
+    if qualified.is_empty() {
+        return DriftApplicability::Missing;
+    }
+    let qualified_values = qualified
+        .iter()
+        .filter_map(|claim| claim.value.as_deref())
+        .collect::<BTreeSet<_>>();
+    if qualified_values.len() > 1 {
+        return DriftApplicability::Ambiguous;
+    }
+    let all_values = relevant
+        .iter()
+        .filter(|claim| claim.source != IdentitySourceClass::Unavailable)
+        .filter_map(|claim| claim.value.as_deref())
+        .collect::<BTreeSet<_>>();
+    if all_values.len() > 1 {
+        return DriftApplicability::Conflict;
+    }
+    match qualified_values.iter().next().copied() {
+        Some(value) if value == expected => DriftApplicability::Applicable,
+        Some(_) => DriftApplicability::Stale,
+        None => DriftApplicability::Missing,
+    }
+}
+
+fn evaluate_runtime_drift(input: &ModelMeshDriftInput<'_>) -> DriftApplicability {
+    let Some(historical) = input.historical_runtime_binding else {
+        return DriftApplicability::Missing;
+    };
+    let Some(current_binding) = input.current_runtime_binding else {
+        return DriftApplicability::Missing;
+    };
+    let Some(discovery) = input.current_runtime_discovery else {
+        return DriftApplicability::Missing;
+    };
+    if historical.binding_id != current_binding.binding_id
+        || historical.session_id != current_binding.session_id
+        || historical.runtime != current_binding.runtime
+        || !runtime_binding_matches_discovery(current_binding, discovery)
+    {
+        return DriftApplicability::Stale;
+    }
+    DriftApplicability::Applicable
+}
+
+fn evaluate_native_session_drift(input: &ModelMeshDriftInput<'_>) -> DriftApplicability {
+    if !input.require_native_session {
+        return DriftApplicability::NotApplicable;
+    }
+    let Some(historical) = input.historical_runtime_binding else {
+        return DriftApplicability::Missing;
+    };
+    let Some(expected_native) = historical.native_session_id.as_deref() else {
+        return DriftApplicability::Missing;
+    };
+    let Some(current) = input.current_runtime_binding else {
+        return DriftApplicability::Missing;
+    };
+    if current.binding_id != historical.binding_id
+        || current.session_id != historical.session_id
+        || current.native_session_id.as_deref() != Some(expected_native)
+        || current.ownership == RuntimeBindingOwnership::OwnershipLost
+    {
+        return DriftApplicability::Stale;
+    }
+    DriftApplicability::Unproven
+}
+
+fn evaluate_scope_drift(
+    expected: &ModelMeshTargetDescriptorV1,
+    current: &ModelMeshTargetDescriptorV1,
+) -> DriftApplicability {
+    if expected.workspace_id() != current.workspace_id()
+        || expected.workstream_id() != current.workstream_id()
+        || expected.workflow_run_id() != current.workflow_run_id()
+        || expected.stage_run_id() != current.stage_run_id()
+        || expected.actor_binding_id() != current.actor_binding_id()
+        || expected.winds_session_id() != current.winds_session_id()
+        || expected.actor_role() != current.actor_role()
+    {
+        DriftApplicability::Stale
+    } else {
+        DriftApplicability::Applicable
+    }
+}
+
+fn evaluate_baseline_drift(
+    requirements: &[ArtifactBaselineRequirement],
+    observed: &[ArtifactBaselineIdentity],
+) -> ModelMeshBaselineDrift {
+    let evaluations = requirements
+        .iter()
+        .map(|requirement| evaluate_artifact_baseline_requirement(requirement, observed))
+        .collect::<Vec<_>>();
+    let applicability = if evaluations.is_empty() {
+        DriftApplicability::NotApplicable
+    } else if evaluations
+        .iter()
+        .any(|evaluation| evaluation.freshness == BaselineFreshness::Ambiguous)
+    {
+        DriftApplicability::Ambiguous
+    } else if evaluations
+        .iter()
+        .any(|evaluation| evaluation.freshness == BaselineFreshness::Stale)
+    {
+        DriftApplicability::Stale
+    } else if evaluations
+        .iter()
+        .any(|evaluation| evaluation.freshness == BaselineFreshness::Missing)
+    {
+        DriftApplicability::Missing
+    } else {
+        DriftApplicability::Applicable
+    };
+    ModelMeshBaselineDrift {
+        applicability,
+        evaluations,
+    }
+}
+
+fn approval_drift(value: ApprovalApplicability) -> DriftApplicability {
+    match value {
+        ApprovalApplicability::Exact => DriftApplicability::Applicable,
+        ApprovalApplicability::Missing => DriftApplicability::Missing,
+        ApprovalApplicability::Mismatch | ApprovalApplicability::Stale => DriftApplicability::Stale,
+    }
+}
+
+fn combine_drift(values: impl IntoIterator<Item = DriftApplicability>) -> DriftApplicability {
+    let values = values.into_iter().collect::<Vec<_>>();
+    for state in [
+        DriftApplicability::Denied,
+        DriftApplicability::Conflict,
+        DriftApplicability::Ambiguous,
+        DriftApplicability::Stale,
+        DriftApplicability::Missing,
+        DriftApplicability::Unproven,
+    ] {
+        if values.contains(&state) {
+            return state;
+        }
+    }
+    DriftApplicability::Applicable
+}
+
+pub(crate) fn evaluate_model_mesh_drift(
+    input: &ModelMeshDriftInput<'_>,
+) -> ModelMeshDriftEvaluation {
+    let runtime = if input.request.descriptor().runtime() != input.current_descriptor.runtime() {
+        DriftApplicability::Stale
+    } else {
+        evaluate_runtime_drift(input)
+    };
+    let provider = match input.request.descriptor().provider() {
+        TargetDimension::Unspecified => DriftApplicability::NotApplicable,
+        TargetDimension::Exact(_)
+            if input.request.descriptor().provider() != input.current_descriptor.provider() =>
+        {
+            DriftApplicability::Stale
+        }
+        TargetDimension::Exact(expected) => evaluate_exact_identity_dimension(
+            input.current_claims,
+            IdentityDimension::Provider,
+            expected.as_str(),
+            input.source_requirements.provider,
+        ),
+    };
+    let model = match input.request.descriptor().model() {
+        TargetDimension::Unspecified => DriftApplicability::NotApplicable,
+        TargetDimension::Exact(_)
+            if input.request.descriptor().model() != input.current_descriptor.model() =>
+        {
+            DriftApplicability::Stale
+        }
+        TargetDimension::Exact(expected) => evaluate_exact_identity_dimension(
+            input.current_claims,
+            IdentityDimension::Model,
+            expected.as_str(),
+            input.source_requirements.model,
+        ),
+    };
+    let native_session = evaluate_native_session_drift(input);
+    let scope = evaluate_scope_drift(input.request.descriptor(), input.current_descriptor);
+    let baseline = evaluate_baseline_drift(input.baseline_requirements, input.observed_baselines);
+    let approval = if input.request.descriptor_digest_matches() {
+        approval_drift(input.approval)
+    } else {
+        DriftApplicability::Stale
+    };
+    let current_authority = match input.current_authority {
+        CurrentAuthorityTruth::Allowed => DriftApplicability::Applicable,
+        CurrentAuthorityTruth::Denied => DriftApplicability::Denied,
+    };
+    let mut dependent = vec![
+        runtime,
+        provider,
+        model,
+        scope,
+        baseline.applicability,
+        approval,
+        current_authority,
+    ];
+    if input.require_native_session {
+        dependent.push(native_session);
+    }
+    let overall = combine_drift(dependent);
+    ModelMeshDriftEvaluation {
+        runtime,
+        provider,
+        model,
+        native_session,
+        scope,
+        baseline,
+        approval,
+        current_authority,
+        overall,
+    }
+}
+
+pub(crate) fn project_current_model_mesh_target(
+    records: &[ModelMeshEvaluatedTargetRecord],
+) -> ModelMeshResult<ModelMeshCurrentTargetProjection> {
+    let mut historical = records.to_vec();
+    historical.sort_by(|left, right| {
+        (left.created_unix_ms, left.target_request_id.as_str())
+            .cmp(&(right.created_unix_ms, right.target_request_id.as_str()))
+    });
+    let stage_run_id = historical.first().map(|record| record.stage_run_id.clone());
+    if let Some(expected_stage) = stage_run_id.as_deref()
+        && historical
+            .iter()
+            .any(|record| record.stage_run_id != expected_stage)
+    {
+        return Err("current Model Mesh target projection cannot mix StageRun attempts".into());
+    }
+    let mut applicable = historical
+        .iter()
+        .filter(|record| record.drift.overall == DriftApplicability::Applicable)
+        .map(|record| record.target_request_id.clone())
+        .collect::<Vec<_>>();
+    applicable.sort();
+    applicable.dedup();
+    let state = match applicable.as_slice() {
+        [] => ModelMeshCurrentTargetState::None,
+        [target_request_id] => ModelMeshCurrentTargetState::Exact(target_request_id.clone()),
+        _ => ModelMeshCurrentTargetState::Ambiguous(applicable),
+    };
+    Ok(ModelMeshCurrentTargetProjection {
+        stage_run_id,
+        state,
+        historical,
+    })
 }
 
 pub(crate) fn model_mesh_authority_json_matches_digest(
