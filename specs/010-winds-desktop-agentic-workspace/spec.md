@@ -3,7 +3,7 @@
 **Feature Branch**: `spec/010-desktop-agentic-workspace`
 **Created**: 2026-09-12
 **Status**: Specification candidate only. Plan, Tasks, dependencies, desktop-framework selection, implementation, daemon/IPC, browser runtime, remote execution, and product-source changes are NOT authorized by this file alone.
-**Input**: Founder directive to make Winds the most beautiful, professional, future-facing interface for the agentic era, with project-organized sessions in the left dock, two independent sessions side-by-side in one page, contextual files/evidence surfaces in the right dock, renameable sessions, and runtime/provider identity such as Claude or Codex visible in each session.
+**Input**: Founder directive to make Winds the most beautiful, professional, future-facing interface for the agentic era, with project-organized sessions in the left dock, two independent sessions side-by-side in one page, contextual files/evidence surfaces in the right dock, renameable sessions, and runtime/provider identity such as Claude or Codex visible in each session; the interaction should feel as direct and agent-native as modern Codex while remaining visibly and behaviorally Winds.
 
 ## Product Thesis
 
@@ -59,6 +59,22 @@ REAL_CODEX_WORKER_EXECUTION=NO
 A richer interface MUST NOT visually promote those nonclaims into proof.
 
 ---
+
+## Design and Interaction References — Non-Authoritative
+
+Spec 010 uses external product/design research as a quality bar, never as copied product authority.
+
+- OpenAI Codex desktop is a current interaction reference for project-organized agent threads, parallel agent work, direct prompting, long-running task supervision, and a focused agent command-center mental model. Winds MUST NOT copy proprietary visual assets, exact layouts, trade dress, or private implementation.
+- `pbakaus/impeccable` at commit `cb56ed6c19a07329a9fa0cd4e657bee040156593` (Apache-2.0) is a design-process reference. Its `Operate` mode and craft-floor principles are appropriate to Winds Desktop: task-first scanability, restrained product color, complete interaction states, purposeful short motion, accessibility, and bounded visual QA. This Spec copies no Impeccable code or assets.
+- Herdr remains a parity/research reference for terminal workspace organization, split panes, agent awareness, and attention rollups. Winds' target is broader: Project/Session organization, dual-session agent work, canonical truth/evidence, and contextual non-terminal work surfaces.
+
+The intended feeling is:
+
+```text
+CODEX_DIRECTNESS + HERDR_PARALLELISM + WINDS_TRUTH + WINDS_VISUAL_IDENTITY
+```
+
+This is an interaction-quality target, not a cloning instruction.
 
 ## Product Model
 
@@ -195,7 +211,29 @@ Runtime identity is expressed through iconography, accessible text, and source-l
 
 ---
 
-## User Story 4 — Inspect Files, Changes, Evidence, Context, and Artifacts from the Right Dock (Priority: P1)
+## User Story 4 — Work Inside an Agent-Native Session, Not a Terminal Wrapper (Priority: P1)
+
+A developer opens a Claude or Codex session and gets a focused agent-work surface with a stable prompt composer and a structured chronological work stream. The experience should feel as immediate as a modern dedicated coding-agent application while remaining source-labelled and Winds-native.
+
+The stream may contain user prompts, user-visible agent responses, tool/command activity summaries, file changes, diffs, test results, verification state, approval requests, errors, and completion events. These are typed work events, not visually identical chat bubbles.
+
+The developer can stay in the agent session for most work and open the terminal, file tree, diff, evidence, or context only when those are the best surfaces for the current step.
+
+**Why this priority**: Winds should feel like using a first-class coding agent, not like manually supervising a CLI inside a multiplexer.
+
+**Independent Test**: Exercise two admitted agent-session fixtures containing prompts, tool actions, file changes, command/test results, an approval request, an error, and completion. Verify event provenance, composer targeting, keyboard flow, file/diff linking, and dual-session isolation.
+
+**Acceptance Scenarios**:
+
+1. **Given** a selected agent session, **When** the user submits from its composer, **Then** the target Session is explicit and no peer Session receives the prompt.
+2. **Given** an agent performs tool/command/file work, **When** the stream updates, **Then** the UI groups that work into typed, inspectable events without converting the agent's prose into Winds-observed evidence.
+3. **Given** an event changes files, **When** the user opens the file/diff affordance, **Then** the right dock binds to the exact Session worktree/candidate context.
+4. **Given** a long-running session continues in the background, **When** the user switches Projects/Sessions, **Then** the left dock retains truthful activity/attention state without requiring the transcript to remain visible.
+5. **Given** a model or runtime does not expose user-visible reasoning, **When** the session renders, **Then** Winds does not require or invent hidden chain-of-thought; only user-visible summaries/output supplied through an accepted surface may appear.
+
+---
+
+## User Story 5 — Inspect Files, Changes, Evidence, Context, and Artifacts from the Right Dock (Priority: P1)
 
 A developer keeps the active sessions visible in the center while inspecting related context in a right-side dock.
 
@@ -221,7 +259,7 @@ The dock follows the currently selected session by default and can be explicitly
 
 ---
 
-## User Story 5 — See Only the Attention That Actually Needs the Human (Priority: P1)
+## User Story 6 — See Only the Attention That Actually Needs the Human (Priority: P1)
 
 A developer can see which projects/sessions need input, approval, clarification, verification repair, or a decision without watching every transcript.
 
@@ -237,7 +275,7 @@ The left dock and a dedicated `Needs You` surface aggregate attention while pres
 
 ---
 
-## User Story 6 — Use Winds Primarily from the Keyboard Without Losing Pointer Quality (Priority: P1)
+## User Story 7 — Use Winds Primarily from the Keyboard Without Losing Pointer Quality (Priority: P1)
 
 A developer can open projects, focus sessions, open a second session, swap slots, toggle docks, search, run permitted commands, and reach attention items through a universal command surface and discoverable keyboard shortcuts.
 
@@ -247,7 +285,7 @@ Pointer interactions remain first-class for drag/drop, resize, context menus, se
 
 ---
 
-## User Story 7 — Trust the Interface Under Terminal and Agent Adversarial Content (Priority: P1)
+## User Story 8 — Trust the Interface Under Terminal and Agent Adversarial Content (Priority: P1)
 
 A developer can safely use terminal and agent output without that untrusted content forging trusted Winds chrome, badges, evidence, links, approvals, or host actions.
 
@@ -255,7 +293,7 @@ A developer can safely use terminal and agent output without that untrusted cont
 
 ---
 
-## User Story 8 — Experience a Distinctive, Premium Winds Visual System (Priority: P1)
+## User Story 9 — Experience a Distinctive, Premium Winds Visual System (Priority: P1)
 
 A developer should recognize Winds immediately from typography, spacing, material hierarchy, motion, iconography, density, and information architecture without relying on copied assets or default framework components.
 
@@ -267,7 +305,7 @@ Aesthetic acceptance requires explicit human visual review in addition to determ
 
 ---
 
-## User Story 9 — Preserve Winds Truth While Showing Rich Workflow and Model Context (Priority: P2)
+## User Story 10 — Preserve Winds Truth While Showing Rich Workflow and Model Context (Priority: P2)
 
 A developer can inspect current workflow/stage, runtime/provider/model target, continuity state, candidate/tree, evidence, and authority without the UI creating a competing source of truth.
 
@@ -275,7 +313,7 @@ The interface may summarize canonical state but must always be able to reveal so
 
 ---
 
-## User Story 10 — Scale from One Session to Many Without Becoming Noisy (Priority: P2)
+## User Story 11 — Scale from One Session to Many Without Becoming Noisy (Priority: P2)
 
 A developer with many projects and sessions can search, filter, collapse, pin, reorder, and navigate without the left dock becoming a scrolling transcript index.
 
@@ -438,6 +476,29 @@ The Plan MUST pin reproducible measurement environments before implementation cl
 - **FR-111**: Platform-native window/chrome integration MAY differ by OS, but canonical Project/Session/evidence semantics MUST remain consistent.
 - **FR-112**: A platform limitation MUST be shown truthfully rather than hidden behind universal-looking UI affordances.
 
+## Agent-Native Session Interaction
+
+- **FR-113**: Every admitted agent Session MUST provide a first-class session interaction surface with a stable prompt composer and a chronological work stream; a raw terminal MUST NOT be the only desktop interaction path for that Session once the applicable runtime adapter is authorized.
+- **FR-114**: The prompt composer MUST expose its exact target Session and MUST remain keyboard reachable, multiline-capable, and compatible with explicit file/context attachment semantics selected later by Plan/Tasks.
+- **FR-115**: The agent work stream MUST distinguish at least user prompt, user-visible agent response, tool/action summary, command execution/result, file change/diff, test/verification result, approval/attention request, error, and completion event classes where those events exist.
+- **FR-116**: Every typed work event MUST retain source/provenance sufficient to preserve `AGENT_REPORTED != WINDS_OBSERVED != HUMAN_DECIDED`; visual grouping MUST NOT upgrade trust.
+- **FR-117**: Tool/command activity MAY collapse detail for scanability, but target, status, source, and material failure/attention state MUST remain visible without expanding every event.
+- **FR-118**: File-change events MUST bind to exact worktree/path context and provide a direct route to the right-dock Files/Changes surface without inventing candidate verification.
+- **FR-119**: Test/check events MUST distinguish agent-reported results from repository-native Winds verification evidence.
+- **FR-120**: In dual-session mode, each composer and contextual action MUST target exactly one Session by default; no visual proximity, selection rectangle, or shared Project MAY create implicit multi-session dispatch.
+- **FR-121**: Send, stop, interrupt, retry, approve, deny, or equivalent session actions MUST preserve the underlying runtime/authority semantics and identify the exact target before consequential execution.
+- **FR-122**: Background agent Sessions MUST retain truthful lifecycle/attention rollups in the left dock so the user can supervise parallel work without keeping every stream visible.
+- **FR-123**: Winds Desktop MUST NOT require, reconstruct, expose, or claim access to hidden model chain-of-thought. User-visible reasoning summaries or explanations may be rendered only when supplied through an accepted user-visible runtime surface and MUST remain source-labelled.
+- **FR-124**: Session-stream content MUST support normal selection/copy/navigation while remaining unable to forge trusted Winds controls, badges, approvals, evidence, files, or host actions.
+- **FR-125**: Switching away from and back to a Session MUST preserve available session history/context truthfully; missing, truncated, evicted, or unavailable history MUST be explicit rather than visually reconstructed as complete.
+- **FR-126**: The session surface SHOULD prefer inline/progressive interactions over modal interruption for routine work; modals MAY be used only where protected focus or consequential confirmation is materially required.
+- **FR-127**: The default agent-work presentation MUST optimize for scanability over chat-bubble theater: dense typed events, calm hierarchy, restrained color, and progressive detail rather than every event receiving equal card weight.
+- **FR-128**: The first desktop design system MUST define complete default/hover/focus/active/disabled/loading/error/empty states for primary session controls before final acceptance.
+- **FR-129**: Routine desktop transitions SHOULD complete within a Plan-defined range centered on approximately 150–250 ms unless direct manipulation or platform-native behavior requires another measured rule; decorative page-load choreography is prohibited by default.
+- **FR-130**: Project-scoped Session organization MUST remain the primary desktop history/navigation model; a global flat Recents list MAY exist as a convenience surface but MUST NOT be the only way to recover long-running project work.
+- **FR-131**: The design MUST use familiar product affordances for standard operations unless a materially better task-specific interaction is proven; visual novelty alone is insufficient justification for reinventing scroll, selection, forms, menus, dialogs, or focus behavior.
+- **FR-132**: Winds' accepted desktop appearance MUST be recognizably its own and MUST NOT reproduce Codex, Claude, Herdr, Cursor, Linear, Warp, or Impeccable trade dress, proprietary assets, or exact visual composition.
+
 ---
 
 # Success Criteria
@@ -467,6 +528,11 @@ The Plan MUST pin reproducible measurement environments before implementation cl
 - **SC-023**: Presentation restart never claims restored live-child ownership solely from remembered Project/Session layout metadata.
 - **SC-024**: The final exact candidate passes repository quality, applicable desktop/platform/security/performance workflows, author correctness/safety review, Ponytail/YAGNI review, fresh independent substantive review, and has zero unresolved material findings/threads.
 - **SC-025**: Final closeout reconciles every FR/SC to exact evidence and preserves all inherited Spec 006/007/008/009 nonclaims and historical failures without relabelling them.
+- **SC-026**: Two simultaneously visible Claude/Codex-style agent-session fixtures can each accept prompts and stream typed work events while exact input/action targeting proves zero unintended cross-session dispatch.
+- **SC-027**: A canonical agent-session fixture containing command activity, file change, diff, test result, approval request, error, and completion renders each event with the required source/trust distinction and direct contextual navigation.
+- **SC-028**: Switching among at least 100 project-scoped Session fixtures preserves deterministic selection/search and does not require a global flat Recents list to recover the target Session.
+- **SC-029**: No acceptance test, UI contract, or product copy claims hidden model chain-of-thought access; user-visible summaries remain explicitly source-labelled.
+- **SC-030**: Final human visual review confirms the accepted build satisfies the Winds Operate-mode craft rubric: task-first scanability, restrained semantic color, complete component states, purposeful short motion, non-default product detailing, and no copied competitor trade dress.
 
 ---
 
@@ -508,6 +574,8 @@ The later Plan MUST decide with exact evidence, not preference:
 12. whether any P1 requirement truly requires persistent ownership/daemon/IPC; default answer remains NO unless proven otherwise.
 
 Candidate architecture references MAY include Tauri 2.x, React 19.x, Vite 8.x, and a bounded terminal renderer, but this Spec selects none of them.
+
+The Plan SHOULD also define a bounded design workflow inspired by the pinned Impeccable Operate/craft-floor process: capture product truth, select one coherent Winds visual world, build the full primary surface, inspect in one batched visual/accessibility pass, repair findings in one batch, and confirm with at most one additional visual pass. This process reference MUST NOT override canonical Winds product/evidence truth or create an external runtime dependency.
 
 ---
 
