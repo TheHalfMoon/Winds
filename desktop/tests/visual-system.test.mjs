@@ -5,8 +5,10 @@ import test from "node:test";
 
 const root = new URL("..", import.meta.url).pathname;
 const app = readFileSync(join(root, "src/App.tsx"), "utf8");
+const main = readFileSync(join(root, "src/main.tsx"), "utf8");
 const styles = readFileSync(join(root, "src/styles.css"), "utf8");
 const tokens = readFileSync(join(root, "src/tokens.css"), "utf8");
+const fixtureModes = readFileSync(join(root, "src/fixture-modes.css"), "utf8");
 const runtimeMark = readFileSync(join(root, "src/components/RuntimeMark.tsx"), "utf8");
 const fixtureManifest = JSON.parse(
   readFileSync(join(root, "tests/fixtures/visual-fixtures.json"), "utf8"),
@@ -67,7 +69,7 @@ test("T129 runtime identity uses Winds-authored accessible marks", () => {
 });
 
 test("T129 visual grammar rejects clone-prone decorative patterns", () => {
-  const combined = `${styles}\n${tokens}`.toLowerCase();
+  const combined = `${styles}\n${tokens}\n${fixtureModes}`.toLowerCase();
   const forbidden = [
     "linear-gradient(",
     "radial-gradient(",
@@ -90,6 +92,15 @@ test("T129 primary controls have explicit focus, hover, active, disabled, loadin
     ".empty-state",
   ];
   for (const value of required) assert.equal(styles.includes(value), true, value);
+});
+
+test("T129 focus and 125% scale fixtures create observable rendered differences", () => {
+  assert.match(main, /dataset\.fixture = "keyboard-focus"/);
+  assert.match(main, /dataset\.scale = "125"/);
+  assert.match(fixtureModes, /data-fixture="keyboard-focus"/);
+  assert.match(fixtureModes, /outline: 2px solid var\(--focus\)/);
+  assert.match(fixtureModes, /data-scale="125"/);
+  assert.match(fixtureModes, /transform: scale\(1\.25\)/);
 });
 
 test("T129 fixture matrix contains the required viewport and accessibility surfaces", () => {
