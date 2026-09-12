@@ -69,6 +69,8 @@ mod t117_model_mesh_drift_tests;
 mod t118_model_mesh_continuity_tests;
 #[cfg(test)]
 mod t119_model_mesh_event_tests;
+#[cfg(test)]
+mod t120_model_mesh_projection_tests;
 mod workbench;
 mod workflow_cli;
 

@@ -494,7 +494,8 @@ impl IdentityClaim {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub(crate) enum AuthenticationTruth {
     Ready,
     Unknown,
@@ -506,7 +507,8 @@ pub(crate) enum CapabilityTruth {
     Unavailable,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub(crate) enum ApprovalApplicability {
     Exact,
     Missing,
@@ -514,7 +516,8 @@ pub(crate) enum ApprovalApplicability {
     Stale,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub(crate) enum CurrentAuthorityTruth {
     Allowed,
     Denied,
@@ -1038,7 +1041,8 @@ fn resolve_identity_dimension(
     TargetResolution::ExactMatch
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub(crate) enum DriftApplicability {
     Applicable,
     NotApplicable,
@@ -1830,6 +1834,14 @@ impl ModelMeshContinuityContextV1 {
         &self.markers
     }
 
+    pub(crate) fn workspace_id(&self) -> &str {
+        &self.workspace_id
+    }
+
+    pub(crate) fn workstream_id(&self) -> &str {
+        &self.workstream_id
+    }
+
     pub(crate) fn target_request_id(&self) -> &str {
         &self.target_request_id
     }
@@ -1852,6 +1864,22 @@ impl ModelMeshContinuityContextV1 {
 
     pub(crate) fn destination_actor_binding_id(&self) -> Option<&str> {
         self.destination_actor_binding_id.as_deref()
+    }
+
+    pub(crate) fn source_winds_session_id(&self) -> Option<&str> {
+        self.source_winds_session_id.as_deref()
+    }
+
+    pub(crate) fn destination_winds_session_id(&self) -> Option<&str> {
+        self.destination_winds_session_id.as_deref()
+    }
+
+    pub(crate) fn source_native_session_id(&self) -> Option<&str> {
+        self.source_native_session_id.as_deref()
+    }
+
+    pub(crate) fn destination_native_session_id(&self) -> Option<&str> {
+        self.destination_native_session_id.as_deref()
     }
 
     pub(crate) fn current_authority(&self) -> CurrentAuthorityTruth {
@@ -2309,6 +2337,514 @@ fn normalize_sha256(value: &str, label: &str) -> ModelMeshResult<String> {
 
 fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub(crate) enum ModelMeshProjectionTruth {
+    Yes,
+    No,
+    Unknown,
+    Stale,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub(crate) enum ModelMeshBlockerCategory {
+    None,
+    TargetUnknown,
+    TargetUnavailable,
+    TargetAmbiguous,
+    TargetConflict,
+    StaleIdentity,
+    AuthenticationUnknown,
+    CapabilityUnavailable,
+    AuthorityDenied,
+    PolicyNotAuthorized,
+    ApprovalMissing,
+    ApprovalMismatch,
+    ApprovalUnknown,
+    ApprovalStale,
+    InconsistentTruth,
+    NativeSessionUnproven,
+    CandidateStale,
+    ArtifactStale,
+    EvidenceStale,
+}
+
+impl ModelMeshBlockerCategory {
+    fn from_resolution(resolution: TargetResolution) -> Self {
+        match resolution {
+            TargetResolution::ExactMatch => Self::None,
+            TargetResolution::Unknown => Self::TargetUnknown,
+            TargetResolution::Unavailable => Self::TargetUnavailable,
+            TargetResolution::Ambiguous => Self::TargetAmbiguous,
+            TargetResolution::Conflict => Self::TargetConflict,
+            TargetResolution::Stale => Self::StaleIdentity,
+            TargetResolution::AuthenticationUnknown => Self::AuthenticationUnknown,
+            TargetResolution::CapabilityUnavailable => Self::CapabilityUnavailable,
+            TargetResolution::AuthorityDenied => Self::AuthorityDenied,
+            TargetResolution::PolicyNotAuthorized => Self::PolicyNotAuthorized,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", content = "value", rename_all = "SCREAMING_SNAKE_CASE")]
+pub(crate) enum ModelMeshProjectedTargetDimension {
+    Unspecified,
+    Exact(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ModelMeshProjectedIdentityClaim {
+    pub(crate) dimension: String,
+    pub(crate) value: Option<String>,
+    pub(crate) source: String,
+    pub(crate) observation_basis: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) struct ModelMeshEvidenceFreshnessProjection {
+    pub(crate) candidate: DriftApplicability,
+    pub(crate) artifact: DriftApplicability,
+    pub(crate) evidence: DriftApplicability,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) struct ModelMeshOutcomeProjection {
+    pub(crate) target_match: ModelMeshProjectionTruth,
+    pub(crate) execution_authorized: ModelMeshProjectionTruth,
+    pub(crate) continuity_proven: ModelMeshProjectionTruth,
+    pub(crate) verified: ModelMeshProjectionTruth,
+    pub(crate) human_accepted: ModelMeshProjectionTruth,
+    pub(crate) landed: ModelMeshProjectionTruth,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub(crate) enum ModelMeshUsageCostProjection {
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ModelMeshTargetProjection {
+    pub(crate) workspace_id: String,
+    pub(crate) workstream_id: String,
+    pub(crate) workflow_run_id: String,
+    pub(crate) stage_run_id: String,
+    pub(crate) actor_binding_id: String,
+    pub(crate) winds_session_id: String,
+    pub(crate) actor_role: String,
+    pub(crate) selector: String,
+    pub(crate) requested_runtime: String,
+    pub(crate) requested_provider: ModelMeshProjectedTargetDimension,
+    pub(crate) requested_model: ModelMeshProjectedTargetDimension,
+    pub(crate) identity_claims: Vec<ModelMeshProjectedIdentityClaim>,
+    pub(crate) resolution: String,
+    pub(crate) blocker: ModelMeshBlockerCategory,
+    pub(crate) runtime_freshness: DriftApplicability,
+    pub(crate) native_session_freshness: DriftApplicability,
+    pub(crate) authentication: AuthenticationTruth,
+    pub(crate) approval: ApprovalApplicability,
+    pub(crate) approval_digest_match: ModelMeshProjectionTruth,
+    pub(crate) current_authority: CurrentAuthorityTruth,
+    pub(crate) evidence_freshness: ModelMeshEvidenceFreshnessProjection,
+    pub(crate) outcomes: ModelMeshOutcomeProjection,
+    pub(crate) usage_cost: ModelMeshUsageCostProjection,
+}
+
+pub(crate) struct ModelMeshTargetProjectionInput<'a> {
+    pub(crate) request: &'a TargetRequest,
+    pub(crate) claims: &'a [IdentityClaim],
+    pub(crate) resolution: TargetResolution,
+    pub(crate) drift: &'a ModelMeshDriftEvaluation,
+    pub(crate) authentication: AuthenticationTruth,
+    pub(crate) approval: ApprovalApplicability,
+    pub(crate) approval_digest_match: ModelMeshProjectionTruth,
+    pub(crate) current_authority: CurrentAuthorityTruth,
+    pub(crate) evidence_freshness: ModelMeshEvidenceFreshnessProjection,
+    pub(crate) execution_authorized: ModelMeshProjectionTruth,
+    pub(crate) continuity_proven: ModelMeshProjectionTruth,
+    pub(crate) verified: ModelMeshProjectionTruth,
+    pub(crate) human_accepted: ModelMeshProjectionTruth,
+    pub(crate) landed: ModelMeshProjectionTruth,
+}
+
+pub(crate) fn project_model_mesh_target(
+    input: &ModelMeshTargetProjectionInput<'_>,
+) -> ModelMeshTargetProjection {
+    let descriptor = input.request.descriptor();
+    ModelMeshTargetProjection {
+        workspace_id: descriptor.workspace_id().to_owned(),
+        workstream_id: descriptor.workstream_id().to_owned(),
+        workflow_run_id: descriptor.workflow_run_id().to_owned(),
+        stage_run_id: descriptor.stage_run_id().to_owned(),
+        actor_binding_id: descriptor.actor_binding_id().to_owned(),
+        winds_session_id: descriptor.winds_session_id().to_owned(),
+        actor_role: descriptor.actor_role().to_owned(),
+        selector: input.request.selector().as_str().to_owned(),
+        requested_runtime: descriptor.runtime().as_str().to_owned(),
+        requested_provider: project_provider_dimension(descriptor.provider()),
+        requested_model: project_model_dimension(descriptor.model()),
+        identity_claims: project_identity_claims(input.claims),
+        resolution: target_resolution_label(input.resolution).to_owned(),
+        blocker: target_projection_blocker(input),
+        runtime_freshness: input.drift.runtime,
+        native_session_freshness: input.drift.native_session,
+        authentication: input.authentication,
+        approval: input.approval,
+        approval_digest_match: input.approval_digest_match,
+        current_authority: input.current_authority,
+        evidence_freshness: input.evidence_freshness,
+        outcomes: ModelMeshOutcomeProjection {
+            target_match: target_match_truth(input.resolution),
+            execution_authorized: input.execution_authorized,
+            continuity_proven: input.continuity_proven,
+            verified: input.verified,
+            human_accepted: input.human_accepted,
+            landed: input.landed,
+        },
+        usage_cost: ModelMeshUsageCostProjection::Unknown,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ModelMeshContinuityProjection {
+    pub(crate) workspace_id: String,
+    pub(crate) workstream_id: String,
+    pub(crate) target_request_id: String,
+    pub(crate) target_descriptor_digest: String,
+    pub(crate) workflow_run_id: String,
+    pub(crate) stage_run_id: String,
+    pub(crate) continuity_class: String,
+    pub(crate) source_actor_binding_id: Option<String>,
+    pub(crate) destination_actor_binding_id: Option<String>,
+    pub(crate) source_winds_session_id: Option<String>,
+    pub(crate) destination_winds_session_id: Option<String>,
+    pub(crate) source_runtime: Option<String>,
+    pub(crate) destination_runtime: Option<String>,
+    pub(crate) source_native_session_id: Option<String>,
+    pub(crate) destination_native_session_id: Option<String>,
+    pub(crate) source_identity_claims: Vec<ModelMeshProjectedIdentityClaim>,
+    pub(crate) destination_identity_claims: Vec<ModelMeshProjectedIdentityClaim>,
+    pub(crate) completeness: ContinuityContextCompleteness,
+    pub(crate) loss_markers: Vec<ModelMeshContinuityMarkerV1>,
+    pub(crate) evidence_freshness: ModelMeshEvidenceFreshnessProjection,
+    pub(crate) approval: ApprovalApplicability,
+    pub(crate) approval_digest_match: ModelMeshProjectionTruth,
+    pub(crate) current_authority: CurrentAuthorityTruth,
+    pub(crate) outcomes: ModelMeshOutcomeProjection,
+    pub(crate) usage_cost: ModelMeshUsageCostProjection,
+}
+
+pub(crate) struct ModelMeshContinuityProjectionInput<'a> {
+    pub(crate) context: &'a ModelMeshContinuityContextV1,
+    pub(crate) source_identity_claims: &'a [IdentityClaim],
+    pub(crate) destination_identity_claims: &'a [IdentityClaim],
+    pub(crate) evidence_freshness: ModelMeshEvidenceFreshnessProjection,
+    pub(crate) approval: ApprovalApplicability,
+    pub(crate) approval_digest_match: ModelMeshProjectionTruth,
+    pub(crate) current_authority: CurrentAuthorityTruth,
+    pub(crate) execution_authorized: ModelMeshProjectionTruth,
+    pub(crate) continuity_proven: ModelMeshProjectionTruth,
+    pub(crate) verified: ModelMeshProjectionTruth,
+    pub(crate) human_accepted: ModelMeshProjectionTruth,
+    pub(crate) landed: ModelMeshProjectionTruth,
+}
+
+pub(crate) fn project_model_mesh_continuity(
+    input: &ModelMeshContinuityProjectionInput<'_>,
+) -> ModelMeshContinuityProjection {
+    ModelMeshContinuityProjection {
+        workspace_id: input.context.workspace_id().to_owned(),
+        workstream_id: input.context.workstream_id().to_owned(),
+        target_request_id: input.context.target_request_id().to_owned(),
+        target_descriptor_digest: input.context.target_descriptor_digest().to_owned(),
+        workflow_run_id: input.context.workflow_run_id().to_owned(),
+        stage_run_id: input.context.stage_run_id().to_owned(),
+        continuity_class: input.context.continuity_class().to_owned(),
+        source_actor_binding_id: input.context.source_actor_binding_id().map(str::to_owned),
+        destination_actor_binding_id: input
+            .context
+            .destination_actor_binding_id()
+            .map(str::to_owned),
+        source_winds_session_id: input.context.source_winds_session_id().map(str::to_owned),
+        destination_winds_session_id: input
+            .context
+            .destination_winds_session_id()
+            .map(str::to_owned),
+        source_runtime: input.context.source_runtime().map(str::to_owned),
+        destination_runtime: input.context.destination_runtime().map(str::to_owned),
+        source_native_session_id: input.context.source_native_session_id().map(str::to_owned),
+        destination_native_session_id: input
+            .context
+            .destination_native_session_id()
+            .map(str::to_owned),
+        source_identity_claims: project_identity_claims(input.source_identity_claims),
+        destination_identity_claims: project_identity_claims(input.destination_identity_claims),
+        completeness: input.context.completeness(),
+        loss_markers: input.context.markers().to_vec(),
+        evidence_freshness: input.evidence_freshness,
+        approval: input.approval,
+        approval_digest_match: input.approval_digest_match,
+        current_authority: input.current_authority,
+        outcomes: ModelMeshOutcomeProjection {
+            target_match: ModelMeshProjectionTruth::Unknown,
+            execution_authorized: input.execution_authorized,
+            continuity_proven: input.continuity_proven,
+            verified: input.verified,
+            human_accepted: input.human_accepted,
+            landed: input.landed,
+        },
+        usage_cost: ModelMeshUsageCostProjection::Unknown,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ModelMeshWhyBlockedProjection {
+    pub(crate) primary: ModelMeshBlockerCategory,
+    pub(crate) blockers: Vec<ModelMeshBlockerCategory>,
+    pub(crate) runtime_freshness: DriftApplicability,
+    pub(crate) native_session_freshness: DriftApplicability,
+    pub(crate) evidence_freshness: ModelMeshEvidenceFreshnessProjection,
+    pub(crate) approval: ApprovalApplicability,
+    pub(crate) approval_digest_match: ModelMeshProjectionTruth,
+    pub(crate) current_authority: CurrentAuthorityTruth,
+}
+
+pub(crate) fn project_model_mesh_why_blocked(
+    target: &ModelMeshTargetProjection,
+) -> ModelMeshWhyBlockedProjection {
+    let mut blockers = Vec::new();
+    push_blocker(&mut blockers, target.blocker);
+    push_drift_blocker(
+        &mut blockers,
+        target.runtime_freshness,
+        ModelMeshBlockerCategory::StaleIdentity,
+    );
+    if target.native_session_freshness == DriftApplicability::Unproven {
+        push_blocker(
+            &mut blockers,
+            ModelMeshBlockerCategory::NativeSessionUnproven,
+        );
+    } else {
+        push_drift_blocker(
+            &mut blockers,
+            target.native_session_freshness,
+            ModelMeshBlockerCategory::StaleIdentity,
+        );
+    }
+    if target.authentication == AuthenticationTruth::Unknown {
+        push_blocker(
+            &mut blockers,
+            ModelMeshBlockerCategory::AuthenticationUnknown,
+        );
+    }
+    match target.approval {
+        ApprovalApplicability::Missing => {
+            push_blocker(&mut blockers, ModelMeshBlockerCategory::ApprovalMissing)
+        }
+        ApprovalApplicability::Mismatch => {
+            push_blocker(&mut blockers, ModelMeshBlockerCategory::ApprovalMismatch)
+        }
+        ApprovalApplicability::Stale => {
+            push_blocker(&mut blockers, ModelMeshBlockerCategory::ApprovalStale)
+        }
+        ApprovalApplicability::Exact => {}
+    }
+    match target.approval_digest_match {
+        ModelMeshProjectionTruth::No => {
+            push_blocker(&mut blockers, ModelMeshBlockerCategory::ApprovalMismatch)
+        }
+        ModelMeshProjectionTruth::Unknown => {
+            push_blocker(&mut blockers, ModelMeshBlockerCategory::ApprovalUnknown)
+        }
+        ModelMeshProjectionTruth::Stale => {
+            push_blocker(&mut blockers, ModelMeshBlockerCategory::ApprovalStale)
+        }
+        ModelMeshProjectionTruth::Yes => {}
+    }
+    if target.current_authority == CurrentAuthorityTruth::Denied {
+        push_blocker(&mut blockers, ModelMeshBlockerCategory::AuthorityDenied);
+    }
+    push_drift_blocker(
+        &mut blockers,
+        target.evidence_freshness.candidate,
+        ModelMeshBlockerCategory::CandidateStale,
+    );
+    push_drift_blocker(
+        &mut blockers,
+        target.evidence_freshness.artifact,
+        ModelMeshBlockerCategory::ArtifactStale,
+    );
+    push_drift_blocker(
+        &mut blockers,
+        target.evidence_freshness.evidence,
+        ModelMeshBlockerCategory::EvidenceStale,
+    );
+    let primary = blockers
+        .first()
+        .copied()
+        .unwrap_or(ModelMeshBlockerCategory::None);
+    ModelMeshWhyBlockedProjection {
+        primary,
+        blockers,
+        runtime_freshness: target.runtime_freshness,
+        native_session_freshness: target.native_session_freshness,
+        evidence_freshness: target.evidence_freshness,
+        approval: target.approval,
+        approval_digest_match: target.approval_digest_match,
+        current_authority: target.current_authority,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ReviewerContinuityProjection {
+    pub(crate) workspace_id: String,
+    pub(crate) workstream_id: String,
+    pub(crate) target_request_id: String,
+    pub(crate) target_descriptor_digest: String,
+    pub(crate) workflow_run_id: String,
+    pub(crate) stage_run_id: String,
+    pub(crate) continuity_class: String,
+    pub(crate) source_actor_binding_id: Option<String>,
+    pub(crate) destination_actor_binding_id: Option<String>,
+    pub(crate) completeness: ContinuityContextCompleteness,
+    pub(crate) evidence_freshness: ModelMeshEvidenceFreshnessProjection,
+    pub(crate) verified: ModelMeshProjectionTruth,
+    pub(crate) human_accepted: ModelMeshProjectionTruth,
+    pub(crate) reviewer_context_fresh: bool,
+}
+
+pub(crate) fn project_reviewer_continuity(
+    continuity: &ModelMeshContinuityProjection,
+) -> ReviewerContinuityProjection {
+    let reviewer_context_fresh = [
+        continuity.evidence_freshness.candidate,
+        continuity.evidence_freshness.artifact,
+        continuity.evidence_freshness.evidence,
+    ]
+    .into_iter()
+    .all(|value| value == DriftApplicability::Applicable);
+    ReviewerContinuityProjection {
+        workspace_id: continuity.workspace_id.clone(),
+        workstream_id: continuity.workstream_id.clone(),
+        target_request_id: continuity.target_request_id.clone(),
+        target_descriptor_digest: continuity.target_descriptor_digest.clone(),
+        workflow_run_id: continuity.workflow_run_id.clone(),
+        stage_run_id: continuity.stage_run_id.clone(),
+        continuity_class: continuity.continuity_class.clone(),
+        source_actor_binding_id: continuity.source_actor_binding_id.clone(),
+        destination_actor_binding_id: continuity.destination_actor_binding_id.clone(),
+        completeness: continuity.completeness,
+        evidence_freshness: continuity.evidence_freshness,
+        verified: continuity.outcomes.verified,
+        human_accepted: continuity.outcomes.human_accepted,
+        reviewer_context_fresh,
+    }
+}
+
+fn project_identity_claims(claims: &[IdentityClaim]) -> Vec<ModelMeshProjectedIdentityClaim> {
+    claims
+        .iter()
+        .map(|claim| ModelMeshProjectedIdentityClaim {
+            dimension: claim.dimension.as_str().to_owned(),
+            value: claim.value.clone(),
+            source: claim.source.as_str().to_owned(),
+            observation_basis: claim.observation_basis.clone(),
+        })
+        .collect()
+}
+
+fn project_provider_dimension(
+    value: &TargetDimension<ExactProviderId>,
+) -> ModelMeshProjectedTargetDimension {
+    match value {
+        TargetDimension::Unspecified => ModelMeshProjectedTargetDimension::Unspecified,
+        TargetDimension::Exact(value) => {
+            ModelMeshProjectedTargetDimension::Exact(value.as_str().to_owned())
+        }
+    }
+}
+
+fn project_model_dimension(
+    value: &TargetDimension<ExactModelId>,
+) -> ModelMeshProjectedTargetDimension {
+    match value {
+        TargetDimension::Unspecified => ModelMeshProjectedTargetDimension::Unspecified,
+        TargetDimension::Exact(value) => {
+            ModelMeshProjectedTargetDimension::Exact(value.as_str().to_owned())
+        }
+    }
+}
+
+fn target_resolution_label(value: TargetResolution) -> &'static str {
+    match value {
+        TargetResolution::ExactMatch => "EXACT_MATCH",
+        TargetResolution::Unknown => "UNKNOWN",
+        TargetResolution::Unavailable => "UNAVAILABLE",
+        TargetResolution::Ambiguous => "AMBIGUOUS",
+        TargetResolution::Conflict => "CONFLICT",
+        TargetResolution::Stale => "STALE",
+        TargetResolution::AuthenticationUnknown => "AUTHENTICATION_UNKNOWN",
+        TargetResolution::CapabilityUnavailable => "CAPABILITY_UNAVAILABLE",
+        TargetResolution::AuthorityDenied => "AUTHORITY_DENIED",
+        TargetResolution::PolicyNotAuthorized => "POLICY_NOT_AUTHORIZED",
+    }
+}
+
+fn push_blocker(blockers: &mut Vec<ModelMeshBlockerCategory>, blocker: ModelMeshBlockerCategory) {
+    if blocker != ModelMeshBlockerCategory::None && !blockers.contains(&blocker) {
+        blockers.push(blocker);
+    }
+}
+
+fn push_drift_blocker(
+    blockers: &mut Vec<ModelMeshBlockerCategory>,
+    value: DriftApplicability,
+    blocker: ModelMeshBlockerCategory,
+) {
+    if value == DriftApplicability::Stale {
+        push_blocker(blockers, blocker);
+    }
+}
+
+fn target_projection_blocker(
+    input: &ModelMeshTargetProjectionInput<'_>,
+) -> ModelMeshBlockerCategory {
+    match input.resolution {
+        TargetResolution::AuthorityDenied
+            if input.current_authority == CurrentAuthorityTruth::Denied =>
+        {
+            ModelMeshBlockerCategory::AuthorityDenied
+        }
+        TargetResolution::AuthorityDenied => match input.approval {
+            ApprovalApplicability::Missing => ModelMeshBlockerCategory::ApprovalMissing,
+            ApprovalApplicability::Mismatch => ModelMeshBlockerCategory::ApprovalMismatch,
+            ApprovalApplicability::Stale => ModelMeshBlockerCategory::ApprovalStale,
+            ApprovalApplicability::Exact => ModelMeshBlockerCategory::InconsistentTruth,
+        },
+        TargetResolution::Stale if input.approval == ApprovalApplicability::Stale => {
+            ModelMeshBlockerCategory::ApprovalStale
+        }
+        resolution => ModelMeshBlockerCategory::from_resolution(resolution),
+    }
+}
+
+fn target_match_truth(resolution: TargetResolution) -> ModelMeshProjectionTruth {
+    match resolution {
+        TargetResolution::ExactMatch => ModelMeshProjectionTruth::Yes,
+        TargetResolution::Stale => ModelMeshProjectionTruth::Stale,
+        TargetResolution::Unknown
+        | TargetResolution::Unavailable
+        | TargetResolution::Ambiguous
+        | TargetResolution::Conflict
+        | TargetResolution::AuthenticationUnknown
+        | TargetResolution::CapabilityUnavailable
+        | TargetResolution::AuthorityDenied
+        | TargetResolution::PolicyNotAuthorized => ModelMeshProjectionTruth::Unknown,
+    }
 }
 
 #[derive(Serialize)]
