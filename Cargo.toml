@@ -9,6 +9,11 @@ repository = "https://github.com/TheHalfMoon/Winds"
 readme = "README.md"
 description = "Independent verification runtime for agent-generated software."
 
+[lib]
+path = "src/lib.rs"
+test = false
+doctest = false
+
 [[bin]]
 name = "winds"
 path = "src/main.rs"
