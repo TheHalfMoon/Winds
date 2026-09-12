@@ -89,12 +89,14 @@ No Model Mesh approval substitutes for a Spec 008 workflow decision, and no work
 
 ## 6. Platform claim boundary
 
-Only directly exercised domains may be called platform-qualified:
+The immediate T123 implementation-bearing baseline directly exercised the following domains on exact T123 head `533f468b9a956acf8e5a73e65229f542a26d610b` through runs 34706322502 and 34706322494:
 
-- Ubuntu/Linux repository and terminal paths: exercised by exact-head GitHub workflows.
-- macOS repository and terminal paths: exercised by exact-head GitHub workflows.
-- native Windows terminal path: exercised by the native Windows job.
-- Windows host plus Ubuntu WSL2 path: exercised by the real WSL2 integration job.
+- Ubuntu/Linux repository and terminal paths;
+- macOS repository and terminal paths;
+- native Windows terminal path;
+- Windows host plus Ubuntu WSL2 path.
+
+Those are inherited T123 baseline facts, not exact-head T124 workflow results. T124 is documentation-only and makes no platform-sensitive source change. A platform domain may be described as freshly exercised by T124 only if an applicable workflow actually runs and succeeds on the exact final T124 head. If no platform-specific workflow is triggered for the documentation-only T124 head, T124 adds no new platform claim and relies only on the unchanged implementation-bearing T123 baseline plus fresh exact-head repository quality.
 
 No platform result proves real Claude execution, real Codex worker execution, provider/model availability, provider authentication, provider billing, provider-native memory, or physical native-resume continuity.
 
@@ -130,7 +132,7 @@ T124_CREDENTIAL_OPERATION=NO
 T124_PLATFORM_CLAIMS=DIRECTLY_EXERCISED_ONLY
 SPEC_006_LIVE_NONCLAIMS=UNCHANGED
 EXACT_HEAD_QUALITY=REQUIRED
-APPLICABLE_EXACT_HEAD_PLATFORM_REGRESSION=REQUIRED
+APPLICABLE_EXACT_HEAD_PLATFORM_REGRESSION=REQUIRED_IF_TRIGGERED_OR_PLATFORM_SOURCE_SCOPE_IS_AFFECTED
 AUTHOR_REVIEW=REQUIRED
 PONYTAIL_YAGNI_REVIEW=REQUIRED
 FRESH_INDEPENDENT_SUBSTANTIVE_REVIEW=REQUIRED
