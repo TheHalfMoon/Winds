@@ -65,6 +65,8 @@ mod t114_model_mesh_domain_tests;
 mod t115_model_mesh_adapter_tests;
 #[cfg(test)]
 mod t117_model_mesh_drift_tests;
+#[cfg(test)]
+mod t118_model_mesh_continuity_tests;
 mod workbench;
 mod workflow_cli;
 

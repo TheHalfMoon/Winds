@@ -5,7 +5,10 @@ use crate::agentic_runtime::{
 use crate::domain::WindsSessionRecord;
 use crate::domain::workflow::{
     ArtifactBaselineIdentity, ArtifactBaselineRequirement, BaselineEvaluation, BaselineFreshness,
-    StageRunIdentity, WorkflowRunIdentity, evaluate_artifact_baseline_requirement,
+    ReconstructionCategory, ReconstructionContentState, ReconstructionReport,
+    ReconstructionSourceClass, ReconstructionTransferState, StageRunIdentity,
+    WorkflowContinuationClass, WorkflowRunIdentity, build_reconstruction_preview,
+    evaluate_artifact_baseline_requirement,
 };
 use crate::store::StoredWorkflowActorBinding;
 use serde::{Deserialize, Serialize};
@@ -17,6 +20,12 @@ const MAX_TARGET_ID_BYTES: usize = 256;
 const MAX_ACTOR_ROLE_BYTES: usize = 64;
 const MAX_OBSERVATION_BASIS_BYTES: usize = 512;
 const SHA256_HEX_BYTES: usize = 64;
+const MAX_CONTINUITY_REFERENCE_ID_BYTES: usize = 256;
+const MAX_CONTINUITY_REFERENCE_VALUE_BYTES: usize = 1024;
+const MAX_CONTINUITY_REFERENCES_PER_KIND: usize = 32;
+const MAX_CONTINUITY_MARKERS: usize = 32;
+const MAX_CONTINUITY_CONTEXT_BYTES: usize = 128 * 1024;
+const PROVIDER_PRIVATE_CONTEXT_MARKER_ID: &str = "provider-private-state";
 
 pub(crate) type ModelMeshResult<T> = std::result::Result<T, String>;
 
@@ -1394,6 +1403,631 @@ pub(crate) fn project_current_model_mesh_target(
         state,
         historical,
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub(crate) enum ContinuityContextCompleteness {
+    Complete,
+    Incomplete,
+    Redacted,
+    Omitted,
+    Unavailable,
+    MaterialLoss,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub(crate) enum ContinuityMaterialState {
+    Redacted,
+    Omitted,
+    Unavailable,
+    MaterialLoss,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub(crate) struct ModelMeshContinuityReferenceV1 {
+    pub(crate) reference_id: String,
+    pub(crate) exact_identity: String,
+}
+
+impl ModelMeshContinuityReferenceV1 {
+    pub(crate) fn new(reference_id: &str, exact_identity: &str) -> ModelMeshResult<Self> {
+        Ok(Self {
+            reference_id: normalize_bounded(
+                reference_id,
+                "continuity reference id",
+                MAX_CONTINUITY_REFERENCE_ID_BYTES,
+            )?,
+            exact_identity: normalize_continuity_reference_value(exact_identity)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub(crate) struct ModelMeshContinuityMarkerV1 {
+    pub(crate) item_id: String,
+    pub(crate) state: ContinuityMaterialState,
+    pub(crate) required: bool,
+}
+
+impl ModelMeshContinuityMarkerV1 {
+    pub(crate) fn new(
+        item_id: &str,
+        state: ContinuityMaterialState,
+        required: bool,
+    ) -> ModelMeshResult<Self> {
+        let item_id = normalize_bounded(
+            item_id,
+            "continuity marker id",
+            MAX_CONTINUITY_REFERENCE_ID_BYTES,
+        )?;
+        if item_id.eq_ignore_ascii_case(PROVIDER_PRIVATE_CONTEXT_MARKER_ID) {
+            return Err(
+                "provider-private continuity boundary is Winds-owned and cannot be overridden"
+                    .into(),
+            );
+        }
+        Ok(Self {
+            item_id,
+            state,
+            required,
+        })
+    }
+}
+
+pub(crate) struct ModelMeshContinuityClassifierInput<'a> {
+    pub(crate) target: &'a ModelMeshTargetDescriptorV1,
+    pub(crate) source_actor_binding_id: Option<&'a str>,
+    pub(crate) destination_actor_binding_id: Option<&'a str>,
+    pub(crate) source_runtime_binding: Option<&'a RuntimeSessionBinding>,
+    pub(crate) destination_runtime_binding: Option<&'a RuntimeSessionBinding>,
+    pub(crate) destination_continuation: WorkflowContinuationClass,
+    pub(crate) reconstruction_report: Option<&'a ReconstructionReport>,
+}
+
+pub(crate) fn classify_model_mesh_continuity(
+    input: &ModelMeshContinuityClassifierInput<'_>,
+) -> ModelMeshResult<ContinuityClass> {
+    if let (Some(destination_actor), Some(destination_runtime)) = (
+        input.destination_actor_binding_id,
+        input.destination_runtime_binding,
+    ) {
+        let destination_actor = normalize_scope(destination_actor, "destination actor binding id")?;
+        if destination_actor != input.target.actor_binding_id()
+            || destination_runtime.session_id != input.target.winds_session_id()
+            || destination_runtime.runtime != input.target.runtime()
+        {
+            return Err(
+                "continuity destination does not match the exact target actor/session/runtime"
+                    .into(),
+            );
+        }
+    }
+    if input
+        .source_runtime_binding
+        .is_some_and(|binding| binding.ownership == RuntimeBindingOwnership::OwnershipLost)
+        || input
+            .destination_runtime_binding
+            .is_some_and(|binding| binding.ownership == RuntimeBindingOwnership::OwnershipLost)
+        || input.destination_continuation == WorkflowContinuationClass::OwnershipLost
+    {
+        return Ok(ContinuityClass::OwnershipLost);
+    }
+    let (
+        Some(source_actor),
+        Some(destination_actor),
+        Some(source_runtime),
+        Some(destination_runtime),
+    ) = (
+        input.source_actor_binding_id,
+        input.destination_actor_binding_id,
+        input.source_runtime_binding,
+        input.destination_runtime_binding,
+    )
+    else {
+        return Ok(ContinuityClass::Unavailable);
+    };
+    let source_actor = normalize_scope(source_actor, "source actor binding id")?;
+    let destination_actor = normalize_scope(destination_actor, "destination actor binding id")?;
+    if input.destination_continuation == WorkflowContinuationClass::Reconstructed
+        && input.reconstruction_report.is_none()
+    {
+        return Err(
+            "reconstructed continuity requires its exact bounded reconstruction report".into(),
+        );
+    }
+    if let Some(report) = input.reconstruction_report {
+        validate_continuity_reconstruction(
+            report,
+            &destination_actor,
+            input.target.stage_run_id(),
+        )?;
+    }
+    if source_runtime.runtime != destination_runtime.runtime {
+        if source_actor == destination_actor {
+            return Err("cross-runtime continuity cannot reuse one canonical actor binding".into());
+        }
+        return Ok(ContinuityClass::Handoff);
+    }
+    if source_actor != destination_actor {
+        return Ok(ContinuityClass::Reassigned);
+    }
+    if input.reconstruction_report.is_some()
+        || input.destination_continuation == WorkflowContinuationClass::Reconstructed
+    {
+        return Ok(ContinuityClass::Reconstructed);
+    }
+    if input.destination_continuation == WorkflowContinuationClass::Unavailable {
+        return Ok(ContinuityClass::Unavailable);
+    }
+    // Current accepted Spec 006 truth exposes only durable resume candidates, never physical
+    // live/resumed proof. Even a persisted/resolved RESUMED label or matching native ID therefore
+    // cannot manufacture NATIVE_RESUME in Spec 009.
+    Ok(ContinuityClass::Unproven)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ModelMeshReconstructionSummaryV1 {
+    category: &'static str,
+    source_class: &'static str,
+    transfer_state: &'static str,
+    content_state: &'static str,
+}
+
+fn validate_continuity_reconstruction(
+    report: &ReconstructionReport,
+    destination_actor_binding_id: &str,
+    stage_run_id: &str,
+) -> ModelMeshResult<(String, Vec<ModelMeshReconstructionSummaryV1>)> {
+    if report.binding_id != destination_actor_binding_id || report.stage_run_id != stage_run_id {
+        return Err(
+            "reconstruction report does not match continuity destination actor/stage".into(),
+        );
+    }
+    let preview =
+        build_reconstruction_preview(&report.binding_id, &report.stage_run_id, &report.items)
+            .map_err(|error| format!("invalid continuity reconstruction report: {error}"))?;
+    let digest = sha256_hex(preview.canonical_json.as_bytes());
+    let summary = preview
+        .report
+        .items
+        .iter()
+        .map(|item| ModelMeshReconstructionSummaryV1 {
+            category: reconstruction_category_name(item.category),
+            source_class: reconstruction_source_class_name(item.source_class),
+            transfer_state: reconstruction_transfer_state_name(item.transfer_state),
+            content_state: reconstruction_content_state_name(item.content_state),
+        })
+        .collect();
+    Ok((digest, summary))
+}
+
+fn reconstruction_category_name(value: ReconstructionCategory) -> &'static str {
+    match value {
+        ReconstructionCategory::CanonicalWorkContext => "CANONICAL_WORK_CONTEXT",
+        ReconstructionCategory::ObjectiveConstraints => "OBJECTIVE_CONSTRAINTS",
+        ReconstructionCategory::Decisions => "DECISIONS",
+        ReconstructionCategory::CandidateEvidence => "CANDIDATE_EVIDENCE",
+        ReconstructionCategory::PriorStageOutputs => "PRIOR_STAGE_OUTPUTS",
+        ReconstructionCategory::RuntimeNativeContext => "RUNTIME_NATIVE_CONTEXT",
+        ReconstructionCategory::ProviderPrivateState => "PROVIDER_PRIVATE_STATE",
+    }
+}
+
+fn reconstruction_source_class_name(value: ReconstructionSourceClass) -> &'static str {
+    match value {
+        ReconstructionSourceClass::WindsObserved => "WINDS_OBSERVED",
+        ReconstructionSourceClass::HumanDecided => "HUMAN_DECIDED",
+        ReconstructionSourceClass::StoredCanonicalReference => "STORED_CANONICAL_REFERENCE",
+        ReconstructionSourceClass::DerivedReconstruction => "DERIVED_RECONSTRUCTION",
+        ReconstructionSourceClass::Unavailable => "UNAVAILABLE",
+    }
+}
+
+fn reconstruction_transfer_state_name(value: ReconstructionTransferState) -> &'static str {
+    match value {
+        ReconstructionTransferState::PreservedReference => "PRESERVED_REFERENCE",
+        ReconstructionTransferState::Reconstructed => "RECONSTRUCTED",
+        ReconstructionTransferState::Derived => "DERIVED",
+        ReconstructionTransferState::Omitted => "OMITTED",
+        ReconstructionTransferState::Unavailable => "UNAVAILABLE",
+        ReconstructionTransferState::NoLongerTransferable => "NO_LONGER_TRANSFERABLE",
+    }
+}
+
+fn reconstruction_content_state_name(value: ReconstructionContentState) -> &'static str {
+    match value {
+        ReconstructionContentState::Full => "FULL",
+        ReconstructionContentState::Redacted => "REDACTED",
+        ReconstructionContentState::Omitted => "OMITTED",
+        ReconstructionContentState::Unavailable => "UNAVAILABLE",
+    }
+}
+
+pub(crate) struct ModelMeshContinuityContextInput<'a> {
+    pub(crate) target_request_id: &'a str,
+    pub(crate) target: &'a ModelMeshTargetDescriptorV1,
+    pub(crate) continuity_class: ContinuityClass,
+    pub(crate) source_actor_binding_id: Option<&'a str>,
+    pub(crate) destination_actor_binding_id: Option<&'a str>,
+    pub(crate) source_runtime_binding: Option<&'a RuntimeSessionBinding>,
+    pub(crate) destination_runtime_binding: Option<&'a RuntimeSessionBinding>,
+    pub(crate) candidate_references: &'a [ModelMeshContinuityReferenceV1],
+    pub(crate) artifact_references: &'a [ModelMeshContinuityReferenceV1],
+    pub(crate) evidence_references: &'a [ModelMeshContinuityReferenceV1],
+    pub(crate) selection_approval: &'a ModelMeshAuthorityEnvelopeV1,
+    pub(crate) current_authority: CurrentAuthorityTruth,
+    pub(crate) reconstruction_report: Option<&'a ReconstructionReport>,
+    pub(crate) markers: &'a [ModelMeshContinuityMarkerV1],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ModelMeshContinuityContextV1 {
+    schema_version: u8,
+    workspace_id: String,
+    workstream_id: String,
+    workflow_run_id: String,
+    stage_run_id: String,
+    target_request_id: String,
+    target_descriptor_digest: String,
+    continuity_class: String,
+    source_actor_binding_id: Option<String>,
+    destination_actor_binding_id: Option<String>,
+    source_runtime_binding_id: Option<String>,
+    destination_runtime_binding_id: Option<String>,
+    source_winds_session_id: Option<String>,
+    destination_winds_session_id: Option<String>,
+    source_native_session_id: Option<String>,
+    destination_native_session_id: Option<String>,
+    source_runtime: Option<String>,
+    destination_runtime: Option<String>,
+    candidate_references: Vec<ModelMeshContinuityReferenceV1>,
+    artifact_references: Vec<ModelMeshContinuityReferenceV1>,
+    evidence_references: Vec<ModelMeshContinuityReferenceV1>,
+    selection_approval_digest: String,
+    current_authority: String,
+    reconstruction_report_digest: Option<String>,
+    reconstruction_summary: Vec<ModelMeshReconstructionSummaryV1>,
+    markers: Vec<ModelMeshContinuityMarkerV1>,
+    completeness: ContinuityContextCompleteness,
+}
+
+impl ModelMeshContinuityContextV1 {
+    pub(crate) fn canonical_json(&self) -> ModelMeshResult<String> {
+        let json = serde_json::to_string(self).map_err(|error| {
+            format!("Model Mesh continuity context serialization failed: {error}")
+        })?;
+        if json.len() > MAX_CONTINUITY_CONTEXT_BYTES {
+            return Err(
+                "Model Mesh continuity context exceeds the bounded projection limit".into(),
+            );
+        }
+        Ok(json)
+    }
+
+    pub(crate) fn digest(&self) -> ModelMeshResult<String> {
+        Ok(sha256_hex(self.canonical_json()?.as_bytes()))
+    }
+
+    pub(crate) fn continuity_class(&self) -> &str {
+        &self.continuity_class
+    }
+
+    pub(crate) fn completeness(&self) -> ContinuityContextCompleteness {
+        self.completeness
+    }
+
+    pub(crate) fn source_runtime(&self) -> Option<&str> {
+        self.source_runtime.as_deref()
+    }
+
+    pub(crate) fn destination_runtime(&self) -> Option<&str> {
+        self.destination_runtime.as_deref()
+    }
+
+    pub(crate) fn markers(&self) -> &[ModelMeshContinuityMarkerV1] {
+        &self.markers
+    }
+}
+
+pub(crate) fn build_model_mesh_continuity_context(
+    input: &ModelMeshContinuityContextInput<'_>,
+) -> ModelMeshResult<ModelMeshContinuityContextV1> {
+    if input.continuity_class == ContinuityClass::NativeResume {
+        return Err(
+            "current accepted Spec 006 truth does not provide physical NATIVE_RESUME proof".into(),
+        );
+    }
+    let target_digest = input.target.digest()?;
+    validate_selection_approval_for_context(
+        input.selection_approval,
+        input.target,
+        &target_digest,
+    )?;
+    let target_request_id = normalize_scope(input.target_request_id, "target request id")?;
+    let source_actor_binding_id = input
+        .source_actor_binding_id
+        .map(|value| normalize_scope(value, "source actor binding id"))
+        .transpose()?;
+    let destination_actor_binding_id = input
+        .destination_actor_binding_id
+        .map(|value| normalize_scope(value, "destination actor binding id"))
+        .transpose()?;
+    if let Some(destination) = destination_actor_binding_id.as_deref()
+        && destination != input.target.actor_binding_id()
+    {
+        return Err("continuity context destination actor does not match exact target".into());
+    }
+    if let Some(destination_runtime) = input.destination_runtime_binding
+        && (destination_runtime.runtime != input.target.runtime()
+            || destination_runtime.session_id != input.target.winds_session_id())
+    {
+        return Err(
+            "continuity context destination runtime binding does not match exact target".into(),
+        );
+    }
+    match (
+        input.source_runtime_binding,
+        input.destination_runtime_binding,
+    ) {
+        (Some(source), Some(destination)) if source.runtime != destination.runtime => {
+            if input.continuity_class != ContinuityClass::Handoff {
+                return Err(
+                    "cross-runtime continuity context must be classified as HANDOFF".into(),
+                );
+            }
+        }
+        (Some(source), Some(destination))
+            if source.runtime == destination.runtime
+                && input.continuity_class == ContinuityClass::Handoff =>
+        {
+            return Err("same-runtime continuity context cannot claim HANDOFF".into());
+        }
+        _ => {}
+    }
+    if input.continuity_class != ContinuityClass::Unavailable
+        && (input.source_runtime_binding.is_none() || input.destination_runtime_binding.is_none())
+    {
+        return Err(
+            "applicable continuity context requires exact source/destination runtime provenance"
+                .into(),
+        );
+    }
+    if matches!(
+        input.continuity_class,
+        ContinuityClass::Handoff | ContinuityClass::Reassigned
+    ) && (source_actor_binding_id.is_none() || destination_actor_binding_id.is_none())
+    {
+        return Err(
+            "handoff/reassignment continuity requires exact source/destination actors".into(),
+        );
+    }
+    if input.continuity_class == ContinuityClass::Reconstructed
+        && (destination_actor_binding_id.is_none() || input.reconstruction_report.is_none())
+    {
+        return Err(
+            "reconstructed continuity requires its exact destination actor and reconstruction report"
+                .into(),
+        );
+    }
+    if input.continuity_class == ContinuityClass::Handoff
+        && source_actor_binding_id == destination_actor_binding_id
+    {
+        return Err("cross-runtime HANDOFF cannot reuse one canonical actor binding".into());
+    }
+    if input.continuity_class == ContinuityClass::Reassigned
+        && source_actor_binding_id == destination_actor_binding_id
+    {
+        return Err(
+            "REASSIGNED continuity requires different source/destination actor bindings".into(),
+        );
+    }
+    let (reconstruction_report_digest, reconstruction_summary) = match input.reconstruction_report {
+        Some(report) => {
+            let destination = destination_actor_binding_id
+                .as_deref()
+                .unwrap_or(input.target.actor_binding_id());
+            let (digest, summary) = validate_continuity_reconstruction(
+                report,
+                destination,
+                input.target.stage_run_id(),
+            )?;
+            (Some(digest), summary)
+        }
+        None => (None, Vec::new()),
+    };
+    let candidate_references = canonicalize_continuity_references(
+        input.candidate_references,
+        "candidate continuity references",
+    )?;
+    let artifact_references = canonicalize_continuity_references(
+        input.artifact_references,
+        "artifact continuity references",
+    )?;
+    let evidence_references = canonicalize_continuity_references(
+        input.evidence_references,
+        "evidence continuity references",
+    )?;
+    let mut markers = canonicalize_continuity_markers(input.markers)?;
+    markers.push(ModelMeshContinuityMarkerV1 {
+        item_id: PROVIDER_PRIVATE_CONTEXT_MARKER_ID.to_owned(),
+        state: ContinuityMaterialState::Unavailable,
+        required: false,
+    });
+    markers.sort();
+    let completeness = continuity_context_completeness(
+        &candidate_references,
+        &artifact_references,
+        &evidence_references,
+        &markers,
+    );
+    let context = ModelMeshContinuityContextV1 {
+        schema_version: 1,
+        workspace_id: input.target.workspace_id().to_owned(),
+        workstream_id: input.target.workstream_id().to_owned(),
+        workflow_run_id: input.target.workflow_run_id().to_owned(),
+        stage_run_id: input.target.stage_run_id().to_owned(),
+        target_request_id,
+        target_descriptor_digest: target_digest,
+        continuity_class: input.continuity_class.as_str().to_owned(),
+        source_actor_binding_id,
+        destination_actor_binding_id,
+        source_runtime_binding_id: input
+            .source_runtime_binding
+            .map(|binding| binding.binding_id.clone()),
+        destination_runtime_binding_id: input
+            .destination_runtime_binding
+            .map(|binding| binding.binding_id.clone()),
+        source_winds_session_id: input
+            .source_runtime_binding
+            .map(|binding| binding.session_id.clone()),
+        destination_winds_session_id: input
+            .destination_runtime_binding
+            .map(|binding| binding.session_id.clone()),
+        source_native_session_id: input
+            .source_runtime_binding
+            .and_then(|binding| binding.native_session_id.clone()),
+        destination_native_session_id: input
+            .destination_runtime_binding
+            .and_then(|binding| binding.native_session_id.clone()),
+        source_runtime: input
+            .source_runtime_binding
+            .map(|binding| binding.runtime.as_str().to_owned()),
+        destination_runtime: input
+            .destination_runtime_binding
+            .map(|binding| binding.runtime.as_str().to_owned()),
+        candidate_references,
+        artifact_references,
+        evidence_references,
+        selection_approval_digest: input.selection_approval.digest()?,
+        current_authority: match input.current_authority {
+            CurrentAuthorityTruth::Allowed => "ALLOWED",
+            CurrentAuthorityTruth::Denied => "DENIED",
+        }
+        .to_owned(),
+        reconstruction_report_digest,
+        reconstruction_summary,
+        markers,
+        completeness,
+    };
+    context.canonical_json()?;
+    Ok(context)
+}
+
+fn validate_selection_approval_for_context(
+    approval: &ModelMeshAuthorityEnvelopeV1,
+    target: &ModelMeshTargetDescriptorV1,
+    target_digest: &str,
+) -> ModelMeshResult<()> {
+    if approval.purpose() != ModelMeshAuthorityPurpose::TargetSelection
+        || approval.workspace_id() != target.workspace_id()
+        || approval.workstream_id() != target.workstream_id()
+        || approval.session_id() != target.winds_session_id()
+        || approval.workflow_run_id() != target.workflow_run_id()
+        || approval.stage_run_id() != target.stage_run_id()
+        || approval.actor_binding_id() != target.actor_binding_id()
+        || approval.actor_role() != target.actor_role()
+        || approval.target_descriptor_digest() != target_digest
+        || approval.continuity_permission_digest().is_some()
+    {
+        return Err("continuity context lacks an exact TARGET_SELECTION authority basis".into());
+    }
+    Ok(())
+}
+
+fn canonicalize_continuity_references(
+    references: &[ModelMeshContinuityReferenceV1],
+    label: &str,
+) -> ModelMeshResult<Vec<ModelMeshContinuityReferenceV1>> {
+    if references.len() > MAX_CONTINUITY_REFERENCES_PER_KIND {
+        return Err(format!("{label} exceeds the bounded item limit"));
+    }
+    let mut values = references.to_vec();
+    values.sort();
+    values.dedup();
+    Ok(values)
+}
+
+fn canonicalize_continuity_markers(
+    markers: &[ModelMeshContinuityMarkerV1],
+) -> ModelMeshResult<Vec<ModelMeshContinuityMarkerV1>> {
+    if markers.len() > MAX_CONTINUITY_MARKERS {
+        return Err("continuity markers exceed the bounded item limit".into());
+    }
+    let mut values = markers.to_vec();
+    values.sort();
+    for pair in values.windows(2) {
+        if pair[0].item_id == pair[1].item_id {
+            return Err(
+                "continuity context contains duplicate/conflicting material markers".into(),
+            );
+        }
+    }
+    Ok(values)
+}
+
+fn continuity_context_completeness(
+    candidate_references: &[ModelMeshContinuityReferenceV1],
+    artifact_references: &[ModelMeshContinuityReferenceV1],
+    evidence_references: &[ModelMeshContinuityReferenceV1],
+    markers: &[ModelMeshContinuityMarkerV1],
+) -> ContinuityContextCompleteness {
+    let required_states = markers
+        .iter()
+        .filter(|marker| marker.required)
+        .map(|marker| marker.state)
+        .collect::<Vec<_>>();
+    if required_states.contains(&ContinuityMaterialState::MaterialLoss) {
+        return ContinuityContextCompleteness::MaterialLoss;
+    }
+    if required_states.contains(&ContinuityMaterialState::Redacted) {
+        return ContinuityContextCompleteness::Redacted;
+    }
+    if required_states.contains(&ContinuityMaterialState::Omitted) {
+        return ContinuityContextCompleteness::Omitted;
+    }
+    if required_states.contains(&ContinuityMaterialState::Unavailable) {
+        return ContinuityContextCompleteness::Unavailable;
+    }
+    if candidate_references.is_empty()
+        || artifact_references.is_empty()
+        || evidence_references.is_empty()
+    {
+        return ContinuityContextCompleteness::Incomplete;
+    }
+    ContinuityContextCompleteness::Complete
+}
+
+fn normalize_continuity_reference_value(value: &str) -> ModelMeshResult<String> {
+    let normalized = normalize_bounded(
+        value,
+        "continuity reference exact identity",
+        MAX_CONTINUITY_REFERENCE_VALUE_BYTES,
+    )?;
+    let lower = normalized.to_ascii_lowercase();
+    if [
+        "api_key",
+        "apikey",
+        "authorization",
+        "bearer ",
+        "credential",
+        "password",
+        "secret",
+        "token",
+        "provider-private",
+        "provider_private",
+        "persuasion",
+        "confidence",
+        "winner",
+        "recommendation",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+    {
+        return Err("continuity references must contain exact structured identity, not secret/private/persuasive prose".into());
+    }
+    Ok(normalized)
 }
 
 pub(crate) fn model_mesh_authority_json_matches_digest(
