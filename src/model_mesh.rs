@@ -1420,6 +1420,54 @@ pub(crate) enum ContinuityContextCompleteness {
     MaterialLoss,
 }
 
+impl ContinuityContextCompleteness {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Complete => "COMPLETE",
+            Self::Incomplete => "INCOMPLETE",
+            Self::Redacted => "REDACTED",
+            Self::Omitted => "OMITTED",
+            Self::Unavailable => "UNAVAILABLE",
+            Self::MaterialLoss => "MATERIAL_LOSS",
+        }
+    }
+
+    pub(crate) fn from_db(value: &str) -> Option<Self> {
+        match value {
+            "COMPLETE" => Some(Self::Complete),
+            "INCOMPLETE" => Some(Self::Incomplete),
+            "REDACTED" => Some(Self::Redacted),
+            "OMITTED" => Some(Self::Omitted),
+            "UNAVAILABLE" => Some(Self::Unavailable),
+            "MATERIAL_LOSS" => Some(Self::MaterialLoss),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ContinuityAuthorityClaim {
+    Required,
+    NoAuthorityClaim,
+}
+
+impl ContinuityAuthorityClaim {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Required => "REQUIRED",
+            Self::NoAuthorityClaim => "NO_AUTHORITY_CLAIM",
+        }
+    }
+
+    pub(crate) fn from_db(value: &str) -> Option<Self> {
+        match value {
+            "REQUIRED" => Some(Self::Required),
+            "NO_AUTHORITY_CLAIM" => Some(Self::NoAuthorityClaim),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub(crate) enum ContinuityMaterialState {
@@ -1780,6 +1828,63 @@ impl ModelMeshContinuityContextV1 {
 
     pub(crate) fn markers(&self) -> &[ModelMeshContinuityMarkerV1] {
         &self.markers
+    }
+
+    pub(crate) fn target_request_id(&self) -> &str {
+        &self.target_request_id
+    }
+
+    pub(crate) fn target_descriptor_digest(&self) -> &str {
+        &self.target_descriptor_digest
+    }
+
+    pub(crate) fn workflow_run_id(&self) -> &str {
+        &self.workflow_run_id
+    }
+
+    pub(crate) fn stage_run_id(&self) -> &str {
+        &self.stage_run_id
+    }
+
+    pub(crate) fn source_actor_binding_id(&self) -> Option<&str> {
+        self.source_actor_binding_id.as_deref()
+    }
+
+    pub(crate) fn destination_actor_binding_id(&self) -> Option<&str> {
+        self.destination_actor_binding_id.as_deref()
+    }
+
+    pub(crate) fn current_authority(&self) -> CurrentAuthorityTruth {
+        match self.current_authority.as_str() {
+            "ALLOWED" => CurrentAuthorityTruth::Allowed,
+            "DENIED" => CurrentAuthorityTruth::Denied,
+            _ => unreachable!("continuity context is constructed from a closed authority enum"),
+        }
+    }
+
+    pub(crate) fn permission_descriptor(
+        &self,
+        target: &ModelMeshTargetDescriptorV1,
+    ) -> ModelMeshResult<ModelMeshContinuityPermissionDescriptorV1> {
+        if self.workspace_id != target.workspace_id()
+            || self.workstream_id != target.workstream_id()
+            || self.workflow_run_id != target.workflow_run_id()
+            || self.stage_run_id != target.stage_run_id()
+            || self.target_descriptor_digest != target.digest()?
+        {
+            return Err("continuity context does not match exact target descriptor scope".into());
+        }
+        let continuity_class = ContinuityClass::from_db(&self.continuity_class)
+            .ok_or_else(|| "continuity context contains an unknown continuity class".to_owned())?;
+        ModelMeshContinuityPermissionDescriptorV1::new(
+            &self.workflow_run_id,
+            &self.stage_run_id,
+            self.source_actor_binding_id.as_deref(),
+            self.destination_actor_binding_id.as_deref(),
+            continuity_class,
+            &self.target_descriptor_digest,
+            ContextDigest::exact(&self.digest()?)?,
+        )
     }
 }
 
