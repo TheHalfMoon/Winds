@@ -114,7 +114,7 @@ Selected migration objects are exactly:
 
 From canonical Tasks merge `6ac57311e17b52c014a6ee14d99ec60968736230` through T125 merge `d6de382082d79bc939733588749986d6ca8a2fe6`, Spec 009 changed one migration and no `Cargo.toml`, `Cargo.lock`, or `.github/workflows` file. Existing `winds.db`/rusqlite remains the selected durable store. No second database, ORM, queue, event-sourcing framework, provider SDK/API, billing/pricing database, telemetry service, provider gateway, policy engine, daemon/server/socket/IPC, remote/browser runtime, MCP/ACP/A2A expansion, semantic/vector/RAG subsystem, learning/training/RL system, or automatic Git action was added.
 
-The amendment-authorized `src/execution.rs` change is test-only and reconciles an inherited terminal fixture; it does not change production terminal behavior.
+The Amendment-002-authorized `src/t060_fault_tests.rs` change is test-only and reconciles an inherited terminal fixture; it does not change production terminal behavior.
 
 ## 6. Platform, runtime, provider, and live-execution truth boundary
 
