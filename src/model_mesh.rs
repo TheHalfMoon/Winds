@@ -26,6 +26,7 @@ const MAX_CONTINUITY_REFERENCES_PER_KIND: usize = 32;
 const MAX_CONTINUITY_MARKERS: usize = 32;
 const MAX_CONTINUITY_CONTEXT_BYTES: usize = 128 * 1024;
 const PROVIDER_PRIVATE_CONTEXT_MARKER_ID: &str = "provider-private-state";
+const RECONSTRUCTION_CONTEXT_MARKER_PREFIX: &str = "reconstruction:";
 
 pub(crate) type ModelMeshResult<T> = std::result::Result<T, String>;
 
@@ -266,6 +267,7 @@ pub(crate) struct ModelMeshActorScope {
     stage_run_id: String,
     actor_binding_id: String,
     winds_session_id: String,
+    runtime_binding_id: Option<String>,
     bound_runtime: Option<RuntimeKind>,
 }
 
@@ -317,15 +319,16 @@ pub(crate) fn adapt_actor_scope(
     if session.workstream_id != workflow.workstream_id {
         return Err("Model Mesh Winds session does not belong to the workflow workstream".into());
     }
-    let bound_runtime = match (actor.runtime_binding_id.as_deref(), runtime_binding) {
-        (Some(expected), Some(binding))
-            if expected == binding.binding_id && binding.session_id == session.session_id =>
-        {
-            Some(binding.runtime)
-        }
-        (None, None) => None,
-        _ => return Err("Model Mesh actor runtime binding context is inconsistent".into()),
-    };
+    let (runtime_binding_id, bound_runtime) =
+        match (actor.runtime_binding_id.as_deref(), runtime_binding) {
+            (Some(expected), Some(binding))
+                if expected == binding.binding_id && binding.session_id == session.session_id =>
+            {
+                (Some(binding.binding_id.clone()), Some(binding.runtime))
+            }
+            (None, None) => (None, None),
+            _ => return Err("Model Mesh actor runtime binding context is inconsistent".into()),
+        };
 
     Ok(ModelMeshActorScope {
         workspace_id: normalize_scope(&workflow.workspace_id, "workspace id")?,
@@ -334,6 +337,7 @@ pub(crate) fn adapt_actor_scope(
         stage_run_id: normalize_scope(&stage.stage_run_id, "stage run id")?,
         actor_binding_id: normalize_scope(&actor.binding_id, "actor binding id")?,
         winds_session_id: normalize_scope(&session.session_id, "Winds session id")?,
+        runtime_binding_id,
         bound_runtime,
     })
 }
@@ -1462,10 +1466,13 @@ impl ModelMeshContinuityMarkerV1 {
             "continuity marker id",
             MAX_CONTINUITY_REFERENCE_ID_BYTES,
         )?;
-        if item_id.eq_ignore_ascii_case(PROVIDER_PRIVATE_CONTEXT_MARKER_ID) {
+        if item_id.eq_ignore_ascii_case(PROVIDER_PRIVATE_CONTEXT_MARKER_ID)
+            || item_id
+                .to_ascii_lowercase()
+                .starts_with(RECONSTRUCTION_CONTEXT_MARKER_PREFIX)
+        {
             return Err(
-                "provider-private continuity boundary is Winds-owned and cannot be overridden"
-                    .into(),
+                "Winds-owned continuity material markers cannot be overridden by callers".into(),
             );
         }
         Ok(Self {
@@ -1476,12 +1483,79 @@ impl ModelMeshContinuityMarkerV1 {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ModelMeshContinuityActorV1 {
+    workspace_id: String,
+    workstream_id: String,
+    workflow_run_id: String,
+    stage_run_id: String,
+    actor_binding_id: String,
+    winds_session_id: String,
+    runtime_binding_id: String,
+    runtime: RuntimeKind,
+    native_session_id: Option<String>,
+    ownership: RuntimeBindingOwnership,
+}
+
+impl ModelMeshContinuityActorV1 {
+    pub(crate) fn from_actor_scope(
+        scope: &ModelMeshActorScope,
+        runtime_binding: &RuntimeSessionBinding,
+    ) -> ModelMeshResult<Self> {
+        if scope.runtime_binding_id.as_deref() != Some(runtime_binding.binding_id.as_str())
+            || scope.bound_runtime != Some(runtime_binding.runtime)
+            || scope.winds_session_id != runtime_binding.session_id
+        {
+            return Err(
+                "Model Mesh continuity actor does not match its canonical runtime binding".into(),
+            );
+        }
+        Ok(Self {
+            workspace_id: scope.workspace_id.clone(),
+            workstream_id: scope.workstream_id.clone(),
+            workflow_run_id: scope.workflow_run_id.clone(),
+            stage_run_id: scope.stage_run_id.clone(),
+            actor_binding_id: scope.actor_binding_id.clone(),
+            winds_session_id: scope.winds_session_id.clone(),
+            runtime_binding_id: runtime_binding.binding_id.clone(),
+            runtime: runtime_binding.runtime,
+            native_session_id: runtime_binding.native_session_id.clone(),
+            ownership: runtime_binding.ownership,
+        })
+    }
+
+    fn validate_work_scope(&self, target: &ModelMeshTargetDescriptorV1) -> ModelMeshResult<()> {
+        if self.workspace_id != target.workspace_id()
+            || self.workstream_id != target.workstream_id()
+            || self.workflow_run_id != target.workflow_run_id()
+        {
+            return Err(
+                "continuity actor does not belong to the target canonical work scope".into(),
+            );
+        }
+        Ok(())
+    }
+
+    fn validate_destination(&self, target: &ModelMeshTargetDescriptorV1) -> ModelMeshResult<()> {
+        self.validate_work_scope(target)?;
+        if self.stage_run_id != target.stage_run_id()
+            || self.actor_binding_id != target.actor_binding_id()
+            || self.winds_session_id != target.winds_session_id()
+            || self.runtime != target.runtime()
+        {
+            return Err(
+                "continuity destination does not match the exact target actor/stage/session/runtime"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+}
+
 pub(crate) struct ModelMeshContinuityClassifierInput<'a> {
     pub(crate) target: &'a ModelMeshTargetDescriptorV1,
-    pub(crate) source_actor_binding_id: Option<&'a str>,
-    pub(crate) destination_actor_binding_id: Option<&'a str>,
-    pub(crate) source_runtime_binding: Option<&'a RuntimeSessionBinding>,
-    pub(crate) destination_runtime_binding: Option<&'a RuntimeSessionBinding>,
+    pub(crate) source_actor: Option<&'a ModelMeshContinuityActorV1>,
+    pub(crate) destination_actor: Option<&'a ModelMeshContinuityActorV1>,
     pub(crate) destination_continuation: WorkflowContinuationClass,
     pub(crate) reconstruction_report: Option<&'a ReconstructionReport>,
 }
@@ -1489,47 +1563,25 @@ pub(crate) struct ModelMeshContinuityClassifierInput<'a> {
 pub(crate) fn classify_model_mesh_continuity(
     input: &ModelMeshContinuityClassifierInput<'_>,
 ) -> ModelMeshResult<ContinuityClass> {
-    if let (Some(destination_actor), Some(destination_runtime)) = (
-        input.destination_actor_binding_id,
-        input.destination_runtime_binding,
-    ) {
-        let destination_actor = normalize_scope(destination_actor, "destination actor binding id")?;
-        if destination_actor != input.target.actor_binding_id()
-            || destination_runtime.session_id != input.target.winds_session_id()
-            || destination_runtime.runtime != input.target.runtime()
-        {
-            return Err(
-                "continuity destination does not match the exact target actor/session/runtime"
-                    .into(),
-            );
-        }
+    if let Some(destination) = input.destination_actor {
+        destination.validate_destination(input.target)?;
+    }
+    if let Some(source) = input.source_actor {
+        source.validate_work_scope(input.target)?;
     }
     if input
-        .source_runtime_binding
-        .is_some_and(|binding| binding.ownership == RuntimeBindingOwnership::OwnershipLost)
+        .source_actor
+        .is_some_and(|actor| actor.ownership == RuntimeBindingOwnership::OwnershipLost)
         || input
-            .destination_runtime_binding
-            .is_some_and(|binding| binding.ownership == RuntimeBindingOwnership::OwnershipLost)
+            .destination_actor
+            .is_some_and(|actor| actor.ownership == RuntimeBindingOwnership::OwnershipLost)
         || input.destination_continuation == WorkflowContinuationClass::OwnershipLost
     {
         return Ok(ContinuityClass::OwnershipLost);
     }
-    let (
-        Some(source_actor),
-        Some(destination_actor),
-        Some(source_runtime),
-        Some(destination_runtime),
-    ) = (
-        input.source_actor_binding_id,
-        input.destination_actor_binding_id,
-        input.source_runtime_binding,
-        input.destination_runtime_binding,
-    )
-    else {
+    let (Some(source), Some(destination)) = (input.source_actor, input.destination_actor) else {
         return Ok(ContinuityClass::Unavailable);
     };
-    let source_actor = normalize_scope(source_actor, "source actor binding id")?;
-    let destination_actor = normalize_scope(destination_actor, "destination actor binding id")?;
     if input.destination_continuation == WorkflowContinuationClass::Reconstructed
         && input.reconstruction_report.is_none()
     {
@@ -1540,17 +1592,17 @@ pub(crate) fn classify_model_mesh_continuity(
     if let Some(report) = input.reconstruction_report {
         validate_continuity_reconstruction(
             report,
-            &destination_actor,
+            &destination.actor_binding_id,
             input.target.stage_run_id(),
         )?;
     }
-    if source_runtime.runtime != destination_runtime.runtime {
-        if source_actor == destination_actor {
+    if source.runtime != destination.runtime {
+        if source.actor_binding_id == destination.actor_binding_id {
             return Err("cross-runtime continuity cannot reuse one canonical actor binding".into());
         }
         return Ok(ContinuityClass::Handoff);
     }
-    if source_actor != destination_actor {
+    if source.actor_binding_id != destination.actor_binding_id {
         return Ok(ContinuityClass::Reassigned);
     }
     if input.reconstruction_report.is_some()
@@ -1649,10 +1701,8 @@ pub(crate) struct ModelMeshContinuityContextInput<'a> {
     pub(crate) target_request_id: &'a str,
     pub(crate) target: &'a ModelMeshTargetDescriptorV1,
     pub(crate) continuity_class: ContinuityClass,
-    pub(crate) source_actor_binding_id: Option<&'a str>,
-    pub(crate) destination_actor_binding_id: Option<&'a str>,
-    pub(crate) source_runtime_binding: Option<&'a RuntimeSessionBinding>,
-    pub(crate) destination_runtime_binding: Option<&'a RuntimeSessionBinding>,
+    pub(crate) source_actor: Option<&'a ModelMeshContinuityActorV1>,
+    pub(crate) destination_actor: Option<&'a ModelMeshContinuityActorV1>,
     pub(crate) candidate_references: &'a [ModelMeshContinuityReferenceV1],
     pub(crate) artifact_references: &'a [ModelMeshContinuityReferenceV1],
     pub(crate) evidence_references: &'a [ModelMeshContinuityReferenceV1],
@@ -1674,6 +1724,8 @@ pub(crate) struct ModelMeshContinuityContextV1 {
     continuity_class: String,
     source_actor_binding_id: Option<String>,
     destination_actor_binding_id: Option<String>,
+    source_stage_run_id: Option<String>,
+    destination_stage_run_id: Option<String>,
     source_runtime_binding_id: Option<String>,
     destination_runtime_binding_id: Option<String>,
     source_winds_session_id: Option<String>,
@@ -1746,31 +1798,13 @@ pub(crate) fn build_model_mesh_continuity_context(
         &target_digest,
     )?;
     let target_request_id = normalize_scope(input.target_request_id, "target request id")?;
-    let source_actor_binding_id = input
-        .source_actor_binding_id
-        .map(|value| normalize_scope(value, "source actor binding id"))
-        .transpose()?;
-    let destination_actor_binding_id = input
-        .destination_actor_binding_id
-        .map(|value| normalize_scope(value, "destination actor binding id"))
-        .transpose()?;
-    if let Some(destination) = destination_actor_binding_id.as_deref()
-        && destination != input.target.actor_binding_id()
-    {
-        return Err("continuity context destination actor does not match exact target".into());
+    if let Some(destination) = input.destination_actor {
+        destination.validate_destination(input.target)?;
     }
-    if let Some(destination_runtime) = input.destination_runtime_binding
-        && (destination_runtime.runtime != input.target.runtime()
-            || destination_runtime.session_id != input.target.winds_session_id())
-    {
-        return Err(
-            "continuity context destination runtime binding does not match exact target".into(),
-        );
+    if let Some(source) = input.source_actor {
+        source.validate_work_scope(input.target)?;
     }
-    match (
-        input.source_runtime_binding,
-        input.destination_runtime_binding,
-    ) {
+    match (input.source_actor, input.destination_actor) {
         (Some(source), Some(destination)) if source.runtime != destination.runtime => {
             if input.continuity_class != ContinuityClass::Handoff {
                 return Err(
@@ -1787,56 +1821,50 @@ pub(crate) fn build_model_mesh_continuity_context(
         _ => {}
     }
     if input.continuity_class != ContinuityClass::Unavailable
-        && (input.source_runtime_binding.is_none() || input.destination_runtime_binding.is_none())
+        && (input.source_actor.is_none() || input.destination_actor.is_none())
     {
         return Err(
-            "applicable continuity context requires exact source/destination runtime provenance"
+            "applicable continuity context requires exact source/destination actor and runtime provenance"
                 .into(),
         );
     }
-    if matches!(
-        input.continuity_class,
-        ContinuityClass::Handoff | ContinuityClass::Reassigned
-    ) && (source_actor_binding_id.is_none() || destination_actor_binding_id.is_none())
-    {
-        return Err(
-            "handoff/reassignment continuity requires exact source/destination actors".into(),
-        );
-    }
     if input.continuity_class == ContinuityClass::Reconstructed
-        && (destination_actor_binding_id.is_none() || input.reconstruction_report.is_none())
+        && (input.destination_actor.is_none() || input.reconstruction_report.is_none())
     {
         return Err(
             "reconstructed continuity requires its exact destination actor and reconstruction report"
                 .into(),
         );
     }
-    if input.continuity_class == ContinuityClass::Handoff
-        && source_actor_binding_id == destination_actor_binding_id
-    {
-        return Err("cross-runtime HANDOFF cannot reuse one canonical actor binding".into());
-    }
-    if input.continuity_class == ContinuityClass::Reassigned
-        && source_actor_binding_id == destination_actor_binding_id
-    {
+    if matches!(
+        (input.continuity_class, input.source_actor, input.destination_actor),
+        (
+            ContinuityClass::Handoff | ContinuityClass::Reassigned,
+            Some(source),
+            Some(destination)
+        ) if source.actor_binding_id == destination.actor_binding_id
+    ) {
         return Err(
-            "REASSIGNED continuity requires different source/destination actor bindings".into(),
+            "handoff/reassignment continuity requires different canonical actor bindings".into(),
         );
     }
-    let (reconstruction_report_digest, reconstruction_summary) = match input.reconstruction_report {
-        Some(report) => {
-            let destination = destination_actor_binding_id
-                .as_deref()
-                .unwrap_or(input.target.actor_binding_id());
-            let (digest, summary) = validate_continuity_reconstruction(
-                report,
-                destination,
-                input.target.stage_run_id(),
-            )?;
-            (Some(digest), summary)
-        }
-        None => (None, Vec::new()),
-    };
+    let (reconstruction_report_digest, reconstruction_summary, reconstruction_markers) =
+        match input.reconstruction_report {
+            Some(report) => {
+                let destination = input
+                    .destination_actor
+                    .map(|actor| actor.actor_binding_id.as_str())
+                    .unwrap_or(input.target.actor_binding_id());
+                let (digest, summary) = validate_continuity_reconstruction(
+                    report,
+                    destination,
+                    input.target.stage_run_id(),
+                )?;
+                let markers = reconstruction_material_markers(report);
+                (Some(digest), summary, markers)
+            }
+            None => (None, Vec::new(), Vec::new()),
+        };
     let candidate_references = canonicalize_continuity_references(
         input.candidate_references,
         "candidate continuity references",
@@ -1850,12 +1878,23 @@ pub(crate) fn build_model_mesh_continuity_context(
         "evidence continuity references",
     )?;
     let mut markers = canonicalize_continuity_markers(input.markers)?;
+    markers.extend(reconstruction_markers);
     markers.push(ModelMeshContinuityMarkerV1 {
         item_id: PROVIDER_PRIVATE_CONTEXT_MARKER_ID.to_owned(),
         state: ContinuityMaterialState::Unavailable,
         required: false,
     });
+    if markers.len() > MAX_CONTINUITY_MARKERS {
+        return Err("continuity markers exceed the bounded item limit".into());
+    }
     markers.sort();
+    for pair in markers.windows(2) {
+        if pair[0].item_id == pair[1].item_id {
+            return Err(
+                "continuity context contains duplicate/conflicting material markers".into(),
+            );
+        }
+    }
     let completeness = continuity_context_completeness(
         &candidate_references,
         &artifact_references,
@@ -1871,32 +1910,40 @@ pub(crate) fn build_model_mesh_continuity_context(
         target_request_id,
         target_descriptor_digest: target_digest,
         continuity_class: input.continuity_class.as_str().to_owned(),
-        source_actor_binding_id,
-        destination_actor_binding_id,
+        source_actor_binding_id: input
+            .source_actor
+            .map(|actor| actor.actor_binding_id.clone()),
+        destination_actor_binding_id: input
+            .destination_actor
+            .map(|actor| actor.actor_binding_id.clone()),
+        source_stage_run_id: input.source_actor.map(|actor| actor.stage_run_id.clone()),
+        destination_stage_run_id: input
+            .destination_actor
+            .map(|actor| actor.stage_run_id.clone()),
         source_runtime_binding_id: input
-            .source_runtime_binding
-            .map(|binding| binding.binding_id.clone()),
+            .source_actor
+            .map(|actor| actor.runtime_binding_id.clone()),
         destination_runtime_binding_id: input
-            .destination_runtime_binding
-            .map(|binding| binding.binding_id.clone()),
+            .destination_actor
+            .map(|actor| actor.runtime_binding_id.clone()),
         source_winds_session_id: input
-            .source_runtime_binding
-            .map(|binding| binding.session_id.clone()),
+            .source_actor
+            .map(|actor| actor.winds_session_id.clone()),
         destination_winds_session_id: input
-            .destination_runtime_binding
-            .map(|binding| binding.session_id.clone()),
+            .destination_actor
+            .map(|actor| actor.winds_session_id.clone()),
         source_native_session_id: input
-            .source_runtime_binding
-            .and_then(|binding| binding.native_session_id.clone()),
+            .source_actor
+            .and_then(|actor| actor.native_session_id.clone()),
         destination_native_session_id: input
-            .destination_runtime_binding
-            .and_then(|binding| binding.native_session_id.clone()),
+            .destination_actor
+            .and_then(|actor| actor.native_session_id.clone()),
         source_runtime: input
-            .source_runtime_binding
-            .map(|binding| binding.runtime.as_str().to_owned()),
+            .source_actor
+            .map(|actor| actor.runtime.as_str().to_owned()),
         destination_runtime: input
-            .destination_runtime_binding
-            .map(|binding| binding.runtime.as_str().to_owned()),
+            .destination_actor
+            .map(|actor| actor.runtime.as_str().to_owned()),
         candidate_references,
         artifact_references,
         evidence_references,
@@ -1913,6 +1960,45 @@ pub(crate) fn build_model_mesh_continuity_context(
     };
     context.canonical_json()?;
     Ok(context)
+}
+
+fn reconstruction_material_markers(
+    report: &ReconstructionReport,
+) -> Vec<ModelMeshContinuityMarkerV1> {
+    let mut markers = report
+        .items
+        .iter()
+        .filter(|item| item.category != ReconstructionCategory::ProviderPrivateState)
+        .filter_map(|item| {
+            let state = match (item.transfer_state, item.content_state) {
+                (ReconstructionTransferState::NoLongerTransferable, _) => {
+                    Some(ContinuityMaterialState::MaterialLoss)
+                }
+                (_, ReconstructionContentState::Redacted) => {
+                    Some(ContinuityMaterialState::Redacted)
+                }
+                (ReconstructionTransferState::Omitted, _)
+                | (_, ReconstructionContentState::Omitted) => {
+                    Some(ContinuityMaterialState::Omitted)
+                }
+                (ReconstructionTransferState::Unavailable, _)
+                | (_, ReconstructionContentState::Unavailable) => {
+                    Some(ContinuityMaterialState::Unavailable)
+                }
+                _ => None,
+            }?;
+            Some(ModelMeshContinuityMarkerV1 {
+                item_id: format!(
+                    "{RECONSTRUCTION_CONTEXT_MARKER_PREFIX}{}",
+                    reconstruction_category_name(item.category).to_ascii_lowercase()
+                ),
+                state,
+                required: true,
+            })
+        })
+        .collect::<Vec<_>>();
+    markers.sort();
+    markers
 }
 
 fn validate_selection_approval_for_context(
