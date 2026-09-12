@@ -557,6 +557,8 @@ fn t120_continuity_projection_preserves_actor_session_runtime_native_and_identit
         human_accepted: ModelMeshProjectionTruth::No,
         landed: ModelMeshProjectionTruth::No,
     });
+    assert_eq!(projection.workspace_id, "workspace-1");
+    assert_eq!(projection.workstream_id, "workstream-1");
     assert_eq!(projection.continuity_class, "HANDOFF");
     assert_eq!(
         projection.source_actor_binding_id.as_deref(),
@@ -618,6 +620,8 @@ fn t120_reviewer_projection_is_freshness_sensitive_and_contains_no_winner_or_per
         landed: ModelMeshProjectionTruth::No,
     });
     let reviewer = project_reviewer_continuity(&continuity);
+    assert_eq!(reviewer.workspace_id, "workspace-1");
+    assert_eq!(reviewer.workstream_id, "workstream-1");
     assert!(!reviewer.reviewer_context_fresh);
     let json = serde_json::to_string(&reviewer).unwrap();
     assert!(!json.to_ascii_lowercase().contains("winner"));

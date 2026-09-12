@@ -1834,6 +1834,14 @@ impl ModelMeshContinuityContextV1 {
         &self.markers
     }
 
+    pub(crate) fn workspace_id(&self) -> &str {
+        &self.workspace_id
+    }
+
+    pub(crate) fn workstream_id(&self) -> &str {
+        &self.workstream_id
+    }
+
     pub(crate) fn target_request_id(&self) -> &str {
         &self.target_request_id
     }
@@ -2503,6 +2511,8 @@ pub(crate) fn project_model_mesh_target(
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct ModelMeshContinuityProjection {
+    pub(crate) workspace_id: String,
+    pub(crate) workstream_id: String,
     pub(crate) target_request_id: String,
     pub(crate) target_descriptor_digest: String,
     pub(crate) workflow_run_id: String,
@@ -2547,6 +2557,8 @@ pub(crate) fn project_model_mesh_continuity(
     input: &ModelMeshContinuityProjectionInput<'_>,
 ) -> ModelMeshContinuityProjection {
     ModelMeshContinuityProjection {
+        workspace_id: input.context.workspace_id().to_owned(),
+        workstream_id: input.context.workstream_id().to_owned(),
         target_request_id: input.context.target_request_id().to_owned(),
         target_descriptor_digest: input.context.target_descriptor_digest().to_owned(),
         workflow_run_id: input.context.workflow_run_id().to_owned(),
@@ -2689,6 +2701,8 @@ pub(crate) fn project_model_mesh_why_blocked(
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct ReviewerContinuityProjection {
+    pub(crate) workspace_id: String,
+    pub(crate) workstream_id: String,
     pub(crate) target_request_id: String,
     pub(crate) target_descriptor_digest: String,
     pub(crate) workflow_run_id: String,
@@ -2714,6 +2728,8 @@ pub(crate) fn project_reviewer_continuity(
     .into_iter()
     .all(|value| value == DriftApplicability::Applicable);
     ReviewerContinuityProjection {
+        workspace_id: continuity.workspace_id.clone(),
+        workstream_id: continuity.workstream_id.clone(),
         target_request_id: continuity.target_request_id.clone(),
         target_descriptor_digest: continuity.target_descriptor_digest.clone(),
         workflow_run_id: continuity.workflow_run_id.clone(),
