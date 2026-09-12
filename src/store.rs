@@ -892,6 +892,51 @@ impl Store {
         load_model_mesh_target_request_connection(&self.connection, target_request_id)
     }
 
+    pub(crate) fn list_model_mesh_target_requests_for_stage(
+        &self,
+        stage_run_id: &str,
+    ) -> Result<Vec<StoredModelMeshTargetRequest>> {
+        self.validate_model_mesh_schema()?;
+        validate_agentic_identity_text(stage_run_id, "Model Mesh stage run id")?;
+        self.load_stage_run(stage_run_id)?;
+        let mut statement = self.connection.prepare(
+            "SELECT target_request_id FROM model_mesh_target_requests
+             WHERE stage_run_id = ?1 ORDER BY created_unix_ms, target_request_id",
+        )?;
+        let ids = statement
+            .query_map(params![stage_run_id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(statement);
+        ids.iter()
+            .map(|id| load_model_mesh_target_request_connection(&self.connection, id))
+            .collect()
+    }
+
+    pub(crate) fn list_model_mesh_identity_claims_for_target_request(
+        &self,
+        target_request_id: &str,
+    ) -> Result<Vec<StoredModelMeshIdentityClaim>> {
+        self.validate_model_mesh_schema()?;
+        validate_agentic_identity_text(target_request_id, "Model Mesh target request id")?;
+        let request =
+            load_model_mesh_target_request_connection(&self.connection, target_request_id)?;
+        let actor_binding_id = request.request.descriptor().actor_binding_id();
+        let mut statement = self.connection.prepare(
+            "SELECT identity_claim_id FROM model_mesh_identity_claims
+             WHERE target_request_id = ?1 OR actor_binding_id = ?2
+             ORDER BY observed_unix_ms, identity_claim_id",
+        )?;
+        let ids = statement
+            .query_map(params![target_request_id, actor_binding_id], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(statement);
+        ids.iter()
+            .map(|id| load_model_mesh_identity_claim_connection(&self.connection, id))
+            .collect()
+    }
+
     pub(crate) fn create_model_mesh_target_request(
         &mut self,
         new_request: NewModelMeshTargetRequest<'_>,
