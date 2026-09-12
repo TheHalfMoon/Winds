@@ -36,6 +36,7 @@ mod git;
     reason = "Spec 009 T114 pure Model Mesh domain; product adapters land in later tasks"
 )]
 mod model_mesh;
+mod model_mesh_cli;
 mod store;
 #[cfg(test)]
 mod t068_store_regression_tests;
@@ -71,6 +72,8 @@ mod t118_model_mesh_continuity_tests;
 mod t119_model_mesh_event_tests;
 #[cfg(test)]
 mod t120_model_mesh_projection_tests;
+#[cfg(test)]
+mod t121_model_mesh_cli_tests;
 mod workbench;
 mod workflow_cli;
 
@@ -119,6 +122,7 @@ fn run() -> Result<()> {
         "workspace-open" | "workspace-clone" | "profiles" | "run" | "terminal-proof"
         | "execution" => cli_workspace::dispatch(command.as_str(), flags),
         "workflow" => workflow_cli::dispatch(flags),
+        model_mesh_cli::MODEL_MESH_COMMAND => model_mesh_cli::dispatch(flags),
         _ => Err(usage().into()),
     }
 }
@@ -479,5 +483,5 @@ fn unix_ms() -> Result<i64> {
 }
 
 fn usage() -> &'static str {
-    "usage:\n  winds verify --repo PATH --base REF --candidate REF --check COMMAND [--timeout-secs N] [--home PATH]\n  winds promote --repo PATH --run RUN_ID [--home PATH]\n  winds recover --repo PATH [--home PATH]\n  winds workspace-open --repo PATH [--home PATH]\n  winds workspace-clone --remote REMOTE --destination ABS_PATH [--home PATH]\n  winds profiles --repo PATH [--home PATH]\n  winds run --repo PATH --execution-id ID --executable ABS_PATH [--args-json JSON_ARRAY] [--history command|disabled] [--home PATH]\n  winds terminal-proof --repo PATH --execution-id ID --profile-id PROFILE_ID [--rows N] [--cols N] [--home PATH]\n  winds execution --repo PATH --execution-id ID [--home PATH]\n  winds workflow --action ACTION --home ABS_PATH --workspace-id ID --workstream-id ID --workflow-id ID [workflow flags]\n  winds workbench [--repo PATH]"
+    "usage:\n  winds verify --repo PATH --base REF --candidate REF --check COMMAND [--timeout-secs N] [--home PATH]\n  winds promote --repo PATH --run RUN_ID [--home PATH]\n  winds recover --repo PATH [--home PATH]\n  winds workspace-open --repo PATH [--home PATH]\n  winds workspace-clone --remote REMOTE --destination ABS_PATH [--home PATH]\n  winds profiles --repo PATH [--home PATH]\n  winds run --repo PATH --execution-id ID --executable ABS_PATH [--args-json JSON_ARRAY] [--history command|disabled] [--home PATH]\n  winds terminal-proof --repo PATH --execution-id ID --profile-id PROFILE_ID [--rows N] [--cols N] [--home PATH]\n  winds execution --repo PATH --execution-id ID [--home PATH]\n  winds workflow --action ACTION --home ABS_PATH --workspace-id ID --workstream-id ID --workflow-id ID [workflow flags]\n  winds model-mesh --action ACTION --home ABS_PATH [Model Mesh flags]\n  winds workbench [--repo PATH]"
 }
