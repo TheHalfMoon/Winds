@@ -14,13 +14,14 @@ use crate::{Result, ensure_allowed_flags, required, unix_ms};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 pub(crate) const MODEL_MESH_COMMAND: &str = "model-mesh";
 const MAX_CLI_ITEMS: usize = 256;
 const MAX_CLI_VALUE_BYTES: usize = 4096;
+const MAX_STAGE_LINEAGE_DEPTH: usize = 4096;
 
 #[derive(Debug)]
 struct ReadOnlyModelMeshStore {
@@ -537,37 +538,118 @@ impl ReadOnlyModelMeshStore {
         ))
     }
 
+    fn validated_target_stage_lineage(&self, target_request_id: &str) -> Result<BTreeSet<String>> {
+        let target_stage_id = self
+            .connection
+            .query_row(
+                "SELECT stage_run_id FROM model_mesh_target_requests WHERE target_request_id = ?1",
+                params![target_request_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .ok_or_else(|| format!("unknown Model Mesh target request: {target_request_id}"))?;
+        let mut lineage = BTreeSet::new();
+        let mut current_id = target_stage_id;
+        let mut expected_scope: Option<(String, String, u32)> = None;
+        loop {
+            if lineage.len() >= MAX_STAGE_LINEAGE_DEPTH {
+                return Err(format!(
+                    "Model Mesh target StageRun lineage exceeds bounded {MAX_STAGE_LINEAGE_DEPTH}-stage depth"
+                )
+                .into());
+            }
+            if !lineage.insert(current_id.clone()) {
+                return Err("Model Mesh target StageRun predecessor lineage is cyclic".into());
+            }
+            let row = self
+                .connection
+                .query_row(
+                    "SELECT workflow_run_id, stage_key, attempt_ordinal,
+                            predecessor_stage_run_id, relation_kind
+                     FROM workflow_stage_runs WHERE stage_run_id = ?1",
+                    params![current_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, String>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, i64>(2)?,
+                            row.get::<_, Option<String>>(3)?,
+                            row.get::<_, Option<String>>(4)?,
+                        ))
+                    },
+                )
+                .optional()?
+                .ok_or_else(|| {
+                    format!("Model Mesh target StageRun lineage is missing stage: {current_id}")
+                })?;
+            let attempt = u32::try_from(row.2)
+                .map_err(|_| "Model Mesh target StageRun attempt ordinal is invalid")?;
+            if attempt == 0 {
+                return Err("Model Mesh target StageRun attempt ordinal must be positive".into());
+            }
+            if let Some((workflow_run_id, stage_key, expected_attempt)) = &expected_scope
+                && (&row.0 != workflow_run_id
+                    || &row.1 != stage_key
+                    || attempt != *expected_attempt)
+            {
+                return Err(
+                    "Model Mesh target StageRun predecessor does not match canonical workflow/stage attempt ordering"
+                        .into(),
+                );
+            }
+            let valid_relation = row.4.as_deref().is_some_and(|value| {
+                matches!(
+                    value,
+                    "RETRY_OF" | "RECONSTRUCTION_OF" | "REASSIGNMENT_OF" | "RECOVERY_OF"
+                )
+            });
+            match row.3 {
+                None => {
+                    if attempt != 1 || row.4.is_some() {
+                        return Err(
+                            "Model Mesh target StageRun root does not form canonical attempt lineage"
+                                .into(),
+                        );
+                    }
+                    break;
+                }
+                Some(predecessor_id) => {
+                    if attempt <= 1 || !valid_relation {
+                        return Err(
+                            "Model Mesh target StageRun predecessor relation is not canonical"
+                                .into(),
+                        );
+                    }
+                    expected_scope = Some((row.0, row.1, attempt - 1));
+                    current_id = predecessor_id;
+                }
+            }
+        }
+        Ok(lineage)
+    }
+
     fn validate_actor_in_target_lineage(
         &self,
-        target_request_id: &str,
+        lineage: &BTreeSet<String>,
         actor_binding_id: Option<&str>,
         role: &str,
     ) -> Result<()> {
         let Some(actor_binding_id) = actor_binding_id else {
             return Ok(());
         };
-        let valid = self.connection.query_row(
-            "WITH RECURSIVE lineage(stage_run_id, predecessor_stage_run_id) AS (
-                SELECT stage.stage_run_id, stage.predecessor_stage_run_id
-                FROM model_mesh_target_requests request
-                JOIN workflow_stage_runs stage ON stage.stage_run_id = request.stage_run_id
-                WHERE request.target_request_id = ?1
-                UNION ALL
-                SELECT predecessor.stage_run_id, predecessor.predecessor_stage_run_id
-                FROM workflow_stage_runs predecessor
-                JOIN lineage current ON predecessor.stage_run_id = current.predecessor_stage_run_id
-             )
-             SELECT EXISTS(
-                SELECT 1
-                FROM workflow_actor_bindings actor
-                JOIN lineage ON lineage.stage_run_id = actor.stage_run_id
-                WHERE actor.binding_id = ?2
-                  AND actor.winds_session_id IS NOT NULL
-             )",
-            params![target_request_id, actor_binding_id],
-            |row| row.get::<_, i64>(0),
-        )? == 1;
-        if !valid {
+        let actor_stage = self
+            .connection
+            .query_row(
+                "SELECT stage_run_id FROM workflow_actor_bindings
+                 WHERE binding_id = ?1 AND winds_session_id IS NOT NULL",
+                params![actor_binding_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        if actor_stage
+            .as_ref()
+            .is_none_or(|stage| !lineage.contains(stage))
+        {
             return Err(format!(
                 "stored Model Mesh continuity {role} actor is outside canonical target StageRun lineage"
             )
@@ -613,8 +695,9 @@ impl ReadOnlyModelMeshStore {
         if row.10 < 0 {
             return Err("stored Model Mesh continuity event time must not be negative".into());
         }
-        self.validate_actor_in_target_lineage(&row.1, row.2.as_deref(), "source")?;
-        self.validate_actor_in_target_lineage(&row.1, row.3.as_deref(), "destination")?;
+        let lineage = self.validated_target_stage_lineage(&row.1)?;
+        self.validate_actor_in_target_lineage(&lineage, row.2.as_deref(), "source")?;
+        self.validate_actor_in_target_lineage(&lineage, row.3.as_deref(), "destination")?;
         let source_identity_claim_ids = self.association_ids(&row.0, "SOURCE")?;
         let destination_identity_claim_ids = self.association_ids(&row.0, "DESTINATION")?;
         self.validate_event_claims(row.2.as_deref(), &source_identity_claim_ids, "source")?;

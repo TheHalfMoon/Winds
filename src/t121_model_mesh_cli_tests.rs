@@ -4,7 +4,7 @@ use crate::agentic_runtime::{
     RuntimeDiscovery, RuntimeDiscoveryState, RuntimeExecutableIdentity, RuntimeKind,
     RuntimeResumeResolution, RuntimeVersionEvidence, RuntimeVersionState,
 };
-use crate::domain::workflow::{StageRunIdentity, WorkflowRunIdentity};
+use crate::domain::workflow::{StageAttemptRelation, StageRunIdentity, WorkflowRunIdentity};
 use crate::model_mesh::{
     ContinuityAuthorityClaim, ContinuityClass, CurrentAuthorityTruth, IdentityClaim,
     IdentityDimension, IdentitySourceClass, ModelMeshAuthorityEnvelopeV1,
@@ -627,6 +627,65 @@ fn t121_continuity_rejects_actor_outside_target_lineage_even_with_valid_schema()
         "{error}"
     );
     assert_eq!(home_snapshot(&home), before);
+    cleanup(home);
+}
+
+#[test]
+fn t121_continuity_and_reviewer_reject_cyclic_stage_lineage_without_mutation() {
+    let (home, mut store) = seeded_store("cyclic-lineage");
+    store
+        .create_stage_run(
+            &StageRunIdentity::new("stage-2", "workflow-1", "build", 2, Some("stage-1")).unwrap(),
+            Some(StageAttemptRelation::Reconstruction),
+            10,
+        )
+        .unwrap();
+    insert_request(&home, &store);
+    add_unproven_event(&mut store);
+    drop(store);
+
+    let connection = Connection::open(home.join("winds.db")).unwrap();
+    let identity_trigger_sql: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='trg_workflow_stage_runs_identity_update'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    connection
+        .execute_batch("DROP TRIGGER trg_workflow_stage_runs_identity_update;")
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE workflow_stage_runs
+             SET attempt_ordinal=3,
+                 predecessor_stage_run_id='stage-2',
+                 relation_kind='RECONSTRUCTION_OF'
+             WHERE stage_run_id='stage-1'",
+            [],
+        )
+        .unwrap();
+    connection.execute_batch(&identity_trigger_sql).unwrap();
+    drop(connection);
+
+    let before = home_snapshot(&home);
+    for action in ["continuity", "reviewer"] {
+        let mut input = target_only_flags(&home, action);
+        if action == "reviewer" {
+            input.insert("continuity-event-id".into(), "event-unproven-1".into());
+        }
+        let error = execute(input).unwrap_err().to_string();
+        assert!(
+            error.contains("canonical workflow/stage attempt ordering")
+                || error.contains("predecessor lineage is cyclic"),
+            "{action}: {error}"
+        );
+        assert_eq!(
+            home_snapshot(&home),
+            before,
+            "{action} mutated the corrupted lineage fixture"
+        );
+    }
     cleanup(home);
 }
 
