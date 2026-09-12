@@ -1295,31 +1295,33 @@ pub(crate) fn evaluate_model_mesh_drift(
     } else {
         evaluate_runtime_drift(input)
     };
-    let provider = if input.request.descriptor().provider() != input.current_descriptor.provider() {
-        DriftApplicability::Stale
-    } else {
-        match input.request.descriptor().provider() {
-            TargetDimension::Unspecified => DriftApplicability::NotApplicable,
-            TargetDimension::Exact(expected) => evaluate_exact_identity_dimension(
-                input.current_claims,
-                IdentityDimension::Provider,
-                expected.as_str(),
-                input.source_requirements.provider,
-            ),
+    let provider = match input.request.descriptor().provider() {
+        TargetDimension::Unspecified => DriftApplicability::NotApplicable,
+        TargetDimension::Exact(_)
+            if input.request.descriptor().provider() != input.current_descriptor.provider() =>
+        {
+            DriftApplicability::Stale
         }
+        TargetDimension::Exact(expected) => evaluate_exact_identity_dimension(
+            input.current_claims,
+            IdentityDimension::Provider,
+            expected.as_str(),
+            input.source_requirements.provider,
+        ),
     };
-    let model = if input.request.descriptor().model() != input.current_descriptor.model() {
-        DriftApplicability::Stale
-    } else {
-        match input.request.descriptor().model() {
-            TargetDimension::Unspecified => DriftApplicability::NotApplicable,
-            TargetDimension::Exact(expected) => evaluate_exact_identity_dimension(
-                input.current_claims,
-                IdentityDimension::Model,
-                expected.as_str(),
-                input.source_requirements.model,
-            ),
+    let model = match input.request.descriptor().model() {
+        TargetDimension::Unspecified => DriftApplicability::NotApplicable,
+        TargetDimension::Exact(_)
+            if input.request.descriptor().model() != input.current_descriptor.model() =>
+        {
+            DriftApplicability::Stale
         }
+        TargetDimension::Exact(expected) => evaluate_exact_identity_dimension(
+            input.current_claims,
+            IdentityDimension::Model,
+            expected.as_str(),
+            input.source_requirements.model,
+        ),
     };
     let native_session = evaluate_native_session_drift(input);
     let scope = evaluate_scope_drift(input.request.descriptor(), input.current_descriptor);

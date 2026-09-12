@@ -256,6 +256,43 @@ fn t117_unspecified_target_dimensions_ignore_unrelated_identity_movement() {
 }
 
 #[test]
+fn t117_unspecified_request_dimensions_ignore_exact_current_descriptor_dimensions() {
+    let discovery = runtime_discovery("t117-runtime-1", 'a');
+    let binding = runtime_binding(&discovery);
+    let requested = descriptor(
+        "stage-1",
+        "actor-binding-1",
+        "session-1",
+        "WORKER",
+        TargetDimension::Unspecified,
+        TargetDimension::Unspecified,
+    );
+    let current = exact_descriptor();
+    let request = TargetRequest::new(requested, TargetSelector::Human).unwrap();
+    let claims = vec![
+        winds_claim(IdentityDimension::Provider, "openai"),
+        winds_claim(IdentityDimension::Model, "model-a"),
+    ];
+    let evaluation = evaluate_model_mesh_drift(&ModelMeshDriftInput {
+        request: &request,
+        current_descriptor: &current,
+        current_claims: &claims,
+        source_requirements: SourceRequirements::winds_observed(),
+        historical_runtime_binding: Some(&binding),
+        current_runtime_binding: Some(&binding),
+        current_runtime_discovery: Some(&discovery),
+        require_native_session: false,
+        baseline_requirements: &[],
+        observed_baselines: &[],
+        approval: ApprovalApplicability::Exact,
+        current_authority: CurrentAuthorityTruth::Allowed,
+    });
+    assert_eq!(evaluation.provider, DriftApplicability::NotApplicable);
+    assert_eq!(evaluation.model, DriftApplicability::NotApplicable);
+    assert_eq!(evaluation.overall, DriftApplicability::Applicable);
+}
+
+#[test]
 fn t117_native_session_identity_never_upgrades_unproven_ownership() {
     let mut fixture = DriftFixture::exact();
     fixture.require_native_session = true;
