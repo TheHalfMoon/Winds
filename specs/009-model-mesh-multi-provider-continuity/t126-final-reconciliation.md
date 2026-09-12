@@ -2,9 +2,10 @@
 
 ## Status and closure rule
 
-- Canonical T126 base: `d6de382082d79bc939733588749986d6ca8a2fe6` (T125 guarded merge).
-- T114..T125 are already `CLOSED_CANONICAL` under the exact ledger below.
-- This T126 candidate is documentation/evidence only. It changes no production source, runtime behavior, dependency, lockfile, workflow, migration, schema, provider/runtime execution, credential path, Workbench behavior, or Git authority.
+- Initial T126 candidate base: `d6de382082d79bc939733588749986d6ca8a2fe6` (T125 guarded merge).
+- Final T126 qualification base after the required forward-only inherited-fixture repair: `61479d50e72775e6ee663838ded37abfccd907a8`.
+- T114..T125 are already `CLOSED_CANONICAL` under the exact ledger below. Spec 009 Tasks Amendment 002 and its bounded inherited T060 fixture repair are also `CLOSED_CANONICAL` before final T126 requalification.
+- Relative to the final canonical qualification base, this T126 candidate remains documentation/evidence only: `tasks.md` checked-state reconciliation plus this artifact. It changes no production source, runtime behavior, dependency, lockfile, workflow, migration, schema, provider/runtime execution, credential path, Workbench behavior, or Git authority.
 - T126 becomes `CLOSED_CANONICAL` only after this exact documentation candidate lands through guarded normal merge and every actually-triggered post-merge push check succeeds.
 - Exact T126 HEAD/TREE, candidate reviews, CI, merge identity, and post-merge checks remain in the PR/merge trail to avoid a self-referential candidate hash.
 
@@ -80,6 +81,22 @@ Independent T121 review also found and drove forward-only repairs for: read-only
 A local T123 full-suite run showed inherited T090 bounded terminal-cleanup failures; an untouched canonical-main control reproduced the same class. Neither run is represented as exact-head success. GitHub exact-head qualification is the successful T123 workflow set recorded above.
 
 T124 initial head `ab904c7b152c178060653f08077aa740e3902733` had a material evidence-integrity wording finding because inherited T123 platform runs were described as if they were exact-head T124 platform evidence. The final forward-only head `865662aaa22fb6f0854351b49119cbdc23d3989a` corrected that distinction and received a fresh no-material-finding review before landing.
+
+### T126 initial quality failure, Amendment 002, and bounded T060 repair
+
+The initial T126 documentation candidate `f3465500dfdb4a44855419843871e6bf2ebbe2fc`, tree `2daf07d5f1989f9c7a9745e49781d261e9a622ef`, preserved exact-head `quality` run `34709700248` attempt 1 as `FAILURE`. The macOS job succeeded. The Ubuntu job ran 624 tests and failed exactly one inherited fixture, `git::t060_fault_tests::input_and_resize_racing_with_exit_never_reopen_final_session`, with `617 passed; 1 failed; 6 ignored`. Production durably observed `ExecutionStatus::Exited`; the inherited success branch asserted `ExecutionStatus::Interrupted`. The failed run was not rerun, waived, or classified as a flake.
+
+Fresh independent review of that exact T126 head found no material defect in the reconciliation artifact or checked-state reconciliation and explicitly retained the failed `quality` gate as blocking acceptance.
+
+Spec 009 Tasks Amendment 002 then qualified independently on PR #185 from exact head `5fa13768ddd702a30a57faa1ab7a1e737a7e4b7e`, tree `a9a2ed2f7eb9e2cecc4b4e9771c0daec8b3f24e6`. Exact-head `quality` run `34710545884` succeeded on Ubuntu and macOS on attempt 1; independent review found no material finding; the amendment guarded-landed as `2a96d14177e9e5605785021f6918d07ba418a05f` with ordered parents `[d6de382082d79bc939733588749986d6ca8a2fe6, 5fa13768ddd702a30a57faa1ab7a1e737a7e4b7e]`, tree `a9a2ed2f7eb9e2cecc4b4e9771c0daec8b3f24e6`, and GitHub `verified=true` / `reason=valid`. Post-merge `quality` run `34710725816` succeeded on attempt 1.
+
+The amendment authorized only `src/t060_fault_tests.rs` inside `input_and_resize_racing_with_exit_never_reopen_final_session()`. Repair PR #186 exact head `0c55015a459ee25828f668857e20aeb3eb71d850`, tree `20682cf37e68dfb2664eb43e2fcc226892ed3cc7`, changed only that function. It preserved the three canonical bounded-cleanup truths: natural `EXITED/PROCESS_EXITED`, controlled `INTERRUPTED/TERMINATED_BY_WINDS`, and bounded-unproven `OWNERSHIP_LOST/OWNERSHIP_LOST_PROCESS_STATE_UNKNOWN`. No production statement, timeout, retry, workflow, dependency, schema, migration, Model Mesh behavior, or authority changed.
+
+Before publication, the repaired focused T060 test passed locally, format and Clippy passed, while one local macOS full-suite attempt retained the known inherited T090 bounded-cleanup class as `598 passed; 7 failed; 4 ignored`. Those seven local T090 failures were not rerun into green and are not represented as acceptance evidence.
+
+On exact repair head `0c55015a459ee25828f668857e20aeb3eb71d850`, first-attempt GitHub workflows all succeeded: `quality` `34711069905`, `release-candidate` `34711069851`, and `windows-terminal` `34711069916`, including Ubuntu/macOS full quality, native Windows terminal, real Windows Server + Ubuntu WSL2, Ubuntu/macOS terminal integration, T063 soaks on Ubuntu/macOS/Windows, T064 regressions, SC-001 soak, and release builds. Independent review found no material finding and zero review threads remained unresolved.
+
+The repair guarded-landed as `61479d50e72775e6ee663838ded37abfccd907a8` with ordered parents `[2a96d14177e9e5605785021f6918d07ba418a05f, 0c55015a459ee25828f668857e20aeb3eb71d850]`, tree `20682cf37e68dfb2664eb43e2fcc226892ed3cc7`, and GitHub `verified=true` / `reason=valid`. Post-merge `quality` `34711467693` and `windows-terminal` `34711467751` both succeeded on attempt 1. Only after those post-merge gates completed was repaired canonical `main` forward-integrated into the existing T126 branch through a normal merge commit; no rebase, force-push, or history rewrite occurred.
 
 ## 5. Schema, persistence, dependency, and scope reconciliation
 
@@ -271,6 +288,7 @@ Spec 009 deterministic tests exercise the already admitted `RuntimeKind::Codex` 
 - [x] T125 usage/cost decision reconciled as `MODEL_MESH_USAGE_OBSERVATION=UNKNOWN`.
 - [x] Platform claims are bounded to directly exercised workflow domains; Spec 006 live-runtime nonclaims remain unchanged.
 - [x] Historical Plan/T121/T123/T124 failed, superseded, stale, and repaired evidence remains explicitly material and inspectable.
+- [x] Initial T126 `quality` failure `34709700248`, canonical Amendment 002, bounded T060 repair, repair exact-head qualification, and repair post-merge verification remain explicitly material and inspectable.
 
 The following gates are intentionally external to this pre-landing artifact and MUST be proven on the exact final T126 commit in the PR/merge trail: repository `quality`; every actually-triggered applicable regression/platform/security workflow; author correctness/safety/governance/evidence-integrity review; Ponytail/YAGNI review; fresh independent substantive review; zero unresolved material findings/threads; exact main/base/head/tree/scope/ruleset/mergeability reconciliation; expected-head guarded normal merge; merge commit/tree/ordered parents/signature verification; and every actually-triggered post-merge push check.
 
@@ -280,6 +298,8 @@ Before guarded T126 landing:
 
 ```text
 T114..T125=CLOSED_CANONICAL
+SPEC_009_TASKS_AMENDMENT_002=CLOSED_CANONICAL
+T126_T060_FIXTURE_REPAIR=CLOSED_CANONICAL
 T126=CANDIDATE_CLOSEOUT
 SPEC_009_FIRST_IMPLEMENTATION_PROGRAM=NOT_YET_CLOSED
 ```
