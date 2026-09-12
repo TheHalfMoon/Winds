@@ -16,6 +16,7 @@ use crate::store::{
     ModelMeshClaimSubject, NewModelMeshContinuityEvent, NewModelMeshIdentityClaim, NewWindsSession,
     NewWorkspace, NewWorkstream, Store,
 };
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -34,6 +35,48 @@ fn cleanup(home: PathBuf) {
     if home.exists() {
         fs::remove_dir_all(home).unwrap();
     }
+}
+
+fn home_snapshot(home: &Path) -> Vec<(String, String)> {
+    fn visit(root: &Path, current: &Path, out: &mut Vec<(String, String)>) {
+        let mut entries = fs::read_dir(current)
+            .unwrap()
+            .map(|entry| entry.unwrap())
+            .collect::<Vec<_>>();
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            let path = entry.path();
+            let relative = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            let metadata = entry.metadata().unwrap();
+            if metadata.is_dir() {
+                out.push((relative.clone(), "DIR".into()));
+                visit(root, &path, out);
+            } else {
+                let bytes = fs::read(&path).unwrap();
+                out.push((
+                    relative,
+                    format!("FILE:{}:{:x}", bytes.len(), Sha256::digest(&bytes)),
+                ));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    visit(home, home, &mut out);
+    out
+}
+
+fn assert_inspection_preserves_home(
+    home: &Path,
+    flags: HashMap<String, String>,
+) -> serde_json::Value {
+    let before = home_snapshot(home);
+    let output = execute(flags).unwrap();
+    assert_eq!(home_snapshot(home), before);
+    output
 }
 
 fn runtime_discovery() -> RuntimeDiscovery {
@@ -316,7 +359,8 @@ fn t121_availability_is_read_only_and_never_claims_live_execution_readiness() {
             .unwrap()
             .is_empty()
     );
-    let output = execute(flags(&home, "availability")).unwrap();
+    drop(store);
+    let output = assert_inspection_preserves_home(&home, flags(&home, "availability"));
     assert_eq!(output["observation_scope"], "DURABLE_LOCAL_STATE_ONLY");
     assert_eq!(output["live_runtime_discovery"], "NOT_PERFORMED");
     assert_eq!(output["provider_execution"], "NOT_PERFORMED");
@@ -324,13 +368,14 @@ fn t121_availability_is_read_only_and_never_claims_live_execution_readiness() {
         output["actors"][0]["runtime_binding"]["live_session_proven"],
         false
     );
+    let reopened = Store::open(&home).unwrap();
     assert!(
-        store
+        reopened
             .list_model_mesh_target_requests_for_stage("stage-1")
             .unwrap()
             .is_empty()
     );
-    drop(store);
+    drop(reopened);
     cleanup(home);
 }
 
@@ -389,7 +434,8 @@ fn t121_status_and_why_blocked_preserve_source_truth_without_mutation_or_fake_au
     let history_before = store
         .list_model_mesh_target_requests_for_stage("stage-1")
         .unwrap();
-    let status = execute(target_only_flags(&home, "status")).unwrap();
+    drop(store);
+    let status = assert_inspection_preserves_home(&home, target_only_flags(&home, "status"));
     assert_eq!(status["target_resolution"]["state"], "UNAVAILABLE");
     assert_eq!(
         status["target_resolution"]["canonical_resolution"],
@@ -404,18 +450,19 @@ fn t121_status_and_why_blocked_preserve_source_truth_without_mutation_or_fake_au
         status["identity_claims"][0]["source"],
         "WINDS_LOCALLY_OBSERVED"
     );
-    let blocked = execute(target_only_flags(&home, "why-blocked")).unwrap();
+    let blocked = assert_inspection_preserves_home(&home, target_only_flags(&home, "why-blocked"));
     assert_eq!(
         blocked["primary_blocker"],
         "LIVE_RUNTIME_DISCOVERY_UNAVAILABLE"
     );
+    let reopened = Store::open(&home).unwrap();
     assert_eq!(
-        store
+        reopened
             .list_model_mesh_target_requests_for_stage("stage-1")
             .unwrap(),
         history_before
     );
-    drop(store);
+    drop(reopened);
     cleanup(home);
 }
 
@@ -427,7 +474,9 @@ fn t121_continuity_and_reviewer_views_are_read_only_and_preserve_unproven_histor
     let before = store
         .list_model_mesh_continuity_events_for_target_request("target-request-1")
         .unwrap();
-    let continuity = execute(target_only_flags(&home, "continuity")).unwrap();
+    drop(store);
+    let continuity =
+        assert_inspection_preserves_home(&home, target_only_flags(&home, "continuity"));
     assert_eq!(continuity["events"][0]["continuity_class"], "UNPROVEN");
     assert_eq!(
         continuity["events"][0]["source_actor_binding_id"],
@@ -444,7 +493,7 @@ fn t121_continuity_and_reviewer_views_are_read_only_and_preserve_unproven_histor
     assert_eq!(continuity["history_rewritten"], false);
     let mut reviewer_flags = target_only_flags(&home, "reviewer");
     reviewer_flags.insert("continuity-event-id".into(), "event-unproven-1".into());
-    let reviewer = execute(reviewer_flags).unwrap();
+    let reviewer = assert_inspection_preserves_home(&home, reviewer_flags);
     assert_eq!(reviewer["reviewer_context_fresh"], false);
     assert_eq!(reviewer["verified"], "UNKNOWN");
     assert_eq!(reviewer["human_accepted"], "UNKNOWN");
@@ -454,12 +503,94 @@ fn t121_continuity_and_reviewer_views_are_read_only_and_preserve_unproven_histor
     assert!(!reviewer_json.contains("winner"));
     assert!(!reviewer_json.contains("recommendation"));
     assert!(!reviewer_json.contains("persuasion"));
+    let reopened = Store::open(&home).unwrap();
     assert_eq!(
-        store
+        reopened
             .list_model_mesh_continuity_events_for_target_request("target-request-1")
             .unwrap(),
         before
     );
+    drop(reopened);
+    cleanup(home);
+}
+
+#[test]
+fn t121_inspection_refuses_active_sqlite_writer_without_touching_sidecars() {
+    let (home, store) = seeded_store("active-writer");
+    let before = home_snapshot(&home);
+    assert!(
+        before
+            .iter()
+            .any(|(path, _)| path.ends_with("winds.db-wal"))
+            || before
+                .iter()
+                .any(|(path, _)| path.ends_with("winds.db-shm")),
+        "fixture must expose an active SQLite sidecar"
+    );
+    let error = execute(flags(&home, "availability"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("refuses an active SQLite sidecar"),
+        "{error}"
+    );
+    assert_eq!(home_snapshot(&home), before);
     drop(store);
     cleanup(home);
+}
+
+#[test]
+fn t121_all_inspection_actions_refuse_uninitialized_home_without_mutation() {
+    for action in [
+        "availability",
+        "status",
+        "why-blocked",
+        "continuity",
+        "reviewer",
+    ] {
+        let home = test_home(&format!("uninitialized-{action}"));
+        let before = home_snapshot(&home);
+        let input = HashMap::from([
+            ("action".into(), action.into()),
+            ("home".into(), home.to_string_lossy().into_owned()),
+        ]);
+        let error = execute(input).unwrap_err().to_string();
+        assert!(
+            error.contains("existing initialized winds.db"),
+            "{action}: {error}"
+        );
+        assert_eq!(home_snapshot(&home), before, "{action} mutated empty home");
+        cleanup(home);
+    }
+}
+
+#[test]
+fn t121_all_inspection_actions_refuse_nonexistent_home_without_creating_state() {
+    for action in [
+        "availability",
+        "status",
+        "why-blocked",
+        "continuity",
+        "reviewer",
+    ] {
+        let home = std::env::temp_dir().join(format!(
+            "winds-t121-missing-{action}-{}-{}",
+            std::process::id(),
+            NEXT_HOME.fetch_add(1, Ordering::Relaxed)
+        ));
+        assert!(!home.exists());
+        let input = HashMap::from([
+            ("action".into(), action.into()),
+            ("home".into(), home.to_string_lossy().into_owned()),
+        ]);
+        let error = execute(input).unwrap_err().to_string();
+        assert!(
+            error.contains("existing initialized --home"),
+            "{action}: {error}"
+        );
+        assert!(
+            !home.exists(),
+            "{action} created the nonexistent inspection home"
+        );
+    }
 }

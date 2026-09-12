@@ -1,22 +1,756 @@
-use crate::agentic_runtime::{EvidenceSource, RuntimeKind, RuntimeVersionState};
+use crate::agentic_runtime::{RuntimeBindingOwnership, RuntimeKind};
+use crate::domain::workflow::WorkflowContinuationClass;
 use crate::model_mesh::{
-    ApprovalApplicability, ExactModelId, ExactProviderId, ModelMeshAuthorityEnvelopeV1,
+    ApprovalApplicability, ContextDigest, ContinuityAuthorityClaim, ContinuityClass,
+    ContinuityContextCompleteness, ExactModelId, ExactProviderId, IdentityClaim, IdentityDimension,
+    IdentitySourceClass, ModelMeshAuthorityEnvelopeV1, ModelMeshContinuityPermissionDescriptorV1,
     TargetDimension, TargetRequest, TargetSelector, adapt_actor_scope,
 };
 use crate::store::{
-    ModelMeshClaimSubject, NewModelMeshTargetRequest, Store, StoredModelMeshIdentityClaim,
-    StoredModelMeshTargetRequest, StoredStageRun, StoredWorkflowRun,
+    ModelMeshClaimSubject, NewModelMeshTargetRequest, Store, StoredModelMeshContinuityEvent,
+    StoredModelMeshIdentityClaim, StoredModelMeshTargetRequest, StoredStageRun, StoredWorkflowRun,
 };
 use crate::{Result, ensure_allowed_flags, required, unix_ms};
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 pub(crate) const MODEL_MESH_COMMAND: &str = "model-mesh";
 const MAX_CLI_ITEMS: usize = 256;
 const MAX_CLI_VALUE_BYTES: usize = 4096;
+
+#[derive(Debug)]
+struct ReadOnlyModelMeshStore {
+    connection: Connection,
+    db_path: PathBuf,
+}
+
+#[derive(Debug)]
+struct ReadOnlyRuntimeBinding {
+    binding_id: String,
+    session_id: String,
+    runtime: RuntimeKind,
+    executable_sha256: String,
+    version: String,
+    native_session_id: Option<String>,
+    ownership: RuntimeBindingOwnership,
+}
+
+impl ReadOnlyModelMeshStore {
+    fn open(home: &Path) -> Result<Self> {
+        if !home.is_absolute() {
+            return Err("model-mesh --home must be an absolute path".into());
+        }
+        let home_metadata = fs::metadata(home)
+            .map_err(|_| "Model Mesh inspection requires an existing initialized --home")?;
+        if !home_metadata.is_dir() {
+            return Err("Model Mesh inspection --home is not a directory".into());
+        }
+        let db_path = home.join("winds.db");
+        let db_metadata = fs::metadata(&db_path)
+            .map_err(|_| "Model Mesh inspection requires an existing initialized winds.db")?;
+        if !db_metadata.is_file() {
+            return Err("Model Mesh inspection winds.db is not a regular file".into());
+        }
+        ensure_no_sqlite_sidecars(&db_path)?;
+        let uri = immutable_sqlite_uri(&db_path)?;
+        let connection = Connection::open_with_flags(
+            uri,
+            OpenFlags::SQLITE_OPEN_READ_ONLY
+                | OpenFlags::SQLITE_OPEN_URI
+                | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        let required_objects = [
+            "workflow_runs",
+            "workflow_stage_runs",
+            "workflow_actor_bindings",
+            "winds_sessions",
+            "runtime_session_bindings",
+            "model_mesh_target_requests",
+            "model_mesh_identity_claims",
+            "model_mesh_continuity_events",
+            "model_mesh_continuity_identity_claims",
+        ];
+        for object in required_objects {
+            let exists = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+                params![object],
+                |row| row.get::<_, i64>(0),
+            )?;
+            if exists != 1 {
+                return Err(format!(
+                    "Model Mesh inspection requires initialized canonical table: {object}"
+                )
+                .into());
+            }
+        }
+        Ok(Self {
+            connection,
+            db_path,
+        })
+    }
+
+    fn assert_source_quiescent(&self) -> Result<()> {
+        ensure_no_sqlite_sidecars(&self.db_path)
+    }
+
+    fn require_stage_scope(&self, flags: &HashMap<String, String>) -> Result<String> {
+        let stage_id = required(flags, "stage-id")?;
+        let row = self
+            .connection
+            .query_row(
+                "SELECT workflow.workspace_id, workflow.workstream_id, workflow.workflow_run_id,
+                        stage.stage_run_id
+                 FROM workflow_stage_runs stage
+                 JOIN workflow_runs workflow ON workflow.workflow_run_id = stage.workflow_run_id
+                 WHERE stage.stage_run_id = ?1",
+                params![stage_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| format!("unknown workflow StageRun: {stage_id}"))?;
+        if row.0 != required(flags, "workspace-id")?
+            || row.1 != required(flags, "workstream-id")?
+            || row.2 != required(flags, "workflow-id")?
+        {
+            return Err(
+                "Model Mesh CLI exact workspace/workstream/workflow/stage identity mismatch".into(),
+            );
+        }
+        Ok(row.3)
+    }
+
+    fn actor_binding_ids_for_stage(&self, stage_run_id: &str) -> Result<Vec<String>> {
+        let mut statement = self.connection.prepare(
+            "SELECT binding_id FROM workflow_actor_bindings
+             WHERE stage_run_id = ?1 ORDER BY bound_unix_ms, binding_id",
+        )?;
+        Ok(statement
+            .query_map(params![stage_run_id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    fn load_runtime_binding(&self, binding_id: &str) -> Result<ReadOnlyRuntimeBinding> {
+        let row = self
+            .connection
+            .query_row(
+                "SELECT binding_id, session_id, runtime_kind, observed_executable_path,
+                        canonical_executable_path, executable_byte_len, executable_sha256,
+                        runtime_version_state, runtime_version, runtime_version_source,
+                        native_session_id, ownership_state, bound_unix_ms,
+                        ownership_observed_unix_ms
+                 FROM runtime_session_bindings WHERE binding_id = ?1",
+                params![binding_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, String>(8)?,
+                        row.get::<_, String>(9)?,
+                        row.get::<_, Option<String>>(10)?,
+                        row.get::<_, String>(11)?,
+                        row.get::<_, i64>(12)?,
+                        row.get::<_, Option<i64>>(13)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| format!("unknown runtime session binding: {binding_id}"))?;
+        let runtime = RuntimeKind::from_db(&row.2)
+            .ok_or_else(|| format!("unknown runtime kind in store: {}", row.2))?;
+        if row.7 != "OBSERVED" || row.9 != "WINDS_LOCALLY_OBSERVED" {
+            return Err(
+                "persisted runtime binding lacks accepted observed version provenance".into(),
+            );
+        }
+        if row.8.trim().is_empty() || row.12 < 0 || row.5 < 0 {
+            return Err(
+                "persisted runtime binding contains invalid bounded observation truth".into(),
+            );
+        }
+        if !Path::new(&row.3).is_absolute() || !Path::new(&row.4).is_absolute() {
+            return Err("persisted runtime executable identity must use absolute paths".into());
+        }
+        if row.6.len() != 64
+            || !row
+                .6
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err("persisted runtime executable SHA-256 is malformed".into());
+        }
+        let ownership = RuntimeBindingOwnership::from_db(&row.11)
+            .ok_or_else(|| format!("unknown runtime binding ownership state: {}", row.11))?;
+        match (ownership, row.13) {
+            (RuntimeBindingOwnership::Unproven, None) => {}
+            (RuntimeBindingOwnership::OwnershipLost, Some(observed)) if observed >= row.12 => {}
+            _ => return Err("persisted runtime binding ownership evidence is inconsistent".into()),
+        }
+        if row
+            .10
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err("persisted native runtime session id must not be empty".into());
+        }
+        Ok(ReadOnlyRuntimeBinding {
+            binding_id: row.0,
+            session_id: row.1,
+            runtime,
+            executable_sha256: row.6,
+            version: row.8,
+            native_session_id: row.10,
+            ownership,
+        })
+    }
+
+    fn actor_availability_json(&self, binding_id: &str) -> Result<Value> {
+        let row = self
+            .connection
+            .query_row(
+                "SELECT binding_id, stage_run_id, winds_session_id, runtime_binding_id,
+                        continuation_class, bound_unix_ms
+                 FROM workflow_actor_bindings WHERE binding_id = ?1",
+                params![binding_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, i64>(5)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| format!("unknown workflow actor binding: {binding_id}"))?;
+        let winds_session_id = row
+            .2
+            .ok_or("stored workflow actor binding is missing explicit Winds session identity")?;
+        if row.5 < 0 {
+            return Err("stored workflow actor binding time must not be negative".into());
+        }
+        let continuation = WorkflowContinuationClass::from_db(&row.4)
+            .ok_or_else(|| format!("unknown workflow continuation class in store: {}", row.4))?;
+        if continuation == WorkflowContinuationClass::Resumed {
+            return Err(
+                "stored RESUMED workflow continuation lacks an accepted physical Spec 006 resume proof"
+                    .into(),
+            );
+        }
+        let runtime = row
+            .3
+            .as_deref()
+            .map(|id| self.load_runtime_binding(id))
+            .transpose()?;
+        if runtime
+            .as_ref()
+            .is_some_and(|runtime| runtime.session_id != winds_session_id)
+        {
+            return Err(
+                "workflow actor runtime binding does not belong to the bound Winds session".into(),
+            );
+        }
+        Ok(json!({
+            "actor_binding_id":row.0,
+            "stage_run_id":row.1,
+            "winds_session_id":winds_session_id,
+            "workflow_continuation":continuation.as_db_str(),
+            "runtime_binding":runtime.as_ref().map(read_only_runtime_binding_json),
+            "target_availability":"DURABLE_BINDING_OBSERVED_NOT_LIVE_EXECUTION_READINESS"
+        }))
+    }
+
+    fn load_target(&self, target_request_id: &str) -> Result<StoredModelMeshTargetRequest> {
+        let row = self
+            .connection
+            .query_row(
+                "SELECT request.target_request_id, request.actor_role, request.runtime_kind,
+                        request.requested_provider_id, request.requested_model_id,
+                        request.selector_class, request.target_descriptor_digest,
+                        request.selection_approval_id, request.created_unix_ms,
+                        workflow.workspace_id, workflow.workstream_id, workflow.workflow_run_id,
+                        stage.stage_run_id, actor.binding_id, actor.winds_session_id
+                 FROM model_mesh_target_requests request
+                 JOIN workflow_actor_bindings actor
+                   ON actor.binding_id = request.actor_binding_id
+                  AND actor.stage_run_id = request.stage_run_id
+                 JOIN workflow_stage_runs stage ON stage.stage_run_id = request.stage_run_id
+                 JOIN workflow_runs workflow ON workflow.workflow_run_id = stage.workflow_run_id
+                 JOIN winds_sessions session
+                   ON session.session_id = actor.winds_session_id
+                  AND session.workstream_id = workflow.workstream_id
+                 LEFT JOIN runtime_session_bindings runtime ON runtime.binding_id = actor.runtime_binding_id
+                 WHERE request.target_request_id = ?1
+                   AND (actor.runtime_binding_id IS NULL OR (
+                        runtime.session_id = actor.winds_session_id
+                        AND runtime.runtime_kind = request.runtime_kind
+                   ))",
+                params![target_request_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, i64>(8)?,
+                        row.get::<_, String>(9)?,
+                        row.get::<_, String>(10)?,
+                        row.get::<_, String>(11)?,
+                        row.get::<_, String>(12)?,
+                        row.get::<_, String>(13)?,
+                        row.get::<_, String>(14)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| format!("unknown or invalid Model Mesh target request: {target_request_id}"))?;
+        let runtime = RuntimeKind::from_db(&row.2)
+            .ok_or_else(|| format!("unknown Model Mesh target runtime: {}", row.2))?;
+        let provider = row
+            .3
+            .as_deref()
+            .map(ExactProviderId::new)
+            .transpose()
+            .map_err(cli_model_mesh_error)?
+            .map_or(TargetDimension::Unspecified, TargetDimension::Exact);
+        let model = row
+            .4
+            .as_deref()
+            .map(ExactModelId::new)
+            .transpose()
+            .map_err(cli_model_mesh_error)?
+            .map_or(TargetDimension::Unspecified, TargetDimension::Exact);
+        let selector = TargetSelector::from_db(&row.5)
+            .ok_or_else(|| format!("unknown Model Mesh target selector: {}", row.5))?;
+        let descriptor = crate::model_mesh::ModelMeshTargetDescriptorV1::new(
+            &row.9, &row.10, &row.11, &row.12, &row.13, &row.14, &row.1, runtime, provider, model,
+        )
+        .map_err(cli_model_mesh_error)?;
+        let request = TargetRequest::new(descriptor, selector).map_err(cli_model_mesh_error)?;
+        if request.target_descriptor_digest() != row.6 {
+            return Err(
+                "stored Model Mesh target descriptor digest does not match canonical joins".into(),
+            );
+        }
+        if row.8 < 0 {
+            return Err("stored Model Mesh target creation time must not be negative".into());
+        }
+        Ok(StoredModelMeshTargetRequest {
+            target_request_id: row.0,
+            request,
+            selection_approval_id: row.7,
+            created_unix_ms: row.8,
+        })
+    }
+
+    fn load_claim(&self, identity_claim_id: &str) -> Result<StoredModelMeshIdentityClaim> {
+        let row = self
+            .connection
+            .query_row(
+                "SELECT identity_claim_id, claim_subject, target_request_id, actor_binding_id,
+                        dimension, normalized_value, source_class, observation_basis,
+                        runtime_binding_id, observed_unix_ms
+                 FROM model_mesh_identity_claims WHERE identity_claim_id = ?1",
+                params![identity_claim_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, Option<String>>(7)?,
+                        row.get::<_, Option<String>>(8)?,
+                        row.get::<_, i64>(9)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| format!("unknown Model Mesh identity claim: {identity_claim_id}"))?;
+        let subject = match row.1.as_str() {
+            "REQUEST_TARGET" => ModelMeshClaimSubject::RequestTarget(
+                row.2
+                    .ok_or("REQUEST_TARGET claim is missing target request identity")?,
+            ),
+            "ACTOR" => ModelMeshClaimSubject::Actor(
+                row.3
+                    .ok_or("ACTOR claim is missing actor binding identity")?,
+            ),
+            _ => return Err(format!("unknown Model Mesh claim subject: {}", row.1).into()),
+        };
+        let dimension = IdentityDimension::from_db(&row.4)
+            .ok_or_else(|| format!("unknown Model Mesh identity dimension: {}", row.4))?;
+        let source = IdentitySourceClass::from_db(&row.6)
+            .ok_or_else(|| format!("unknown Model Mesh identity source: {}", row.6))?;
+        let claim = IdentityClaim::new(dimension, row.5.as_deref(), source, row.7.as_deref())
+            .map_err(cli_model_mesh_error)?;
+        if row.9 < 0 {
+            return Err("stored Model Mesh identity observation time must not be negative".into());
+        }
+        self.validate_claim_subject(&subject, row.8.as_deref())?;
+        Ok(StoredModelMeshIdentityClaim {
+            identity_claim_id: row.0,
+            subject,
+            claim,
+            runtime_binding_id: row.8,
+            observed_unix_ms: row.9,
+        })
+    }
+
+    fn validate_claim_subject(
+        &self,
+        subject: &ModelMeshClaimSubject,
+        runtime_binding_id: Option<&str>,
+    ) -> Result<()> {
+        let valid = match subject {
+            ModelMeshClaimSubject::RequestTarget(target_request_id) => {
+                self.connection.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM model_mesh_target_requests WHERE target_request_id=?1)",
+                    params![target_request_id],
+                    |row| row.get::<_, i64>(0),
+                )? == 1
+                    && runtime_binding_id.is_none()
+            }
+            ModelMeshClaimSubject::Actor(actor_binding_id) => {
+                self.connection.query_row(
+                    "SELECT EXISTS(
+                        SELECT 1 FROM workflow_actor_bindings actor
+                        LEFT JOIN runtime_session_bindings runtime
+                          ON runtime.binding_id = actor.runtime_binding_id
+                        WHERE actor.binding_id = ?1
+                          AND actor.winds_session_id IS NOT NULL
+                          AND (?2 IS NULL OR (
+                               actor.runtime_binding_id = ?2
+                               AND runtime.session_id = actor.winds_session_id
+                          )))",
+                    params![actor_binding_id, runtime_binding_id],
+                    |row| row.get::<_, i64>(0),
+                )? == 1
+            }
+        };
+        if !valid {
+            return Err(
+                "stored Model Mesh identity claim subject/runtime binding is invalid".into(),
+            );
+        }
+        Ok(())
+    }
+
+    fn list_claims_for_target(
+        &self,
+        target_request_id: &str,
+    ) -> Result<Vec<StoredModelMeshIdentityClaim>> {
+        let target = self.load_target(target_request_id)?;
+        let actor_binding_id = target.request.descriptor().actor_binding_id();
+        let mut statement = self.connection.prepare(
+            "SELECT identity_claim_id FROM model_mesh_identity_claims
+             WHERE target_request_id = ?1 OR actor_binding_id = ?2
+             ORDER BY observed_unix_ms, identity_claim_id",
+        )?;
+        let ids = statement
+            .query_map(params![target_request_id, actor_binding_id], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(statement);
+        ids.iter().map(|id| self.load_claim(id)).collect()
+    }
+
+    fn association_ids(&self, event_id: &str, role: &str) -> Result<Vec<String>> {
+        let mut statement = self.connection.prepare(
+            "SELECT identity_claim_id FROM model_mesh_continuity_identity_claims
+             WHERE continuity_event_id=?1 AND actor_role=?2
+             ORDER BY identity_claim_id",
+        )?;
+        Ok(statement
+            .query_map(params![event_id, role], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    fn validate_event_claims(
+        &self,
+        actor_binding_id: Option<&str>,
+        claim_ids: &[String],
+        role: &str,
+    ) -> Result<()> {
+        if actor_binding_id.is_none() && !claim_ids.is_empty() {
+            return Err(
+                format!("Model Mesh continuity {role} claims require an exact actor").into(),
+            );
+        }
+        if let Some(actor_binding_id) = actor_binding_id {
+            for claim_id in claim_ids {
+                let claim = self.load_claim(claim_id)?;
+                if claim.subject != ModelMeshClaimSubject::Actor(actor_binding_id.to_owned()) {
+                    return Err(format!(
+                        "Model Mesh continuity {role} identity claim does not belong to exact actor"
+                    )
+                    .into());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn approval_matches(
+        &self,
+        approval_id: &str,
+        expected: &ModelMeshAuthorityEnvelopeV1,
+    ) -> Result<(bool, i64)> {
+        let row = self
+            .connection
+            .query_row(
+                "SELECT workspace_id, workstream_id, session_id, content_digest,
+                        canonical_content_json, approved_unix_ms
+                 FROM agentic_delegation_approvals WHERE approval_id=?1",
+                params![approval_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, i64>(5)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some(row) = row else {
+            return Ok((false, -1));
+        };
+        let observed = format!("{:x}", Sha256::digest(row.4.as_bytes()));
+        if observed != row.3 || row.5 < 0 {
+            return Ok((false, row.5));
+        }
+        let parsed = match ModelMeshAuthorityEnvelopeV1::from_canonical_json(&row.4) {
+            Ok(value) => value,
+            Err(_) => return Ok((false, row.5)),
+        };
+        Ok((
+            row.0 == parsed.workspace_id()
+                && row.1 == parsed.workstream_id()
+                && row.2 == parsed.session_id()
+                && &parsed == expected,
+            row.5,
+        ))
+    }
+
+    fn load_event(&self, event_id: &str) -> Result<StoredModelMeshContinuityEvent> {
+        let row = self
+            .connection
+            .query_row(
+                "SELECT continuity_event_id, target_request_id, source_actor_binding_id,
+                        destination_actor_binding_id, continuity_class, context_digest,
+                        completeness_state, continuity_permission_digest, authority_approval_id,
+                        authority_claim, created_unix_ms
+                 FROM model_mesh_continuity_events WHERE continuity_event_id=?1",
+                params![event_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, Option<String>>(7)?,
+                        row.get::<_, Option<String>>(8)?,
+                        row.get::<_, String>(9)?,
+                        row.get::<_, i64>(10)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or_else(|| format!("unknown Model Mesh continuity event: {event_id}"))?;
+        let continuity_class = ContinuityClass::from_db(&row.4)
+            .ok_or_else(|| format!("unknown Model Mesh continuity class: {}", row.4))?;
+        let completeness = ContinuityContextCompleteness::from_db(&row.6)
+            .ok_or_else(|| format!("unknown Model Mesh continuity completeness: {}", row.6))?;
+        let authority_claim = ContinuityAuthorityClaim::from_db(&row.9)
+            .ok_or_else(|| format!("unknown Model Mesh continuity authority claim: {}", row.9))?;
+        if row.10 < 0 {
+            return Err("stored Model Mesh continuity event time must not be negative".into());
+        }
+        let source_identity_claim_ids = self.association_ids(&row.0, "SOURCE")?;
+        let destination_identity_claim_ids = self.association_ids(&row.0, "DESTINATION")?;
+        self.validate_event_claims(row.2.as_deref(), &source_identity_claim_ids, "source")?;
+        self.validate_event_claims(
+            row.3.as_deref(),
+            &destination_identity_claim_ids,
+            "destination",
+        )?;
+        let target = self.load_target(&row.1)?;
+        if row.10 < target.created_unix_ms {
+            return Err("stored Model Mesh continuity event predates its target request".into());
+        }
+        let descriptor = target.request.descriptor();
+        let target_digest = descriptor.digest().map_err(cli_model_mesh_error)?;
+        match authority_claim {
+            ContinuityAuthorityClaim::Required => {
+                let context_digest = row
+                    .5
+                    .as_deref()
+                    .ok_or("authorized Model Mesh continuity requires context digest")?;
+                let permission_digest = row
+                    .7
+                    .as_deref()
+                    .ok_or("authorized Model Mesh continuity requires permission digest")?;
+                let approval_id = row
+                    .8
+                    .as_deref()
+                    .ok_or("authorized Model Mesh continuity requires approval id")?;
+                let permission = ModelMeshContinuityPermissionDescriptorV1::new(
+                    descriptor.workflow_run_id(),
+                    descriptor.stage_run_id(),
+                    row.2.as_deref(),
+                    row.3.as_deref(),
+                    continuity_class,
+                    &target_digest,
+                    ContextDigest::exact(context_digest).map_err(cli_model_mesh_error)?,
+                )
+                .map_err(cli_model_mesh_error)?;
+                if permission.digest().map_err(cli_model_mesh_error)? != permission_digest {
+                    return Err(
+                        "stored Model Mesh continuity permission digest does not match event"
+                            .into(),
+                    );
+                }
+                let expected = ModelMeshAuthorityEnvelopeV1::for_continuity_permission(
+                    descriptor,
+                    &permission,
+                )
+                .map_err(cli_model_mesh_error)?;
+                let (matches, approved_at) = self.approval_matches(approval_id, &expected)?;
+                if !matches || row.10 < approved_at {
+                    return Err(
+                        "stored Model Mesh continuity approval no longer matches exact event"
+                            .into(),
+                    );
+                }
+            }
+            ContinuityAuthorityClaim::NoAuthorityClaim => {
+                if !matches!(
+                    continuity_class,
+                    ContinuityClass::Unavailable | ContinuityClass::Unproven
+                ) || row.7.is_some()
+                    || row.8.is_some()
+                {
+                    return Err("invalid NO_AUTHORITY_CLAIM continuity event".into());
+                }
+            }
+        }
+        Ok(StoredModelMeshContinuityEvent {
+            continuity_event_id: row.0,
+            target_request_id: row.1,
+            source_actor_binding_id: row.2,
+            destination_actor_binding_id: row.3,
+            continuity_class,
+            context_digest: row.5,
+            completeness,
+            continuity_permission_digest: row.7,
+            authority_approval_id: row.8,
+            authority_claim,
+            source_identity_claim_ids,
+            destination_identity_claim_ids,
+            created_unix_ms: row.10,
+        })
+    }
+
+    fn list_events_for_target(
+        &self,
+        target_request_id: &str,
+    ) -> Result<Vec<StoredModelMeshContinuityEvent>> {
+        self.load_target(target_request_id)?;
+        let mut statement = self.connection.prepare(
+            "SELECT continuity_event_id FROM model_mesh_continuity_events
+             WHERE target_request_id=?1 ORDER BY created_unix_ms, continuity_event_id",
+        )?;
+        let ids = statement
+            .query_map(params![target_request_id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(statement);
+        ids.iter().map(|id| self.load_event(id)).collect()
+    }
+}
+
+fn immutable_sqlite_uri(path: &Path) -> Result<String> {
+    let text = path
+        .to_str()
+        .ok_or("Model Mesh inspection database path is not valid UTF-8")?
+        .replace('\\', "/");
+    #[cfg(windows)]
+    let text = if text.starts_with('/') {
+        text
+    } else {
+        format!("/{text}")
+    };
+    let mut encoded = String::with_capacity(text.len() + 32);
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b':' | b'-' | b'_' | b'.' | b'~') {
+            encoded.push(char::from(byte));
+        } else {
+            use std::fmt::Write as _;
+            write!(&mut encoded, "%{byte:02X}").map_err(|_| "failed to encode SQLite path")?;
+        }
+    }
+    Ok(format!("file://{encoded}?mode=ro&immutable=1"))
+}
+
+fn ensure_no_sqlite_sidecars(db_path: &Path) -> Result<()> {
+    let text = db_path
+        .to_str()
+        .ok_or("Model Mesh inspection database path is not valid UTF-8")?;
+    for suffix in ["-wal", "-shm", "-journal"] {
+        if Path::new(&format!("{text}{suffix}")).exists() {
+            return Err(
+                "Model Mesh read-only inspection refuses an active SQLite sidecar; retry after the writer closes"
+                    .into(),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn read_only_runtime_binding_json(binding: &ReadOnlyRuntimeBinding) -> Value {
+    json!({
+        "binding_id":binding.binding_id,
+        "winds_session_id":binding.session_id,
+        "runtime":binding.runtime.as_str(),
+        "executable_sha256":binding.executable_sha256,
+        "version_state":"OBSERVED",
+        "version":binding.version,
+        "version_source":"WINDS_LOCALLY_OBSERVED",
+        "native_session_id":binding.native_session_id,
+        "ownership":binding.ownership.as_str(),
+        "live_session_proven":false
+    })
+}
 
 pub(crate) fn dispatch(flags: HashMap<String, String>) -> Result<()> {
     let output = execute(flags)?;
@@ -40,24 +774,26 @@ pub(crate) fn execute(flags: HashMap<String, String>) -> Result<Value> {
 
 fn availability(flags: HashMap<String, String>) -> Result<Value> {
     ensure_allowed_flags(&flags, &stage_flags(&[]))?;
-    let store = open_store(&flags)?;
-    let (_, stage) = require_stage_scope(&store, &flags)?;
-    let actor_ids = actor_binding_ids_for_stage(&store, &stage.identity.stage_run_id)?;
+    let store = open_read_only_store(&flags)?;
+    let stage_run_id = store.require_stage_scope(&flags)?;
+    let actor_ids = store.actor_binding_ids_for_stage(&stage_run_id)?;
     require_bounded_items(actor_ids.len(), "Model Mesh actor availability")?;
     let actors = actor_ids
         .iter()
-        .map(|id| actor_availability_json(&store, id))
+        .map(|id| store.actor_availability_json(id))
         .collect::<Result<Vec<_>>>()?;
-    Ok(json!({
+    let output = json!({
         "action":"availability",
-        "stage_run_id":stage.identity.stage_run_id,
+        "stage_run_id":stage_run_id,
         "observation_scope":"DURABLE_LOCAL_STATE_ONLY",
         "live_runtime_discovery":"NOT_PERFORMED",
         "provider_execution":"NOT_PERFORMED",
         "credential_operation":"NOT_PERFORMED",
         "actors":actors,
         "policy_path":"EXPLICIT_POLICY_UNAVAILABLE_FIRST_SLICE"
-    }))
+    });
+    store.assert_source_quiescent()?;
+    Ok(output)
 }
 
 fn record_request(flags: HashMap<String, String>) -> Result<Value> {
@@ -140,22 +876,27 @@ fn request_result(outcome: &str, stored: &StoredModelMeshTargetRequest) -> Value
 
 fn target_status(flags: HashMap<String, String>) -> Result<Value> {
     ensure_allowed_flags(&flags, &["action", "home", "target-request-id"])?;
-    let store = open_store(&flags)?;
-    target_status_from_store(&store, required(&flags, "target-request-id")?)
+    let store = open_read_only_store(&flags)?;
+    let output =
+        target_status_from_read_only_store(&store, required(&flags, "target-request-id")?)?;
+    store.assert_source_quiescent()?;
+    Ok(output)
 }
 
-fn target_status_from_store(store: &Store, target_request_id: &str) -> Result<Value> {
-    let stored = store.load_model_mesh_target_request(target_request_id)?;
-    let claims = store.list_model_mesh_identity_claims_for_target_request(target_request_id)?;
+fn target_status_from_read_only_store(
+    store: &ReadOnlyModelMeshStore,
+    target_request_id: &str,
+) -> Result<Value> {
+    let stored = store.load_target(target_request_id)?;
+    let claims = store.list_claims_for_target(target_request_id)?;
     require_bounded_items(claims.len(), "Model Mesh identity claims")?;
-    let approval = selection_approval_applicability(store, &stored)?;
-    let actor =
-        store.load_workflow_actor_binding(stored.request.descriptor().actor_binding_id())?;
-    let runtime_binding = actor
-        .runtime_binding_id
-        .as_deref()
-        .map(|id| store.load_runtime_session_binding(id))
-        .transpose()?;
+    let approval = selection_approval_applicability_read_only(store, &stored)?;
+    let actor_json =
+        store.actor_availability_json(stored.request.descriptor().actor_binding_id())?;
+    let runtime_binding = actor_json
+        .get("runtime_binding")
+        .cloned()
+        .unwrap_or(Value::Null);
     let mut blockers = Vec::new();
     if approval != ApprovalApplicability::Exact {
         blockers.push(format!("SELECTION_APPROVAL_{}", approval_label(approval)));
@@ -167,7 +908,7 @@ fn target_status_from_store(store: &Store, target_request_id: &str) -> Result<Va
         "action":"status",
         "request":stored_target_json(&stored),
         "identity_claims":claims.iter().map(stored_claim_json).collect::<Vec<_>>(),
-        "durable_runtime_binding":runtime_binding.as_ref().map(runtime_binding_json),
+        "durable_runtime_binding":runtime_binding,
         "target_resolution":{
             "state":"UNAVAILABLE",
             "canonical_resolution":Value::Null,
@@ -175,7 +916,7 @@ fn target_status_from_store(store: &Store, target_request_id: &str) -> Result<Va
         },
         "drift":{
             "live_runtime_freshness":"UNAVAILABLE_WITHOUT_DISCOVERY",
-            "native_session_truth":runtime_binding.as_ref().map(|binding| binding.ownership.as_str()).unwrap_or("UNAVAILABLE"),
+            "native_session_truth":actor_json["runtime_binding"]["ownership"].as_str().unwrap_or("UNAVAILABLE"),
             "selection_approval":approval_label(approval),
             "current_authority":"UNKNOWN"
         },
@@ -198,8 +939,9 @@ fn target_status_from_store(store: &Store, target_request_id: &str) -> Result<Va
 
 fn why_blocked(flags: HashMap<String, String>) -> Result<Value> {
     ensure_allowed_flags(&flags, &["action", "home", "target-request-id"])?;
-    let store = open_store(&flags)?;
-    let mut status = target_status_from_store(&store, required(&flags, "target-request-id")?)?;
+    let store = open_read_only_store(&flags)?;
+    let mut status =
+        target_status_from_read_only_store(&store, required(&flags, "target-request-id")?)?;
     let primary = status["blockers"]
         .as_array()
         .and_then(|values| values.first())
@@ -207,27 +949,30 @@ fn why_blocked(flags: HashMap<String, String>) -> Result<Value> {
         .unwrap_or_else(|| json!("NONE"));
     status["action"] = json!("why-blocked");
     status["primary_blocker"] = primary;
+    store.assert_source_quiescent()?;
     Ok(status)
 }
 
 fn continuity(flags: HashMap<String, String>) -> Result<Value> {
     ensure_allowed_flags(&flags, &["action", "home", "target-request-id"])?;
-    let store = open_store(&flags)?;
+    let store = open_read_only_store(&flags)?;
     let target_request_id = required(&flags, "target-request-id")?;
-    let target = store.load_model_mesh_target_request(target_request_id)?;
-    let events = store.list_model_mesh_continuity_events_for_target_request(target_request_id)?;
+    let target = store.load_target(target_request_id)?;
+    let events = store.list_events_for_target(target_request_id)?;
     require_bounded_items(events.len(), "Model Mesh continuity events")?;
     let values = events
         .iter()
-        .map(|event| continuity_event_json(&store, event))
+        .map(|event| continuity_event_json_read_only(&store, event))
         .collect::<Result<Vec<_>>>()?;
-    Ok(json!({
+    let output = json!({
         "action":"continuity",
         "target_request":stored_target_json(&target),
         "events":values,
         "history_rewritten":false,
         "provider_execution":"NOT_PERFORMED"
-    }))
+    });
+    store.assert_source_quiescent()?;
+    Ok(output)
 }
 
 fn reviewer(flags: HashMap<String, String>) -> Result<Value> {
@@ -235,17 +980,17 @@ fn reviewer(flags: HashMap<String, String>) -> Result<Value> {
         &flags,
         &["action", "home", "target-request-id", "continuity-event-id"],
     )?;
-    let store = open_store(&flags)?;
+    let store = open_read_only_store(&flags)?;
     let target_request_id = required(&flags, "target-request-id")?;
-    let event = store.load_model_mesh_continuity_event(required(&flags, "continuity-event-id")?)?;
+    let event = store.load_event(required(&flags, "continuity-event-id")?)?;
     if event.target_request_id != target_request_id {
         return Err("reviewer continuity event does not belong to the exact target request".into());
     }
-    let target = store.load_model_mesh_target_request(target_request_id)?;
-    Ok(json!({
+    let target = store.load_target(target_request_id)?;
+    let output = json!({
         "action":"reviewer",
         "target_request":stored_target_json(&target),
-        "continuity":continuity_event_json(&store, &event)?,
+        "continuity":continuity_event_json_read_only(&store, &event)?,
         "candidate_evidence_freshness":{
             "state":"UNAVAILABLE",
             "reason":"CURRENT_CANDIDATE_ARTIFACT_EVIDENCE_INPUTS_NOT_SUPPLIED_TO_T121"
@@ -254,7 +999,14 @@ fn reviewer(flags: HashMap<String, String>) -> Result<Value> {
         "verified":"UNKNOWN",
         "human_accepted":"UNKNOWN",
         "provider_execution":"NOT_PERFORMED"
-    }))
+    });
+    store.assert_source_quiescent()?;
+    Ok(output)
+}
+
+fn open_read_only_store(flags: &HashMap<String, String>) -> Result<ReadOnlyModelMeshStore> {
+    let home = PathBuf::from(required(flags, "home")?);
+    ReadOnlyModelMeshStore::open(Path::new(&home))
 }
 
 fn open_store(flags: &HashMap<String, String>) -> Result<Store> {
@@ -282,46 +1034,6 @@ fn require_stage_scope(
         );
     }
     Ok((workflow, stage))
-}
-
-fn actor_binding_ids_for_stage(store: &Store, stage_run_id: &str) -> Result<Vec<String>> {
-    let mut statement = store.connection.prepare(
-        "SELECT binding_id FROM workflow_actor_bindings WHERE stage_run_id = ?1 ORDER BY bound_unix_ms, binding_id"
-    )?;
-    Ok(statement
-        .query_map(params![stage_run_id], |row| row.get::<_, String>(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?)
-}
-
-fn actor_availability_json(store: &Store, binding_id: &str) -> Result<Value> {
-    let actor = store.load_workflow_actor_binding(binding_id)?;
-    let runtime = actor
-        .runtime_binding_id
-        .as_deref()
-        .map(|id| store.load_runtime_session_binding(id))
-        .transpose()?;
-    Ok(json!({
-        "actor_binding_id":actor.binding_id,
-        "winds_session_id":actor.winds_session_id,
-        "workflow_continuation":workflow_continuation_label(actor.continuation),
-        "runtime_binding":runtime.as_ref().map(runtime_binding_json),
-        "target_availability":"DURABLE_BINDING_OBSERVED_NOT_LIVE_EXECUTION_READINESS"
-    }))
-}
-
-fn runtime_binding_json(binding: &crate::agentic_runtime::RuntimeSessionBinding) -> Value {
-    json!({
-        "binding_id":binding.binding_id,
-        "winds_session_id":binding.session_id,
-        "runtime":binding.runtime.as_str(),
-        "executable_sha256":binding.executable.sha256,
-        "version_state":runtime_version_state_label(binding.version.state),
-        "version":binding.version.value,
-        "version_source":evidence_source_label(binding.version.source),
-        "native_session_id":binding.native_session_id,
-        "ownership":binding.ownership.as_str(),
-        "live_session_proven":false
-    })
 }
 
 fn stored_target_json(stored: &StoredModelMeshTargetRequest) -> Value {
@@ -362,20 +1074,20 @@ fn stored_claim_json(stored: &StoredModelMeshIdentityClaim) -> Value {
     })
 }
 
-fn continuity_event_json(
-    store: &Store,
-    event: &crate::store::StoredModelMeshContinuityEvent,
+fn continuity_event_json_read_only(
+    store: &ReadOnlyModelMeshStore,
+    event: &StoredModelMeshContinuityEvent,
 ) -> Result<Value> {
     let source_claims = event
         .source_identity_claim_ids
         .iter()
-        .map(|id| store.load_model_mesh_identity_claim(id))
-        .collect::<crate::store::Result<Vec<_>>>()?;
+        .map(|id| store.load_claim(id))
+        .collect::<Result<Vec<_>>>()?;
     let destination_claims = event
         .destination_identity_claim_ids
         .iter()
-        .map(|id| store.load_model_mesh_identity_claim(id))
-        .collect::<crate::store::Result<Vec<_>>>()?;
+        .map(|id| store.load_claim(id))
+        .collect::<Result<Vec<_>>>()?;
     require_bounded_items(source_claims.len(), "Model Mesh continuity source claims")?;
     require_bounded_items(
         destination_claims.len(),
@@ -384,12 +1096,12 @@ fn continuity_event_json(
     let source_actor = event
         .source_actor_binding_id
         .as_deref()
-        .map(|id| actor_availability_json(store, id))
+        .map(|id| store.actor_availability_json(id))
         .transpose()?;
     let destination_actor = event
         .destination_actor_binding_id
         .as_deref()
-        .map(|id| actor_availability_json(store, id))
+        .map(|id| store.actor_availability_json(id))
         .transpose()?;
     Ok(json!({
         "continuity_event_id":event.continuity_event_id,
@@ -411,18 +1123,27 @@ fn continuity_event_json(
     }))
 }
 
-fn selection_approval_applicability(
-    store: &Store,
+fn selection_approval_applicability_read_only(
+    store: &ReadOnlyModelMeshStore,
     target: &StoredModelMeshTargetRequest,
 ) -> Result<ApprovalApplicability> {
-    let row = store.connection.query_row(
-        "SELECT workspace_id, workstream_id, session_id, content_digest, canonical_content_json FROM agentic_delegation_approvals WHERE approval_id = ?1",
-        params![target.selection_approval_id],
-        |row| Ok((
-            row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?,
-            row.get::<_, String>(3)?, row.get::<_, String>(4)?,
-        )),
-    ).optional()?;
+    let row = store
+        .connection
+        .query_row(
+            "SELECT workspace_id, workstream_id, session_id, content_digest, canonical_content_json
+         FROM agentic_delegation_approvals WHERE approval_id = ?1",
+            params![target.selection_approval_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            },
+        )
+        .optional()?;
     let Some((workspace_id, workstream_id, session_id, digest, canonical)) = row else {
         return Ok(ApprovalApplicability::Missing);
     };
@@ -511,29 +1232,6 @@ fn approval_label(value: ApprovalApplicability) -> &'static str {
         ApprovalApplicability::Mismatch => "MISMATCH",
         ApprovalApplicability::Stale => "STALE",
     }
-}
-
-fn runtime_version_state_label(value: RuntimeVersionState) -> &'static str {
-    match value {
-        RuntimeVersionState::Observed => "OBSERVED",
-        RuntimeVersionState::Unsupported => "UNSUPPORTED",
-        RuntimeVersionState::Unavailable => "UNAVAILABLE",
-    }
-}
-
-fn evidence_source_label(value: EvidenceSource) -> &'static str {
-    match value {
-        EvidenceSource::WindsLocallyObserved => "WINDS_LOCALLY_OBSERVED",
-        EvidenceSource::VendorDeclared => "VENDOR_DECLARED",
-        EvidenceSource::CatalogDeclared => "CATALOG_DECLARED",
-        EvidenceSource::Unavailable => "UNAVAILABLE",
-    }
-}
-
-fn workflow_continuation_label(
-    value: crate::domain::workflow::WorkflowContinuationClass,
-) -> &'static str {
-    value.as_db_str()
 }
 
 fn validate_flag_values(flags: &HashMap<String, String>) -> Result<()> {
