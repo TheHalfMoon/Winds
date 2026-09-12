@@ -74,6 +74,8 @@ mod t119_model_mesh_event_tests;
 mod t120_model_mesh_projection_tests;
 #[cfg(test)]
 mod t121_model_mesh_cli_tests;
+#[cfg(test)]
+mod t123_model_mesh_adversarial_tests;
 mod workbench;
 mod workflow_cli;
 
