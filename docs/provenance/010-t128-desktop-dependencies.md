@@ -20,7 +20,7 @@ javascript_lockfile=desktop/package-lock.json
 rust_lockfile=desktop/src-tauri/Cargo.lock
 ```
 
-The first directly claimed desktop build host is macOS arm64. Windows and Linux desktop product qualification remain owned by T142.
+The first directly claimed desktop CI host is GitHub-hosted `macos-15`. T128 does not preclaim an architecture: exact-head `desktop-quality` records `sw_vers` and `uname -m`, and final T128 evidence binds the host claim to the architecture actually observed by that run. Windows and Linux desktop product qualification remain owned by T142.
 
 ## Rust desktop host direct dependencies
 
@@ -35,12 +35,19 @@ Both resolve from the crates.io registry source recorded in `Cargo.lock`. The lo
 
 | Package | Version | License | Purpose |
 | --- | --- | --- | --- |
-| `@tauri-apps/api` | `2.11.1` | Apache-2.0 OR MIT | typed Tauri client API; not invoked in T128 |
-| `react` | `19.3.0` | MIT | renderer view model |
-| `react-dom` | `19.3.0` | MIT | renderer DOM integration |
-| `@xterm/xterm` | `6.0.0` | MIT | terminal rendering reserved for T135; unused in T128 |
-| `@xterm/addon-fit` | `0.11.0` | MIT | terminal fit helper reserved for T135; unused in T128 |
-| `lucide-react` | `1.45.0` | ISC | generic UI icon grammar reserved for later visual tasks; unused in T128 |
+| `react` | `19.3.0` | MIT | inert renderer view model |
+| `react-dom` | `19.3.0` | MIT | inert renderer DOM integration |
+
+The following Plan candidates were reviewed but are deliberately **not admitted** by T128 because this slice does not use them:
+
+| Deferred candidate | Plan version | License | Owning future task |
+| --- | --- | --- | --- |
+| `@tauri-apps/api` | `2.11.1` | Apache-2.0 OR MIT | first task that introduces a typed renderer bridge |
+| `lucide-react` | `1.45.0` | ISC | T129 or later visual task if still necessary |
+| `@xterm/xterm` | `6.0.0` | MIT | T135 terminal rendering |
+| `@xterm/addon-fit` | `0.11.0` | MIT | T135 terminal fit behavior |
+
+They are absent from `desktop/package.json` and `desktop/package-lock.json`. Their owning task must revalidate necessity, exact version, provenance, and security before adoption.
 
 ## JavaScript direct development dependencies
 
@@ -54,22 +61,18 @@ Both resolve from the crates.io registry source recorded in `Cargo.lock`. The lo
 | `@types/react-dom` | `19.3.0` | MIT | React DOM declarations |
 | `@types/node` | `22.20.2` | MIT | Node-facing Vite configuration declarations |
 
-`package-lock.json` records exact resolved registry URLs and SHA-512 integrity values for all npm artifacts. The current lock contains 86 non-root package records.
+`package-lock.json` records exact resolved registry URLs and SHA-512 integrity values for all npm artifacts. The current lock contains 82 non-root package records.
 
 ## Direct npm integrity and engine evidence
 
 All direct npm artifacts resolve from `https://registry.npmjs.org/`. The exact direct integrity values are:
 
 ```text
-@tauri-apps/api@2.11.1 sha512-M2FPuYND2m+wh5hfW9ZpSdxMPdEJovPBWwoHJmwUpysTYNHaOkVFN419m/K0LIgjb/7KU2vBgsUepJWugQCvAA==
 @tauri-apps/cli@2.11.4 sha512-R8xGtMpwyetawSqm9kYOuMmEqkhUbvcUy8n0aNXIxollKBLESUu5f4Fx+64hgASYm1H+jSWq6jCW6zqTnH6hqQ==
 react@19.3.0 sha512-E8LUcbtBWt20bbl2YoHfx4ZDBdxVTfOKtCZn9cDSJ4l6/nuoApcpIBcj47t2wZoVX8g2ZHuMHbiShgCR1T5Sog==
 react-dom@19.3.0 sha512-JDk8dgif51OjFoDE70+OT9ICyYr+69HlmihNwp1+Nsfbna3t5sIiCa9ZJktDmQ4/1b/rn26hIAR2uYXDMr5r0Q==
 vite@8.3.0 sha512-lhZBVvEHefgE+HQZC9O7EBJgCU/nVzFNl7vkS4RE0APtWLP02/8QVIkQtzBxPquh7lq5/78NHipTj7ODQ6XuyQ==
 @vitejs/plugin-react@6.1.1 sha512-yxLaQV9gkhS8ezJqCM6+ndU7mDY6gqAg75NQ+0IjwEI8IYOmQCgkRwHKVSfWXW076DsqMo0Dk+0FK1U+M5RgFw==
-@xterm/xterm@6.0.0 sha512-TQwDdQGtwwDt+2cgKDLn0IRaSxYu1tSUjgKarSDkUM0ZNiSRXFpjxEsvc/Zgc5kq5omJ+V0a8/kIM2WD3sMOYg==
-@xterm/addon-fit@0.11.0 sha512-jYcgT6xtVYhnhgxh3QgYDnnNMYTcf8ElbxxFzX0IZo+vabQqSPAjC3c1wJrKB5E19VwQei89QCiZZP86DCPF7g==
-lucide-react@1.45.0 sha512-yH1ubCAduho9UR7oJhRXIQXogksRILBiTuZC4/bQIGeB9JOkxMlSuEHyyZpo1Z3S0yWJO2KTSUZbjiNvVxeOUw==
 typescript@7.0.2 sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA==
 @types/react@19.3.0 sha512-N0rFCuH9YoxG9/m61l9MfpJKfmLOVU0em7ipIz6TRgSSkvReLB9vL85GB+yr8Bs5leqpvg96JSwF4ZS1s4viQg==
 @types/react-dom@19.3.0 sha512-ZI7bU42mZXXKHn/qNLEw2IrbiINU7X5+vfgdixBHkCNpYWXjKgfQ/P+uyGb5CjOLB9UcnTeg3rylQtV2hym44Q==
@@ -98,7 +101,7 @@ npm ci --ignore-scripts
 
 No second JavaScript package manager is admitted. No postinstall script is required for the selected direct dependency surface. `npm audit` reported zero known vulnerabilities at T128 qualification time; that observation is time-bound and does not replace lockfile review.
 
-The T128 renderer imports React only. It does not import the Tauri client API, xterm.js, addon-fit, or Lucide yet. Those selected direct dependencies are lock-qualified now so later owning tasks do not silently choose a different graph.
+The T128 renderer imports React and React DOM only. The Tauri client API, xterm.js, addon-fit, and Lucide are not admitted into the T128 manifest or lockfile. Later owning tasks must qualify them from then-current registry and repository truth rather than inheriting a dormant dependency.
 
 ## T128 privilege boundary
 
@@ -125,7 +128,7 @@ npm run frontend:build
 npm run desktop:build
 ```
 
-`desktop-quality` reproduces these gates on the first directly claimed desktop CI host (`macos-latest`) using exact Node, npm, and Rust toolchains.
+`desktop-quality` reproduces these gates on the first directly claimed desktop CI host (`macos-15`) using exact Node, npm, and Rust toolchains. It records `sw_vers` plus `uname -m` before toolchain installation. `desktop:build` invokes `tauri build --no-bundle --ci -- --locked`, so the release host build is required to use the committed Cargo lockfile.
 
 ## Local qualification observations
 
@@ -137,7 +140,7 @@ npm_audit_known_vulnerabilities=0
 frontend_format=PASS
 frontend_typecheck=PASS
 frontend_lint=PASS
-frontend_tests=17_passed_0_failed
+frontend_tests=20_passed_0_failed
 vite_production_build=PASS
 desktop_cargo_check=PASS
 desktop_rust_format=PASS
@@ -145,7 +148,14 @@ desktop_rust_clippy=PASS
 root_cli_build=PASS
 ```
 
-A local `npm run desktop:build` invocation produced `desktop/src-tauri/target/release/winds-desktop-host`, a Mach-O arm64 release binary. The remote command wrapper timed out before returning the process exit status, so that local invocation is not counted as acceptance PASS. Exact-head `desktop-quality` CI is the authoritative T128 desktop-build gate.
+The repaired local `npm run desktop:build` completed with exit code `0` and produced `desktop/src-tauri/target/release/winds-desktop-host`. Its command is `tauri build --no-bundle --ci -- --locked`, so the local release build was lock-constrained. Exact-head `desktop-quality` CI remains the authoritative T128 desktop-build gate.
+
+
+## Initial candidate review history
+
+The first T128 PR head was `96eaf701678f59b4ad26769c9f742c274d68a4d1` with tree `71f433a53b9fbbdec132d3558d809478d873d962`. Fresh independent review found three material issues: the Tauri release build did not pass Cargo `--locked`, the evidence preclaimed macOS arm64 while CI used `macos-latest` without architecture attestation, and four unused future runtime dependencies were admitted prematurely.
+
+Those findings are preserved as material historical evidence. The first head's `desktop-quality` run `34722630080` and repository `quality` run `34722630082` both later completed `SUCCESS` on attempt 1, but they remain stale for acceptance because the reviewed candidate was materially defective. The repair is forward-only: the release build now passes `--locked`, CI uses `macos-15` and records its observed architecture, and all four unused future dependencies are removed from the T128 manifest and lockfile. All checks and reviews on the first head are historical only.
 
 ## Explicit nonclaims
 
