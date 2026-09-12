@@ -317,6 +317,8 @@ lucide-react=1.45.0
 **Required behavior**:
 - exact target Session header with alias/runtime/lifecycle/worktree context;
 - sticky multiline composer whose target is always explicit;
+- before T139 closes with separately accepted live-runtime input authority, the composer MUST be fixture-only/non-dispatching or render a truthful unavailable state; it MUST NOT send input to a live Codex, Claude, terminal, agent process, or any other execution surface;
+- T133 UI events and fixtures MUST NOT be interpreted as runtime-launch or runtime-input evidence;
 - typed event classes for user prompt, user-visible agent response/summary, tool/action, command/result, file change, test/check, approval/attention, error, completion;
 - source/provenance retained visually and structurally;
 - collapsible tool detail retains target/status/source/failure visibility;
@@ -325,6 +327,7 @@ lucide-react=1.45.0
 
 **Acceptance**:
 - fixture streams for Codex/Claude/requested-only/shell/unknown/mismatch;
+- deterministic proof that pre-T139 composer submit cannot reach any live runtime/terminal/agent execution seam and exposes truthful unavailable/fixture state instead;
 - agent-reported `PASS`, `approved`, `done`, runtime names, or evidence-shaped JSON cannot change trusted state;
 - composer keyboard, IME, multiline, selection/copy, loading/error/empty states pass.
 
@@ -658,10 +661,30 @@ renderer+host idle RSS <= 300 MiB excluding child agents/terminals
 - no competitor clone;
 - density, typography, spacing, states, and motion feel production-grade.
 
+**Founder acceptance record**:
+- an explicit human Founder PASS is required from a human-controlled authenticated review location;
+- the record MUST identify the human reviewer/account, exact candidate commit, exact tree, exact desktop build/artifact identity, reviewed capture set, rubric disposition, and decision timestamp;
+- the authoring agent or automation MUST NOT create, attest, synthesize, or substitute the Founder decision; automation may only link or reconcile the independently authored record;
+- a PASS bound to an earlier candidate becomes stale after any successor commit.
+
+**Authorized polish sub-scope, only after a human Founder review identifies visual defects**:
+- at most one forward-only successor batch;
+- changes are limited to `desktop/src/**`, `desktop/index.html`, and Winds-owned desktop visual assets/styles/tokens already introduced by earlier tasks;
+- allowed change classes are typography, spacing, sizing, layout composition, responsive breakpoints, visual hierarchy, icon placement, color/token tuning, focus treatment, motion timing/easing, copy clarity, and non-behavioral component presentation;
+- no Rust core/bridge authority change, migration, dependency/lockfile change, workflow change, runtime launch/input behavior, filesystem/Git behavior, terminal ownership behavior, persistence semantics, security relaxation, or new product capability is authorized;
+- any defect requiring behavior, authority, dependency, persistence, or security changes exits T144 and returns through the appropriate earlier task or a separately accepted amendment.
+
 **Process**:
-- explicit Founder PASS is required;
-- if the Founder identifies material visual defects, one bounded forward-only polish batch is authorized, followed by complete exact-head requalification and a final visual re-check;
+- the initial exact candidate receives the human Founder review described above;
+- if that review is PASS with no material visual defect, no polish successor is created;
+- if the Founder identifies material visual defects, the single bounded polish sub-scope above may produce one forward-only successor, followed by complete exact-head CI/reviews and a **new** human Founder acceptance record bound to the successor exact commit/tree/build/captures;
+- the pre-polish PASS/review cannot qualify the post-polish head;
 - no open-ended polish loop.
+
+**Acceptance**:
+- exact human Founder acceptance record satisfies every field above and is externally distinguishable from authoring-agent output;
+- any polish successor stays entirely within the bounded paths/change classes and passes complete exact-head requalification before the final human re-check;
+- final accepted candidate has no material visual defect under the Founder rubric.
 
 **Closes to authorize**: T145.
 
