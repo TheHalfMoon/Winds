@@ -2355,6 +2355,9 @@ pub(crate) enum ModelMeshBlockerCategory {
     PolicyNotAuthorized,
     ApprovalMissing,
     ApprovalMismatch,
+    ApprovalUnknown,
+    ApprovalStale,
+    InconsistentTruth,
     NativeSessionUnproven,
     CandidateStale,
     ArtifactStale,
@@ -2478,7 +2481,7 @@ pub(crate) fn project_model_mesh_target(
         requested_model: project_model_dimension(descriptor.model()),
         identity_claims: project_identity_claims(input.claims),
         resolution: target_resolution_label(input.resolution).to_owned(),
-        blocker: ModelMeshBlockerCategory::from_resolution(input.resolution),
+        blocker: target_projection_blocker(input),
         runtime_freshness: input.drift.runtime,
         native_session_freshness: input.drift.native_session,
         authentication: input.authentication,
@@ -2487,11 +2490,7 @@ pub(crate) fn project_model_mesh_target(
         current_authority: input.current_authority,
         evidence_freshness: input.evidence_freshness,
         outcomes: ModelMeshOutcomeProjection {
-            target_match: if input.resolution == TargetResolution::ExactMatch {
-                ModelMeshProjectionTruth::Yes
-            } else {
-                ModelMeshProjectionTruth::No
-            },
+            target_match: target_match_truth(input.resolution),
             execution_authorized: input.execution_authorized,
             continuity_proven: input.continuity_proven,
             verified: input.verified,
@@ -2594,6 +2593,12 @@ pub(crate) fn project_model_mesh_continuity(
 pub(crate) struct ModelMeshWhyBlockedProjection {
     pub(crate) primary: ModelMeshBlockerCategory,
     pub(crate) blockers: Vec<ModelMeshBlockerCategory>,
+    pub(crate) runtime_freshness: DriftApplicability,
+    pub(crate) native_session_freshness: DriftApplicability,
+    pub(crate) evidence_freshness: ModelMeshEvidenceFreshnessProjection,
+    pub(crate) approval: ApprovalApplicability,
+    pub(crate) approval_digest_match: ModelMeshProjectionTruth,
+    pub(crate) current_authority: CurrentAuthorityTruth,
 }
 
 pub(crate) fn project_model_mesh_why_blocked(
@@ -2628,13 +2633,25 @@ pub(crate) fn project_model_mesh_why_blocked(
         ApprovalApplicability::Missing => {
             push_blocker(&mut blockers, ModelMeshBlockerCategory::ApprovalMissing)
         }
-        ApprovalApplicability::Mismatch | ApprovalApplicability::Stale => {
+        ApprovalApplicability::Mismatch => {
             push_blocker(&mut blockers, ModelMeshBlockerCategory::ApprovalMismatch)
+        }
+        ApprovalApplicability::Stale => {
+            push_blocker(&mut blockers, ModelMeshBlockerCategory::ApprovalStale)
         }
         ApprovalApplicability::Exact => {}
     }
-    if target.approval_digest_match == ModelMeshProjectionTruth::No {
-        push_blocker(&mut blockers, ModelMeshBlockerCategory::ApprovalMismatch);
+    match target.approval_digest_match {
+        ModelMeshProjectionTruth::No => {
+            push_blocker(&mut blockers, ModelMeshBlockerCategory::ApprovalMismatch)
+        }
+        ModelMeshProjectionTruth::Unknown => {
+            push_blocker(&mut blockers, ModelMeshBlockerCategory::ApprovalUnknown)
+        }
+        ModelMeshProjectionTruth::Stale => {
+            push_blocker(&mut blockers, ModelMeshBlockerCategory::ApprovalStale)
+        }
+        ModelMeshProjectionTruth::Yes => {}
     }
     if target.current_authority == CurrentAuthorityTruth::Denied {
         push_blocker(&mut blockers, ModelMeshBlockerCategory::AuthorityDenied);
@@ -2658,7 +2675,16 @@ pub(crate) fn project_model_mesh_why_blocked(
         .first()
         .copied()
         .unwrap_or(ModelMeshBlockerCategory::None);
-    ModelMeshWhyBlockedProjection { primary, blockers }
+    ModelMeshWhyBlockedProjection {
+        primary,
+        blockers,
+        runtime_freshness: target.runtime_freshness,
+        native_session_freshness: target.native_session_freshness,
+        evidence_freshness: target.evidence_freshness,
+        approval: target.approval,
+        approval_digest_match: target.approval_digest_match,
+        current_authority: target.current_authority,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -2763,11 +2789,45 @@ fn push_drift_blocker(
     value: DriftApplicability,
     blocker: ModelMeshBlockerCategory,
 ) {
-    if !matches!(
-        value,
-        DriftApplicability::Applicable | DriftApplicability::NotApplicable
-    ) {
+    if value == DriftApplicability::Stale {
         push_blocker(blockers, blocker);
+    }
+}
+
+fn target_projection_blocker(
+    input: &ModelMeshTargetProjectionInput<'_>,
+) -> ModelMeshBlockerCategory {
+    match input.resolution {
+        TargetResolution::AuthorityDenied
+            if input.current_authority == CurrentAuthorityTruth::Denied =>
+        {
+            ModelMeshBlockerCategory::AuthorityDenied
+        }
+        TargetResolution::AuthorityDenied => match input.approval {
+            ApprovalApplicability::Missing => ModelMeshBlockerCategory::ApprovalMissing,
+            ApprovalApplicability::Mismatch => ModelMeshBlockerCategory::ApprovalMismatch,
+            ApprovalApplicability::Stale => ModelMeshBlockerCategory::ApprovalStale,
+            ApprovalApplicability::Exact => ModelMeshBlockerCategory::InconsistentTruth,
+        },
+        TargetResolution::Stale if input.approval == ApprovalApplicability::Stale => {
+            ModelMeshBlockerCategory::ApprovalStale
+        }
+        resolution => ModelMeshBlockerCategory::from_resolution(resolution),
+    }
+}
+
+fn target_match_truth(resolution: TargetResolution) -> ModelMeshProjectionTruth {
+    match resolution {
+        TargetResolution::ExactMatch => ModelMeshProjectionTruth::Yes,
+        TargetResolution::Stale => ModelMeshProjectionTruth::Stale,
+        TargetResolution::Unknown
+        | TargetResolution::Unavailable
+        | TargetResolution::Ambiguous
+        | TargetResolution::Conflict
+        | TargetResolution::AuthenticationUnknown
+        | TargetResolution::CapabilityUnavailable
+        | TargetResolution::AuthorityDenied
+        | TargetResolution::PolicyNotAuthorized => ModelMeshProjectionTruth::Unknown,
     }
 }
 

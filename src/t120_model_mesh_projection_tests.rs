@@ -76,6 +76,24 @@ fn target_projection(
     resolution: TargetResolution,
     evidence: DriftApplicability,
 ) -> crate::model_mesh::ModelMeshTargetProjection {
+    target_projection_with(
+        resolution,
+        evidence,
+        AuthenticationTruth::Unknown,
+        ApprovalApplicability::Exact,
+        ModelMeshProjectionTruth::Yes,
+        CurrentAuthorityTruth::Allowed,
+    )
+}
+
+fn target_projection_with(
+    resolution: TargetResolution,
+    evidence: DriftApplicability,
+    authentication: AuthenticationTruth,
+    approval: ApprovalApplicability,
+    approval_digest_match: ModelMeshProjectionTruth,
+    current_authority: CurrentAuthorityTruth,
+) -> crate::model_mesh::ModelMeshTargetProjection {
     let request = request();
     let claims = vec![
         claim(
@@ -99,10 +117,10 @@ fn target_projection(
         claims: &claims,
         resolution,
         drift: &drift(DriftApplicability::Applicable),
-        authentication: AuthenticationTruth::Unknown,
-        approval: ApprovalApplicability::Exact,
-        approval_digest_match: ModelMeshProjectionTruth::Yes,
-        current_authority: CurrentAuthorityTruth::Allowed,
+        authentication,
+        approval,
+        approval_digest_match,
+        current_authority,
         evidence_freshness: freshness(evidence),
         execution_authorized: ModelMeshProjectionTruth::No,
         continuity_proven: ModelMeshProjectionTruth::Unknown,
@@ -280,14 +298,23 @@ fn t120_why_blocked_keeps_unknown_unavailable_ambiguous_conflict_stale_and_denie
             TargetResolution::Stale,
             ModelMeshBlockerCategory::StaleIdentity,
         ),
-        (
-            TargetResolution::AuthorityDenied,
-            ModelMeshBlockerCategory::AuthorityDenied,
-        ),
     ] {
         let projection = target_projection(resolution, DriftApplicability::Applicable);
         assert_eq!(project_model_mesh_why_blocked(&projection).primary, blocker);
     }
+
+    let denied = target_projection_with(
+        TargetResolution::AuthorityDenied,
+        DriftApplicability::Applicable,
+        AuthenticationTruth::Ready,
+        ApprovalApplicability::Exact,
+        ModelMeshProjectionTruth::Yes,
+        CurrentAuthorityTruth::Denied,
+    );
+    assert_eq!(
+        project_model_mesh_why_blocked(&denied).primary,
+        ModelMeshBlockerCategory::AuthorityDenied
+    );
 }
 
 #[test]
@@ -373,6 +400,134 @@ fn t120_digest_unknown_or_stale_never_manufactures_authority_denial() {
             .blockers
             .contains(&ModelMeshBlockerCategory::AuthorityDenied)
     );
+}
+
+#[test]
+fn t120_authority_resolution_is_disambiguated_by_independent_projection_truth() {
+    let approval_missing = target_projection_with(
+        TargetResolution::AuthorityDenied,
+        DriftApplicability::Applicable,
+        AuthenticationTruth::Ready,
+        ApprovalApplicability::Missing,
+        ModelMeshProjectionTruth::Unknown,
+        CurrentAuthorityTruth::Allowed,
+    );
+    let blocked = project_model_mesh_why_blocked(&approval_missing);
+    assert_eq!(
+        approval_missing.blocker,
+        ModelMeshBlockerCategory::ApprovalMissing
+    );
+    assert!(
+        !blocked
+            .blockers
+            .contains(&ModelMeshBlockerCategory::AuthorityDenied)
+    );
+
+    let denied = target_projection_with(
+        TargetResolution::AuthorityDenied,
+        DriftApplicability::Applicable,
+        AuthenticationTruth::Ready,
+        ApprovalApplicability::Exact,
+        ModelMeshProjectionTruth::Yes,
+        CurrentAuthorityTruth::Denied,
+    );
+    let blocked = project_model_mesh_why_blocked(&denied);
+    assert_eq!(denied.blocker, ModelMeshBlockerCategory::AuthorityDenied);
+    assert!(
+        blocked
+            .blockers
+            .contains(&ModelMeshBlockerCategory::AuthorityDenied)
+    );
+
+    let inconsistent = target_projection_with(
+        TargetResolution::AuthorityDenied,
+        DriftApplicability::Applicable,
+        AuthenticationTruth::Ready,
+        ApprovalApplicability::Exact,
+        ModelMeshProjectionTruth::Yes,
+        CurrentAuthorityTruth::Allowed,
+    );
+    assert_eq!(
+        inconsistent.blocker,
+        ModelMeshBlockerCategory::InconsistentTruth
+    );
+    assert!(
+        !project_model_mesh_why_blocked(&inconsistent)
+            .blockers
+            .contains(&ModelMeshBlockerCategory::AuthorityDenied)
+    );
+}
+
+#[test]
+fn t120_target_match_preserves_uncertainty_and_staleness() {
+    for resolution in [
+        TargetResolution::Unknown,
+        TargetResolution::Unavailable,
+        TargetResolution::Ambiguous,
+        TargetResolution::Conflict,
+        TargetResolution::AuthenticationUnknown,
+        TargetResolution::CapabilityUnavailable,
+        TargetResolution::AuthorityDenied,
+        TargetResolution::PolicyNotAuthorized,
+    ] {
+        let projection = target_projection(resolution, DriftApplicability::Applicable);
+        assert_eq!(
+            projection.outcomes.target_match,
+            ModelMeshProjectionTruth::Unknown
+        );
+    }
+    let stale = target_projection(TargetResolution::Stale, DriftApplicability::Stale);
+    assert_eq!(stale.outcomes.target_match, ModelMeshProjectionTruth::Stale);
+}
+
+#[test]
+fn t120_non_stale_freshness_is_not_relabelled_stale() {
+    for freshness in [
+        DriftApplicability::Missing,
+        DriftApplicability::Unproven,
+        DriftApplicability::Ambiguous,
+        DriftApplicability::Conflict,
+        DriftApplicability::Denied,
+    ] {
+        let mut projection = target_projection(TargetResolution::ExactMatch, freshness);
+        projection.authentication = AuthenticationTruth::Ready;
+        projection.runtime_freshness = freshness;
+        projection.native_session_freshness = freshness;
+        projection.approval = ApprovalApplicability::Exact;
+        projection.approval_digest_match = ModelMeshProjectionTruth::Yes;
+        projection.current_authority = CurrentAuthorityTruth::Allowed;
+        let blocked = project_model_mesh_why_blocked(&projection);
+        assert_eq!(blocked.runtime_freshness, freshness);
+        assert_eq!(blocked.native_session_freshness, freshness);
+        assert_eq!(blocked.evidence_freshness.candidate, freshness);
+        assert!(
+            !blocked
+                .blockers
+                .contains(&ModelMeshBlockerCategory::StaleIdentity)
+        );
+        assert!(
+            !blocked
+                .blockers
+                .contains(&ModelMeshBlockerCategory::CandidateStale)
+        );
+        assert!(
+            !blocked
+                .blockers
+                .contains(&ModelMeshBlockerCategory::ArtifactStale)
+        );
+        assert!(
+            !blocked
+                .blockers
+                .contains(&ModelMeshBlockerCategory::EvidenceStale)
+        );
+        if freshness == DriftApplicability::Unproven {
+            assert!(
+                blocked
+                    .blockers
+                    .contains(&ModelMeshBlockerCategory::NativeSessionUnproven)
+            );
+        }
+    }
 }
 
 #[test]
