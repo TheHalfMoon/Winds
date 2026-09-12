@@ -1,8 +1,8 @@
 # Feature Specification: Winds Desktop Agentic Workspace
 
-**Feature Branch**: `spec/010-desktop-agentic-workspace`  
-**Created**: 2026-09-12  
-**Status**: Specification candidate only. Plan, Tasks, dependencies, desktop-framework selection, implementation, daemon/IPC, browser runtime, remote execution, and product-source changes are NOT authorized by this file alone.  
+**Feature Branch**: `spec/010-desktop-agentic-workspace`
+**Created**: 2026-09-12
+**Status**: Specification candidate only. Plan, Tasks, dependencies, desktop-framework selection, implementation, daemon/IPC, browser runtime, remote execution, and product-source changes are NOT authorized by this file alone.
 **Input**: Founder directive to make Winds the most beautiful, professional, future-facing interface for the agentic era, with project-organized sessions in the left dock, two independent sessions side-by-side in one page, contextual files/evidence surfaces in the right dock, renameable sessions, and runtime/provider identity such as Claude or Codex visible in each session.
 
 ## Product Thesis
