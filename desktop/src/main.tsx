@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import "./styles.css";
+import "./fixture-modes.css";
 
 const root = document.getElementById("root");
 
@@ -23,7 +24,7 @@ if (params.get("fixture") === "keyboard-focus") {
 }
 
 if (params.get("scale") === "125") {
-  document.documentElement.style.fontSize = "125%";
+  document.documentElement.dataset.scale = "125";
 }
 
 createRoot(root).render(
