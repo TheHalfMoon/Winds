@@ -1022,6 +1022,21 @@ fn resolve_identity_dimension(
     TargetResolution::ExactMatch
 }
 
+pub(crate) fn model_mesh_authority_json_matches_digest(
+    canonical_content_json: &str,
+    content_digest: &str,
+) -> bool {
+    if content_digest.len() != SHA256_HEX_BYTES
+        || !content_digest
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || sha256_hex(canonical_content_json.as_bytes()) != content_digest
+    {
+        return false;
+    }
+    ModelMeshAuthorityEnvelopeV1::from_canonical_json(canonical_content_json).is_ok()
+}
+
 fn normalize_scope(value: &str, label: &str) -> ModelMeshResult<String> {
     normalize_bounded(value, label, MAX_SCOPE_ID_BYTES)
 }

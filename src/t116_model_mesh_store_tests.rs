@@ -16,7 +16,7 @@ use crate::model_mesh::{
     ModelMeshContinuityPermissionDescriptorV1, ModelMeshTargetDescriptorV1, TargetDimension,
     TargetRequest, TargetSelector,
 };
-use rusqlite::params;
+use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
@@ -365,6 +365,7 @@ fn t116_target_request_is_exact_approved_idempotent_append_only_and_restart_safe
         .load_model_mesh_target_request("target-request-1")
         .unwrap();
     assert_eq!(persisted, first);
+    drop(reopened);
     cleanup(home);
 }
 
@@ -420,6 +421,74 @@ fn t116_target_request_rejects_policy_cross_scope_wrong_and_generic_approval() {
                 selection_approval_id: "generic-approval",
                 created_unix_ms: 9,
             })
+            .is_err()
+    );
+
+    let exact_target_authority =
+        ModelMeshAuthorityEnvelopeV1::for_target_selection(request.descriptor()).unwrap();
+    let exact_target_authority_json = exact_target_authority.canonical_json().unwrap();
+    store
+        .connection
+        .execute(
+            "INSERT INTO agentic_delegation_approvals(
+                approval_id, workstream_id, session_id, workspace_id,
+                content_digest, canonical_content_json, approved_unix_ms
+             ) VALUES ('forged-target-digest-approval', 'workstream-1', 'session-1',
+                       'workspace-1', ?1, ?2, 8)",
+            params!["f".repeat(64), exact_target_authority_json],
+        )
+        .unwrap();
+    assert!(
+        store
+            .connection
+            .execute(
+                "INSERT INTO model_mesh_target_requests(
+                    target_request_id, stage_run_id, actor_binding_id, actor_role, runtime_kind,
+                    requested_provider_id, requested_model_id, selector_class,
+                    target_descriptor_digest, selection_approval_id, created_unix_ms
+                 ) VALUES (
+                    'forged-target-digest-request', 'stage-1', 'actor-binding-1', 'WORKER',
+                    'CODEX', 'openai', 'model-t116', 'HUMAN', ?1,
+                    'forged-target-digest-approval', 9
+                 )",
+                params![request.target_descriptor_digest()],
+            )
+            .is_err()
+    );
+
+    let augmented_target_authority_json = format!(
+        "{},\"unexpected\":true}}",
+        exact_target_authority_json.strip_suffix('}').unwrap()
+    );
+    store
+        .connection
+        .execute(
+            "INSERT INTO agentic_delegation_approvals(
+                approval_id, workstream_id, session_id, workspace_id,
+                content_digest, canonical_content_json, approved_unix_ms
+             ) VALUES ('augmented-target-approval', 'workstream-1', 'session-1',
+                       'workspace-1', ?1, ?2, 8)",
+            params![
+                sha256_hex(&augmented_target_authority_json),
+                augmented_target_authority_json
+            ],
+        )
+        .unwrap();
+    assert!(
+        store
+            .connection
+            .execute(
+                "INSERT INTO model_mesh_target_requests(
+                    target_request_id, stage_run_id, actor_binding_id, actor_role, runtime_kind,
+                    requested_provider_id, requested_model_id, selector_class,
+                    target_descriptor_digest, selection_approval_id, created_unix_ms
+                 ) VALUES (
+                    'augmented-target-authority-request', 'stage-1', 'actor-binding-1',
+                    'WORKER', 'CODEX', 'openai', 'model-t116', 'HUMAN', ?1,
+                    'augmented-target-approval', 9
+                 )",
+                params![request.target_descriptor_digest()],
+            )
             .is_err()
     );
 
@@ -573,6 +642,31 @@ fn t116_target_request_rejects_policy_cross_scope_wrong_and_generic_approval() {
             })
             .is_err()
     );
+    drop(store);
+
+    // The frozen trigger must fail closed for a raw SQLite connection that did not register
+    // Winds' deterministic approval-integrity function. An otherwise exact approval cannot
+    // become Model Mesh authority through an alternate direct-database writer.
+    let raw_connection = Connection::open(home.join("winds.db")).unwrap();
+    let raw_insert_error = raw_connection
+        .execute(
+            "INSERT INTO model_mesh_target_requests(
+                target_request_id, stage_run_id, actor_binding_id, actor_role, runtime_kind,
+                requested_provider_id, requested_model_id, selector_class,
+                target_descriptor_digest, selection_approval_id, created_unix_ms
+             ) VALUES (
+                'raw-connection-target', 'stage-1', 'actor-binding-1', 'WORKER', 'CODEX',
+                'openai', 'model-t116', 'HUMAN', ?1, 'late-target-approval', 21
+             )",
+            params![request.target_descriptor_digest()],
+        )
+        .unwrap_err();
+    assert!(
+        raw_insert_error
+            .to_string()
+            .contains("winds_model_mesh_approval_integrity")
+    );
+    drop(raw_connection);
     cleanup(home);
 }
 
@@ -747,6 +841,7 @@ fn t116_identity_claims_are_subject_bound_runtime_bound_idempotent_and_append_on
             .unwrap(),
         actor_stored
     );
+    drop(reopened);
     cleanup(home);
 }
 
@@ -858,6 +953,7 @@ fn t116_continuity_schema_represents_both_authority_classes_and_role_specific_cl
             )
             .is_err()
     );
+    drop(store);
     cleanup(home);
 }
 
@@ -957,6 +1053,74 @@ fn t116_continuity_schema_rejects_bad_authority_digest_actor_role_and_lineage() 
         &retrospective_permission,
     )
     .unwrap();
+    let exact_continuity_authority_json = retrospective_authority.canonical_json().unwrap();
+    store
+        .connection
+        .execute(
+            "INSERT INTO agentic_delegation_approvals(
+                approval_id, workstream_id, session_id, workspace_id,
+                content_digest, canonical_content_json, approved_unix_ms
+             ) VALUES ('forged-continuity-digest-approval', 'workstream-1', 'session-1',
+                       'workspace-1', ?1, ?2, 10)",
+            params!["f".repeat(64), exact_continuity_authority_json],
+        )
+        .unwrap();
+    assert!(
+        store
+            .connection
+            .execute(
+                "INSERT INTO model_mesh_continuity_events(
+                    continuity_event_id, target_request_id, source_actor_binding_id,
+                    destination_actor_binding_id, continuity_class, context_digest,
+                    completeness_state, continuity_permission_digest,
+                    authority_approval_id, authority_claim, created_unix_ms
+                 ) VALUES (
+                    'forged-continuity-digest-event', 'target-request-1', 'actor-binding-1',
+                    'actor-binding-1', 'HANDOFF', ?1, 'COMPLETE', ?2,
+                    'forged-continuity-digest-approval', 'REQUIRED', 11
+                 )",
+                params![retrospective_context, retrospective_permission_digest],
+            )
+            .is_err()
+    );
+
+    let augmented_continuity_authority_json = format!(
+        "{},\"unexpected\":true}}",
+        exact_continuity_authority_json.strip_suffix('}').unwrap()
+    );
+    store
+        .connection
+        .execute(
+            "INSERT INTO agentic_delegation_approvals(
+                approval_id, workstream_id, session_id, workspace_id,
+                content_digest, canonical_content_json, approved_unix_ms
+             ) VALUES ('augmented-continuity-approval', 'workstream-1', 'session-1',
+                       'workspace-1', ?1, ?2, 10)",
+            params![
+                sha256_hex(&augmented_continuity_authority_json),
+                augmented_continuity_authority_json
+            ],
+        )
+        .unwrap();
+    assert!(
+        store
+            .connection
+            .execute(
+                "INSERT INTO model_mesh_continuity_events(
+                    continuity_event_id, target_request_id, source_actor_binding_id,
+                    destination_actor_binding_id, continuity_class, context_digest,
+                    completeness_state, continuity_permission_digest,
+                    authority_approval_id, authority_claim, created_unix_ms
+                 ) VALUES (
+                    'augmented-continuity-authority-event', 'target-request-1',
+                    'actor-binding-1', 'actor-binding-1', 'HANDOFF', ?1, 'COMPLETE', ?2,
+                    'augmented-continuity-approval', 'REQUIRED', 11
+                 )",
+                params![retrospective_context, retrospective_permission_digest],
+            )
+            .is_err()
+    );
+
     record_model_mesh_approval(
         &store,
         "late-continuity-approval",
@@ -1150,5 +1314,6 @@ fn t116_continuity_schema_rejects_bad_authority_digest_actor_role_and_lineage() 
     );
 
     assert_eq!(request.descriptor().actor_binding_id(), "actor-binding-1");
+    drop(store);
     cleanup(home);
 }

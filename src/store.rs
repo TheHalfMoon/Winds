@@ -24,17 +24,19 @@ use crate::domain::{
 use crate::model_mesh::{
     ExactModelId, ExactProviderId, IdentityClaim, IdentityDimension, IdentitySourceClass,
     ModelMeshAuthorityEnvelopeV1, ModelMeshTargetDescriptorV1, TargetDimension, TargetRequest,
-    TargetSelector,
+    TargetSelector, model_mesh_authority_json_matches_digest,
 };
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, ffi, params};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
+use std::ffi::c_int;
 use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Read, Write};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::{slice, str};
 
 #[path = "agentic_identity.rs"]
 pub(crate) mod agentic_identity;
@@ -309,6 +311,7 @@ impl Store {
         fs::create_dir_all(home)?;
         fs::create_dir_all(home.join("blobs"))?;
         let connection = Connection::open(home.join("winds.db"))?;
+        register_model_mesh_approval_integrity_function(&connection)?;
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.execute_batch(include_str!("../migrations/0001_init.sql"))?;
@@ -476,6 +479,7 @@ fn model_mesh_schema_objects(
 
 fn expected_model_mesh_schema_objects() -> Result<BTreeMap<String, (String, String, String)>> {
     let connection = Connection::open_in_memory()?;
+    register_model_mesh_approval_integrity_function(&connection)?;
     connection.pragma_update(None, "foreign_keys", "ON")?;
     connection.execute_batch(include_str!(
         "../migrations/0002_workspace_execution_ledger.sql"
@@ -522,6 +526,72 @@ fn validate_model_mesh_schema_connection(connection: &Connection) -> Result<()> 
         }
     }
     Ok(())
+}
+
+const MODEL_MESH_APPROVAL_INTEGRITY_SQL_FUNCTION: &[u8] = b"winds_model_mesh_approval_integrity\0";
+
+fn register_model_mesh_approval_integrity_function(connection: &Connection) -> Result<()> {
+    // T116 cannot add a rusqlite feature/dependency. Register one narrow deterministic function
+    // through rusqlite's public SQLite FFI so the frozen schema can fail closed on approval bytes,
+    // not only on selected JSON fields. Connections without this function cannot satisfy the
+    // Model Mesh authority triggers and therefore cannot append authorized target/event truth.
+    let result = unsafe {
+        ffi::sqlite3_create_function_v2(
+            connection.handle(),
+            MODEL_MESH_APPROVAL_INTEGRITY_SQL_FUNCTION.as_ptr().cast(),
+            2,
+            ffi::SQLITE_UTF8 | ffi::SQLITE_DETERMINISTIC | ffi::SQLITE_INNOCUOUS,
+            std::ptr::null_mut(),
+            Some(model_mesh_approval_integrity_sqlite),
+            None,
+            None,
+            None,
+        )
+    };
+    if result != ffi::SQLITE_OK {
+        return Err(format!(
+            "could not register Model Mesh approval-integrity SQL function: SQLite code {result}"
+        )
+        .into());
+    }
+    Ok(())
+}
+
+unsafe extern "C" fn model_mesh_approval_integrity_sqlite(
+    context: *mut ffi::sqlite3_context,
+    argument_count: c_int,
+    arguments: *mut *mut ffi::sqlite3_value,
+) {
+    let valid = if argument_count == 2 && !arguments.is_null() {
+        let values = unsafe { slice::from_raw_parts(arguments, 2) };
+        match (unsafe { model_mesh_sql_text(values[0]) }, unsafe {
+            model_mesh_sql_text(values[1])
+        }) {
+            (Some(canonical_content_json), Some(content_digest)) => {
+                model_mesh_authority_json_matches_digest(&canonical_content_json, &content_digest)
+            }
+            _ => false,
+        }
+    } else {
+        false
+    };
+    unsafe { ffi::sqlite3_result_int(context, i32::from(valid)) };
+}
+
+unsafe fn model_mesh_sql_text(value: *mut ffi::sqlite3_value) -> Option<String> {
+    if value.is_null() || unsafe { ffi::sqlite3_value_type(value) } != ffi::SQLITE_TEXT {
+        return None;
+    }
+    let text = unsafe { ffi::sqlite3_value_text(value) };
+    if text.is_null() {
+        return None;
+    }
+    let bytes = unsafe { ffi::sqlite3_value_bytes(value) };
+    if bytes < 0 {
+        return None;
+    }
+    let bytes = unsafe { slice::from_raw_parts(text, bytes as usize) };
+    str::from_utf8(bytes).ok().map(str::to_owned)
 }
 
 fn initialize_model_mesh_schema(connection: &Connection) -> Result<()> {
