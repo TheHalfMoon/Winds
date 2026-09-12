@@ -498,6 +498,7 @@ The Plan MUST pin reproducible measurement environments before implementation cl
 - **FR-130**: Project-scoped Session organization MUST remain the primary desktop history/navigation model; a global flat Recents list MAY exist as a convenience surface but MUST NOT be the only way to recover long-running project work.
 - **FR-131**: The design MUST use familiar product affordances for standard operations unless a materially better task-specific interaction is proven; visual novelty alone is insufficient justification for reinventing scroll, selection, forms, menus, dialogs, or focus behavior.
 - **FR-132**: Winds' accepted desktop appearance MUST be recognizably its own and MUST NOT reproduce Codex, Claude, Herdr, Cursor, Linear, Warp, or Impeccable trade dress, proprietary assets, or exact visual composition.
+- **FR-133**: Every asynchronous right-dock request/result MUST carry an immutable canonical binding snapshot identifying the applicable Project, Session, workspace/worktree, candidate/tree, and other material source identity available at request time. Before rendering or applying a late result, Winds MUST compare that snapshot with the dock's current binding; a mismatch MUST be discarded or rendered only as explicitly stale data with its original binding visible, never silently attributed to the newly focused Session.
 
 ---
 
@@ -533,6 +534,7 @@ The Plan MUST pin reproducible measurement environments before implementation cl
 - **SC-028**: Switching among at least 100 project-scoped Session fixtures preserves deterministic selection/search and does not require a global flat Recents list to recover the target Session.
 - **SC-029**: No acceptance test, UI contract, or product copy claims hidden model chain-of-thought access; user-visible summaries remain explicitly source-labelled.
 - **SC-030**: Final human visual review confirms the accepted build satisfies the Winds Operate-mode craft rubric: task-first scanability, restrained semantic color, complete component states, purposeful short motion, non-default product detailing, and no copied competitor trade dress.
+- **SC-031**: A delayed-response race fixture starts right-dock Files/Changes/Evidence/Context/Artifacts/Needs-You requests for Session A, switches the dock binding to Session B before completion, then delivers A's results late; no result may be rendered as B-bound truth, and any retained stale result must visibly preserve A's original immutable binding.
 
 ---
 
