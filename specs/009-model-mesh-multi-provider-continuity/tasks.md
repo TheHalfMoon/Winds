@@ -123,7 +123,7 @@ No row grants authority to skip a dependency. The map identifies the primary imp
 
 ## Phase 1 — Closed Model Mesh Domain
 
-### [ ] T114 — Canonical target/identity/continuity domain and pure exact resolver
+### [x] T114 — Canonical target/identity/continuity domain and pure exact resolver
 
 **Purpose**: establish the smallest closed deterministic Model Mesh truth model before adapters, persistence, CLI, or runtime action.
 
@@ -159,7 +159,7 @@ No row grants authority to skip a dependency. The map identifies the primary imp
 
 ## Phase 2 — Accepted Observation and Authority Adapters
 
-### [ ] T115 — Runtime/actor/source-labelled observation and authority revalidation adapters
+### [x] T115 — Runtime/actor/source-labelled observation and authority revalidation adapters
 
 **Purpose**: adapt already-accepted Winds runtime/workflow/authority truth into pure Model Mesh inputs without creating new observations, persistence, or execution authority.
 
@@ -197,7 +197,7 @@ No row grants authority to skip a dependency. The map identifies the primary imp
 
 ## Phase 3 — Append-Only SQLite Substrate
 
-### [ ] T116 — `0011_model_mesh_continuity.sql`, exact target/claim persistence, and Model Mesh approval storage
+### [x] T116 — `0011_model_mesh_continuity.sql`, exact target/claim persistence, and Model Mesh approval storage
 
 **Purpose**: qualify the complete Plan-selected Spec 009 schema once and expose only the persistence behavior needed by target requests/identity claims/approval basis in this slice.
 
@@ -253,7 +253,7 @@ No row grants authority to skip a dependency. The map identifies the primary imp
 
 ## Phase 4 — Deterministic Drift and Staleness
 
-### [ ] T117 — Exact target/identity/authority drift evaluator
+### [x] T117 — Exact target/identity/authority drift evaluator
 
 **Purpose**: make applicability fail truthfully when any observation or authority basis moves, without deleting historical records.
 
@@ -283,7 +283,7 @@ No row grants authority to skip a dependency. The map identifies the primary imp
 
 ## Phase 5 — Direction-Neutral Continuity Context
 
-### [ ] T118 — Continuity classifier and canonical cross-runtime context projection
+### [x] T118 — Continuity classifier and canonical cross-runtime context projection
 
 **Purpose**: generalize continuity evaluation over accepted Spec 006/008 context/reconstruction seams without manufacturing live ownership or provider-private memory.
 
@@ -319,7 +319,7 @@ No row grants authority to skip a dependency. The map identifies the primary imp
 
 ## Phase 6 — Continuity Event Persistence
 
-### [ ] T119 — Append-only continuity events, role-specific actor claims, and permission binding
+### [x] T119 — Append-only continuity events, role-specific actor claims, and permission binding
 
 **Purpose**: activate the already-landed continuity schema with exact source/destination identity and content-bound permission semantics.
 
@@ -353,7 +353,7 @@ No row grants authority to skip a dependency. The map identifies the primary imp
 
 ## Phase 7 — Read-Only Operator and Reviewer Projections
 
-### [ ] T120 — Target/status/why-blocked/continuity/reviewer projections
+### [x] T120 — Target/status/why-blocked/continuity/reviewer projections
 
 **Purpose**: expose deterministic Model Mesh truth without creating a second mutable UI/authority state.
 
@@ -385,7 +385,7 @@ No row grants authority to skip a dependency. The map identifies the primary imp
 
 ## Phase 8 — Narrow CLI Integration
 
-### [ ] T121 — Existing-style Model Mesh CLI inspection and explicit request surfaces
+### [x] T121 — Existing-style Model Mesh CLI inspection and explicit request surfaces
 
 **Purpose**: make qualified Model Mesh truth usable from the existing CLI without implicit provider/runtime execution.
 
@@ -417,7 +417,7 @@ No row grants authority to skip a dependency. The map identifies the primary imp
 
 ## Phase 9 — Workbench Necessity Gate
 
-### [ ] T122 — Decide whether read-only Workbench Model Mesh rendering is necessary
+### [x] T122 — Decide whether read-only Workbench Model Mesh rendering is necessary
 
 **Purpose**: prevent speculative TUI expansion; add a read-only surface only if CLI qualification proves a concrete operator gap.
 
@@ -445,7 +445,7 @@ No row grants authority to skip a dependency. The map identifies the primary imp
 
 ## Phase 10 — Adversarial Model Mesh Truth Campaign
 
-### [ ] T123 — Forged identity, authority replay, secret, corruption, and history campaign
+### [x] T123 — Forged identity, authority replay, secret, corruption, and history campaign
 
 **Purpose**: attack the complete deterministic Model Mesh truth model before platform/final qualification.
 
@@ -485,7 +485,7 @@ No row grants authority to skip a dependency. The map identifies the primary imp
 
 ## Phase 11 — Inherited Regression and Platform Qualification
 
-### [ ] T124 — Spec 003/006/007/008 regression and platform-bound qualification
+### [x] T124 — Spec 003/006/007/008 regression and platform-bound qualification
 
 **Purpose**: prove Model Mesh integration does not weaken inherited canonical terminal/runtime/workbench/workflow/evidence/authority boundaries.
 
@@ -518,7 +518,7 @@ No row grants authority to skip a dependency. The map identifies the primary imp
 
 ## Phase 12 — Optional Usage/Cost Observation Necessity Gate
 
-### [ ] T125 — Qualify an existing structured local usage source or close with `UNKNOWN`
+### [x] T125 — Qualify an existing structured local usage source or close with `UNKNOWN`
 
 **Purpose**: satisfy optional observability truth without creating billing/provider infrastructure or speculative telemetry.
 
@@ -548,7 +548,7 @@ No row grants authority to skip a dependency. The map identifies the primary imp
 
 ## Phase 13 — Final Spec 009 Reconciliation and Closeout
 
-### [ ] T126 — Spec 009 final acceptance, evidence reconciliation, and program closeout
+### [x] T126 — Spec 009 final acceptance, evidence reconciliation, and program closeout
 
 **Purpose**: reconcile every Spec 009 requirement/success criterion against canonical implementation evidence and close only what is actually proven.
 
