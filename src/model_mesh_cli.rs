@@ -14,7 +14,7 @@ use crate::{Result, ensure_allowed_flags, required, unix_ms};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -63,30 +63,7 @@ impl ReadOnlyModelMeshStore {
                 | OpenFlags::SQLITE_OPEN_URI
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
-        let required_objects = [
-            "workflow_runs",
-            "workflow_stage_runs",
-            "workflow_actor_bindings",
-            "winds_sessions",
-            "runtime_session_bindings",
-            "model_mesh_target_requests",
-            "model_mesh_identity_claims",
-            "model_mesh_continuity_events",
-            "model_mesh_continuity_identity_claims",
-        ];
-        for object in required_objects {
-            let exists = connection.query_row(
-                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
-                params![object],
-                |row| row.get::<_, i64>(0),
-            )?;
-            if exists != 1 {
-                return Err(format!(
-                    "Model Mesh inspection requires initialized canonical table: {object}"
-                )
-                .into());
-            }
-        }
+        validate_read_only_canonical_schema(&connection)?;
         Ok(Self {
             connection,
             db_path,
@@ -560,6 +537,45 @@ impl ReadOnlyModelMeshStore {
         ))
     }
 
+    fn validate_actor_in_target_lineage(
+        &self,
+        target_request_id: &str,
+        actor_binding_id: Option<&str>,
+        role: &str,
+    ) -> Result<()> {
+        let Some(actor_binding_id) = actor_binding_id else {
+            return Ok(());
+        };
+        let valid = self.connection.query_row(
+            "WITH RECURSIVE lineage(stage_run_id, predecessor_stage_run_id) AS (
+                SELECT stage.stage_run_id, stage.predecessor_stage_run_id
+                FROM model_mesh_target_requests request
+                JOIN workflow_stage_runs stage ON stage.stage_run_id = request.stage_run_id
+                WHERE request.target_request_id = ?1
+                UNION ALL
+                SELECT predecessor.stage_run_id, predecessor.predecessor_stage_run_id
+                FROM workflow_stage_runs predecessor
+                JOIN lineage current ON predecessor.stage_run_id = current.predecessor_stage_run_id
+             )
+             SELECT EXISTS(
+                SELECT 1
+                FROM workflow_actor_bindings actor
+                JOIN lineage ON lineage.stage_run_id = actor.stage_run_id
+                WHERE actor.binding_id = ?2
+                  AND actor.winds_session_id IS NOT NULL
+             )",
+            params![target_request_id, actor_binding_id],
+            |row| row.get::<_, i64>(0),
+        )? == 1;
+        if !valid {
+            return Err(format!(
+                "stored Model Mesh continuity {role} actor is outside canonical target StageRun lineage"
+            )
+            .into());
+        }
+        Ok(())
+    }
+
     fn load_event(&self, event_id: &str) -> Result<StoredModelMeshContinuityEvent> {
         let row = self
             .connection
@@ -597,6 +613,8 @@ impl ReadOnlyModelMeshStore {
         if row.10 < 0 {
             return Err("stored Model Mesh continuity event time must not be negative".into());
         }
+        self.validate_actor_in_target_lineage(&row.1, row.2.as_deref(), "source")?;
+        self.validate_actor_in_target_lineage(&row.1, row.3.as_deref(), "destination")?;
         let source_identity_claim_ids = self.association_ids(&row.0, "SOURCE")?;
         let destination_identity_claim_ids = self.association_ids(&row.0, "DESTINATION")?;
         self.validate_event_claims(row.2.as_deref(), &source_identity_claim_ids, "source")?;
@@ -697,6 +715,130 @@ impl ReadOnlyModelMeshStore {
         drop(statement);
         ids.iter().map(|id| self.load_event(id)).collect()
     }
+}
+
+fn normalize_schema_sql(sql: &str) -> String {
+    sql.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+        .replace(" if not exists", "")
+}
+
+fn read_schema_objects(
+    connection: &Connection,
+    namespace: &str,
+) -> Result<BTreeMap<String, (String, String, String)>> {
+    let (table_glob, index_glob, trigger_glob) = match namespace {
+        "workflow" => ("workflow_*", "idx_workflow_*", "trg_workflow_*"),
+        "model_mesh" => ("model_mesh_*", "idx_model_mesh_*", "trg_model_mesh_*"),
+        _ => return Err("unknown read-only schema namespace".into()),
+    };
+    let mut statement = connection.prepare(
+        "SELECT name, type, tbl_name, sql
+         FROM sqlite_master
+         WHERE name GLOB ?1 OR name GLOB ?2 OR name GLOB ?3
+         ORDER BY name",
+    )?;
+    let rows = statement.query_map(params![table_glob, index_glob, trigger_glob], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(3)?,
+        ))
+    })?;
+    let mut objects = BTreeMap::new();
+    for row in rows {
+        let (name, object_type, table_name, sql) = row?;
+        let sql = sql.ok_or_else(|| format!("{namespace} schema object has no SQL: {name}"))?;
+        objects.insert(name, (object_type, table_name, normalize_schema_sql(&sql)));
+    }
+    Ok(objects)
+}
+
+fn expected_workflow_schema_objects_read_only() -> Result<BTreeMap<String, (String, String, String)>>
+{
+    let connection = Connection::open_in_memory()?;
+    connection.pragma_update(None, "foreign_keys", "ON")?;
+    connection.execute_batch(include_str!(
+        "../migrations/0002_workspace_execution_ledger.sql"
+    ))?;
+    connection.execute_batch(include_str!("../migrations/0006_agentic_identity.sql"))?;
+    connection.execute_batch(include_str!(
+        "../migrations/0008_runtime_session_bindings.sql"
+    ))?;
+    connection.execute_batch(include_str!(
+        "../migrations/0010_resumable_workflow_ledger.sql"
+    ))?;
+    read_schema_objects(&connection, "workflow")
+}
+
+fn expected_model_mesh_schema_objects_read_only()
+-> Result<BTreeMap<String, (String, String, String)>> {
+    let connection = Connection::open_in_memory()?;
+    connection.pragma_update(None, "foreign_keys", "ON")?;
+    connection.execute_batch(include_str!(
+        "../migrations/0002_workspace_execution_ledger.sql"
+    ))?;
+    connection.execute_batch(include_str!("../migrations/0006_agentic_identity.sql"))?;
+    connection.execute_batch(include_str!(
+        "../migrations/0008_runtime_session_bindings.sql"
+    ))?;
+    connection.execute_batch(include_str!(
+        "../migrations/0009_agentic_delegation_audit.sql"
+    ))?;
+    connection.execute_batch(include_str!(
+        "../migrations/0010_resumable_workflow_ledger.sql"
+    ))?;
+    connection.execute_batch(include_str!("../migrations/0011_model_mesh_continuity.sql"))?;
+    read_schema_objects(&connection, "model_mesh")
+}
+
+fn validate_schema_namespace(
+    connection: &Connection,
+    namespace: &str,
+    expected: BTreeMap<String, (String, String, String)>,
+) -> Result<()> {
+    let observed = read_schema_objects(connection, namespace)?;
+    if observed.keys().collect::<Vec<_>>() != expected.keys().collect::<Vec<_>>() {
+        let missing = expected
+            .keys()
+            .filter(|name| !observed.contains_key(*name))
+            .cloned()
+            .collect::<Vec<_>>();
+        let unexpected = observed
+            .keys()
+            .filter(|name| !expected.contains_key(*name))
+            .cloned()
+            .collect::<Vec<_>>();
+        return Err(format!(
+            "{namespace} schema object inventory mismatch; missing={missing:?}; unexpected={unexpected:?}"
+        )
+        .into());
+    }
+    for (name, expected_object) in expected {
+        let observed_object = observed
+            .get(&name)
+            .ok_or_else(|| format!("{namespace} schema object missing: {name}"))?;
+        if observed_object != &expected_object {
+            return Err(format!("{namespace} schema object definition mismatch: {name}").into());
+        }
+    }
+    Ok(())
+}
+
+fn validate_read_only_canonical_schema(connection: &Connection) -> Result<()> {
+    validate_schema_namespace(
+        connection,
+        "workflow",
+        expected_workflow_schema_objects_read_only()?,
+    )?;
+    validate_schema_namespace(
+        connection,
+        "model_mesh",
+        expected_model_mesh_schema_objects_read_only()?,
+    )
 }
 
 fn immutable_sqlite_uri(path: &Path) -> Result<String> {

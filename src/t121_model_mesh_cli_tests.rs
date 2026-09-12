@@ -16,6 +16,7 @@ use crate::store::{
     ModelMeshClaimSubject, NewModelMeshContinuityEvent, NewModelMeshIdentityClaim, NewWindsSession,
     NewWorkspace, NewWorkstream, Store,
 };
+use rusqlite::Connection;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
@@ -310,6 +311,34 @@ fn add_unproven_event(store: &mut Store) {
         .unwrap();
 }
 
+fn add_outside_stage_actor(store: &Store) {
+    store
+        .create_stage_run(
+            &StageRunIdentity::new("stage-outside", "workflow-1", "outside", 1, None).unwrap(),
+            None,
+            10,
+        )
+        .unwrap();
+    let runtime = store
+        .load_runtime_session_binding("runtime-binding-1")
+        .unwrap();
+    store
+        .create_actor_binding_from_runtime_resolution(
+            "actor-binding-outside",
+            "stage-outside",
+            "session-1",
+            &RuntimeResumeResolution::Candidate(Box::new(runtime)),
+            11,
+        )
+        .unwrap();
+}
+
+fn corrupt_db(home: &Path, sql: &str) {
+    let connection = Connection::open(home.join("winds.db")).unwrap();
+    connection.execute_batch(sql).unwrap();
+    drop(connection);
+}
+
 #[test]
 fn t121_command_spelling_is_single_and_unknown_or_malformed_input_fails_closed() {
     assert_eq!(MODEL_MESH_COMMAND, "model-mesh");
@@ -511,6 +540,93 @@ fn t121_continuity_and_reviewer_views_are_read_only_and_preserve_unproven_histor
         before
     );
     drop(reopened);
+    cleanup(home);
+}
+
+#[test]
+fn t121_inspection_rejects_missing_canonical_trigger_without_mutation() {
+    let (home, store) = seeded_store("missing-trigger");
+    drop(store);
+    corrupt_db(
+        &home,
+        "DROP TRIGGER trg_model_mesh_continuity_event_lineage_insert;",
+    );
+    let before = home_snapshot(&home);
+    let error = execute(flags(&home, "availability"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("model_mesh schema object inventory mismatch"),
+        "{error}"
+    );
+    assert_eq!(home_snapshot(&home), before);
+    cleanup(home);
+}
+
+#[test]
+fn t121_inspection_rejects_modified_canonical_trigger_without_mutation() {
+    let (home, store) = seeded_store("modified-trigger");
+    drop(store);
+    corrupt_db(
+        &home,
+        "DROP TRIGGER trg_workflow_runs_no_delete;
+         CREATE TRIGGER trg_workflow_runs_no_delete
+         BEFORE DELETE ON workflow_runs
+         BEGIN
+             SELECT 1;
+         END;",
+    );
+    let before = home_snapshot(&home);
+    let error = execute(flags(&home, "availability"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("workflow schema object definition mismatch: trg_workflow_runs_no_delete"),
+        "{error}"
+    );
+    assert_eq!(home_snapshot(&home), before);
+    cleanup(home);
+}
+
+#[test]
+fn t121_continuity_rejects_actor_outside_target_lineage_even_with_valid_schema() {
+    let (home, mut store) = seeded_store("outside-lineage");
+    insert_request(&home, &store);
+    add_unproven_event(&mut store);
+    add_outside_stage_actor(&store);
+    drop(store);
+
+    let connection = Connection::open(home.join("winds.db")).unwrap();
+    let no_update_sql: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='trigger' AND name='trg_model_mesh_continuity_events_no_update'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    connection
+        .execute_batch("DROP TRIGGER trg_model_mesh_continuity_events_no_update;")
+        .unwrap();
+    connection
+        .execute(
+            "UPDATE model_mesh_continuity_events
+             SET source_actor_binding_id='actor-binding-outside'
+             WHERE continuity_event_id='event-unproven-1'",
+            [],
+        )
+        .unwrap();
+    connection.execute_batch(&no_update_sql).unwrap();
+    drop(connection);
+
+    let before = home_snapshot(&home);
+    let error = execute(target_only_flags(&home, "continuity"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("source actor is outside canonical target StageRun lineage"),
+        "{error}"
+    );
+    assert_eq!(home_snapshot(&home), before);
     cleanup(home);
 }
 
