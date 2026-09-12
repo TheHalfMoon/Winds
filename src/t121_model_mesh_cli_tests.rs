@@ -339,6 +339,30 @@ fn corrupt_db(home: &Path, sql: &str) {
     drop(connection);
 }
 
+fn corrupt_target_selector_to_explicit_policy(home: &Path) {
+    let connection = Connection::open(home.join("winds.db")).unwrap();
+    let no_update_sql: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master
+             WHERE type='trigger' AND name='trg_model_mesh_target_requests_no_update'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    connection
+        .execute_batch(
+            "DROP TRIGGER trg_model_mesh_target_requests_no_update;
+             PRAGMA ignore_check_constraints = ON;
+             UPDATE model_mesh_target_requests
+             SET selector_class = 'EXPLICIT_POLICY'
+             WHERE target_request_id = 'target-request-1';
+             PRAGMA ignore_check_constraints = OFF;",
+        )
+        .unwrap();
+    connection.execute_batch(&no_update_sql).unwrap();
+    drop(connection);
+}
+
 fn insert_actor_binding_overflow(home: &Path) {
     let mut connection = Connection::open(home.join("winds.db")).unwrap();
     let tx = connection.transaction().unwrap();
@@ -669,6 +693,31 @@ fn t121_continuity_and_reviewer_views_are_read_only_and_preserve_unproven_histor
     );
     drop(reopened);
     cleanup(home);
+}
+
+#[test]
+fn t121_inspection_rejects_corrupted_non_human_target_selector_without_mutation() {
+    for action in ["status", "continuity", "reviewer"] {
+        let (home, mut store) = seeded_store(&format!("selector-corruption-{action}"));
+        insert_request(&home, &store);
+        if action != "status" {
+            add_unproven_event(&mut store);
+        }
+        drop(store);
+        corrupt_target_selector_to_explicit_policy(&home);
+        let before = home_snapshot(&home);
+        let mut input = target_only_flags(&home, action);
+        if action == "reviewer" {
+            input.insert("continuity-event-id".into(), "event-unproven-1".into());
+        }
+        let error = execute(input).unwrap_err().to_string();
+        assert!(
+            error.contains("stored Model Mesh target selector must be canonical HUMAN"),
+            "{action}: {error}"
+        );
+        assert_eq!(home_snapshot(&home), before, "{action}");
+        cleanup(home);
+    }
 }
 
 #[test]

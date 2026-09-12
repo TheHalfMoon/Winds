@@ -327,6 +327,9 @@ impl ReadOnlyModelMeshStore {
             .map_or(TargetDimension::Unspecified, TargetDimension::Exact);
         let selector = TargetSelector::from_db(&row.5)
             .ok_or_else(|| format!("unknown Model Mesh target selector: {}", row.5))?;
+        if selector != TargetSelector::Human {
+            return Err("stored Model Mesh target selector must be canonical HUMAN".into());
+        }
         let descriptor = crate::model_mesh::ModelMeshTargetDescriptorV1::new(
             &row.9, &row.10, &row.11, &row.12, &row.13, &row.14, &row.1, runtime, provider, model,
         )
