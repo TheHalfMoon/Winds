@@ -101,6 +101,9 @@ test("T129 focus and 125% scale fixtures create observable rendered differences"
   assert.match(fixtureModes, /outline: 2px solid var\(--focus\)/);
   assert.match(fixtureModes, /data-scale="125"/);
   assert.match(fixtureModes, /transform: scale\(1\.25\)/);
+  assert.match(fixtureModes, /data-scale="125"\] \.workspace-grid/);
+  assert.match(fixtureModes, /data-scale="125"\] \.right-dock/);
+  assert.match(fixtureModes, /display: none/);
 });
 
 test("T129 fixture matrix contains the required viewport and accessibility surfaces", () => {
