@@ -2633,9 +2633,10 @@ pub(crate) fn project_model_mesh_why_blocked(
         }
         ApprovalApplicability::Exact => {}
     }
-    if target.approval_digest_match != ModelMeshProjectionTruth::Yes
-        || target.current_authority == CurrentAuthorityTruth::Denied
-    {
+    if target.approval_digest_match == ModelMeshProjectionTruth::No {
+        push_blocker(&mut blockers, ModelMeshBlockerCategory::ApprovalMismatch);
+    }
+    if target.current_authority == CurrentAuthorityTruth::Denied {
         push_blocker(&mut blockers, ModelMeshBlockerCategory::AuthorityDenied);
     }
     push_drift_blocker(

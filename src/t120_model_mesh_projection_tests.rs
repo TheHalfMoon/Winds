@@ -335,6 +335,47 @@ fn t120_why_blocked_preserves_auth_approval_native_and_evidence_blockers() {
 }
 
 #[test]
+fn t120_digest_unknown_or_stale_never_manufactures_authority_denial() {
+    for digest_truth in [
+        ModelMeshProjectionTruth::Unknown,
+        ModelMeshProjectionTruth::Stale,
+    ] {
+        let mut projection =
+            target_projection(TargetResolution::ExactMatch, DriftApplicability::Applicable);
+        projection.authentication = AuthenticationTruth::Ready;
+        projection.native_session_freshness = DriftApplicability::NotApplicable;
+        projection.approval = ApprovalApplicability::Exact;
+        projection.approval_digest_match = digest_truth;
+        projection.current_authority = CurrentAuthorityTruth::Allowed;
+        let blocked = project_model_mesh_why_blocked(&projection);
+        assert!(
+            !blocked
+                .blockers
+                .contains(&ModelMeshBlockerCategory::AuthorityDenied)
+        );
+    }
+
+    let mut mismatch =
+        target_projection(TargetResolution::ExactMatch, DriftApplicability::Applicable);
+    mismatch.authentication = AuthenticationTruth::Ready;
+    mismatch.native_session_freshness = DriftApplicability::NotApplicable;
+    mismatch.approval = ApprovalApplicability::Exact;
+    mismatch.approval_digest_match = ModelMeshProjectionTruth::No;
+    mismatch.current_authority = CurrentAuthorityTruth::Allowed;
+    let blocked = project_model_mesh_why_blocked(&mismatch);
+    assert!(
+        blocked
+            .blockers
+            .contains(&ModelMeshBlockerCategory::ApprovalMismatch)
+    );
+    assert!(
+        !blocked
+            .blockers
+            .contains(&ModelMeshBlockerCategory::AuthorityDenied)
+    );
+}
+
+#[test]
 fn t120_continuity_projection_preserves_actor_session_runtime_native_and_identity_truth() {
     let context = continuity_context();
     let source_claims = vec![claim(
