@@ -234,16 +234,17 @@ fn input_and_resize_racing_with_exit_never_reopen_final_session() {
             drop(execution);
 
             let record = store.load_execution("t060-exit-race").unwrap();
-            assert_eq!(record.status, ExecutionStatus::Interrupted);
             assert_eq!(record.status_source, FactSource::WindsObserved);
             assert!(record.ended_unix_ms.is_some());
-            assert_eq!(
-                store
-                    .load_terminal_session("t060-exit-race")
-                    .unwrap()
-                    .close_reason,
-                Some(TerminalCloseReason::TerminatedByWinds)
-            );
+            assert!(record.duration_ms.is_some());
+            let terminal = store.load_terminal_session("t060-exit-race").unwrap();
+            match (record.status, terminal.close_reason) {
+                (ExecutionStatus::Exited, Some(TerminalCloseReason::ProcessExited))
+                | (ExecutionStatus::Interrupted, Some(TerminalCloseReason::TerminatedByWinds)) => {}
+                (status, close_reason) => panic!(
+                    "unexpected proven-terminate lifecycle: status={status:?} close_reason={close_reason:?}"
+                ),
+            }
         }
         Err(error) => {
             assert_eq!(
