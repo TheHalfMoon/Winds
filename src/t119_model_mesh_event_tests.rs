@@ -350,6 +350,7 @@ fn t119_required_event_is_exact_atomic_idempotent_semantic_replay_safe_and_resta
             continuity_event_id: "event-required-1",
             target_request_id: "target-request-1",
             context: &context,
+            current_authority: CurrentAuthorityTruth::Allowed,
             authority_claim: ContinuityAuthorityClaim::Required,
             authority_approval_id: Some("continuity-approval"),
             source_identity_claim_ids: &source_refs,
@@ -371,6 +372,7 @@ fn t119_required_event_is_exact_atomic_idempotent_semantic_replay_safe_and_resta
             continuity_event_id: "event-required-1",
             target_request_id: "target-request-1",
             context: &context,
+            current_authority: CurrentAuthorityTruth::Allowed,
             authority_claim: ContinuityAuthorityClaim::Required,
             authority_approval_id: Some("continuity-approval"),
             source_identity_claim_ids: &source_refs,
@@ -385,6 +387,7 @@ fn t119_required_event_is_exact_atomic_idempotent_semantic_replay_safe_and_resta
             continuity_event_id: "event-required-replay-new-id",
             target_request_id: "target-request-1",
             context: &context,
+            current_authority: CurrentAuthorityTruth::Allowed,
             authority_claim: ContinuityAuthorityClaim::Required,
             authority_approval_id: Some("continuity-approval"),
             source_identity_claim_ids: &source_refs,
@@ -406,6 +409,7 @@ fn t119_required_event_is_exact_atomic_idempotent_semantic_replay_safe_and_resta
             continuity_event_id: "event-required-reapproved",
             target_request_id: "target-request-1",
             context: &context,
+            current_authority: CurrentAuthorityTruth::Allowed,
             authority_claim: ContinuityAuthorityClaim::Required,
             authority_approval_id: Some("continuity-approval-reissued"),
             source_identity_claim_ids: &source_refs,
@@ -466,6 +470,7 @@ fn t119_no_authority_observation_is_bounded_and_never_overrides_current_authorit
             continuity_event_id: "event-unproven",
             target_request_id: "target-request-1",
             context: &unproven,
+            current_authority: CurrentAuthorityTruth::Allowed,
             authority_claim: ContinuityAuthorityClaim::NoAuthorityClaim,
             authority_approval_id: None,
             source_identity_claim_ids: &destination_refs,
@@ -493,6 +498,7 @@ fn t119_no_authority_observation_is_bounded_and_never_overrides_current_authorit
                 continuity_event_id: "event-reassigned-without-authority",
                 target_request_id: "target-request-1",
                 context: &reassigned,
+                current_authority: CurrentAuthorityTruth::Allowed,
                 authority_claim: ContinuityAuthorityClaim::NoAuthorityClaim,
                 authority_approval_id: None,
                 source_identity_claim_ids: &[],
@@ -502,6 +508,49 @@ fn t119_no_authority_observation_is_bounded_and_never_overrides_current_authorit
             .unwrap_err()
             .to_string()
             .contains("only UNAVAILABLE or UNPROVEN")
+    );
+
+    let stale_allowed_context = continuity_context(
+        &store,
+        request.descriptor(),
+        ContinuityClass::Reassigned,
+        CurrentAuthorityTruth::Allowed,
+        "run:119/stale-authority",
+    );
+    approve_continuity(
+        &store,
+        "stale-authority-approval",
+        request.descriptor(),
+        &stale_allowed_context,
+        15,
+    );
+    let event_count_before = store
+        .list_model_mesh_continuity_events_for_target_request("target-request-1")
+        .unwrap()
+        .len();
+    assert!(
+        store
+            .create_model_mesh_continuity_event(NewModelMeshContinuityEvent {
+                continuity_event_id: "event-stale-authority",
+                target_request_id: "target-request-1",
+                context: &stale_allowed_context,
+                current_authority: CurrentAuthorityTruth::Denied,
+                authority_claim: ContinuityAuthorityClaim::Required,
+                authority_approval_id: Some("stale-authority-approval"),
+                source_identity_claim_ids: &[],
+                destination_identity_claim_ids: &[],
+                created_unix_ms: 16,
+            })
+            .unwrap_err()
+            .to_string()
+            .contains("independently current authority")
+    );
+    assert_eq!(
+        store
+            .list_model_mesh_continuity_events_for_target_request("target-request-1")
+            .unwrap()
+            .len(),
+        event_count_before
     );
 
     let denied_reassigned = continuity_context(
@@ -524,6 +573,7 @@ fn t119_no_authority_observation_is_bounded_and_never_overrides_current_authorit
                 continuity_event_id: "event-denied-required",
                 target_request_id: "target-request-1",
                 context: &denied_reassigned,
+                current_authority: CurrentAuthorityTruth::Allowed,
                 authority_claim: ContinuityAuthorityClaim::Required,
                 authority_approval_id: Some("denied-context-approval"),
                 source_identity_claim_ids: &[],
@@ -532,7 +582,7 @@ fn t119_no_authority_observation_is_bounded_and_never_overrides_current_authorit
             })
             .unwrap_err()
             .to_string()
-            .contains("cannot override a denied current authority ceiling")
+            .contains("requires both snapshot and independently current authority to be allowed")
     );
     drop(store);
     cleanup(home);
@@ -575,6 +625,7 @@ fn t119_wrong_role_claim_and_different_context_permission_fail_closed() {
                 continuity_event_id: "event-wrong-role",
                 target_request_id: "target-request-1",
                 context: &approved_context,
+                current_authority: CurrentAuthorityTruth::Allowed,
                 authority_claim: ContinuityAuthorityClaim::Required,
                 authority_approval_id: Some("continuity-approval"),
                 source_identity_claim_ids: &destination_refs,
@@ -603,6 +654,7 @@ fn t119_wrong_role_claim_and_different_context_permission_fail_closed() {
                 continuity_event_id: "event-wrong-context-approval",
                 target_request_id: "target-request-1",
                 context: &moved_context,
+                current_authority: CurrentAuthorityTruth::Allowed,
                 authority_claim: ContinuityAuthorityClaim::Required,
                 authority_approval_id: Some("continuity-approval"),
                 source_identity_claim_ids: &source_refs,
@@ -646,6 +698,7 @@ fn t119_unproven_history_remains_after_later_authorized_continuity() {
             continuity_event_id: "event-history-unproven",
             target_request_id: "target-request-1",
             context: &unproven,
+            current_authority: CurrentAuthorityTruth::Allowed,
             authority_claim: ContinuityAuthorityClaim::NoAuthorityClaim,
             authority_approval_id: None,
             source_identity_claim_ids: &destination_refs,
@@ -673,6 +726,7 @@ fn t119_unproven_history_remains_after_later_authorized_continuity() {
             continuity_event_id: "event-history-authorized",
             target_request_id: "target-request-1",
             context: &reassigned,
+            current_authority: CurrentAuthorityTruth::Allowed,
             authority_claim: ContinuityAuthorityClaim::Required,
             authority_approval_id: Some("history-continuity-approval"),
             source_identity_claim_ids: &source_refs,

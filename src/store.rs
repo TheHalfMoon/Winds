@@ -23,8 +23,8 @@ use crate::domain::{
 };
 use crate::model_mesh::{
     ContextDigest, ContinuityAuthorityClaim, ContinuityClass, ContinuityContextCompleteness,
-    ExactModelId, ExactProviderId, IdentityClaim, IdentityDimension, IdentitySourceClass,
-    ModelMeshAuthorityEnvelopeV1, ModelMeshContinuityContextV1,
+    CurrentAuthorityTruth, ExactModelId, ExactProviderId, IdentityClaim, IdentityDimension,
+    IdentitySourceClass, ModelMeshAuthorityEnvelopeV1, ModelMeshContinuityContextV1,
     ModelMeshContinuityPermissionDescriptorV1, ModelMeshTargetDescriptorV1, TargetDimension,
     TargetRequest, TargetSelector, model_mesh_authority_json_matches_digest,
 };
@@ -329,6 +329,7 @@ pub(crate) struct NewModelMeshContinuityEvent<'a> {
     pub(crate) continuity_event_id: &'a str,
     pub(crate) target_request_id: &'a str,
     pub(crate) context: &'a ModelMeshContinuityContextV1,
+    pub(crate) current_authority: CurrentAuthorityTruth,
     pub(crate) authority_claim: ContinuityAuthorityClaim,
     pub(crate) authority_approval_id: Option<&'a str>,
     pub(crate) source_identity_claim_ids: &'a [&'a str],
@@ -1544,11 +1545,11 @@ impl Store {
         let (continuity_permission_digest, authority_approval_id) = match new_event.authority_claim
         {
             ContinuityAuthorityClaim::Required => {
-                if new_event.context.current_authority()
-                    != crate::model_mesh::CurrentAuthorityTruth::Allowed
+                if new_event.context.current_authority() != CurrentAuthorityTruth::Allowed
+                    || new_event.current_authority != CurrentAuthorityTruth::Allowed
                 {
                     return Err(
-                        "Model Mesh continuity permission cannot override a denied current authority ceiling"
+                        "Model Mesh continuity permission requires both snapshot and independently current authority to be allowed"
                             .into(),
                     );
                 }
