@@ -22,9 +22,11 @@ use crate::domain::{
     TerminalCloseReason, TerminalSessionRecord, WorkspaceRecord,
 };
 use crate::model_mesh::{
+    ContextDigest, ContinuityAuthorityClaim, ContinuityClass, ContinuityContextCompleteness,
     ExactModelId, ExactProviderId, IdentityClaim, IdentityDimension, IdentitySourceClass,
-    ModelMeshAuthorityEnvelopeV1, ModelMeshTargetDescriptorV1, TargetDimension, TargetRequest,
-    TargetSelector, model_mesh_authority_json_matches_digest,
+    ModelMeshAuthorityEnvelopeV1, ModelMeshContinuityContextV1,
+    ModelMeshContinuityPermissionDescriptorV1, ModelMeshTargetDescriptorV1, TargetDimension,
+    TargetRequest, TargetSelector, model_mesh_authority_json_matches_digest,
 };
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, ffi, params};
 use sha2::{Digest, Sha256};
@@ -304,6 +306,34 @@ pub(crate) struct NewModelMeshIdentityClaim<'a> {
     pub(crate) claim: &'a IdentityClaim,
     pub(crate) runtime_binding_id: Option<&'a str>,
     pub(crate) observed_unix_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StoredModelMeshContinuityEvent {
+    pub(crate) continuity_event_id: String,
+    pub(crate) target_request_id: String,
+    pub(crate) source_actor_binding_id: Option<String>,
+    pub(crate) destination_actor_binding_id: Option<String>,
+    pub(crate) continuity_class: ContinuityClass,
+    pub(crate) context_digest: Option<String>,
+    pub(crate) completeness: ContinuityContextCompleteness,
+    pub(crate) continuity_permission_digest: Option<String>,
+    pub(crate) authority_approval_id: Option<String>,
+    pub(crate) authority_claim: ContinuityAuthorityClaim,
+    pub(crate) source_identity_claim_ids: Vec<String>,
+    pub(crate) destination_identity_claim_ids: Vec<String>,
+    pub(crate) created_unix_ms: i64,
+}
+
+pub(crate) struct NewModelMeshContinuityEvent<'a> {
+    pub(crate) continuity_event_id: &'a str,
+    pub(crate) target_request_id: &'a str,
+    pub(crate) context: &'a ModelMeshContinuityContextV1,
+    pub(crate) authority_claim: ContinuityAuthorityClaim,
+    pub(crate) authority_approval_id: Option<&'a str>,
+    pub(crate) source_identity_claim_ids: &'a [&'a str],
+    pub(crate) destination_identity_claim_ids: &'a [&'a str],
+    pub(crate) created_unix_ms: i64,
 }
 
 impl Store {
@@ -874,9 +904,250 @@ fn validate_model_mesh_claim_subject_connection(
     Ok(())
 }
 
+fn canonical_model_mesh_claim_ids(ids: &[&str], label: &str) -> Result<Vec<String>> {
+    let mut values = Vec::with_capacity(ids.len());
+    for id in ids {
+        validate_agentic_identity_text(id, label)?;
+        values.push((*id).to_owned());
+    }
+    values.sort();
+    if values.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(format!("{label} contains duplicate identity claim ids").into());
+    }
+    Ok(values)
+}
+
+fn load_model_mesh_continuity_associations_connection(
+    connection: &Connection,
+    continuity_event_id: &str,
+    actor_role: &str,
+) -> Result<Vec<String>> {
+    let mut statement = connection.prepare(
+        "SELECT identity_claim_id FROM model_mesh_continuity_identity_claims
+         WHERE continuity_event_id = ?1 AND actor_role = ?2
+         ORDER BY identity_claim_id",
+    )?;
+    let ids = statement
+        .query_map(params![continuity_event_id, actor_role], |row| {
+            row.get::<_, String>(0)
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(ids)
+}
+
+fn validate_model_mesh_event_claims_connection(
+    connection: &Connection,
+    actor_binding_id: Option<&str>,
+    claim_ids: &[String],
+    role_label: &str,
+) -> Result<()> {
+    match actor_binding_id {
+        None if !claim_ids.is_empty() => {
+            return Err(format!(
+                "Model Mesh continuity {role_label} claims require an exact {role_label} actor"
+            )
+            .into());
+        }
+        None => return Ok(()),
+        Some(actor_binding_id) => {
+            validate_agentic_identity_text(
+                actor_binding_id,
+                &format!("Model Mesh continuity {role_label} actor binding id"),
+            )?;
+            for claim_id in claim_ids {
+                let claim = load_model_mesh_identity_claim_connection(connection, claim_id)?;
+                validate_model_mesh_claim_subject_connection(
+                    connection,
+                    &claim.subject,
+                    claim.runtime_binding_id.as_deref(),
+                )?;
+                if claim.subject != ModelMeshClaimSubject::Actor(actor_binding_id.to_owned()) {
+                    return Err(format!(
+                        "Model Mesh continuity {role_label} identity claim does not belong to the exact {role_label} actor"
+                    )
+                    .into());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn load_model_mesh_continuity_event_connection(
+    connection: &Connection,
+    continuity_event_id: &str,
+) -> Result<StoredModelMeshContinuityEvent> {
+    let row = connection
+        .query_row(
+            "SELECT continuity_event_id, target_request_id, source_actor_binding_id,
+                    destination_actor_binding_id, continuity_class, context_digest,
+                    completeness_state, continuity_permission_digest, authority_approval_id,
+                    authority_claim, created_unix_ms
+             FROM model_mesh_continuity_events WHERE continuity_event_id = ?1",
+            params![continuity_event_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, String>(9)?,
+                    row.get::<_, i64>(10)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or_else(|| format!("unknown Model Mesh continuity event: {continuity_event_id}"))?;
+
+    let continuity_class = ContinuityClass::from_db(&row.4)
+        .ok_or_else(|| format!("unknown Model Mesh continuity class: {}", row.4))?;
+    let completeness = ContinuityContextCompleteness::from_db(&row.6)
+        .ok_or_else(|| format!("unknown Model Mesh continuity completeness: {}", row.6))?;
+    let authority_claim = ContinuityAuthorityClaim::from_db(&row.9)
+        .ok_or_else(|| format!("unknown Model Mesh continuity authority claim: {}", row.9))?;
+    validate_agentic_identity_timestamp(row.10, "stored Model Mesh continuity event time")?;
+
+    let source_identity_claim_ids =
+        load_model_mesh_continuity_associations_connection(connection, &row.0, "SOURCE")?;
+    let destination_identity_claim_ids =
+        load_model_mesh_continuity_associations_connection(connection, &row.0, "DESTINATION")?;
+    validate_model_mesh_event_claims_connection(
+        connection,
+        row.2.as_deref(),
+        &source_identity_claim_ids,
+        "source",
+    )?;
+    validate_model_mesh_event_claims_connection(
+        connection,
+        row.3.as_deref(),
+        &destination_identity_claim_ids,
+        "destination",
+    )?;
+
+    let target = load_model_mesh_target_request_connection(connection, &row.1)?;
+    let descriptor = target.request.descriptor();
+    let target_digest = descriptor.digest().map_err(model_mesh_error)?;
+    if target_digest != target.request.target_descriptor_digest() {
+        return Err("stored Model Mesh continuity target digest is stale".into());
+    }
+
+    match authority_claim {
+        ContinuityAuthorityClaim::Required => {
+            let context_digest = row
+                .5
+                .as_deref()
+                .ok_or("authorized Model Mesh continuity requires an exact context digest")?;
+            let permission_digest = row
+                .7
+                .as_deref()
+                .ok_or("authorized Model Mesh continuity requires a permission digest")?;
+            let approval_id = row
+                .8
+                .as_deref()
+                .ok_or("authorized Model Mesh continuity requires an approval id")?;
+            let permission = ModelMeshContinuityPermissionDescriptorV1::new(
+                descriptor.workflow_run_id(),
+                descriptor.stage_run_id(),
+                row.2.as_deref(),
+                row.3.as_deref(),
+                continuity_class,
+                &target_digest,
+                ContextDigest::exact(context_digest).map_err(model_mesh_error)?,
+            )
+            .map_err(model_mesh_error)?;
+            if permission.digest().map_err(model_mesh_error)? != permission_digest {
+                return Err(
+                    "stored Model Mesh continuity permission digest does not match event".into(),
+                );
+            }
+            let expected =
+                ModelMeshAuthorityEnvelopeV1::for_continuity_permission(descriptor, &permission)
+                    .map_err(model_mesh_error)?;
+            let stored_approval =
+                load_stored_model_mesh_approval_connection(connection, approval_id)?;
+            if !model_mesh_approval_matches(&stored_approval, &expected)? {
+                return Err(
+                    "stored Model Mesh continuity approval no longer matches exact event".into(),
+                );
+            }
+            if row.10 < stored_approval.approved_unix_ms {
+                return Err("stored Model Mesh continuity event predates its approval".into());
+            }
+        }
+        ContinuityAuthorityClaim::NoAuthorityClaim => {
+            if !matches!(
+                continuity_class,
+                ContinuityClass::Unavailable | ContinuityClass::Unproven
+            ) {
+                return Err(
+                    "only UNAVAILABLE or UNPROVEN continuity may carry NO_AUTHORITY_CLAIM".into(),
+                );
+            }
+            if row.7.is_some() || row.8.is_some() {
+                return Err("NO_AUTHORITY_CLAIM continuity cannot carry approval material".into());
+            }
+        }
+    }
+
+    Ok(StoredModelMeshContinuityEvent {
+        continuity_event_id: row.0,
+        target_request_id: row.1,
+        source_actor_binding_id: row.2,
+        destination_actor_binding_id: row.3,
+        continuity_class,
+        context_digest: row.5,
+        completeness,
+        continuity_permission_digest: row.7,
+        authority_approval_id: row.8,
+        authority_claim,
+        source_identity_claim_ids,
+        destination_identity_claim_ids,
+        created_unix_ms: row.10,
+    })
+}
+
+fn model_mesh_continuity_semantic_match_connection(
+    connection: &Connection,
+    event: &StoredModelMeshContinuityEvent,
+) -> Result<Option<StoredModelMeshContinuityEvent>> {
+    let existing_id = connection
+        .query_row(
+            "SELECT continuity_event_id FROM model_mesh_continuity_events
+             WHERE target_request_id = ?1
+               AND source_actor_binding_id IS ?2
+               AND destination_actor_binding_id IS ?3
+               AND continuity_class = ?4
+               AND context_digest IS ?5
+               AND completeness_state = ?6
+               AND continuity_permission_digest IS ?7
+               AND authority_claim = ?8
+             ORDER BY created_unix_ms, continuity_event_id LIMIT 1",
+            params![
+                event.target_request_id,
+                event.source_actor_binding_id,
+                event.destination_actor_binding_id,
+                event.continuity_class.as_str(),
+                event.context_digest,
+                event.completeness.as_str(),
+                event.continuity_permission_digest,
+                event.authority_claim.as_str(),
+            ],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    existing_id
+        .map(|id| load_model_mesh_continuity_event_connection(connection, &id))
+        .transpose()
+}
+
 #[allow(
     dead_code,
-    reason = "Spec 009 T116 persistence API; projections and continuity consumers land later"
+    reason = "Spec 009 T116/T119 persistence API; projections and CLI consumers land later"
 )]
 impl Store {
     pub(crate) fn validate_model_mesh_schema(&self) -> Result<()> {
@@ -1172,6 +1443,251 @@ impl Store {
             ],
         )?;
         let stored = load_model_mesh_identity_claim_connection(&tx, new_claim.identity_claim_id)?;
+        tx.commit()?;
+        Ok(stored)
+    }
+
+    pub(crate) fn load_model_mesh_continuity_event(
+        &self,
+        continuity_event_id: &str,
+    ) -> Result<StoredModelMeshContinuityEvent> {
+        self.validate_model_mesh_schema()?;
+        validate_agentic_identity_text(continuity_event_id, "Model Mesh continuity event id")?;
+        load_model_mesh_continuity_event_connection(&self.connection, continuity_event_id)
+    }
+
+    pub(crate) fn list_model_mesh_continuity_events_for_target_request(
+        &self,
+        target_request_id: &str,
+    ) -> Result<Vec<StoredModelMeshContinuityEvent>> {
+        self.validate_model_mesh_schema()?;
+        validate_agentic_identity_text(target_request_id, "Model Mesh target request id")?;
+        load_model_mesh_target_request_connection(&self.connection, target_request_id)?;
+        let mut statement = self.connection.prepare(
+            "SELECT continuity_event_id FROM model_mesh_continuity_events
+             WHERE target_request_id = ?1 ORDER BY created_unix_ms, continuity_event_id",
+        )?;
+        let ids = statement
+            .query_map(params![target_request_id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(statement);
+        ids.iter()
+            .map(|id| load_model_mesh_continuity_event_connection(&self.connection, id))
+            .collect()
+    }
+
+    pub(crate) fn create_model_mesh_continuity_event(
+        &mut self,
+        new_event: NewModelMeshContinuityEvent<'_>,
+    ) -> Result<StoredModelMeshContinuityEvent> {
+        self.validate_model_mesh_schema()?;
+        validate_agentic_identity_text(
+            new_event.continuity_event_id,
+            "Model Mesh continuity event id",
+        )?;
+        validate_agentic_identity_text(
+            new_event.target_request_id,
+            "Model Mesh target request id",
+        )?;
+        validate_agentic_identity_timestamp(
+            new_event.created_unix_ms,
+            "Model Mesh continuity event creation time",
+        )?;
+        if let Some(approval_id) = new_event.authority_approval_id {
+            validate_agentic_identity_text(approval_id, "Model Mesh continuity approval id")?;
+        }
+        let source_claim_ids = canonical_model_mesh_claim_ids(
+            new_event.source_identity_claim_ids,
+            "Model Mesh continuity source claim id",
+        )?;
+        let destination_claim_ids = canonical_model_mesh_claim_ids(
+            new_event.destination_identity_claim_ids,
+            "Model Mesh continuity destination claim id",
+        )?;
+
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let target = load_model_mesh_target_request_connection(&tx, new_event.target_request_id)?;
+        if new_event.created_unix_ms < target.created_unix_ms {
+            return Err("Model Mesh continuity event cannot predate its target request".into());
+        }
+        let descriptor = target.request.descriptor();
+        if new_event.context.target_request_id() != new_event.target_request_id
+            || new_event.context.target_descriptor_digest()
+                != target.request.target_descriptor_digest()
+            || new_event.context.workflow_run_id() != descriptor.workflow_run_id()
+            || new_event.context.stage_run_id() != descriptor.stage_run_id()
+        {
+            return Err(
+                "Model Mesh continuity context does not match persisted target request".into(),
+            );
+        }
+        let continuity_class = ContinuityClass::from_db(new_event.context.continuity_class())
+            .ok_or("Model Mesh continuity context contains an unknown class")?;
+        let context_digest = new_event.context.digest().map_err(model_mesh_error)?;
+        let source_actor_binding_id = new_event.context.source_actor_binding_id();
+        let destination_actor_binding_id = new_event.context.destination_actor_binding_id();
+        validate_model_mesh_event_claims_connection(
+            &tx,
+            source_actor_binding_id,
+            &source_claim_ids,
+            "source",
+        )?;
+        validate_model_mesh_event_claims_connection(
+            &tx,
+            destination_actor_binding_id,
+            &destination_claim_ids,
+            "destination",
+        )?;
+
+        let (continuity_permission_digest, authority_approval_id) = match new_event.authority_claim
+        {
+            ContinuityAuthorityClaim::Required => {
+                if new_event.context.current_authority()
+                    != crate::model_mesh::CurrentAuthorityTruth::Allowed
+                {
+                    return Err(
+                        "Model Mesh continuity permission cannot override a denied current authority ceiling"
+                            .into(),
+                    );
+                }
+                let approval_id = new_event
+                    .authority_approval_id
+                    .ok_or("REQUIRED Model Mesh continuity requires an exact approval id")?;
+                let permission = new_event
+                    .context
+                    .permission_descriptor(descriptor)
+                    .map_err(model_mesh_error)?;
+                let permission_digest = permission.digest().map_err(model_mesh_error)?;
+                let expected = ModelMeshAuthorityEnvelopeV1::for_continuity_permission(
+                    descriptor,
+                    &permission,
+                )
+                .map_err(model_mesh_error)?;
+                let stored_approval = load_stored_model_mesh_approval_connection(&tx, approval_id)?;
+                if !model_mesh_approval_matches(&stored_approval, &expected)? {
+                    return Err(
+                        "Model Mesh continuity event lacks exact content-bound permission approval"
+                            .into(),
+                    );
+                }
+                if new_event.created_unix_ms < stored_approval.approved_unix_ms {
+                    return Err(
+                        "Model Mesh continuity event cannot predate its permission approval".into(),
+                    );
+                }
+                (Some(permission_digest), Some(approval_id.to_owned()))
+            }
+            ContinuityAuthorityClaim::NoAuthorityClaim => {
+                if new_event.authority_approval_id.is_some() {
+                    return Err(
+                        "NO_AUTHORITY_CLAIM Model Mesh continuity cannot carry an approval id"
+                            .into(),
+                    );
+                }
+                if !matches!(
+                    continuity_class,
+                    ContinuityClass::Unavailable | ContinuityClass::Unproven
+                ) {
+                    return Err(
+                        "only UNAVAILABLE or UNPROVEN continuity may use NO_AUTHORITY_CLAIM".into(),
+                    );
+                }
+                (None, None)
+            }
+        };
+
+        let expected = StoredModelMeshContinuityEvent {
+            continuity_event_id: new_event.continuity_event_id.to_owned(),
+            target_request_id: new_event.target_request_id.to_owned(),
+            source_actor_binding_id: source_actor_binding_id.map(str::to_owned),
+            destination_actor_binding_id: destination_actor_binding_id.map(str::to_owned),
+            continuity_class,
+            context_digest: Some(context_digest),
+            completeness: new_event.context.completeness(),
+            continuity_permission_digest,
+            authority_approval_id,
+            authority_claim: new_event.authority_claim,
+            source_identity_claim_ids: source_claim_ids,
+            destination_identity_claim_ids: destination_claim_ids,
+            created_unix_ms: new_event.created_unix_ms,
+        };
+
+        if tx
+            .query_row(
+                "SELECT 1 FROM model_mesh_continuity_events WHERE continuity_event_id = ?1",
+                params![new_event.continuity_event_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some()
+        {
+            let existing =
+                load_model_mesh_continuity_event_connection(&tx, new_event.continuity_event_id)?;
+            if existing != expected {
+                return Err("Model Mesh continuity event idempotency collision".into());
+            }
+            tx.commit()?;
+            return Ok(existing);
+        }
+
+        if let Some(existing) = model_mesh_continuity_semantic_match_connection(&tx, &expected)? {
+            if existing.source_identity_claim_ids != expected.source_identity_claim_ids
+                || existing.destination_identity_claim_ids
+                    != expected.destination_identity_claim_ids
+            {
+                return Err(
+                    "Model Mesh continuity semantic replay carries different actor identity claims"
+                        .into(),
+                );
+            }
+            tx.commit()?;
+            return Ok(existing);
+        }
+
+        tx.execute(
+            "INSERT INTO model_mesh_continuity_events(
+                continuity_event_id, target_request_id, source_actor_binding_id,
+                destination_actor_binding_id, continuity_class, context_digest,
+                completeness_state, continuity_permission_digest, authority_approval_id,
+                authority_claim, created_unix_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                expected.continuity_event_id,
+                expected.target_request_id,
+                expected.source_actor_binding_id,
+                expected.destination_actor_binding_id,
+                expected.continuity_class.as_str(),
+                expected.context_digest,
+                expected.completeness.as_str(),
+                expected.continuity_permission_digest,
+                expected.authority_approval_id,
+                expected.authority_claim.as_str(),
+                expected.created_unix_ms,
+            ],
+        )?;
+        for claim_id in &expected.source_identity_claim_ids {
+            tx.execute(
+                "INSERT INTO model_mesh_continuity_identity_claims(
+                    continuity_event_id, actor_role, identity_claim_id
+                 ) VALUES (?1, 'SOURCE', ?2)",
+                params![expected.continuity_event_id, claim_id],
+            )?;
+        }
+        for claim_id in &expected.destination_identity_claim_ids {
+            tx.execute(
+                "INSERT INTO model_mesh_continuity_identity_claims(
+                    continuity_event_id, actor_role, identity_claim_id
+                 ) VALUES (?1, 'DESTINATION', ?2)",
+                params![expected.continuity_event_id, claim_id],
+            )?;
+        }
+        let stored =
+            load_model_mesh_continuity_event_connection(&tx, new_event.continuity_event_id)?;
+        if stored != expected {
+            return Err("stored Model Mesh continuity event does not match exact request".into());
+        }
         tx.commit()?;
         Ok(stored)
     }
