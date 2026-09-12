@@ -36,6 +36,14 @@ export interface ProjectFixture {
   readonly sessions: readonly SessionFixture[];
 }
 
+export interface FileFixture {
+  readonly name: string;
+  readonly depth: number;
+  readonly kind: "folder" | "file";
+  readonly open?: boolean;
+  readonly selected?: boolean;
+}
+
 export const projectFixtures: readonly ProjectFixture[] = [
   {
     id: "winds",
@@ -143,7 +151,7 @@ export const secondarySession: SessionFixture = {
   ],
 };
 
-export const fileFixtures = [
+export const fileFixtures: readonly FileFixture[] = [
   { name: "desktop", depth: 0, kind: "folder", open: true },
   { name: "src", depth: 1, kind: "folder", open: true },
   { name: "App.tsx", depth: 2, kind: "file", selected: true },
@@ -153,4 +161,4 @@ export const fileFixtures = [
   { name: "fixtures", depth: 2, kind: "folder", open: false },
   { name: "DESIGN.md", depth: 0, kind: "file" },
   { name: "PRODUCT.md", depth: 0, kind: "file" },
-] as const;
+];
