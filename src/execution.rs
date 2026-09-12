@@ -792,6 +792,14 @@ mod tests {
         assert!(final_record.started_unix_ms.is_some());
         let terminal = store.load_terminal_session("execution-drop").unwrap();
         match final_record.status {
+            ExecutionStatus::Exited => {
+                assert_eq!(
+                    terminal.close_reason,
+                    Some(TerminalCloseReason::ProcessExited)
+                );
+                assert!(final_record.ended_unix_ms.is_some());
+                assert!(final_record.duration_ms.is_some());
+            }
             ExecutionStatus::Interrupted => {
                 assert_eq!(
                     terminal.close_reason,
