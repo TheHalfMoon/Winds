@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 
 pub(crate) const MODEL_MESH_COMMAND: &str = "model-mesh";
 const MAX_CLI_ITEMS: usize = 256;
+const MAX_CLI_QUERY_ROWS: i64 = 257;
 const MAX_CLI_VALUE_BYTES: usize = 4096;
 const MAX_STAGE_LINEAGE_DEPTH: usize = 4096;
 
@@ -111,11 +112,15 @@ impl ReadOnlyModelMeshStore {
     fn actor_binding_ids_for_stage(&self, stage_run_id: &str) -> Result<Vec<String>> {
         let mut statement = self.connection.prepare(
             "SELECT binding_id FROM workflow_actor_bindings
-             WHERE stage_run_id = ?1 ORDER BY bound_unix_ms, binding_id",
+             WHERE stage_run_id = ?1 ORDER BY bound_unix_ms, binding_id LIMIT ?2",
         )?;
-        Ok(statement
-            .query_map(params![stage_run_id], |row| row.get::<_, String>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?)
+        let ids = statement
+            .query_map(params![stage_run_id, MAX_CLI_QUERY_ROWS], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        require_bounded_items(ids.len(), "Model Mesh actor availability")?;
+        Ok(ids)
     }
 
     fn load_runtime_binding(&self, binding_id: &str) -> Result<ReadOnlyRuntimeBinding> {
@@ -447,14 +452,16 @@ impl ReadOnlyModelMeshStore {
         let mut statement = self.connection.prepare(
             "SELECT identity_claim_id FROM model_mesh_identity_claims
              WHERE target_request_id = ?1 OR actor_binding_id = ?2
-             ORDER BY observed_unix_ms, identity_claim_id",
+             ORDER BY observed_unix_ms, identity_claim_id LIMIT ?3",
         )?;
         let ids = statement
-            .query_map(params![target_request_id, actor_binding_id], |row| {
-                row.get::<_, String>(0)
-            })?
+            .query_map(
+                params![target_request_id, actor_binding_id, MAX_CLI_QUERY_ROWS],
+                |row| row.get::<_, String>(0),
+            )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         drop(statement);
+        require_bounded_items(ids.len(), "Model Mesh identity claims")?;
         ids.iter().map(|id| self.load_claim(id)).collect()
     }
 
@@ -462,11 +469,15 @@ impl ReadOnlyModelMeshStore {
         let mut statement = self.connection.prepare(
             "SELECT identity_claim_id FROM model_mesh_continuity_identity_claims
              WHERE continuity_event_id=?1 AND actor_role=?2
-             ORDER BY identity_claim_id",
+             ORDER BY identity_claim_id LIMIT ?3",
         )?;
-        Ok(statement
-            .query_map(params![event_id, role], |row| row.get::<_, String>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?)
+        let ids = statement
+            .query_map(params![event_id, role, MAX_CLI_QUERY_ROWS], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        require_bounded_items(ids.len(), &format!("Model Mesh continuity {role} claims"))?;
+        Ok(ids)
     }
 
     fn validate_event_claims(
@@ -790,12 +801,15 @@ impl ReadOnlyModelMeshStore {
         self.load_target(target_request_id)?;
         let mut statement = self.connection.prepare(
             "SELECT continuity_event_id FROM model_mesh_continuity_events
-             WHERE target_request_id=?1 ORDER BY created_unix_ms, continuity_event_id",
+             WHERE target_request_id=?1 ORDER BY created_unix_ms, continuity_event_id LIMIT ?2",
         )?;
         let ids = statement
-            .query_map(params![target_request_id], |row| row.get::<_, String>(0))?
+            .query_map(params![target_request_id, MAX_CLI_QUERY_ROWS], |row| {
+                row.get::<_, String>(0)
+            })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         drop(statement);
+        require_bounded_items(ids.len(), "Model Mesh continuity events")?;
         ids.iter().map(|id| self.load_event(id)).collect()
     }
 }
@@ -821,21 +835,28 @@ fn read_schema_objects(
         "SELECT name, type, tbl_name, sql
          FROM sqlite_master
          WHERE name GLOB ?1 OR name GLOB ?2 OR name GLOB ?3
-         ORDER BY name",
+         ORDER BY name LIMIT ?4",
     )?;
-    let rows = statement.query_map(params![table_glob, index_glob, trigger_glob], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, Option<String>>(3)?,
-        ))
-    })?;
+    let rows = statement.query_map(
+        params![table_glob, index_glob, trigger_glob, MAX_CLI_QUERY_ROWS],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        },
+    )?;
     let mut objects = BTreeMap::new();
     for row in rows {
         let (name, object_type, table_name, sql) = row?;
         let sql = sql.ok_or_else(|| format!("{namespace} schema object has no SQL: {name}"))?;
         objects.insert(name, (object_type, table_name, normalize_schema_sql(&sql)));
+        require_bounded_items(
+            objects.len(),
+            &format!("{namespace} schema object inventory"),
+        )?;
     }
     Ok(objects)
 }
@@ -1067,16 +1088,14 @@ fn record_request(flags: HashMap<String, String>) -> Result<Value> {
         TargetRequest::new(descriptor, TargetSelector::Human).map_err(cli_model_mesh_error)?;
     let target_request_id = required(&flags, "target-request-id")?;
     let approval_id = required(&flags, "approval-id")?;
-    let history = store.list_model_mesh_target_requests_for_stage(&stage.identity.stage_run_id)?;
-    require_bounded_items(history.len(), "Model Mesh target history")?;
-    if let Some(existing) = history
-        .iter()
-        .find(|stored| stored.target_request_id == target_request_id)
-    {
+    let home = PathBuf::from(required(&flags, "home")?);
+    let history_ids = bounded_target_history_ids(&home, &stage.identity.stage_run_id)?;
+    if history_ids.iter().any(|id| id == target_request_id) {
+        let existing = store.load_model_mesh_target_request(target_request_id)?;
         if existing.request != request || existing.selection_approval_id != approval_id {
             return Err("Model Mesh target request idempotency collision".into());
         }
-        return Ok(request_result("IDEMPOTENT_NO_CHANGE", existing));
+        return Ok(request_result("IDEMPOTENT_NO_CHANGE", &existing));
     }
     let stored = store.create_model_mesh_target_request(NewModelMeshTargetRequest {
         target_request_id,
@@ -1085,6 +1104,24 @@ fn record_request(flags: HashMap<String, String>) -> Result<Value> {
         created_unix_ms: unix_ms()?,
     })?;
     Ok(request_result("INSERTED", &stored))
+}
+
+fn bounded_target_history_ids(home: &Path, stage_run_id: &str) -> Result<Vec<String>> {
+    let connection = Connection::open_with_flags(
+        home.join("winds.db"),
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    let mut statement = connection.prepare(
+        "SELECT target_request_id FROM model_mesh_target_requests
+         WHERE stage_run_id=?1 ORDER BY created_unix_ms, target_request_id LIMIT ?2",
+    )?;
+    let ids = statement
+        .query_map(params![stage_run_id, MAX_CLI_QUERY_ROWS], |row| {
+            row.get::<_, String>(0)
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    require_bounded_items(ids.len(), "Model Mesh target history")?;
+    Ok(ids)
 }
 
 fn request_result(outcome: &str, stored: &StoredModelMeshTargetRequest) -> Value {

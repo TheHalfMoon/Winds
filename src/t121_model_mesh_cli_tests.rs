@@ -16,7 +16,7 @@ use crate::store::{
     ModelMeshClaimSubject, NewModelMeshContinuityEvent, NewModelMeshIdentityClaim, NewWindsSession,
     NewWorkspace, NewWorkstream, Store,
 };
-use rusqlite::Connection;
+use rusqlite::{Connection, params};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
@@ -339,6 +339,134 @@ fn corrupt_db(home: &Path, sql: &str) {
     drop(connection);
 }
 
+fn insert_actor_binding_overflow(home: &Path) {
+    let mut connection = Connection::open(home.join("winds.db")).unwrap();
+    let tx = connection.transaction().unwrap();
+    for index in 2..=257 {
+        tx.execute(
+            "INSERT INTO workflow_actor_bindings(
+                binding_id, stage_run_id, winds_session_id, runtime_binding_id,
+                continuation_class, bound_unix_ms
+             ) VALUES (?1, 'stage-1', 'session-1', 'runtime-binding-1', 'UNPROVEN', ?2)",
+            params![format!("actor-binding-overflow-{index:03}"), 100 + index],
+        )
+        .unwrap();
+    }
+    tx.commit().unwrap();
+}
+
+fn insert_target_claim_overflow(home: &Path, prefix: &str) {
+    let mut connection = Connection::open(home.join("winds.db")).unwrap();
+    let tx = connection.transaction().unwrap();
+    for index in 1..=257 {
+        tx.execute(
+            "INSERT INTO model_mesh_identity_claims(
+                identity_claim_id, target_request_id, actor_binding_id, claim_subject,
+                dimension, normalized_value, source_class, observation_basis,
+                runtime_binding_id, observed_unix_ms
+             ) VALUES (?1, 'target-request-1', NULL, 'REQUEST_TARGET',
+                       'PROVIDER', ?2, 'AGENT_REPORTED', 'bounded overflow fixture', NULL, ?3)",
+            params![
+                format!("{prefix}-{index:03}"),
+                format!("provider-{index:03}"),
+                100 + index
+            ],
+        )
+        .unwrap();
+    }
+    tx.commit().unwrap();
+}
+
+fn insert_continuity_event_overflow(home: &Path) {
+    let mut connection = Connection::open(home.join("winds.db")).unwrap();
+    let authority_trigger_sql: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master
+             WHERE type='trigger' AND name='trg_model_mesh_continuity_event_authority_insert'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    connection
+        .execute_batch("DROP TRIGGER trg_model_mesh_continuity_event_authority_insert;")
+        .unwrap();
+    let tx = connection.transaction().unwrap();
+    for index in 1..=257 {
+        tx.execute(
+            "INSERT INTO model_mesh_continuity_events(
+                continuity_event_id, target_request_id, source_actor_binding_id,
+                destination_actor_binding_id, continuity_class, context_digest,
+                completeness_state, continuity_permission_digest, authority_approval_id,
+                authority_claim, created_unix_ms
+             ) VALUES (?1, 'target-request-1', NULL, NULL, 'UNPROVEN', NULL,
+                       'UNAVAILABLE', NULL, NULL, 'NO_AUTHORITY_CLAIM', ?2)",
+            params![format!("event-overflow-{index:03}"), 100 + index],
+        )
+        .unwrap();
+    }
+    tx.commit().unwrap();
+    connection.execute_batch(&authority_trigger_sql).unwrap();
+}
+
+fn insert_association_overflow(home: &Path) {
+    let mut connection = Connection::open(home.join("winds.db")).unwrap();
+    let tx = connection.transaction().unwrap();
+    for index in 1..=257 {
+        let claim_id = format!("claim-association-overflow-{index:03}");
+        tx.execute(
+            "INSERT INTO model_mesh_identity_claims(
+                identity_claim_id, target_request_id, actor_binding_id, claim_subject,
+                dimension, normalized_value, source_class, observation_basis,
+                runtime_binding_id, observed_unix_ms
+             ) VALUES (?1, NULL, 'actor-binding-1', 'ACTOR',
+                       'PROVIDER', ?2, 'AGENT_REPORTED', 'bounded association fixture', NULL, ?3)",
+            params![claim_id, format!("provider-{index:03}"), 100 + index],
+        )
+        .unwrap();
+        tx.execute(
+            "INSERT INTO model_mesh_continuity_identity_claims(
+                continuity_event_id, actor_role, identity_claim_id
+             ) VALUES ('event-unproven-1', 'SOURCE', ?1)",
+            params![claim_id],
+        )
+        .unwrap();
+    }
+    tx.commit().unwrap();
+}
+
+fn insert_target_history_overflow(home: &Path) {
+    let mut connection = Connection::open(home.join("winds.db")).unwrap();
+    let approval_trigger_sql: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_master
+             WHERE type='trigger' AND name='trg_model_mesh_target_request_approval_insert'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    connection
+        .execute_batch("DROP TRIGGER trg_model_mesh_target_request_approval_insert;")
+        .unwrap();
+    let tx = connection.transaction().unwrap();
+    for index in 2..=257 {
+        tx.execute(
+            "INSERT INTO model_mesh_target_requests(
+                target_request_id, stage_run_id, actor_binding_id, actor_role, runtime_kind,
+                requested_provider_id, requested_model_id, selector_class,
+                target_descriptor_digest, selection_approval_id, created_unix_ms
+             )
+             SELECT ?1, stage_run_id, actor_binding_id, actor_role, runtime_kind,
+                    requested_provider_id, requested_model_id, selector_class,
+                    target_descriptor_digest, selection_approval_id, ?2
+             FROM model_mesh_target_requests WHERE target_request_id='target-request-1'",
+            params![format!("target-request-overflow-{index:03}"), 100 + index],
+        )
+        .unwrap();
+    }
+    tx.commit().unwrap();
+    connection.execute_batch(&approval_trigger_sql).unwrap();
+}
+
 #[test]
 fn t121_command_spelling_is_single_and_unknown_or_malformed_input_fails_closed() {
     assert_eq!(MODEL_MESH_COMMAND, "model-mesh");
@@ -540,6 +668,97 @@ fn t121_continuity_and_reviewer_views_are_read_only_and_preserve_unproven_histor
         before
     );
     drop(reopened);
+    cleanup(home);
+}
+
+#[test]
+fn t121_availability_bounds_actor_rows_before_projection_without_mutation() {
+    let (home, store) = seeded_store("actor-overflow");
+    drop(store);
+    insert_actor_binding_overflow(&home);
+    let before = home_snapshot(&home);
+    let error = execute(flags(&home, "availability"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("Model Mesh actor availability exceeds the bounded 256-item CLI limit"),
+        "{error}"
+    );
+    assert_eq!(home_snapshot(&home), before);
+    cleanup(home);
+}
+
+#[test]
+fn t121_status_bounds_identity_claim_rows_before_loading_claims_without_mutation() {
+    let (home, store) = seeded_store("claim-overflow");
+    insert_request(&home, &store);
+    drop(store);
+    insert_target_claim_overflow(&home, "claim-target-overflow");
+    let before = home_snapshot(&home);
+    let error = execute(target_only_flags(&home, "status"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("Model Mesh identity claims exceeds the bounded 256-item CLI limit"),
+        "{error}"
+    );
+    assert_eq!(home_snapshot(&home), before);
+    cleanup(home);
+}
+
+#[test]
+fn t121_continuity_bounds_event_rows_before_loading_events_without_mutation() {
+    let (home, store) = seeded_store("event-overflow");
+    insert_request(&home, &store);
+    drop(store);
+    insert_continuity_event_overflow(&home);
+    let before = home_snapshot(&home);
+    let error = execute(target_only_flags(&home, "continuity"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("Model Mesh continuity events exceeds the bounded 256-item CLI limit"),
+        "{error}"
+    );
+    assert_eq!(home_snapshot(&home), before);
+    cleanup(home);
+}
+
+#[test]
+fn t121_continuity_bounds_association_rows_before_loading_claims_without_mutation() {
+    let (home, mut store) = seeded_store("association-overflow");
+    insert_request(&home, &store);
+    add_unproven_event(&mut store);
+    drop(store);
+    insert_association_overflow(&home);
+    let before = home_snapshot(&home);
+    let error = execute(target_only_flags(&home, "continuity"))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error
+            .contains("Model Mesh continuity SOURCE claims exceeds the bounded 256-item CLI limit"),
+        "{error}"
+    );
+    assert_eq!(home_snapshot(&home), before);
+    cleanup(home);
+}
+
+#[test]
+fn t121_request_bounds_target_history_before_any_new_append() {
+    let (home, store) = seeded_store("target-history-overflow");
+    insert_request(&home, &store);
+    drop(store);
+    insert_target_history_overflow(&home);
+    let before = home_snapshot(&home);
+    let mut input = request_flags(&home, "approval-exact");
+    input.insert("target-request-id".into(), "target-request-new".into());
+    let error = execute(input).unwrap_err().to_string();
+    assert!(
+        error.contains("Model Mesh target history exceeds the bounded 256-item CLI limit"),
+        "{error}"
+    );
+    assert_eq!(home_snapshot(&home), before);
     cleanup(home);
 }
 
