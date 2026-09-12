@@ -4,7 +4,7 @@
 
 Build the smallest premium desktop surface that satisfies canonical Spec 010 while preserving Winds' existing Rust authority, exact-candidate evidence model, terminal lifecycle truth, workflow/session identity, Model Mesh continuity semantics, and human landing boundary.
 
-The first desktop implementation program will create a local-first, one-process desktop application where:
+The first desktop implementation program will create a local-first desktop application with one local Winds Rust authority owner, while treating any operating-system WebView renderer and owned terminal/agent child processes as separate non-authoritative process domains, where:
 
 1. Projects organize canonical local work without replacing workspace/repository identity;
 2. the left dock presents named, searchable sessions grouped under Projects;
@@ -76,7 +76,7 @@ Existing seams to reuse rather than duplicate include:
 
 ### 1. One Rust authority, one desktop renderer
 
-The first slice remains one local desktop process. Tauri provides the desktop host and a narrow application bridge. The existing Rust domain remains authoritative.
+The first slice retains one local Winds Rust authority owner. Tauri provides the desktop host and a narrow application bridge. The operating-system WebView renderer is an untrusted presentation process/domain where the platform isolates it, and terminal/agent children remain separately owned lifecycle targets. The existing Rust domain remains authoritative; no renderer or child process becomes a second Winds authority owner.
 
 ```text
 ┌────────────────────────────────────────────────────────────┐
@@ -93,6 +93,16 @@ The first slice remains one local desktop process. Tauri provides the desktop ho
 ```
 
 Renderer state may cache presentation data, but canonical facts MUST be reconstructed from Rust-owned projections or bounded request snapshots.
+
+Process/lifecycle domains are explicit:
+
+```text
+RUST_AUTHORITY_OWNER != WEBVIEW_RENDERER != OWNED_TERMINAL_OR_AGENT_CHILD
+RENDERER_RESTART != LIVE_CHILD_REATTACHMENT_PROOF
+APP_RESTART != PROOF_OF_CONTINUING_CHILD_OWNERSHIP
+```
+
+Cross-restart ownership remains governed by the existing fail-closed Winds lifecycle rules; presentation restoration may restore layout metadata only and MUST NOT manufacture live child ownership.
 
 No renderer string, DOM state, icon, localStorage value, route, query parameter, or JavaScript object may grant execution, verification, acceptance, landing, credential, or Git authority.
 
@@ -520,7 +530,7 @@ The exact final Plan candidate may land only if:
 - it changes planning/design documentation only;
 - canonical Spec 010 entry and formal specification are closed;
 - every selected dependency is exact-versioned as a Plan candidate and Tasks are required to audit license/MSRV/platform/source/checksum/graph before adoption;
-- the architecture preserves one-process local authority and does not smuggle in a daemon/public IPC surface;
+- the architecture preserves one local Winds authority owner, keeps renderer/child-process domains non-authoritative, and does not smuggle in a daemon/public IPC surface;
 - Rust authority and renderer trust boundaries are explicit;
 - Project/session alias semantics cannot rewrite canonical identity;
 - dual-session semantics contain no implicit broadcast;
