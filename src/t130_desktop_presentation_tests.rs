@@ -538,7 +538,7 @@ fn corrupt_compound_layout_fails_closed_without_creating_runtime_ownership() {
             .execute_batch(
                 "PRAGMA ignore_check_constraints = ON;
                  UPDATE desktop_layout_presentation
-                 SET schema_version = 2
+                 SET right_session_id = left_session_id
                  WHERE workspace_id = 'workspace-a';",
             )
             .unwrap();
@@ -548,7 +548,7 @@ fn corrupt_compound_layout_fails_closed_without_creating_runtime_ownership() {
         .load_desktop_layout_presentation("workspace-a")
         .unwrap_err()
         .to_string();
-    assert!(error.contains("desktop layout schema version must be 1"));
+    assert!(error.contains("dual desktop layout requires two distinct sessions"));
     assert_eq!(
         store.load_workspace("workspace-a").unwrap().workspace_id,
         "workspace-a"
