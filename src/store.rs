@@ -65,6 +65,9 @@ mod t108_workflow_recovery_tests;
 #[cfg(test)]
 #[path = "t116_model_mesh_store_tests.rs"]
 mod t116_model_mesh_store_tests;
+#[cfg(test)]
+#[path = "t130_desktop_presentation_tests.rs"]
+mod t130_desktop_presentation_tests;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -134,6 +137,87 @@ pub struct NewWindsSession<'a> {
     pub session_id: &'a str,
     pub workstream_id: &'a str,
     pub display_name: &'a str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DesktopProjectPresentation {
+    pub(crate) workspace_id: String,
+    pub(crate) display_name: String,
+    pub(crate) pinned: bool,
+    pub(crate) sort_order: i64,
+    pub(crate) collapsed: bool,
+    pub(crate) revision: i64,
+    pub(crate) updated_unix_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DesktopProjectPresentationInput<'a> {
+    pub(crate) workspace_id: &'a str,
+    pub(crate) display_name: &'a str,
+    pub(crate) pinned: bool,
+    pub(crate) sort_order: i64,
+    pub(crate) collapsed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DesktopSessionPresentation {
+    pub(crate) session_id: String,
+    pub(crate) display_alias: String,
+    pub(crate) pinned: bool,
+    pub(crate) sort_order: i64,
+    pub(crate) archived: bool,
+    pub(crate) revision: i64,
+    pub(crate) updated_unix_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DesktopSessionPresentationInput<'a> {
+    pub(crate) session_id: &'a str,
+    pub(crate) display_alias: &'a str,
+    pub(crate) pinned: bool,
+    pub(crate) sort_order: i64,
+    pub(crate) archived: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DesktopLayoutPresentation {
+    pub(crate) workspace_id: String,
+    pub(crate) schema_version: i64,
+    pub(crate) layout_mode: String,
+    pub(crate) left_session_id: Option<String>,
+    pub(crate) right_session_id: Option<String>,
+    pub(crate) split_basis_points: i64,
+    pub(crate) right_dock_surface: String,
+    pub(crate) right_dock_binding: String,
+    pub(crate) left_dock_collapsed: bool,
+    pub(crate) left_dock_width_px: i64,
+    pub(crate) right_dock_collapsed: bool,
+    pub(crate) right_dock_width_px: i64,
+    pub(crate) appearance: String,
+    pub(crate) contrast: String,
+    pub(crate) density: String,
+    pub(crate) reduced_motion: bool,
+    pub(crate) revision: i64,
+    pub(crate) updated_unix_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DesktopLayoutPresentationInput<'a> {
+    pub(crate) workspace_id: &'a str,
+    pub(crate) layout_mode: &'a str,
+    pub(crate) left_session_id: Option<&'a str>,
+    pub(crate) right_session_id: Option<&'a str>,
+    pub(crate) split_basis_points: i64,
+    pub(crate) right_dock_surface: &'a str,
+    pub(crate) right_dock_binding: &'a str,
+    pub(crate) left_dock_collapsed: bool,
+    pub(crate) left_dock_width_px: i64,
+    pub(crate) right_dock_collapsed: bool,
+    pub(crate) right_dock_width_px: i64,
+    pub(crate) appearance: &'a str,
+    pub(crate) contrast: &'a str,
+    pub(crate) density: &'a str,
+    pub(crate) reduced_motion: bool,
 }
 
 #[allow(
@@ -365,6 +449,7 @@ impl Store {
         ))?;
         initialize_workflow_schema(&connection)?;
         initialize_model_mesh_schema(&connection)?;
+        initialize_desktop_presentation_schema(&connection)?;
         Ok(Self {
             connection,
             home: home.to_path_buf(),
@@ -642,6 +727,100 @@ fn initialize_model_mesh_schema(connection: &Connection) -> Result<()> {
         connection.execute_batch("COMMIT")?;
     }
     validate_model_mesh_schema_connection(connection)
+}
+
+fn desktop_presentation_schema_objects(
+    connection: &Connection,
+) -> Result<BTreeMap<String, (String, String, String)>> {
+    let mut statement = connection.prepare(
+        "SELECT name, type, tbl_name, sql
+         FROM sqlite_master
+         WHERE name GLOB 'desktop_*'
+            OR name GLOB 'idx_desktop_*'
+            OR name GLOB 'trg_desktop_*'
+         ORDER BY name",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(3)?,
+        ))
+    })?;
+    let mut objects = BTreeMap::new();
+    for row in rows {
+        let (name, object_type, table_name, sql) = row?;
+        let sql =
+            sql.ok_or_else(|| format!("desktop presentation schema object has no SQL: {name}"))?;
+        objects.insert(
+            name,
+            (object_type, table_name, normalize_workflow_schema_sql(&sql)),
+        );
+    }
+    Ok(objects)
+}
+
+fn expected_desktop_presentation_schema_objects()
+-> Result<BTreeMap<String, (String, String, String)>> {
+    let connection = Connection::open_in_memory()?;
+    connection.pragma_update(None, "foreign_keys", "ON")?;
+    connection.execute_batch(include_str!(
+        "../migrations/0002_workspace_execution_ledger.sql"
+    ))?;
+    connection.execute_batch(include_str!("../migrations/0006_agentic_identity.sql"))?;
+    connection.execute_batch(include_str!("../migrations/0012_desktop_presentation.sql"))?;
+    desktop_presentation_schema_objects(&connection)
+}
+
+fn validate_desktop_presentation_schema_connection(connection: &Connection) -> Result<()> {
+    let expected = expected_desktop_presentation_schema_objects()?;
+    let observed = desktop_presentation_schema_objects(connection)?;
+    if observed.keys().collect::<Vec<_>>() != expected.keys().collect::<Vec<_>>() {
+        let missing = expected
+            .keys()
+            .filter(|name| !observed.contains_key(*name))
+            .cloned()
+            .collect::<Vec<_>>();
+        let unexpected = observed
+            .keys()
+            .filter(|name| !expected.contains_key(*name))
+            .cloned()
+            .collect::<Vec<_>>();
+        return Err(format!(
+            "desktop presentation schema object inventory mismatch; missing={missing:?}; unexpected={unexpected:?}"
+        ).into());
+    }
+    for (name, expected_object) in expected {
+        let observed_object = observed
+            .get(&name)
+            .ok_or_else(|| format!("desktop presentation schema object missing: {name}"))?;
+        if observed_object != &expected_object {
+            return Err(
+                format!("desktop presentation schema object definition mismatch: {name}").into(),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn initialize_desktop_presentation_schema(connection: &Connection) -> Result<()> {
+    let existing = desktop_presentation_schema_objects(connection)?;
+    if existing.is_empty() {
+        connection.execute_batch("BEGIN IMMEDIATE")?;
+        if let Err(error) =
+            connection.execute_batch(include_str!("../migrations/0012_desktop_presentation.sql"))
+        {
+            let _ = connection.execute_batch("ROLLBACK");
+            return Err(error.into());
+        }
+        if let Err(error) = validate_desktop_presentation_schema_connection(connection) {
+            let _ = connection.execute_batch("ROLLBACK");
+            return Err(error);
+        }
+        connection.execute_batch("COMMIT")?;
+    }
+    validate_desktop_presentation_schema_connection(connection)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -5320,6 +5499,560 @@ impl Store {
         }
         Ok(())
     }
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 010 T130 presentation persistence; desktop callers land in T131"
+)]
+impl Store {
+    pub(crate) fn save_desktop_project_presentation(
+        &self,
+        input: DesktopProjectPresentationInput<'_>,
+        expected_revision: Option<i64>,
+        now_ms: i64,
+    ) -> Result<DesktopProjectPresentation> {
+        validate_desktop_presentation_text(input.display_name, "desktop project display name")?;
+        validate_desktop_sort_order(input.sort_order)?;
+        validate_agentic_identity_timestamp(now_ms, "desktop project presentation update time")?;
+        self.load_workspace(input.workspace_id)?;
+        match expected_revision {
+            None => {
+                self.connection.execute(
+                    "INSERT INTO desktop_project_presentation(
+                        workspace_id, display_name, pinned, sort_order, collapsed,
+                        revision, updated_unix_ms
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)",
+                    params![
+                        input.workspace_id,
+                        input.display_name,
+                        input.pinned,
+                        input.sort_order,
+                        input.collapsed,
+                        now_ms
+                    ],
+                )?;
+            }
+            Some(revision) => {
+                validate_desktop_revision(revision)?;
+                let updated = self.connection.execute(
+                    "UPDATE desktop_project_presentation
+                     SET display_name = ?2, pinned = ?3, sort_order = ?4,
+                         collapsed = ?5, revision = revision + 1, updated_unix_ms = ?6
+                     WHERE workspace_id = ?1 AND revision = ?7 AND updated_unix_ms <= ?6",
+                    params![
+                        input.workspace_id,
+                        input.display_name,
+                        input.pinned,
+                        input.sort_order,
+                        input.collapsed,
+                        now_ms,
+                        revision
+                    ],
+                )?;
+                if updated != 1 {
+                    return Err("desktop project presentation lost revision/update race".into());
+                }
+            }
+        }
+        self.load_desktop_project_presentation(input.workspace_id)?
+            .ok_or_else(|| "desktop project presentation disappeared after save".into())
+    }
+
+    pub(crate) fn load_desktop_project_presentation(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Option<DesktopProjectPresentation>> {
+        let raw = self
+            .connection
+            .query_row(
+                "SELECT workspace_id, display_name, pinned, sort_order, collapsed,
+                    revision, updated_unix_ms
+             FROM desktop_project_presentation WHERE workspace_id = ?1",
+                params![workspace_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, i64>(6)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((
+            workspace_id,
+            display_name,
+            pinned,
+            sort_order,
+            collapsed,
+            revision,
+            updated_unix_ms,
+        )) = raw
+        else {
+            return Ok(None);
+        };
+        let record = DesktopProjectPresentation {
+            workspace_id,
+            display_name,
+            pinned: decode_desktop_bool(pinned, "desktop project pinned")?,
+            sort_order,
+            collapsed: decode_desktop_bool(collapsed, "desktop project collapsed")?,
+            revision,
+            updated_unix_ms,
+        };
+        validate_desktop_presentation_text(&record.display_name, "desktop project display name")?;
+        validate_desktop_sort_order(record.sort_order)?;
+        validate_desktop_revision(record.revision)?;
+        validate_agentic_identity_timestamp(
+            record.updated_unix_ms,
+            "desktop project presentation update time",
+        )?;
+        self.load_workspace(&record.workspace_id)?;
+        Ok(Some(record))
+    }
+
+    pub(crate) fn delete_desktop_project_presentation(&self, workspace_id: &str) -> Result<bool> {
+        Ok(self.connection.execute(
+            "DELETE FROM desktop_project_presentation WHERE workspace_id = ?1",
+            params![workspace_id],
+        )? == 1)
+    }
+
+    pub(crate) fn save_desktop_session_presentation(
+        &self,
+        input: DesktopSessionPresentationInput<'_>,
+        expected_revision: Option<i64>,
+        now_ms: i64,
+    ) -> Result<DesktopSessionPresentation> {
+        validate_desktop_presentation_text(input.display_alias, "desktop session display alias")?;
+        validate_desktop_sort_order(input.sort_order)?;
+        validate_agentic_identity_timestamp(now_ms, "desktop session presentation update time")?;
+        self.load_winds_session(input.session_id)?;
+        match expected_revision {
+            None => {
+                self.connection.execute(
+                    "INSERT INTO desktop_session_presentation(
+                        session_id, display_alias, pinned, sort_order, archived,
+                        revision, updated_unix_ms
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)",
+                    params![
+                        input.session_id,
+                        input.display_alias,
+                        input.pinned,
+                        input.sort_order,
+                        input.archived,
+                        now_ms
+                    ],
+                )?;
+            }
+            Some(revision) => {
+                validate_desktop_revision(revision)?;
+                let updated = self.connection.execute(
+                    "UPDATE desktop_session_presentation
+                     SET display_alias = ?2, pinned = ?3, sort_order = ?4,
+                         archived = ?5, revision = revision + 1, updated_unix_ms = ?6
+                     WHERE session_id = ?1 AND revision = ?7 AND updated_unix_ms <= ?6",
+                    params![
+                        input.session_id,
+                        input.display_alias,
+                        input.pinned,
+                        input.sort_order,
+                        input.archived,
+                        now_ms,
+                        revision
+                    ],
+                )?;
+                if updated != 1 {
+                    return Err("desktop session presentation lost revision/update race".into());
+                }
+            }
+        }
+        self.load_desktop_session_presentation(input.session_id)?
+            .ok_or_else(|| "desktop session presentation disappeared after save".into())
+    }
+
+    pub(crate) fn load_desktop_session_presentation(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<DesktopSessionPresentation>> {
+        let raw = self
+            .connection
+            .query_row(
+                "SELECT session_id, display_alias, pinned, sort_order, archived,
+                    revision, updated_unix_ms
+             FROM desktop_session_presentation WHERE session_id = ?1",
+                params![session_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, i64>(6)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((
+            session_id,
+            display_alias,
+            pinned,
+            sort_order,
+            archived,
+            revision,
+            updated_unix_ms,
+        )) = raw
+        else {
+            return Ok(None);
+        };
+        let record = DesktopSessionPresentation {
+            session_id,
+            display_alias,
+            pinned: decode_desktop_bool(pinned, "desktop session pinned")?,
+            sort_order,
+            archived: decode_desktop_bool(archived, "desktop session archived")?,
+            revision,
+            updated_unix_ms,
+        };
+        validate_desktop_presentation_text(&record.display_alias, "desktop session display alias")?;
+        validate_desktop_sort_order(record.sort_order)?;
+        validate_desktop_revision(record.revision)?;
+        validate_agentic_identity_timestamp(
+            record.updated_unix_ms,
+            "desktop session presentation update time",
+        )?;
+        self.load_winds_session(&record.session_id)?;
+        Ok(Some(record))
+    }
+
+    pub(crate) fn delete_desktop_session_presentation(&self, session_id: &str) -> Result<bool> {
+        Ok(self.connection.execute(
+            "DELETE FROM desktop_session_presentation WHERE session_id = ?1",
+            params![session_id],
+        )? == 1)
+    }
+
+    pub(crate) fn save_desktop_layout_presentation(
+        &self,
+        input: DesktopLayoutPresentationInput<'_>,
+        expected_revision: Option<i64>,
+        now_ms: i64,
+    ) -> Result<DesktopLayoutPresentation> {
+        validate_desktop_layout_input(&input)?;
+        validate_agentic_identity_timestamp(now_ms, "desktop layout presentation update time")?;
+        self.load_workspace(input.workspace_id)?;
+        match expected_revision {
+            None => {
+                self.connection.execute(
+                    "INSERT INTO desktop_layout_presentation(
+                        workspace_id, schema_version, layout_mode, left_session_id,
+                        right_session_id, split_basis_points, right_dock_surface,
+                        right_dock_binding, left_dock_collapsed, left_dock_width_px,
+                        right_dock_collapsed, right_dock_width_px, appearance, contrast,
+                        density, reduced_motion, revision, updated_unix_ms
+                     ) VALUES (?1, 1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11,
+                               ?12, ?13, ?14, ?15, 1, ?16)",
+                    params![
+                        input.workspace_id,
+                        input.layout_mode,
+                        input.left_session_id,
+                        input.right_session_id,
+                        input.split_basis_points,
+                        input.right_dock_surface,
+                        input.right_dock_binding,
+                        input.left_dock_collapsed,
+                        input.left_dock_width_px,
+                        input.right_dock_collapsed,
+                        input.right_dock_width_px,
+                        input.appearance,
+                        input.contrast,
+                        input.density,
+                        input.reduced_motion,
+                        now_ms
+                    ],
+                )?;
+            }
+            Some(revision) => {
+                validate_desktop_revision(revision)?;
+                let updated = self.connection.execute(
+                    "UPDATE desktop_layout_presentation
+                     SET schema_version = 1, layout_mode = ?2, left_session_id = ?3,
+                         right_session_id = ?4, split_basis_points = ?5,
+                         right_dock_surface = ?6, right_dock_binding = ?7,
+                         left_dock_collapsed = ?8, left_dock_width_px = ?9,
+                         right_dock_collapsed = ?10, right_dock_width_px = ?11,
+                         appearance = ?12, contrast = ?13, density = ?14,
+                         reduced_motion = ?15, revision = revision + 1,
+                         updated_unix_ms = ?16
+                     WHERE workspace_id = ?1 AND revision = ?17 AND updated_unix_ms <= ?16",
+                    params![
+                        input.workspace_id,
+                        input.layout_mode,
+                        input.left_session_id,
+                        input.right_session_id,
+                        input.split_basis_points,
+                        input.right_dock_surface,
+                        input.right_dock_binding,
+                        input.left_dock_collapsed,
+                        input.left_dock_width_px,
+                        input.right_dock_collapsed,
+                        input.right_dock_width_px,
+                        input.appearance,
+                        input.contrast,
+                        input.density,
+                        input.reduced_motion,
+                        now_ms,
+                        revision
+                    ],
+                )?;
+                if updated != 1 {
+                    return Err("desktop layout presentation lost revision/update race".into());
+                }
+            }
+        }
+        self.load_desktop_layout_presentation(input.workspace_id)?
+            .ok_or_else(|| "desktop layout presentation disappeared after save".into())
+    }
+
+    pub(crate) fn load_desktop_layout_presentation(
+        &self,
+        workspace_id: &str,
+    ) -> Result<Option<DesktopLayoutPresentation>> {
+        let raw = self
+            .connection
+            .query_row(
+                "SELECT workspace_id, schema_version, layout_mode, left_session_id,
+                    right_session_id, split_basis_points, right_dock_surface,
+                    right_dock_binding, left_dock_collapsed, left_dock_width_px,
+                    right_dock_collapsed, right_dock_width_px, appearance, contrast,
+                    density, reduced_motion, revision, updated_unix_ms
+             FROM desktop_layout_presentation WHERE workspace_id = ?1",
+                params![workspace_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, Option<String>>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, i64>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, i64>(8)?,
+                        row.get::<_, i64>(9)?,
+                        row.get::<_, i64>(10)?,
+                        row.get::<_, i64>(11)?,
+                        row.get::<_, String>(12)?,
+                        row.get::<_, String>(13)?,
+                        row.get::<_, String>(14)?,
+                        row.get::<_, i64>(15)?,
+                        row.get::<_, i64>(16)?,
+                        row.get::<_, i64>(17)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((
+            workspace_id,
+            schema_version,
+            layout_mode,
+            left_session_id,
+            right_session_id,
+            split_basis_points,
+            right_dock_surface,
+            right_dock_binding,
+            left_dock_collapsed,
+            left_dock_width_px,
+            right_dock_collapsed,
+            right_dock_width_px,
+            appearance,
+            contrast,
+            density,
+            reduced_motion,
+            revision,
+            updated_unix_ms,
+        )) = raw
+        else {
+            return Ok(None);
+        };
+        let record = DesktopLayoutPresentation {
+            workspace_id,
+            schema_version,
+            layout_mode,
+            left_session_id,
+            right_session_id,
+            split_basis_points,
+            right_dock_surface,
+            right_dock_binding,
+            left_dock_collapsed: decode_desktop_bool(
+                left_dock_collapsed,
+                "desktop left dock collapsed",
+            )?,
+            left_dock_width_px,
+            right_dock_collapsed: decode_desktop_bool(
+                right_dock_collapsed,
+                "desktop right dock collapsed",
+            )?,
+            right_dock_width_px,
+            appearance,
+            contrast,
+            density,
+            reduced_motion: decode_desktop_bool(reduced_motion, "desktop reduced motion")?,
+            revision,
+            updated_unix_ms,
+        };
+        validate_desktop_layout_record(self, &record)?;
+        Ok(Some(record))
+    }
+
+    pub(crate) fn delete_desktop_layout_presentation(&self, workspace_id: &str) -> Result<bool> {
+        Ok(self.connection.execute(
+            "DELETE FROM desktop_layout_presentation WHERE workspace_id = ?1",
+            params![workspace_id],
+        )? == 1)
+    }
+}
+
+fn decode_desktop_bool(value: i64, label: &str) -> Result<bool> {
+    match value {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(format!("{label} must be stored as 0 or 1").into()),
+    }
+}
+
+fn validate_desktop_layout_record(store: &Store, record: &DesktopLayoutPresentation) -> Result<()> {
+    if record.schema_version != 1 {
+        return Err("desktop layout schema version must be 1".into());
+    }
+    let input = DesktopLayoutPresentationInput {
+        workspace_id: &record.workspace_id,
+        layout_mode: &record.layout_mode,
+        left_session_id: record.left_session_id.as_deref(),
+        right_session_id: record.right_session_id.as_deref(),
+        split_basis_points: record.split_basis_points,
+        right_dock_surface: &record.right_dock_surface,
+        right_dock_binding: &record.right_dock_binding,
+        left_dock_collapsed: record.left_dock_collapsed,
+        left_dock_width_px: record.left_dock_width_px,
+        right_dock_collapsed: record.right_dock_collapsed,
+        right_dock_width_px: record.right_dock_width_px,
+        appearance: &record.appearance,
+        contrast: &record.contrast,
+        density: &record.density,
+        reduced_motion: record.reduced_motion,
+    };
+    validate_desktop_layout_input(&input)?;
+    validate_desktop_revision(record.revision)?;
+    validate_agentic_identity_timestamp(
+        record.updated_unix_ms,
+        "desktop layout presentation update time",
+    )?;
+    store.load_workspace(&record.workspace_id)?;
+    for session_id in [
+        record.left_session_id.as_deref(),
+        record.right_session_id.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let session = store.load_winds_session(session_id)?;
+        let workstream = store.load_workstream(&session.workstream_id)?;
+        if workstream.workspace_id != record.workspace_id {
+            return Err("desktop layout session/workspace mismatch".into());
+        }
+    }
+    Ok(())
+}
+
+fn validate_desktop_sort_order(value: i64) -> Result<()> {
+    if value < 0 {
+        return Err("desktop presentation sort order must not be negative".into());
+    }
+    Ok(())
+}
+
+fn validate_desktop_presentation_text(value: &str, label: &str) -> Result<()> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{label} must not be empty").into());
+    }
+    if trimmed.chars().count() > 256 {
+        return Err(format!("{label} must not exceed 256 characters").into());
+    }
+    if value.chars().any(char::is_control) {
+        return Err(format!("{label} must not contain control characters").into());
+    }
+    Ok(())
+}
+
+fn validate_desktop_revision(expected_revision: i64) -> Result<()> {
+    if expected_revision < 1 {
+        return Err("desktop presentation revision must be positive".into());
+    }
+    Ok(())
+}
+
+fn validate_desktop_layout_input(input: &DesktopLayoutPresentationInput<'_>) -> Result<()> {
+    if !matches!(input.layout_mode, "SINGLE" | "DUAL") {
+        return Err("desktop layout mode must be SINGLE or DUAL".into());
+    }
+    if !(1000..=9000).contains(&input.split_basis_points) {
+        return Err("desktop split ratio must be between 1000 and 9000 basis points".into());
+    }
+    if !matches!(
+        input.right_dock_surface,
+        "FILES" | "CHANGES" | "EVIDENCE" | "CONTEXT" | "ARTIFACTS" | "NEEDS_YOU"
+    ) {
+        return Err("unknown desktop right-dock surface".into());
+    }
+    if !matches!(
+        input.right_dock_binding,
+        "FOLLOW_FOCUS" | "PROJECT" | "LEFT_SESSION" | "RIGHT_SESSION"
+    ) {
+        return Err("unknown desktop right-dock binding".into());
+    }
+    if !(160..=640).contains(&input.left_dock_width_px)
+        || !(240..=720).contains(&input.right_dock_width_px)
+    {
+        return Err("desktop dock width is outside the accepted range".into());
+    }
+    if !matches!(input.appearance, "SYSTEM" | "DARK" | "LIGHT")
+        || !matches!(input.contrast, "STANDARD" | "HIGH")
+        || !matches!(input.density, "COMPACT" | "STANDARD")
+    {
+        return Err("unknown desktop appearance, contrast, or density value".into());
+    }
+    match input.layout_mode {
+        "SINGLE" if input.right_session_id.is_some() => {
+            return Err("single desktop layout cannot retain a right session".into());
+        }
+        "DUAL" => {
+            let left = input
+                .left_session_id
+                .ok_or("dual desktop layout requires a left session")?;
+            let right = input
+                .right_session_id
+                .ok_or("dual desktop layout requires a right session")?;
+            if left == right {
+                return Err("dual desktop layout requires two distinct sessions".into());
+            }
+        }
+        _ => {}
+    }
+    if input.right_dock_binding == "LEFT_SESSION" && input.left_session_id.is_none() {
+        return Err("left-session dock binding requires a left session".into());
+    }
+    if input.right_dock_binding == "RIGHT_SESSION" && input.right_session_id.is_none() {
+        return Err("right-session dock binding requires a right session".into());
+    }
+    Ok(())
 }
 
 fn validate_agentic_identity_text(value: &str, label: &str) -> Result<()> {
