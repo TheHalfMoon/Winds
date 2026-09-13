@@ -24,6 +24,11 @@ mod cli_workspace;
     reason = "Spec 003 command backend includes lifecycle surfaces beyond the minimal T057 CLI caller"
 )]
 mod command;
+#[allow(
+    dead_code,
+    reason = "Spec 010 T131 Rust-owned desktop projection facade; UI consumers land in T132"
+)]
+mod desktop;
 mod domain;
 #[allow(
     dead_code,
@@ -76,6 +81,8 @@ mod t120_model_mesh_projection_tests;
 mod t121_model_mesh_cli_tests;
 #[cfg(test)]
 mod t123_model_mesh_adversarial_tests;
+#[cfg(test)]
+mod t131_desktop_projection_tests;
 mod workbench;
 mod workflow_cli;
 
