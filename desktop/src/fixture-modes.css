@@ -1,0 +1,25 @@
+:root[data-fixture="keyboard-focus"] .session-row[data-active="true"] {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+:root[data-scale="125"] .winds-app {
+  width: 80%;
+  min-height: 80vh;
+  transform: scale(1.25);
+  transform-origin: top left;
+}
+
+:root[data-scale="125"] .workspace-grid {
+  grid-template-columns: var(--left-dock-width) minmax(0, 1fr);
+}
+
+:root[data-scale="125"] .right-dock {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-scale="125"] .winds-app {
+    transition: none;
+  }
+}

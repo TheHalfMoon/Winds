@@ -1,0 +1,47 @@
+{
+  "schema": "winds-quiet-current-visual-fixtures/1",
+  "fixtures": [
+    {
+      "id": "desktop-1280-dark",
+      "width": 1280,
+      "height": 800,
+      "query": "?theme=dark"
+    },
+    {
+      "id": "desktop-1440-dark",
+      "width": 1440,
+      "height": 900,
+      "query": "?theme=dark"
+    },
+    {
+      "id": "desktop-1920-dark",
+      "width": 1920,
+      "height": 1080,
+      "query": "?theme=dark"
+    },
+    {
+      "id": "desktop-1440-light",
+      "width": 1440,
+      "height": 900,
+      "query": "?theme=light"
+    },
+    {
+      "id": "desktop-1440-contrast",
+      "width": 1440,
+      "height": 900,
+      "query": "?theme=contrast"
+    },
+    {
+      "id": "desktop-1440-keyboard-focus",
+      "width": 1440,
+      "height": 900,
+      "query": "?theme=dark&fixture=keyboard-focus"
+    },
+    {
+      "id": "desktop-1440-scaled-text-125",
+      "width": 1440,
+      "height": 900,
+      "query": "?theme=dark&scale=125"
+    }
+  ]
+}
