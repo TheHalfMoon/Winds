@@ -377,7 +377,12 @@ impl<'a> DesktopFacade<'a> {
         let sessions = self.list_sessions(&workspace.workspace_id)?;
         let attention_count = sessions
             .iter()
-            .filter(|session| session.attention != DesktopAttentionState::None)
+            .filter(|session| {
+                !matches!(
+                    session.attention,
+                    DesktopAttentionState::Unknown | DesktopAttentionState::None
+                )
+            })
             .count();
         let attention = sessions
             .iter()
@@ -446,12 +451,14 @@ impl<'a> DesktopFacade<'a> {
     }
 
     fn runtime_projection(&self, session_id: &str) -> Result<DesktopRuntimeProjection> {
-        let requested = self
+        let mut requested = self
             .store
             .desktop_latest_requested_runtimes(session_id)?
             .into_iter()
             .map(DesktopRuntimeFamily::from)
             .collect::<Vec<_>>();
+        requested.sort();
+        requested.dedup();
         let mut latest_bindings = Vec::new();
         for runtime in [RuntimeKind::Codex, RuntimeKind::Claude] {
             latest_bindings.extend(
@@ -496,7 +503,11 @@ impl<'a> DesktopFacade<'a> {
                 fact.source,
                 Some(TruthSource::WindsObserved | TruthSource::HumanDecided)
             );
-            let candidate = if !trusted {
+            let candidate = if fact.source.is_none()
+                && fact.lifecycle_state == StageLifecycleState::Prepared
+            {
+                DesktopAttentionState::None
+            } else if !trusted {
                 DesktopAttentionState::Unknown
             } else {
                 match fact.lifecycle_state {
