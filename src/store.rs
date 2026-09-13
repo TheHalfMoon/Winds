@@ -5555,8 +5555,15 @@ impl Store {
                 }
             }
         }
-        self.load_desktop_project_presentation(input.workspace_id)?
-            .ok_or_else(|| "desktop project presentation disappeared after save".into())
+        Ok(DesktopProjectPresentation {
+            workspace_id: input.workspace_id.to_owned(),
+            display_name: input.display_name.to_owned(),
+            pinned: input.pinned,
+            sort_order: input.sort_order,
+            collapsed: input.collapsed,
+            revision: expected_revision.map_or(1, |revision| revision + 1),
+            updated_unix_ms: now_ms,
+        })
     }
 
     pub(crate) fn load_desktop_project_presentation(
@@ -5671,8 +5678,15 @@ impl Store {
                 }
             }
         }
-        self.load_desktop_session_presentation(input.session_id)?
-            .ok_or_else(|| "desktop session presentation disappeared after save".into())
+        Ok(DesktopSessionPresentation {
+            session_id: input.session_id.to_owned(),
+            display_alias: input.display_alias.to_owned(),
+            pinned: input.pinned,
+            sort_order: input.sort_order,
+            archived: input.archived,
+            revision: expected_revision.map_or(1, |revision| revision + 1),
+            updated_unix_ms: now_ms,
+        })
     }
 
     pub(crate) fn load_desktop_session_presentation(
@@ -5816,8 +5830,26 @@ impl Store {
                 }
             }
         }
-        self.load_desktop_layout_presentation(input.workspace_id)?
-            .ok_or_else(|| "desktop layout presentation disappeared after save".into())
+        Ok(DesktopLayoutPresentation {
+            workspace_id: input.workspace_id.to_owned(),
+            schema_version: 1,
+            layout_mode: input.layout_mode.to_owned(),
+            left_session_id: input.left_session_id.map(str::to_owned),
+            right_session_id: input.right_session_id.map(str::to_owned),
+            split_basis_points: input.split_basis_points,
+            right_dock_surface: input.right_dock_surface.to_owned(),
+            right_dock_binding: input.right_dock_binding.to_owned(),
+            left_dock_collapsed: input.left_dock_collapsed,
+            left_dock_width_px: input.left_dock_width_px,
+            right_dock_collapsed: input.right_dock_collapsed,
+            right_dock_width_px: input.right_dock_width_px,
+            appearance: input.appearance.to_owned(),
+            contrast: input.contrast.to_owned(),
+            density: input.density.to_owned(),
+            reduced_motion: input.reduced_motion,
+            revision: expected_revision.map_or(1, |revision| revision + 1),
+            updated_unix_ms: now_ms,
+        })
     }
 
     pub(crate) fn load_desktop_layout_presentation(

@@ -256,6 +256,69 @@ fn presentation_updates_reject_stale_revision_and_retrograde_time() {
 }
 
 #[test]
+fn competing_writer_cannot_lend_revision_tokens_across_presentation_surfaces() {
+    let home = test_home("competing-writers");
+    let store_a = Store::open(&home).unwrap();
+    seed_canonical(&store_a);
+    store_a
+        .save_desktop_project_presentation(project_input("Project 1"), None, 100)
+        .unwrap();
+    store_a
+        .save_desktop_session_presentation(session_input("Session 1"), None, 101)
+        .unwrap();
+    store_a
+        .save_desktop_layout_presentation(dual_layout(), None, 102)
+        .unwrap();
+    let store_b = Store::open(&home).unwrap();
+
+    let project_a = store_a
+        .save_desktop_project_presentation(project_input("Project A"), Some(1), 110)
+        .unwrap();
+    let project_b = store_b
+        .save_desktop_project_presentation(project_input("Project B"), Some(2), 120)
+        .unwrap();
+    assert_eq!(project_a.revision, 2);
+    assert_eq!(project_b.revision, 3);
+    assert!(
+        store_a
+            .save_desktop_project_presentation(project_input("Project stale"), Some(2), 130)
+            .is_err()
+    );
+
+    let session_a = store_a
+        .save_desktop_session_presentation(session_input("Session A"), Some(1), 111)
+        .unwrap();
+    let session_b = store_b
+        .save_desktop_session_presentation(session_input("Session B"), Some(2), 121)
+        .unwrap();
+    assert_eq!(session_a.revision, 2);
+    assert_eq!(session_b.revision, 3);
+    assert!(
+        store_a
+            .save_desktop_session_presentation(session_input("Session stale"), Some(2), 131)
+            .is_err()
+    );
+
+    let layout_a = store_a
+        .save_desktop_layout_presentation(dual_layout(), Some(1), 112)
+        .unwrap();
+    let layout_b = store_b
+        .save_desktop_layout_presentation(dual_layout(), Some(2), 122)
+        .unwrap();
+    assert_eq!(layout_a.revision, 2);
+    assert_eq!(layout_b.revision, 3);
+    assert!(
+        store_a
+            .save_desktop_layout_presentation(dual_layout(), Some(2), 132)
+            .is_err()
+    );
+
+    drop(store_b);
+    drop(store_a);
+    cleanup(&home);
+}
+
+#[test]
 fn deleting_presentation_records_preserves_canonical_truth() {
     let home = test_home("delete");
     let store = Store::open(&home).unwrap();
@@ -455,6 +518,59 @@ fn corrupt_presentation_rows_fail_closed_on_load_without_canonical_damage() {
         store.load_winds_session("session-a1").unwrap().session_id,
         "session-a1"
     );
+    drop(store);
+    cleanup(&home);
+}
+
+#[test]
+fn corrupt_compound_layout_fails_closed_without_creating_runtime_ownership() {
+    let home = test_home("corrupt-layout");
+    {
+        let store = Store::open(&home).unwrap();
+        seed_canonical(&store);
+        store
+            .save_desktop_layout_presentation(dual_layout(), None, 100)
+            .unwrap();
+    }
+    {
+        let connection = Connection::open(home.join("winds.db")).unwrap();
+        connection
+            .execute_batch(
+                "PRAGMA ignore_check_constraints = ON;
+                 UPDATE desktop_layout_presentation
+                 SET schema_version = 2
+                 WHERE workspace_id = 'workspace-a';",
+            )
+            .unwrap();
+    }
+    let store = Store::open(&home).unwrap();
+    let error = store
+        .load_desktop_layout_presentation("workspace-a")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("desktop layout schema version must be 1"));
+    assert_eq!(
+        store.load_workspace("workspace-a").unwrap().workspace_id,
+        "workspace-a"
+    );
+    assert_eq!(
+        store.load_winds_session("session-a1").unwrap().session_id,
+        "session-a1"
+    );
+    let runtime_bindings: i64 = store
+        .connection
+        .query_row("SELECT COUNT(*) FROM runtime_session_bindings", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let terminal_sessions: i64 = store
+        .connection
+        .query_row("SELECT COUNT(*) FROM terminal_sessions", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(runtime_bindings, 0);
+    assert_eq!(terminal_sessions, 0);
     drop(store);
     cleanup(&home);
 }
