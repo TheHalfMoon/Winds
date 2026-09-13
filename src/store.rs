@@ -5501,6 +5501,115 @@ impl Store {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DesktopAttentionFact {
+    pub(crate) lifecycle_state: StageLifecycleState,
+    pub(crate) source: Option<TruthSource>,
+    pub(crate) outcome_reason: Option<String>,
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 010 T131 bounded desktop projection queries; UI consumers land in T132"
+)]
+impl Store {
+    pub(crate) fn list_desktop_workspaces(&self) -> Result<Vec<WorkspaceRecord>> {
+        let mut statement = self.connection.prepare(
+            "SELECT workspace_id, canonical_worktree_root, git_common_dir,
+                    created_unix_ms, last_opened_unix_ms
+             FROM workspaces
+             ORDER BY created_unix_ms, workspace_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(WorkspaceRecord {
+                workspace_id: row.get(0)?,
+                canonical_worktree_root: row.get(1)?,
+                git_common_dir: row.get(2)?,
+                created_unix_ms: row.get(3)?,
+                last_opened_unix_ms: row.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub(crate) fn desktop_latest_requested_runtimes(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<crate::agentic_runtime::RuntimeKind>> {
+        self.load_winds_session(session_id)?;
+        let mut statement = self.connection.prepare(
+            "SELECT request.target_request_id, request.created_unix_ms
+             FROM model_mesh_target_requests request
+             JOIN workflow_actor_bindings actor
+               ON actor.binding_id = request.actor_binding_id
+              AND actor.stage_run_id = request.stage_run_id
+             WHERE actor.winds_session_id = ?1
+             ORDER BY request.created_unix_ms DESC, request.target_request_id DESC",
+        )?;
+        let rows = statement
+            .query_map(params![session_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let Some(latest_unix_ms) = rows.first().map(|row| row.1) else {
+            return Ok(Vec::new());
+        };
+        drop(statement);
+
+        let mut runtimes = Vec::new();
+        for (target_request_id, created_unix_ms) in rows {
+            if created_unix_ms != latest_unix_ms {
+                break;
+            }
+            let stored = self.load_model_mesh_target_request(&target_request_id)?;
+            if stored.request.descriptor().winds_session_id() != session_id {
+                return Err("desktop requested runtime crosses canonical session identity".into());
+            }
+            runtimes.push(stored.request.descriptor().runtime());
+        }
+        runtimes.sort();
+        runtimes.dedup();
+        Ok(runtimes)
+    }
+
+    pub(crate) fn desktop_attention_facts(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<DesktopAttentionFact>> {
+        self.load_winds_session(session_id)?;
+        let mut statement = self.connection.prepare(
+            "SELECT DISTINCT stage.stage_run_id
+             FROM workflow_actor_bindings actor
+             JOIN workflow_stage_runs stage ON stage.stage_run_id = actor.stage_run_id
+             WHERE actor.winds_session_id = ?1
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM workflow_stage_runs newer
+                   WHERE newer.workflow_run_id = stage.workflow_run_id
+                     AND newer.stage_key = stage.stage_key
+                     AND newer.attempt_ordinal > stage.attempt_ordinal
+               )
+             ORDER BY stage.updated_unix_ms, stage.stage_run_id",
+        )?;
+        let stage_ids = statement
+            .query_map(params![session_id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(statement);
+
+        stage_ids
+            .into_iter()
+            .map(|stage_run_id| {
+                let stored = self.load_stage_run(&stage_run_id)?;
+                Ok(DesktopAttentionFact {
+                    lifecycle_state: stored.lifecycle_state,
+                    source: stored.last_transition.as_ref().map(|value| value.source),
+                    outcome_reason: stored.outcome_reason,
+                })
+            })
+            .collect()
+    }
+}
+
 #[allow(
     dead_code,
     reason = "Spec 010 T130 presentation persistence; desktop callers land in T131"
