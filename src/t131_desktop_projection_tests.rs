@@ -205,6 +205,48 @@ fn project_session_commands_preserve_canonical_identity() {
     assert_eq!(presented.display_name, "Alias only");
     assert_eq!(presented.canonical_display_name, "Renamed session");
     assert_eq!(presented.canonical_session_id, "session-identity");
+    let duplicate_presentation = facade
+        .update_session_presentation(&DesktopSessionPresentationCommand {
+            session_id: "session-identity".to_owned(),
+            display_alias: "Duplicate alias".to_owned(),
+            pinned: false,
+            sort_order: 0,
+            archived: false,
+            expected_revision: None,
+            now_ms: 51,
+        })
+        .unwrap_err();
+    assert_eq!(
+        duplicate_presentation.to_string(),
+        "desktop session presentation already exists: session-identity"
+    );
+    let updated_presentation = facade
+        .update_session_presentation(&DesktopSessionPresentationCommand {
+            session_id: "session-identity".to_owned(),
+            display_alias: "Alias updated".to_owned(),
+            pinned: true,
+            sort_order: 18,
+            archived: false,
+            expected_revision: Some(1),
+            now_ms: 52,
+        })
+        .unwrap();
+    assert_eq!(updated_presentation.presentation_revision, Some(2));
+    let stale_presentation = facade
+        .update_session_presentation(&DesktopSessionPresentationCommand {
+            session_id: "session-identity".to_owned(),
+            display_alias: "Stale alias".to_owned(),
+            pinned: false,
+            sort_order: 0,
+            archived: false,
+            expected_revision: Some(1),
+            now_ms: 53,
+        })
+        .unwrap_err();
+    assert_eq!(
+        stale_presentation.to_string(),
+        "desktop session presentation lost revision/update race"
+    );
     assert_eq!(
         store.load_workflow_run("workflow-identity").unwrap(),
         workflow_before
@@ -387,7 +429,7 @@ fn attention_rollup_ignores_agent_reported_blocking_claims() {
 
     let facade = DesktopFacade::new(&store);
     let agent_only = facade.list_sessions(&workspace_id).unwrap();
-    assert_eq!(agent_only[0].attention, DesktopAttentionState::None);
+    assert_eq!(agent_only[0].attention, DesktopAttentionState::Unknown);
     store
         .transition_stage_run(
             "stage-attention",

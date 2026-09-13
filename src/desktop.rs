@@ -291,6 +291,18 @@ impl<'a> DesktopFacade<'a> {
         &self,
         command: &DesktopSessionPresentationCommand,
     ) -> Result<DesktopSessionSummary> {
+        if command.expected_revision.is_none()
+            && self
+                .store
+                .load_desktop_session_presentation(&command.session_id)?
+                .is_some()
+        {
+            return Err(format!(
+                "desktop session presentation already exists: {}",
+                command.session_id
+            )
+            .into());
+        }
         self.store.save_desktop_session_presentation(
             DesktopSessionPresentationInput {
                 session_id: &command.session_id,
@@ -484,28 +496,31 @@ impl<'a> DesktopFacade<'a> {
                 fact.source,
                 Some(TruthSource::WindsObserved | TruthSource::HumanDecided)
             );
-            if !trusted {
-                continue;
-            }
-            let candidate = match fact.lifecycle_state {
-                StageLifecycleState::WaitingApproval => DesktopAttentionState::WaitingApproval,
-                StageLifecycleState::WaitingExternal => DesktopAttentionState::WaitingExternal,
-                StageLifecycleState::RecoveryRequired => DesktopAttentionState::RecoveryRequired,
-                StageLifecycleState::Stale => DesktopAttentionState::Stale,
-                StageLifecycleState::Blocked => DesktopAttentionState::Unknown,
-                StageLifecycleState::Failed => match fact.outcome_reason.as_deref() {
-                    Some(RETRY_OUTCOME_BUDGET_EXHAUSTED | RETRY_OUTCOME_AMBIGUOUS_EFFECT) => {
+            let candidate = if !trusted {
+                DesktopAttentionState::Unknown
+            } else {
+                match fact.lifecycle_state {
+                    StageLifecycleState::WaitingApproval => DesktopAttentionState::WaitingApproval,
+                    StageLifecycleState::WaitingExternal => DesktopAttentionState::WaitingExternal,
+                    StageLifecycleState::RecoveryRequired => {
                         DesktopAttentionState::RecoveryRequired
                     }
-                    Some(RETRY_OUTCOME_FAILURE_RECORDED | RETRY_OUTCOME_NO_PROGRESS) => {
-                        DesktopAttentionState::RetryRequired
-                    }
-                    _ => DesktopAttentionState::Unknown,
-                },
-                StageLifecycleState::Prepared
-                | StageLifecycleState::Active
-                | StageLifecycleState::Cancelled
-                | StageLifecycleState::Completed => DesktopAttentionState::None,
+                    StageLifecycleState::Stale => DesktopAttentionState::Stale,
+                    StageLifecycleState::Blocked => DesktopAttentionState::Unknown,
+                    StageLifecycleState::Failed => match fact.outcome_reason.as_deref() {
+                        Some(RETRY_OUTCOME_BUDGET_EXHAUSTED | RETRY_OUTCOME_AMBIGUOUS_EFFECT) => {
+                            DesktopAttentionState::RecoveryRequired
+                        }
+                        Some(RETRY_OUTCOME_FAILURE_RECORDED | RETRY_OUTCOME_NO_PROGRESS) => {
+                            DesktopAttentionState::RetryRequired
+                        }
+                        _ => DesktopAttentionState::Unknown,
+                    },
+                    StageLifecycleState::Prepared
+                    | StageLifecycleState::Active
+                    | StageLifecycleState::Cancelled
+                    | StageLifecycleState::Completed => DesktopAttentionState::None,
+                }
             };
             if candidate.rank() < state.rank() {
                 state = candidate;
