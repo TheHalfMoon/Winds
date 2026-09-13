@@ -201,9 +201,9 @@ fn migration_inventory_is_exact_and_model_mesh_migration_is_unchanged() {
             "trg_desktop_layout_update_scope",
         ]
     );
-    let digest = Sha256::digest(include_bytes!(
-        "../migrations/0011_model_mesh_continuity.sql"
-    ));
+    let frozen_migration = include_str!("../migrations/0011_model_mesh_continuity.sql");
+    let canonical_bytes = frozen_migration.replace("\r\n", "\n");
+    let digest = Sha256::digest(canonical_bytes.as_bytes());
     let hex = digest
         .iter()
         .map(|byte| format!("{byte:02x}"))
