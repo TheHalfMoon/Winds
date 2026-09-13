@@ -319,6 +319,22 @@ impl<'a> DesktopFacade<'a> {
         expected_revision: Option<i64>,
         now_ms: i64,
     ) -> Result<DesktopLayoutPresentation> {
+        self.store.load_workspace(&command.workspace_id)?;
+        for session_id in [
+            command.left_session_id.as_deref(),
+            command.right_session_id.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let session = self.store.load_winds_session(session_id)?;
+            let workstream = self.store.load_workstream(&session.workstream_id)?;
+            if workstream.workspace_id != command.workspace_id {
+                return Err(
+                    "desktop layout session does not belong to the selected project".into(),
+                );
+            }
+        }
         self.store.save_desktop_layout_presentation(
             DesktopLayoutPresentationInput {
                 workspace_id: &command.workspace_id,

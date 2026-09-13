@@ -3,12 +3,13 @@ use crate::agentic_runtime::{
     discover_runtime_from_safe_observations,
 };
 use crate::desktop::{
-    DesktopAttentionState, DesktopFacade, DesktopRuntimeFamily, DesktopRuntimeState,
-    DesktopSessionPresentationCommand, classify_runtime_state,
+    DesktopAttentionState, DesktopFacade, DesktopLayoutCommand, DesktopProjectPresentationCommand,
+    DesktopRuntimeFamily, DesktopRuntimeState, DesktopSessionPresentationCommand,
+    classify_runtime_state,
 };
 use crate::domain::workflow::{
-    StageLifecycleState, StageRunIdentity, StageTransitionAuthority, StageTransitionRequest,
-    TruthSource, WorkflowRunIdentity,
+    RetryFailureObservation, SideEffectTruth, StageLifecycleState, StageRunIdentity,
+    StageTransitionAuthority, StageTransitionRequest, TruthSource, WorkflowRunIdentity,
 };
 use crate::store::{NewWindsSession, NewWorkspace, NewWorkstream, Store};
 use std::ffi::OsStr;
@@ -481,6 +482,383 @@ fn hundred_projects_thousand_sessions_have_stable_order_and_search_inputs() {
             .all(|project| !project.search_input.is_empty())
     );
     assert!(sessions_first.iter().all(|row| !row.2.is_empty()));
+
+    drop(store);
+    cleanup_owned_root(&root);
+}
+
+#[test]
+fn project_and_layout_commands_are_cas_scoped_and_deterministic() {
+    let root = test_root("project-layout-commands");
+    let store = Store::open(&root).unwrap();
+    let (workspace_id, workstream_id) = seed_workspace(&store, "commands", 10);
+    seed_session(&store, &workstream_id, "session-left", "Left", 12);
+    seed_session(&store, &workstream_id, "session-right", "Right", 13);
+    let (foreign_workspace_id, foreign_workstream_id) =
+        seed_workspace(&store, "commands-foreign", 14);
+    seed_session(
+        &store,
+        &foreign_workstream_id,
+        "session-foreign",
+        "Foreign",
+        16,
+    );
+    let facade = DesktopFacade::new(&store);
+
+    let created = facade
+        .create_project_context(&workspace_id, "Project Commands", 20)
+        .unwrap();
+    assert_eq!(created.presentation_revision, Some(1));
+    let duplicate = facade
+        .create_project_context(&workspace_id, "Duplicate", 21)
+        .unwrap_err();
+    assert_eq!(
+        duplicate.to_string(),
+        format!("desktop project context already exists: {workspace_id}")
+    );
+
+    let updated = facade
+        .update_project_presentation(&DesktopProjectPresentationCommand {
+            workspace_id: workspace_id.clone(),
+            display_name: "Project Commands Renamed".to_owned(),
+            pinned: true,
+            sort_order: 7,
+            collapsed: true,
+            expected_revision: 1,
+            now_ms: 22,
+        })
+        .unwrap();
+    assert_eq!(updated.presentation_revision, Some(2));
+    assert!(updated.pinned);
+    assert_eq!(updated.presentation_order, 7);
+    assert!(updated.collapsed);
+    let stale_project = facade
+        .update_project_presentation(&DesktopProjectPresentationCommand {
+            workspace_id: workspace_id.clone(),
+            display_name: "Stale".to_owned(),
+            pinned: false,
+            sort_order: 0,
+            collapsed: false,
+            expected_revision: 1,
+            now_ms: 23,
+        })
+        .unwrap_err();
+    assert_eq!(
+        stale_project.to_string(),
+        "desktop project presentation lost revision/update race"
+    );
+
+    let initial_layout = DesktopLayoutCommand {
+        workspace_id: workspace_id.clone(),
+        layout_mode: "SINGLE".to_owned(),
+        left_session_id: Some("session-left".to_owned()),
+        right_session_id: None,
+        split_basis_points: 5000,
+        right_dock_surface: "FILES".to_owned(),
+        right_dock_binding: "LEFT_SESSION".to_owned(),
+        left_dock_collapsed: false,
+        left_dock_width_px: 280,
+        right_dock_collapsed: false,
+        right_dock_width_px: 360,
+        appearance: "SYSTEM".to_owned(),
+        contrast: "STANDARD".to_owned(),
+        density: "COMPACT".to_owned(),
+        reduced_motion: false,
+    };
+    let saved = facade.save_layout(&initial_layout, None, 30).unwrap();
+    assert_eq!(saved.revision, 1);
+    assert_eq!(facade.load_layout(&workspace_id).unwrap(), Some(saved));
+
+    let updated_layout = DesktopLayoutCommand {
+        layout_mode: "DUAL".to_owned(),
+        right_session_id: Some("session-right".to_owned()),
+        split_basis_points: 4700,
+        right_dock_surface: "CHANGES".to_owned(),
+        right_dock_binding: "FOLLOW_FOCUS".to_owned(),
+        ..initial_layout.clone()
+    };
+    let saved_updated = facade.save_layout(&updated_layout, Some(1), 31).unwrap();
+    assert_eq!(saved_updated.revision, 2);
+    assert_eq!(
+        saved_updated.right_session_id.as_deref(),
+        Some("session-right")
+    );
+    let stale_layout = facade
+        .save_layout(&updated_layout, Some(1), 32)
+        .unwrap_err();
+    assert_eq!(
+        stale_layout.to_string(),
+        "desktop layout presentation lost revision/update race"
+    );
+
+    let foreign_layout = DesktopLayoutCommand {
+        left_session_id: Some("session-foreign".to_owned()),
+        right_session_id: None,
+        ..initial_layout
+    };
+    let scope_error = facade
+        .save_layout(&foreign_layout, Some(2), 33)
+        .unwrap_err();
+    assert_eq!(
+        scope_error.to_string(),
+        "desktop layout session does not belong to the selected project"
+    );
+    assert_eq!(
+        store
+            .load_workspace(&foreign_workspace_id)
+            .unwrap()
+            .workspace_id,
+        foreign_workspace_id
+    );
+
+    drop(store);
+    cleanup_owned_root(&root);
+}
+
+#[test]
+fn duplicate_aliases_keep_canonical_context_and_presentation_order_is_deterministic() {
+    let root = test_root("duplicate-alias-order");
+    let store = Store::open(&root).unwrap();
+    let (workspace_id, workstream_id) = seed_workspace(&store, "aliases-a", 10);
+    let (workspace_b, _) = seed_workspace(&store, "aliases-b", 20);
+    for (session_id, now_ms) in [
+        ("session-alias-a", 30),
+        ("session-alias-b", 31),
+        ("session-alias-c", 32),
+    ] {
+        seed_session(&store, &workstream_id, session_id, session_id, now_ms);
+    }
+    let facade = DesktopFacade::new(&store);
+    facade
+        .create_project_context(&workspace_id, "Duplicate Project", 40)
+        .unwrap();
+    facade
+        .create_project_context(&workspace_b, "Duplicate Project", 41)
+        .unwrap();
+    facade
+        .update_project_presentation(&DesktopProjectPresentationCommand {
+            workspace_id: workspace_b.clone(),
+            display_name: "Duplicate Project".to_owned(),
+            pinned: true,
+            sort_order: 9,
+            collapsed: false,
+            expected_revision: 1,
+            now_ms: 42,
+        })
+        .unwrap();
+
+    for command in [
+        DesktopSessionPresentationCommand {
+            session_id: "session-alias-a".to_owned(),
+            display_alias: "Duplicate Session".to_owned(),
+            pinned: false,
+            sort_order: 1,
+            archived: false,
+            expected_revision: None,
+            now_ms: 50,
+        },
+        DesktopSessionPresentationCommand {
+            session_id: "session-alias-b".to_owned(),
+            display_alias: "Duplicate Session".to_owned(),
+            pinned: true,
+            sort_order: 20,
+            archived: false,
+            expected_revision: None,
+            now_ms: 51,
+        },
+        DesktopSessionPresentationCommand {
+            session_id: "session-alias-c".to_owned(),
+            display_alias: "Duplicate Session".to_owned(),
+            pinned: true,
+            sort_order: 0,
+            archived: true,
+            expected_revision: None,
+            now_ms: 52,
+        },
+    ] {
+        facade.update_session_presentation(&command).unwrap();
+    }
+
+    let first = facade.list_sessions(&workspace_id).unwrap();
+    let second = facade.list_sessions(&workspace_id).unwrap();
+    assert_eq!(first, second);
+    assert_eq!(
+        first
+            .iter()
+            .map(|session| session.canonical_session_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["session-alias-b", "session-alias-a", "session-alias-c"]
+    );
+    assert!(
+        first
+            .iter()
+            .all(|session| session.display_name == "Duplicate Session")
+    );
+    assert!(
+        first
+            .iter()
+            .all(|session| session.canonical_workstream_id == workstream_id)
+    );
+    assert!(
+        first
+            .iter()
+            .all(|session| session.canonical_workspace_id == workspace_id)
+    );
+    assert!(
+        first
+            .iter()
+            .all(|session| session.search_input.contains(&session.canonical_session_id))
+    );
+
+    let projects_first = facade.list_projects().unwrap();
+    let projects_second = facade.list_projects().unwrap();
+    assert_eq!(projects_first, projects_second);
+    assert_eq!(projects_first[0].canonical_workspace_id, workspace_b);
+    assert_eq!(projects_first[0].display_name, "Duplicate Project");
+    assert_eq!(projects_first[1].canonical_workspace_id, workspace_id);
+    assert_eq!(projects_first[1].display_name, "Duplicate Project");
+
+    drop(store);
+    cleanup_owned_root(&root);
+}
+
+#[test]
+fn attention_precedence_uses_only_canonical_stage_truth() {
+    let root = test_root("attention-precedence");
+    let store = Store::open(&root).unwrap();
+    let (workspace_id, workstream_id) = seed_workspace(&store, "attention-rank", 10);
+    for (session_id, now_ms) in [
+        ("session-retry", 20),
+        ("session-external", 21),
+        ("session-recovery", 22),
+    ] {
+        seed_session(&store, &workstream_id, session_id, session_id, now_ms);
+    }
+
+    let setup_active_stage =
+        |workflow_id: &str, stage_id: &str, stage_key: &str, session_id: &str, base: i64| {
+            let workflow =
+                WorkflowRunIdentity::new(workflow_id, &workspace_id, &workstream_id).unwrap();
+            store.create_workflow_run(&workflow, base).unwrap();
+            let stage = StageRunIdentity::new(stage_id, workflow_id, stage_key, 1, None).unwrap();
+            store.create_stage_run(&stage, None, base + 1).unwrap();
+            store
+                .create_actor_binding_from_runtime_resolution(
+                    &format!("actor-{stage_id}"),
+                    stage_id,
+                    session_id,
+                    &RuntimeResumeResolution::Unavailable,
+                    base + 2,
+                )
+                .unwrap();
+            store
+                .transition_stage_run(
+                    stage_id,
+                    &StageTransitionRequest::new(
+                        &format!("activate-{stage_id}"),
+                        StageLifecycleState::Prepared,
+                        StageLifecycleState::Active,
+                        TruthSource::WindsObserved,
+                        StageTransitionAuthority::WindsPolicy,
+                    )
+                    .unwrap(),
+                    base + 3,
+                )
+                .unwrap();
+        };
+
+    setup_active_stage(
+        "workflow-retry",
+        "stage-retry",
+        "retry",
+        "session-retry",
+        30,
+    );
+    let failure = RetryFailureObservation::new(
+        "compile_error",
+        Some("checkpoint-retry"),
+        "basis-retry",
+        SideEffectTruth::SafeOrIdempotent,
+    )
+    .unwrap();
+    store
+        .record_stage_failure("stage-retry", "fail-retry", &failure, 34)
+        .unwrap();
+
+    setup_active_stage(
+        "workflow-external",
+        "stage-external",
+        "external",
+        "session-external",
+        40,
+    );
+    store
+        .transition_stage_run(
+            "stage-external",
+            &StageTransitionRequest::new(
+                "wait-external",
+                StageLifecycleState::Active,
+                StageLifecycleState::WaitingExternal,
+                TruthSource::WindsObserved,
+                StageTransitionAuthority::WindsPolicy,
+            )
+            .unwrap(),
+            44,
+        )
+        .unwrap();
+
+    let facade = DesktopFacade::new(&store);
+    let before_recovery = facade.list_sessions(&workspace_id).unwrap();
+    let retry = before_recovery
+        .iter()
+        .find(|session| session.canonical_session_id == "session-retry")
+        .unwrap();
+    let external = before_recovery
+        .iter()
+        .find(|session| session.canonical_session_id == "session-external")
+        .unwrap();
+    assert_eq!(retry.attention, DesktopAttentionState::RetryRequired);
+    assert_eq!(external.attention, DesktopAttentionState::WaitingExternal);
+    let project_before = facade.open_project(&workspace_id).unwrap();
+    assert_eq!(project_before.attention_count, 2);
+    assert_eq!(
+        project_before.attention,
+        DesktopAttentionState::RetryRequired
+    );
+
+    setup_active_stage(
+        "workflow-recovery",
+        "stage-recovery",
+        "recovery",
+        "session-recovery",
+        50,
+    );
+    store
+        .transition_stage_run(
+            "stage-recovery",
+            &StageTransitionRequest::new(
+                "require-recovery",
+                StageLifecycleState::Active,
+                StageLifecycleState::RecoveryRequired,
+                TruthSource::WindsObserved,
+                StageTransitionAuthority::WindsPolicy,
+            )
+            .unwrap(),
+            54,
+        )
+        .unwrap();
+    let after_recovery = facade.list_sessions(&workspace_id).unwrap();
+    let recovery = after_recovery
+        .iter()
+        .find(|session| session.canonical_session_id == "session-recovery")
+        .unwrap();
+    assert_eq!(recovery.attention, DesktopAttentionState::RecoveryRequired);
+    let project_after = facade.open_project(&workspace_id).unwrap();
+    assert_eq!(project_after.attention_count, 3);
+    assert_eq!(
+        project_after.attention,
+        DesktopAttentionState::RecoveryRequired
+    );
 
     drop(store);
     cleanup_owned_root(&root);
