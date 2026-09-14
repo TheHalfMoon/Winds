@@ -1,81 +1,11 @@
 import { RuntimeMark } from "./components/RuntimeMark";
+import { LeftDock } from "./leftDock/LeftDock";
 import {
   fileFixtures,
   projectFixtures,
   secondarySession,
   type SessionFixture,
 } from "./fixtures/workspace";
-
-function SessionRow({ session }: { readonly session: SessionFixture }) {
-  return (
-    <button
-      type="button"
-      className="session-row"
-      data-active={session.active ? "true" : "false"}
-      data-attention={session.attention ? "true" : "false"}
-      aria-current={session.active ? "page" : undefined}
-    >
-      <RuntimeMark runtime={session.runtime} label={session.runtimeLabel} compact />
-      <span className="session-row-copy">
-        <span className="session-row-title">{session.title}</span>
-        <span className="session-row-meta">{session.status}</span>
-      </span>
-      {session.attention && (
-        <span className="attention-pip" aria-label="Needs attention">
-          1
-        </span>
-      )}
-    </button>
-  );
-}
-
-function LeftDock() {
-  return (
-    <aside className="left-dock" aria-label="Projects and Sessions">
-      <div className="dock-heading-row">
-        <div>
-          <p className="section-kicker">Workspace</p>
-          <h2>Projects</h2>
-        </div>
-        <button type="button" className="icon-button" aria-label="Create Project">
-          +
-        </button>
-      </div>
-
-      <nav className="project-list" aria-label="Project navigation">
-        {projectFixtures.map((project, index) => (
-          <section className="project-group" key={project.id} data-open={index === 0 ? "true" : "false"}>
-            <button type="button" className="project-row" aria-expanded={index === 0}>
-              <span className="disclosure" aria-hidden="true">
-                {index === 0 ? "⌄" : "›"}
-              </span>
-              <span className="project-copy">
-                <span className="project-name">{project.name}</span>
-                <span className="project-meta">{project.meta}</span>
-              </span>
-              <span className="project-count">{project.sessions.length}</span>
-            </button>
-            {index === 0 && (
-              <div className="session-list" aria-label={`${project.name} Sessions`}>
-                {project.sessions.map((session) => (
-                  <SessionRow session={session} key={session.id} />
-                ))}
-              </div>
-            )}
-          </section>
-        ))}
-      </nav>
-
-      <div className="dock-foot">
-        <button type="button" className="quiet-action">
-          <span aria-hidden="true">⌘</span>
-          Command
-          <kbd>⌘K</kbd>
-        </button>
-      </div>
-    </aside>
-  );
-}
 
 function StreamEvent({ item }: { readonly item: SessionFixture["stream"][number] }) {
   return (
@@ -235,7 +165,7 @@ export function App() {
   const primarySession = projectFixtures[0].sessions[0];
 
   return (
-    <div className="winds-app" aria-label="Winds Desktop static anatomy">
+    <div className="winds-app" aria-label="Winds Desktop workspace">
       <header className="top-chrome">
         <div className="brand-lockup" aria-label="Winds">
           <span className="winds-mark" aria-hidden="true">W</span>
@@ -249,7 +179,7 @@ export function App() {
           <span>Quiet Current</span>
         </div>
         <div className="chrome-actions">
-          <span className="static-mode">T129 · static anatomy</span>
+          <span className="static-mode">T132 · canonical left dock</span>
           <button type="button" className="icon-button" aria-label="Open command menu">⌘</button>
           <button type="button" className="avatar-button" aria-label="Profile">AS</button>
         </div>
@@ -266,8 +196,8 @@ export function App() {
         <RightDock />
       </div>
 
-      <footer className="status-rail" aria-label="Static fixture status">
-        <div><span className="status-dot" data-tone="ok" /> renderer authority: none</div>
+      <footer className="status-rail" aria-label="Desktop status">
+        <div><span className="status-dot" data-tone="ok" /> renderer boundary: canonical actions validated by Rust</div>
         <div>dual session · independent input</div>
         <div>theme · quiet current</div>
       </footer>

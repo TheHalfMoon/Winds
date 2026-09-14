@@ -1,11 +1,4 @@
-export type RuntimeFamily =
-  | "codex"
-  | "claude"
-  | "shell"
-  | "unknown"
-  | "unavailable"
-  | "conflicting"
-  | "stale";
+import type { RuntimeFamily } from "../runtime";
 
 export type StreamKind = "agent" | "command" | "result" | "attention";
 

@@ -7,6 +7,7 @@ const root = new URL('..', import.meta.url).pathname;
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 
 const expected = {
+  '@tauri-apps/api': '2.11.1',
   react: '19.3.0',
   'react-dom': '19.3.0'
 };
@@ -15,7 +16,7 @@ for (const [name, version] of Object.entries(expected)) {
   test(`pins ${name}@${version}`, () => assert.equal(pkg.dependencies[name], version));
 }
 
-for (const name of ['@tauri-apps/api', '@xterm/addon-fit', '@xterm/xterm', 'lucide-react']) {
+for (const name of ['@xterm/addon-fit', '@xterm/xterm', 'lucide-react']) {
   test(`defers unused runtime dependency ${name}`, () => {
     assert.equal(pkg.dependencies[name], undefined);
     assert.equal(pkg.devDependencies[name], undefined);

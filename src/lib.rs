@@ -26,9 +26,9 @@ mod cli_workspace;
 mod command;
 #[allow(
     dead_code,
-    reason = "Spec 010 T131 Rust-owned desktop projection facade; UI consumers land in T132"
+    reason = "Spec 010 desktop projection and bounded T132 bridge include later-slice facade surfaces"
 )]
-mod desktop;
+pub mod desktop;
 mod domain;
 #[allow(
     dead_code,
@@ -83,6 +83,8 @@ mod t121_model_mesh_cli_tests;
 mod t123_model_mesh_adversarial_tests;
 #[cfg(test)]
 mod t131_desktop_projection_tests;
+#[cfg(test)]
+mod t132_desktop_bridge_tests;
 mod workbench;
 mod workflow_cli;
 
