@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -29,4 +29,8 @@ test('T135 exposes only the bounded left-dock, layout, and terminal Tauri comman
   for (const forbidden of ['@tauri-apps/plugin-', 'Command::new(', 'std::fs', 'std::process']) {
     assert.equal(host.includes(forbidden), false, forbidden);
   }
+});
+
+test('T135 retains the native Windows Tauri icon resource', () => {
+  assert.equal(existsSync(join(root, 'src-tauri/icons/icon.ico')), true);
 });
