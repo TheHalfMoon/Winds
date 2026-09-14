@@ -12,10 +12,17 @@ const commandNames = [
   'left_dock_rename_session',
   'left_dock_update_session',
   'workspace_load_layout',
-  'workspace_save_layout'
+  'workspace_save_layout',
+  'terminal_status',
+  'terminal_start',
+  'terminal_input',
+  'terminal_resize',
+  'terminal_interrupt',
+  'terminal_terminate',
+  'terminal_close'
 ];
 
-test('T134 exposes only the five left-dock plus two layout Tauri commands', () => {
+test('T135 exposes only the bounded left-dock, layout, and terminal Tauri commands', () => {
   assert.equal((host.match(/#\[tauri::command\]/g) ?? []).length, commandNames.length);
   for (const name of commandNames) assert.equal(host.includes(name), true, name);
   for (const forbidden of ['@tauri-apps/plugin-', 'Command::new(', 'std::fs', 'std::process']) {

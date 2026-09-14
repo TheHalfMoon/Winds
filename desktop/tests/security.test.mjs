@@ -25,7 +25,7 @@ test('T128 CSP denies remote and active host escape surfaces', () => {
 });
 
 
-test('T132 confines renderer host invocation to the typed left-dock bridge', () => {
+test('T135 confines renderer host invocation to the two typed bridge modules', () => {
   const sourceRoot = join(root, 'src');
   const sourceFiles = [];
   const collect = (directory) => {
@@ -40,7 +40,7 @@ test('T132 confines renderer host invocation to the typed left-dock bridge', () 
     const text = readFileSync(path, 'utf8');
     return text.includes('@tauri-apps/api') || text.includes('invoke(');
   });
-  assert.deepEqual(invoking.map((path) => path.slice(sourceRoot.length + 1)), ['leftDock/bridge.ts']);
+  assert.deepEqual(invoking.map((path) => path.slice(sourceRoot.length + 1)).sort(), ['leftDock/bridge.ts', 'terminal/bridge.ts']);
 });
 
 test('T132 host errors log detail locally but return bounded renderer messages', () => {

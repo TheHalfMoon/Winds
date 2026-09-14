@@ -26,3 +26,25 @@ test('Tauri release build is Cargo-lock constrained', () => {
   assert.equal(pkg.scripts['desktop:build'], 'tauri build --no-bundle --ci -- --locked');
   assert.match(workflow, /npm run desktop:build/);
 });
+
+const terminalWorkflow = readFileSync(
+  join(repositoryRoot, '.github/workflows/t135-terminal-renderer.yml'),
+  'utf8',
+);
+
+test('T135 terminal renderer qualification directly covers Linux macOS and Windows exact candidates', () => {
+  for (const os of ['ubuntu-24.04', 'macos-15', 'windows-2025']) {
+    assert.match(terminalWorkflow, new RegExp(`- ${os.replaceAll('.', '\\.')}`));
+  }
+  assert.match(terminalWorkflow, /CANDIDATE_SHA/);
+  assert.match(terminalWorkflow, /git rev-parse HEAD/);
+  assert.match(terminalWorkflow, /libwebkit2gtk-4\.1-dev/);
+});
+
+test('T135 terminal renderer qualification runs the exact focused bridge and locked desktop gates', () => {
+  assert.match(terminalWorkflow, /cargo test --locked t135_desktop_terminal_tests -- --test-threads=1/);
+  assert.match(terminalWorkflow, /npm ci --ignore-scripts/);
+  assert.match(terminalWorkflow, /npm run frontend:build/);
+  assert.match(terminalWorkflow, /cargo clippy --manifest-path desktop\/src-tauri\/Cargo\.toml --locked/);
+  assert.match(terminalWorkflow, /npm run desktop:build/);
+});

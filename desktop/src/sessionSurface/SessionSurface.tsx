@@ -1,4 +1,5 @@
 import { useState, type FormEvent, type KeyboardEvent } from "react";
+import { TerminalSurface } from "../terminal/TerminalSurface";
 import { RuntimeMark } from "../components/RuntimeMark";
 import {
   composerAvailability,
@@ -63,6 +64,7 @@ export function SessionSurface({
   readonly focused?: boolean;
 }) {
   const [events, setEvents] = useState<readonly SessionWorkEvent[]>(session.events);
+  const [surface, setSurface] = useState<"work_stream" | "terminal">("work_stream");
   const [draft, setDraft] = useState("");
   const [sequence, setSequence] = useState(1);
   const availability = composerAvailability(session);
@@ -117,14 +119,14 @@ export function SessionSurface({
       </header>
 
       <div className="stream-toolbar" aria-label="Session stream controls">
-        <div className="segmented-control" aria-label="Work Stream view">
-          <button type="button" data-active="true">Work Stream</button>
-          <button type="button" disabled title="Terminal presentation is owned by T135">Terminal · T135</button>
+        <div className="segmented-control" aria-label="Session surface view">
+          <button type="button" data-active={surface === "work_stream" ? "true" : "false"} onClick={() => setSurface("work_stream")}>Work Stream</button>
+          <button type="button" data-active={surface === "terminal" ? "true" : "false"} onClick={() => setSurface("terminal")}>Terminal</button>
         </div>
         <span className="fixture-label">{session.runtime.proof}</span>
       </div>
 
-      <div className="work-stream" tabIndex={0} aria-label={`${session.displayName} Work Stream`}>
+      <div className="work-stream" hidden={surface !== "work_stream"} tabIndex={surface === "work_stream" ? 0 : -1} aria-label={`${session.displayName} Work Stream`}>
         <div className="stream-day"><span>User-visible work events</span></div>
         {session.surfaceState === "loading" ? (
           <div className="work-stream-state" data-state="loading">Loading fixture work events…</div>
@@ -140,7 +142,9 @@ export function SessionSurface({
         )}
       </div>
 
-      <form className="composer" aria-label={`${session.displayName} composer`} onSubmit={handleSubmit}>
+      <TerminalSurface canonicalSessionId={session.canonicalSessionId} visible={surface === "terminal"} />
+
+      <form className="composer" hidden={surface !== "work_stream"} aria-label={`${session.displayName} composer`} onSubmit={handleSubmit}>
         <div className="composer-context">
           <span className="context-pill">Target · {session.displayName}</span>
           <span className="context-pill">Session · {session.canonicalSessionId}</span>
