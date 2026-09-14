@@ -32,7 +32,7 @@ test("T129 defines dark, light, and high-contrast Quiet Current foundations", ()
 test("T129 anatomy remains two visible Sessions with Files-first right dock", () => {
   const required = [
     "Projects and Sessions", "Dual Session view", "Context dock", "Work Stream", "Terminal",
-    "Files", "Changes", "Evidence", "Context", "Artifacts", "composer",
+    "Files", "Changes", "Evidence", "Context", "Artifacts", "composer", "Rename",
   ];
   const productSurface = `${app}\n${leftDock}\n${sessionSurface}`;
   for (const value of required) assert.equal(productSurface.includes(value), true, value);
