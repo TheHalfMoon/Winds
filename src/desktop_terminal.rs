@@ -302,6 +302,29 @@ impl DesktopTerminalRegistry {
         self.finish_terminal(target, "CLOSED_BY_WINDS", |session| session.close())
     }
 
+    pub fn observe_process_exit(
+        &mut self,
+        target: &DesktopTerminalTargetRequest,
+    ) -> Result<Option<DesktopTerminalStatus>> {
+        if !self.terminals.contains_key(&target.terminal_id) {
+            return self.status_for_target(target).map(Some);
+        }
+        match self.active_terminal_mut(target)?.session.try_wait() {
+            Ok(Some(exit)) => self
+                .record_final(
+                    target,
+                    DesktopTerminalLifecycle::Exited,
+                    Some(exit),
+                    Some("PROCESS_EXITED".to_owned()),
+                )
+                .map(Some),
+            Ok(None) => Ok(None),
+            Err(error) => self
+                .lose_ownership(target, format!("terminal exit observation failed: {error}"))
+                .map(Some),
+        }
+    }
+
     pub fn observe_output_end(
         &mut self,
         target: DesktopTerminalTargetRequest,

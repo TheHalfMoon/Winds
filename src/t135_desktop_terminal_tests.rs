@@ -21,7 +21,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 #[cfg(windows)]
 use std::thread;
 #[cfg(unix)]
-use std::time::Duration;
+use std::time::{Duration, Instant};
 #[cfg(windows)]
 use std::time::{Duration as WindowsDuration, Instant};
 
@@ -197,6 +197,50 @@ fn terminal_registry_preserves_exact_target_and_byte_order() {
     assert!(text.contains("beta"));
     assert!(output.windows(3).any(|bytes| bytes == [0xe2, 0x98, 0x83]));
     assert_eq!(status.lifecycle, DesktopTerminalLifecycle::Exited);
+    cleanup(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn terminal_registry_observes_natural_exit_without_waiting_for_output_eof() {
+    let root = fixture_root("process-exit-before-eof");
+    let profile = fixture_profile(&root, "exec /bin/sh");
+    let mut registry = DesktopTerminalRegistry::new();
+    let mut started = registry
+        .start_with_test_profile("session-exit", "workspace-a", &profile, &root, 24, 80)
+        .unwrap();
+    let target = DesktopTerminalTargetRequest {
+        canonical_session_id: "session-exit".to_owned(),
+        terminal_id: started.status.terminal_id.clone(),
+    };
+    let output_reader = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        started.output_reader.read_to_end(&mut output).unwrap();
+        output
+    });
+    registry
+        .send_input(DesktopTerminalInputRequest {
+            canonical_session_id: target.canonical_session_id.clone(),
+            terminal_id: target.terminal_id.clone(),
+            bytes: b"printf 'T135_EXIT_BEFORE_EOF\n'; exit 0\n".to_vec(),
+        })
+        .unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let final_status = loop {
+        if let Some(status) = registry.observe_process_exit(&target).unwrap() {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out observing T135 natural exit independently from output EOF"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(final_status.lifecycle, DesktopTerminalLifecycle::Exited);
+
+    let output = output_reader.join().unwrap();
+    assert!(String::from_utf8_lossy(&output).contains("T135_EXIT_BEFORE_EOF"));
     cleanup(&root);
 }
 
@@ -474,9 +518,19 @@ fn terminal_registry_directly_qualifies_native_windows_conpty_path() {
         })
         .unwrap();
     wait_for_windows_marker(&output_events, &mut output, b"T135_WINDOWS");
-    wait_for_windows_eof(&output_events, &mut output);
-    let final_status = registry.observe_output_end(target, None).unwrap();
-    assert!(String::from_utf8_lossy(&output).contains("T135_WINDOWS"));
+    let deadline = Instant::now() + WindowsDuration::from_secs(10);
+    let final_status = loop {
+        if let Some(status) = registry.observe_process_exit(&target).unwrap() {
+            break status;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out observing T135 ConPTY child exit independently from output EOF"
+        );
+        std::thread::sleep(WindowsDuration::from_millis(25));
+    };
     assert_eq!(final_status.lifecycle, DesktopTerminalLifecycle::Exited);
+    wait_for_windows_eof(&output_events, &mut output);
+    assert!(String::from_utf8_lossy(&output).contains("T135_WINDOWS"));
     cleanup(&root);
 }

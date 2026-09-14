@@ -1,5 +1,6 @@
 use std::io::Read;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 use tauri::State;
 use tauri::ipc::{Channel, Response};
 use winds_control::desktop::{
@@ -17,6 +18,7 @@ use winds_control::desktop_terminal::{
 };
 
 const TERMINAL_OUTPUT_CHUNK_BYTES: usize = 8 * 1024;
+const TERMINAL_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Default)]
 struct TerminalHostState {
@@ -128,6 +130,33 @@ fn terminal_start(
         canonical_session_id: status.canonical_session_id.clone(),
         terminal_id: status.terminal_id.clone(),
     };
+    let lifecycle_state = host_state.clone();
+    let lifecycle_target = target.clone();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(TERMINAL_EXIT_POLL_INTERVAL);
+            let observation = terminal_registry(&lifecycle_state).and_then(|mut registry| {
+                registry
+                    .observe_process_exit(&lifecycle_target)
+                    .map_err(|error| host_error("terminal process observation", error))
+            });
+            match observation {
+                Ok(Some(status)) => {
+                    if let Err(error) = lifecycle.send(status) {
+                        eprintln!(
+                            "Winds desktop host: terminal lifecycle channel send failed: {error}"
+                        );
+                    }
+                    break;
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    eprintln!("{error}");
+                    break;
+                }
+            }
+        }
+    });
     std::thread::spawn(move || {
         let mut reader = started.output_reader;
         let mut buffer = [0_u8; TERMINAL_OUTPUT_CHUNK_BYTES];
@@ -149,19 +178,13 @@ fn terminal_start(
                 }
             }
         }
-        match terminal_registry(&host_state).and_then(|mut registry| {
+        if let Err(error) = terminal_registry(&host_state).and_then(|mut registry| {
             registry
                 .observe_output_end(target, read_error)
+                .map(|_| ())
                 .map_err(|error| host_error("terminal output completion", error))
         }) {
-            Ok(status) => {
-                if let Err(error) = lifecycle.send(status) {
-                    eprintln!(
-                        "Winds desktop host: terminal lifecycle channel send failed: {error}"
-                    );
-                }
-            }
-            Err(error) => eprintln!("{error}"),
+            eprintln!("{error}");
         }
     });
     Ok(status)
