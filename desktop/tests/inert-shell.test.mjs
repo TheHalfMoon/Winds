@@ -5,21 +5,18 @@ import test from 'node:test';
 
 const root = new URL('..', import.meta.url).pathname;
 const host = readFileSync(join(root, 'src-tauri/src/main.rs'), 'utf8');
-const app = readFileSync(join(root, 'src/App.tsx'), 'utf8');
-const main = readFileSync(join(root, 'src/main.tsx'), 'utf8');
-const combined = `${host}\n${app}\n${main}`;
-
-const forbidden = [
-  '#[tauri::command]',
-  '.invoke_handler(',
-  '@tauri-apps/plugin-',
-  '@tauri-apps/api/core',
-  'invoke(',
-  'Command::new(',
-  'std::fs',
-  'std::process'
+const commandNames = [
+  'left_dock_snapshot',
+  'left_dock_update_project',
+  'left_dock_create_session',
+  'left_dock_rename_session',
+  'left_dock_update_session'
 ];
 
-test('T128 source exposes no renderer-to-host product authority', () => {
-  for (const token of forbidden) assert.equal(combined.includes(token), false, token);
+test('T132 exposes only the five authorized left-dock Tauri commands', () => {
+  assert.equal((host.match(/#\[tauri::command\]/g) ?? []).length, commandNames.length);
+  for (const name of commandNames) assert.equal(host.includes(name), true, name);
+  for (const forbidden of ['@tauri-apps/plugin-', 'Command::new(', 'std::fs', 'std::process']) {
+    assert.equal(host.includes(forbidden), false, forbidden);
+  }
 });

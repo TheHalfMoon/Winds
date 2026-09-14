@@ -5,6 +5,7 @@ import test from "node:test";
 
 const root = new URL("..", import.meta.url).pathname;
 const app = readFileSync(join(root, "src/App.tsx"), "utf8");
+const leftDock = readFileSync(join(root, "src/leftDock/LeftDock.tsx"), "utf8");
 const main = readFileSync(join(root, "src/main.tsx"), "utf8");
 const styles = readFileSync(join(root, "src/styles.css"), "utf8");
 const tokens = readFileSync(join(root, "src/tokens.css"), "utf8");
@@ -54,7 +55,8 @@ test("T129 shell exposes left dock, dual independent Sessions, and Files-first r
     "composer",
     "Rename",
   ];
-  for (const value of required) assert.equal(app.includes(value), true, value);
+  const productSurface = `${app}\n${leftDock}`;
+  for (const value of required) assert.equal(productSurface.includes(value), true, value);
   assert.equal((app.match(/<SessionPane/g) ?? []).length, 2);
 });
 

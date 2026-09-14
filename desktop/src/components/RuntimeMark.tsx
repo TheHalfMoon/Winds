@@ -1,4 +1,4 @@
-import type { RuntimeFamily } from "../fixtures/workspace";
+import type { RuntimeFamily } from "../runtime";
 
 const runtimeGlyph: Record<RuntimeFamily, string> = {
   codex: "CX",
