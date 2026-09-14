@@ -16,8 +16,14 @@ use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(windows)]
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+#[cfg(windows)]
+use std::thread;
 #[cfg(unix)]
 use std::time::Duration;
+#[cfg(windows)]
+use std::time::{Duration as WindowsDuration, Instant};
 
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
 
@@ -54,6 +60,108 @@ fn fixture_profile(root: &Path, body: &str) -> crate::git::shell_profiles::Shell
 
 fn cleanup(root: &Path) {
     fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(windows)]
+const WINDOWS_OUTPUT_LIMIT: usize = 128 * 1024;
+#[cfg(windows)]
+const WINDOWS_CURSOR_POSITION_QUERY: &[u8] = b"\x1b[6n";
+#[cfg(windows)]
+const WINDOWS_CURSOR_POSITION_RESPONSE: &[u8] = b"\x1b[1;1R";
+
+#[cfg(windows)]
+enum WindowsOutputEvent {
+    Chunk(Vec<u8>),
+    Error(String),
+    Eof,
+}
+
+#[cfg(windows)]
+fn start_windows_output_reader(mut reader: Box<dyn Read + Send>) -> Receiver<WindowsOutputEvent> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let mut buffer = [0_u8; 4096];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => {
+                    let _ = sender.send(WindowsOutputEvent::Eof);
+                    return;
+                }
+                Ok(count) => {
+                    if sender
+                        .send(WindowsOutputEvent::Chunk(buffer[..count].to_vec()))
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                Err(error) => {
+                    let _ = sender.send(WindowsOutputEvent::Error(error.to_string()));
+                    return;
+                }
+            }
+        }
+    });
+    receiver
+}
+
+#[cfg(windows)]
+fn wait_for_windows_marker(
+    receiver: &Receiver<WindowsOutputEvent>,
+    output: &mut Vec<u8>,
+    marker: &[u8],
+) {
+    let deadline = Instant::now() + WindowsDuration::from_secs(10);
+    while Instant::now() < deadline {
+        match receiver.recv_timeout(WindowsDuration::from_millis(100)) {
+            Ok(WindowsOutputEvent::Chunk(chunk)) => {
+                output.extend_from_slice(&chunk);
+                assert!(
+                    output.len() <= WINDOWS_OUTPUT_LIMIT,
+                    "T135 ConPTY output exceeded bound"
+                );
+                if output.windows(marker.len()).any(|window| window == marker) {
+                    return;
+                }
+            }
+            Ok(WindowsOutputEvent::Error(error)) => {
+                panic!("T135 ConPTY output reader failed: {error}")
+            }
+            Ok(WindowsOutputEvent::Eof) => break,
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    panic!(
+        "timed out waiting for T135 ConPTY marker {:?}; observed {:?}",
+        String::from_utf8_lossy(marker),
+        String::from_utf8_lossy(output)
+    );
+}
+
+#[cfg(windows)]
+fn wait_for_windows_eof(receiver: &Receiver<WindowsOutputEvent>, output: &mut Vec<u8>) {
+    let deadline = Instant::now() + WindowsDuration::from_secs(10);
+    while Instant::now() < deadline {
+        match receiver.recv_timeout(WindowsDuration::from_millis(100)) {
+            Ok(WindowsOutputEvent::Chunk(chunk)) => {
+                output.extend_from_slice(&chunk);
+                assert!(
+                    output.len() <= WINDOWS_OUTPUT_LIMIT,
+                    "T135 ConPTY output exceeded bound"
+                );
+            }
+            Ok(WindowsOutputEvent::Error(error)) => {
+                panic!("T135 ConPTY output reader failed: {error}")
+            }
+            Ok(WindowsOutputEvent::Eof) => return,
+            Err(RecvTimeoutError::Timeout) => continue,
+            Err(RecvTimeoutError::Disconnected) => {
+                panic!("T135 ConPTY output reader disconnected before EOF")
+            }
+        }
+    }
+    panic!("timed out waiting for T135 ConPTY output EOF");
 }
 
 #[cfg(unix)]
@@ -319,21 +427,22 @@ fn terminal_output_stress_preserves_large_stream_order_without_second_pty() {
 #[test]
 fn terminal_registry_directly_qualifies_native_windows_conpty_path() {
     let root = fixture_root("windows-conpty");
+    let comspec = std::env::var("COMSPEC").expect("windows-2025 must provide COMSPEC");
     let inventory = WorkspaceEnvironmentInventory {
         host_os: std::env::consts::OS.to_owned(),
         host_arch: std::env::consts::ARCH.to_owned(),
         canonical_worktree_root: root.to_str().unwrap().to_owned(),
         git_common_dir: root.to_str().unwrap().to_owned(),
-        shell_candidates: Vec::new(),
+        shell_candidates: vec![comspec.clone()],
         detected_manifests: Vec::new(),
     };
     let profile = discover_native_shell_profiles(&inventory)
         .unwrap()
         .into_iter()
-        .next()
-        .expect("Windows runner must expose a native shell profile");
+        .find(|profile| profile.executable.eq_ignore_ascii_case(&comspec))
+        .expect("COMSPEC must resolve to a qualified native shell profile");
     let mut registry = DesktopTerminalRegistry::new();
-    let mut started = registry
+    let started = registry
         .start_with_test_profile(
             "session-windows",
             "workspace-windows",
@@ -347,6 +456,16 @@ fn terminal_registry_directly_qualifies_native_windows_conpty_path() {
         canonical_session_id: "session-windows".to_owned(),
         terminal_id: started.status.terminal_id.clone(),
     };
+    let output_events = start_windows_output_reader(started.output_reader);
+    let mut output = Vec::new();
+    wait_for_windows_marker(&output_events, &mut output, WINDOWS_CURSOR_POSITION_QUERY);
+    registry
+        .send_input(DesktopTerminalInputRequest {
+            canonical_session_id: target.canonical_session_id.clone(),
+            terminal_id: target.terminal_id.clone(),
+            bytes: WINDOWS_CURSOR_POSITION_RESPONSE.to_vec(),
+        })
+        .unwrap();
     registry
         .send_input(DesktopTerminalInputRequest {
             canonical_session_id: target.canonical_session_id.clone(),
@@ -354,8 +473,8 @@ fn terminal_registry_directly_qualifies_native_windows_conpty_path() {
             bytes: b"echo T135_WINDOWS\r\nexit\r\n".to_vec(),
         })
         .unwrap();
-    let mut output = Vec::new();
-    started.output_reader.read_to_end(&mut output).unwrap();
+    wait_for_windows_marker(&output_events, &mut output, b"T135_WINDOWS");
+    wait_for_windows_eof(&output_events, &mut output);
     let final_status = registry.observe_output_end(target, None).unwrap();
     assert!(String::from_utf8_lossy(&output).contains("T135_WINDOWS"));
     assert_eq!(final_status.lifecycle, DesktopTerminalLifecycle::Exited);
