@@ -1,7 +1,7 @@
 use std::io::Read;
 use std::sync::{Arc, Mutex, MutexGuard};
-use tauri::ipc::{Channel, Response};
 use tauri::State;
+use tauri::ipc::{Channel, Response};
 use winds_control::desktop::{
     DesktopBridgeCreateSessionRequest, DesktopBridgeLayoutPresentation, DesktopBridgeLayoutRequest,
     DesktopBridgeProjectPresentationBatchRequest, DesktopBridgeProjectSummary,
@@ -137,7 +137,9 @@ fn terminal_start(
                 Ok(0) => break,
                 Ok(read) => {
                     if let Err(error) = output.send(Response::new(buffer[..read].to_vec())) {
-                        eprintln!("Winds desktop host: terminal output channel send failed: {error}");
+                        eprintln!(
+                            "Winds desktop host: terminal output channel send failed: {error}"
+                        );
                     }
                 }
                 Err(error) => {
@@ -147,15 +149,16 @@ fn terminal_start(
                 }
             }
         }
-        match terminal_registry(&host_state)
-            .and_then(|mut registry| {
-                registry
-                    .observe_output_end(target, read_error)
-                    .map_err(|error| host_error("terminal output completion", error))
-            }) {
+        match terminal_registry(&host_state).and_then(|mut registry| {
+            registry
+                .observe_output_end(target, read_error)
+                .map_err(|error| host_error("terminal output completion", error))
+        }) {
             Ok(status) => {
                 if let Err(error) = lifecycle.send(status) {
-                    eprintln!("Winds desktop host: terminal lifecycle channel send failed: {error}");
+                    eprintln!(
+                        "Winds desktop host: terminal lifecycle channel send failed: {error}"
+                    );
                 }
             }
             Err(error) => eprintln!("{error}"),

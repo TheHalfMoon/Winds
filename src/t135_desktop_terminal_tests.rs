@@ -1,16 +1,22 @@
 use crate::desktop_terminal::{
     DesktopTerminalInputRequest, DesktopTerminalLifecycle, DesktopTerminalRegistry,
-    DesktopTerminalResizeRequest, DesktopTerminalStartRequest, DesktopTerminalTargetRequest,
+    DesktopTerminalTargetRequest,
 };
+#[cfg(unix)]
+use crate::desktop_terminal::{DesktopTerminalResizeRequest, DesktopTerminalStartRequest};
 use crate::git::shell_profiles::discover_native_shell_profiles;
+#[cfg(unix)]
 use crate::git::workspace::open_existing_workspace;
 use crate::git::workspace_inventory::WorkspaceEnvironmentInventory;
+#[cfg(unix)]
 use crate::store::{NewWindsSession, NewWorkstream, Store};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(unix)]
 use std::time::Duration;
 
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
