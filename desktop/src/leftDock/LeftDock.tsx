@@ -186,27 +186,23 @@ export function LeftDock() {
   const visibleProjects = useMemo(() => filterProjects(snapshot, query), [snapshot, query]);
 
   const updateProject = useCallback((project: BridgeProject, changes: Parameters<typeof projectUpdatePlan>[1]) => {
-    void mutate(() => bridge.updateProject(projectUpdatePlan(project.project, changes)));
+    void mutate(() => bridge.updateProject([projectUpdatePlan(project.project, changes)]));
   }, [bridge, mutate]);
 
   const moveProject = useCallback((workspaceId: string, direction: 1 | -1) => {
     const plan = projectReorderPlan(snapshot.projects, workspaceId, direction);
     if (!plan) return;
-    void mutate(async () => {
-      for (const request of plan) await bridge.updateProject(request);
-    });
+    void mutate(() => bridge.updateProject(plan));
   }, [bridge, mutate, snapshot.projects]);
 
   const updateSession = useCallback((session: BridgeSessionSummary, changes: Parameters<typeof sessionUpdatePlan>[1]) => {
-    void mutate(() => bridge.updateSession(sessionUpdatePlan(session, changes)));
+    void mutate(() => bridge.updateSession([sessionUpdatePlan(session, changes)]));
   }, [bridge, mutate]);
 
   const moveSession = useCallback((project: BridgeProject, sessionId: string, direction: 1 | -1) => {
     const plan = sessionReorderPlan(project.sessions, sessionId, direction);
     if (!plan) return;
-    void mutate(async () => {
-      for (const request of plan) await bridge.updateSession(request);
-    });
+    void mutate(() => bridge.updateSession(plan));
   }, [bridge, mutate]);
 
   const beginCreateSession = useCallback((project: BridgeProject) => {

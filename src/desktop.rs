@@ -792,6 +792,12 @@ pub struct DesktopBridgeProjectPresentationRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DesktopBridgeProjectPresentationBatchRequest {
+    pub updates: Vec<DesktopBridgeProjectPresentationRequest>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DesktopBridgeSessionPresentationRequest {
     pub session_id: String,
     pub display_alias: String,
@@ -799,6 +805,12 @@ pub struct DesktopBridgeSessionPresentationRequest {
     pub sort_order: i64,
     pub archived: bool,
     pub expected_revision: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopBridgeSessionPresentationBatchRequest {
+    pub updates: Vec<DesktopBridgeSessionPresentationRequest>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -814,7 +826,7 @@ pub struct DesktopBridgeCreateSessionRequest {
 pub struct DesktopBridgeRenameSessionRequest {
     pub session_id: String,
     pub display_name: String,
-    pub presentation: Option<DesktopBridgeSessionPresentationRequest>,
+    pub presentation: DesktopBridgeSessionPresentationRequest,
 }
 
 pub fn desktop_bridge_default_home() -> Result<std::path::PathBuf> {
@@ -886,44 +898,65 @@ pub fn desktop_bridge_snapshot(home: &std::path::Path) -> Result<DesktopBridgeSn
     Ok(DesktopBridgeSnapshot { projects })
 }
 
+const MAX_DESKTOP_PRESENTATION_BATCH: usize = 4096;
+
 pub fn desktop_bridge_update_project(
     home: &std::path::Path,
-    request: DesktopBridgeProjectPresentationRequest,
-) -> Result<DesktopBridgeProjectSummary> {
+    request: DesktopBridgeProjectPresentationBatchRequest,
+) -> Result<Vec<DesktopBridgeProjectSummary>> {
+    if request.updates.is_empty() {
+        return Err("desktop Project presentation batch must not be empty".into());
+    }
+    if request.updates.len() > MAX_DESKTOP_PRESENTATION_BATCH {
+        return Err("desktop Project presentation batch exceeds bounded maximum".into());
+    }
     let store = Store::open(home)?;
     let facade = DesktopFacade::new(&store);
     let now_ms = desktop_bridge_now_ms()?;
-    let DesktopBridgeProjectPresentationRequest {
-        workspace_id,
-        display_name,
-        pinned,
-        sort_order,
-        collapsed,
-        expected_revision,
-    } = request;
-    match expected_revision {
-        None => facade
-            .create_project_presentation(
-                &workspace_id,
-                &display_name,
-                pinned,
-                sort_order,
-                collapsed,
-                now_ms,
-            )
-            .map(Into::into),
-        Some(expected_revision) => facade
-            .update_project_presentation(&DesktopProjectPresentationCommand {
-                workspace_id,
-                display_name,
-                pinned,
-                sort_order,
-                collapsed,
-                expected_revision,
-                now_ms,
-            })
-            .map(Into::into),
+    let workspace_ids = request
+        .updates
+        .iter()
+        .map(|update| update.workspace_id.clone())
+        .collect::<Vec<_>>();
+    let transaction = store.connection.unchecked_transaction()?;
+    for update in request.updates {
+        let DesktopBridgeProjectPresentationRequest {
+            workspace_id,
+            display_name,
+            pinned,
+            sort_order,
+            collapsed,
+            expected_revision,
+        } = update;
+        match expected_revision {
+            None => {
+                facade.create_project_presentation(
+                    &workspace_id,
+                    &display_name,
+                    pinned,
+                    sort_order,
+                    collapsed,
+                    now_ms,
+                )?;
+            }
+            Some(expected_revision) => {
+                facade.update_project_presentation(&DesktopProjectPresentationCommand {
+                    workspace_id,
+                    display_name,
+                    pinned,
+                    sort_order,
+                    collapsed,
+                    expected_revision,
+                    now_ms,
+                })?;
+            }
+        }
     }
+    transaction.commit()?;
+    workspace_ids
+        .into_iter()
+        .map(|workspace_id| facade.open_project(&workspace_id).map(Into::into))
+        .collect()
 }
 
 pub fn desktop_bridge_create_session(
@@ -950,66 +983,66 @@ pub fn desktop_bridge_rename_session(
 ) -> Result<DesktopBridgeSessionSummary> {
     let store = Store::open(home)?;
     let facade = DesktopFacade::new(&store);
-    let now_ms = desktop_bridge_now_ms()?;
     let DesktopBridgeRenameSessionRequest {
         session_id,
         display_name,
         presentation,
     } = request;
-    let stored_presentation = store.load_desktop_session_presentation(&session_id)?;
-    match (presentation, stored_presentation) {
-        (None, None) => {}
-        (None, Some(_)) => {
-            return Err("desktop Session presentation changed; refresh before renaming".into());
-        }
-        (Some(_), None) => {
-            return Err(
-                "desktop Session presentation no longer exists; refresh before renaming".into(),
-            );
-        }
-        (Some(presentation), Some(_)) => {
-            if presentation.session_id != session_id || presentation.display_alias != display_name {
-                return Err(
-                    "desktop Session rename presentation does not match rename target".into(),
-                );
-            }
-            if presentation.expected_revision.is_none() {
-                return Err(
-                    "desktop Session rename requires the current presentation revision".into(),
-                );
-            }
-            facade.update_session_presentation(&DesktopSessionPresentationCommand {
-                session_id: presentation.session_id,
-                display_alias: presentation.display_alias,
-                pinned: presentation.pinned,
-                sort_order: presentation.sort_order,
-                archived: presentation.archived,
-                expected_revision: presentation.expected_revision,
-                now_ms,
-            })?;
-        }
+    if presentation.session_id != session_id || presentation.display_alias != display_name {
+        return Err("desktop Session rename presentation does not match rename target".into());
     }
     facade
-        .rename_session(&session_id, &display_name, now_ms)
+        .update_session_presentation(&DesktopSessionPresentationCommand {
+            session_id: presentation.session_id,
+            display_alias: presentation.display_alias,
+            pinned: presentation.pinned,
+            sort_order: presentation.sort_order,
+            archived: presentation.archived,
+            expected_revision: presentation.expected_revision,
+            now_ms: desktop_bridge_now_ms()?,
+        })
         .map(Into::into)
 }
 
 pub fn desktop_bridge_update_session(
     home: &std::path::Path,
-    request: DesktopBridgeSessionPresentationRequest,
-) -> Result<DesktopBridgeSessionSummary> {
+    request: DesktopBridgeSessionPresentationBatchRequest,
+) -> Result<Vec<DesktopBridgeSessionSummary>> {
+    if request.updates.is_empty() {
+        return Err("desktop Session presentation batch must not be empty".into());
+    }
+    if request.updates.len() > MAX_DESKTOP_PRESENTATION_BATCH {
+        return Err("desktop Session presentation batch exceeds bounded maximum".into());
+    }
     let store = Store::open(home)?;
-    DesktopFacade::new(&store)
-        .update_session_presentation(&DesktopSessionPresentationCommand {
-            session_id: request.session_id,
-            display_alias: request.display_alias,
-            pinned: request.pinned,
-            sort_order: request.sort_order,
-            archived: request.archived,
-            expected_revision: request.expected_revision,
-            now_ms: desktop_bridge_now_ms()?,
+    let facade = DesktopFacade::new(&store);
+    let now_ms = desktop_bridge_now_ms()?;
+    let session_ids = request
+        .updates
+        .iter()
+        .map(|update| update.session_id.clone())
+        .collect::<Vec<_>>();
+    let transaction = store.connection.unchecked_transaction()?;
+    for update in request.updates {
+        facade.update_session_presentation(&DesktopSessionPresentationCommand {
+            session_id: update.session_id,
+            display_alias: update.display_alias,
+            pinned: update.pinned,
+            sort_order: update.sort_order,
+            archived: update.archived,
+            expected_revision: update.expected_revision,
+            now_ms,
+        })?;
+    }
+    transaction.commit()?;
+    session_ids
+        .into_iter()
+        .map(|session_id| {
+            facade
+                .session_summary(store.load_winds_session(&session_id)?)
+                .map(Into::into)
         })
-        .map(Into::into)
+        .collect()
 }
 
 fn desktop_bridge_now_ms() -> Result<i64> {

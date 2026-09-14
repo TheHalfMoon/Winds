@@ -49,3 +49,13 @@ test('T132 host errors log detail locally but return bounded renderer messages',
   assert.equal(host.includes('error.to_string()'), false);
   assert.match(host, /Refresh and retry\./);
 });
+
+test('T132 sends reorder plans as one bounded host batch', () => {
+  const dock = readFileSync(join(root, 'src/leftDock/LeftDock.tsx'), 'utf8');
+  const bridge = readFileSync(join(root, 'src/leftDock/bridge.ts'), 'utf8');
+  assert.match(dock, /bridge\.updateProject\(plan\)/);
+  assert.match(dock, /bridge\.updateSession\(plan\)/);
+  assert.equal(dock.includes('for (const request of plan)'), false);
+  assert.match(bridge, /left_dock_update_project[\s\S]*request: \{ updates \}/);
+  assert.match(bridge, /left_dock_update_session[\s\S]*request: \{ updates \}/);
+});

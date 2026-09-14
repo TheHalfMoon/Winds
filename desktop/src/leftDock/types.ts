@@ -96,14 +96,14 @@ export interface CreateSessionRequest {
 export interface RenameSessionRequest {
   readonly sessionId: string;
   readonly displayName: string;
-  readonly presentation: SessionPresentationRequest | null;
+  readonly presentation: SessionPresentationRequest;
 }
 
 export interface LeftDockBridge {
   readonly source: "canonical" | "fixture";
   snapshot(): Promise<BridgeSnapshot>;
-  updateProject(request: ProjectPresentationRequest): Promise<BridgeProjectSummary>;
+  updateProject(requests: readonly ProjectPresentationRequest[]): Promise<readonly BridgeProjectSummary[]>;
   createSession(request: CreateSessionRequest): Promise<BridgeSessionSummary>;
   renameSession(request: RenameSessionRequest): Promise<BridgeSessionSummary>;
-  updateSession(request: SessionPresentationRequest): Promise<BridgeSessionSummary>;
+  updateSession(requests: readonly SessionPresentationRequest[]): Promise<readonly BridgeSessionSummary[]>;
 }

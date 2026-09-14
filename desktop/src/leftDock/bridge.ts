@@ -5,10 +5,10 @@ import type { LeftDockBridge } from "./types";
 const canonicalLeftDockBridge: LeftDockBridge = {
   source: "canonical",
   snapshot: () => invoke("left_dock_snapshot"),
-  updateProject: (request) => invoke("left_dock_update_project", { request }),
+  updateProject: (updates) => invoke("left_dock_update_project", { request: { updates } }),
   createSession: (request) => invoke("left_dock_create_session", { request }),
   renameSession: (request) => invoke("left_dock_rename_session", { request }),
-  updateSession: (request) => invoke("left_dock_update_session", { request }),
+  updateSession: (updates) => invoke("left_dock_update_session", { request: { updates } }),
 };
 
 export function leftDockBridge(): LeftDockBridge {

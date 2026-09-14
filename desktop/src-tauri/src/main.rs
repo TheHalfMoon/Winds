@@ -1,9 +1,10 @@
 use winds_control::desktop::{
-    DesktopBridgeCreateSessionRequest, DesktopBridgeProjectPresentationRequest,
+    DesktopBridgeCreateSessionRequest, DesktopBridgeProjectPresentationBatchRequest,
     DesktopBridgeProjectSummary, DesktopBridgeRenameSessionRequest,
-    DesktopBridgeSessionPresentationRequest, DesktopBridgeSessionSummary, DesktopBridgeSnapshot,
-    desktop_bridge_create_session, desktop_bridge_default_home, desktop_bridge_rename_session,
-    desktop_bridge_snapshot, desktop_bridge_update_project, desktop_bridge_update_session,
+    DesktopBridgeSessionPresentationBatchRequest, DesktopBridgeSessionSummary,
+    DesktopBridgeSnapshot, desktop_bridge_create_session, desktop_bridge_default_home,
+    desktop_bridge_rename_session, desktop_bridge_snapshot, desktop_bridge_update_project,
+    desktop_bridge_update_session,
 };
 
 fn host_error(context: &str, error: impl std::fmt::Display) -> String {
@@ -23,8 +24,8 @@ fn left_dock_snapshot() -> Result<DesktopBridgeSnapshot, String> {
 
 #[tauri::command]
 fn left_dock_update_project(
-    request: DesktopBridgeProjectPresentationRequest,
-) -> Result<DesktopBridgeProjectSummary, String> {
+    request: DesktopBridgeProjectPresentationBatchRequest,
+) -> Result<Vec<DesktopBridgeProjectSummary>, String> {
     let home = bridge_home()?;
     desktop_bridge_update_project(&home, request)
         .map_err(|error| host_error("Project presentation update", error))
@@ -50,8 +51,8 @@ fn left_dock_rename_session(
 
 #[tauri::command]
 fn left_dock_update_session(
-    request: DesktopBridgeSessionPresentationRequest,
-) -> Result<DesktopBridgeSessionSummary, String> {
+    request: DesktopBridgeSessionPresentationBatchRequest,
+) -> Result<Vec<DesktopBridgeSessionSummary>, String> {
     let home = bridge_home()?;
     desktop_bridge_update_session(&home, request)
         .map_err(|error| host_error("Session presentation update", error))

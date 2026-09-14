@@ -152,16 +152,14 @@ export function sessionRenamePlan(session: BridgeSessionSummary, displayName: st
   return {
     sessionId: session.canonicalSessionId,
     displayName,
-    presentation: session.presentationRevision === null
-      ? null
-      : {
-          sessionId: session.canonicalSessionId,
-          displayAlias: displayName,
-          pinned: session.pinned,
-          sortOrder: session.presentationOrder,
-          archived: session.archived,
-          expectedRevision: session.presentationRevision,
-        },
+    presentation: {
+      sessionId: session.canonicalSessionId,
+      displayAlias: displayName,
+      pinned: session.pinned,
+      sortOrder: session.presentationOrder,
+      archived: session.archived,
+      expectedRevision: session.presentationRevision,
+    },
   };
 }
 
