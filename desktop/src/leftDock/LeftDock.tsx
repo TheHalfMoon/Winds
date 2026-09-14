@@ -7,6 +7,7 @@ import {
   filterProjects,
   nextSessionFocusIndex,
   projectReorderPlan,
+  projectRenderedExpanded,
   projectUpdatePlan,
   reconcileSelectedSession,
   resolveSessionSearch,
@@ -66,14 +67,21 @@ function SessionRow({
     if (!editing) setRenameValue(session.displayName);
   }, [editing, session.displayName]);
 
+  const renameTriggerKey = sessionFocusKey(session.canonicalSessionId, "rename");
+
+  function closeRenameEditor() {
+    onFocusKey(renameTriggerKey);
+    setEditing(false);
+  }
+
   async function submitRename(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const displayName = renameValue.trim();
     if (!displayName || displayName === session.displayName) {
-      setEditing(false);
+      closeRenameEditor();
       return;
     }
-    if (await onRename(displayName)) setEditing(false);
+    if (await onRename(displayName)) closeRenameEditor();
   }
 
   return (
@@ -101,7 +109,7 @@ function SessionRow({
         <button type="button" className="mini-action" data-focus-key={sessionFocusKey(session.canonicalSessionId, "pin")} disabled={mutationDisabled} onClick={onPin} aria-label={`${session.pinned ? "Unpin" : "Pin"} canonical Session ${session.canonicalSessionId}`}>{session.pinned ? "★" : "☆"}</button>
         <button type="button" className="mini-action" data-focus-key={sessionFocusKey(session.canonicalSessionId, "move-up")} disabled={mutationDisabled || !canMoveUp} onClick={() => onMove(-1)} aria-label={`Move canonical Session ${session.canonicalSessionId} up`}>↑</button>
         <button type="button" className="mini-action" data-focus-key={sessionFocusKey(session.canonicalSessionId, "move-down")} disabled={mutationDisabled || !canMoveDown} onClick={() => onMove(1)} aria-label={`Move canonical Session ${session.canonicalSessionId} down`}>↓</button>
-        <button type="button" className="mini-action" data-focus-key={sessionFocusKey(session.canonicalSessionId, "rename")} disabled={mutationDisabled} onClick={() => setEditing((value) => !value)} aria-label={`Rename canonical Session ${session.canonicalSessionId}`}>✎</button>
+        <button type="button" className="mini-action" data-focus-key={renameTriggerKey} disabled={mutationDisabled} onClick={() => setEditing((value) => !value)} aria-label={`Rename canonical Session ${session.canonicalSessionId}`}>✎</button>
       </div>
       {editing && writable && (
         <form className="inline-session-form" onSubmit={(event) => void submitRename(event)}>
@@ -111,7 +119,7 @@ function SessionRow({
           </label>
           <div className="inline-form-actions">
             <button type="submit" className="quiet-action" disabled={busy || !renameValue.trim()}>Save name</button>
-            <button type="button" className="quiet-action" disabled={busy} onClick={() => setEditing(false)}>Cancel</button>
+            <button type="button" className="quiet-action" disabled={busy} onClick={closeRenameEditor}>Cancel</button>
           </div>
         </form>
       )}
@@ -219,6 +227,11 @@ export function LeftDock() {
     setCreateWorkstreamId(project.availableWorkstreams.length === 1 ? project.availableWorkstreams[0].workstreamId : "");
   }, [writable]);
 
+  const closeCreateSession = useCallback((workspaceId: string) => {
+    setFocusedControlKey(projectFocusKey(workspaceId, "create-session"));
+    setCreatingWorkspaceId(null);
+  }, []);
+
   const submitCreateSession = useCallback(async (project: BridgeProject) => {
     const displayName = createName.trim();
     if (!displayName || !createWorkstreamId) {
@@ -227,11 +240,11 @@ export function LeftDock() {
     }
     const success = await mutate(() => bridge.createSession(createSessionPlan(project, createWorkstreamId, displayName)));
     if (success) {
-      setCreatingWorkspaceId(null);
+      closeCreateSession(project.project.canonicalWorkspaceId);
       setCreateName("");
       setCreateWorkstreamId("");
     }
-  }, [bridge, createName, createWorkstreamId, mutate]);
+  }, [bridge, closeCreateSession, createName, createWorkstreamId, mutate]);
 
   const renameSession = useCallback((session: BridgeSessionSummary, displayName: string) => (
     mutate(() => bridge.renameSession(sessionRenamePlan(session, displayName)))
@@ -279,16 +292,17 @@ export function LeftDock() {
           const mutationDisabled = busy || !writable;
           const creating = creatingWorkspaceId === current.canonicalWorkspaceId;
           const projectAttention = attentionView(current.attention);
+          const renderedExpanded = projectRenderedExpanded(project, query);
           const upPlan = projectReorderPlan(snapshot.projects, current.canonicalWorkspaceId, -1);
           const downPlan = projectReorderPlan(snapshot.projects, current.canonicalWorkspaceId, 1);
           return (
-            <section className="project-group" key={current.canonicalWorkspaceId} data-open={!current.collapsed ? "true" : "false"}>
+            <section className="project-group" key={current.canonicalWorkspaceId} data-open={renderedExpanded ? "true" : "false"}>
               <div className="project-row-shell">
-                <button type="button" className="project-row" data-focus-key={projectFocusKey(current.canonicalWorkspaceId, "toggle")} aria-expanded={!current.collapsed} disabled={mutationDisabled} onClick={() => updateProject(project, { collapsed: !current.collapsed })}>
-                  <span className="disclosure" aria-hidden="true">{current.collapsed ? "›" : "⌄"}</span>
+                <button type="button" className="project-row" data-focus-key={projectFocusKey(current.canonicalWorkspaceId, "toggle")} aria-expanded={renderedExpanded} disabled={mutationDisabled} onClick={() => updateProject(project, { collapsed: !current.collapsed })}>
+                  <span className="disclosure" aria-hidden="true">{renderedExpanded ? "⌄" : "›"}</span>
                   <span className="project-copy"><span className="project-name">{current.displayName}</span><span className="project-meta">{current.canonicalWorkspaceId}</span></span>
                   <span className="project-count">{current.sessionCount}</span>
-                  {current.collapsed && current.attentionCount > 0 && <span className="project-attention-summary">{current.attentionCount} need attention · {projectAttention.label}</span>}
+                  {!renderedExpanded && current.attentionCount > 0 && <span className="project-attention-summary">{current.attentionCount} need attention · {projectAttention.label}</span>}
                 </button>
                 <div className="row-actions" aria-label={`Presentation actions for canonical Project ${current.canonicalWorkspaceId}`}>
                   <button type="button" className="mini-action" data-focus-key={projectFocusKey(current.canonicalWorkspaceId, "pin")} disabled={mutationDisabled} onClick={() => updateProject(project, { pinned: !current.pinned })} aria-label={`${current.pinned ? "Unpin" : "Pin"} canonical Project ${current.canonicalWorkspaceId}`}>{current.pinned ? "★" : "☆"}</button>
@@ -304,10 +318,10 @@ export function LeftDock() {
                     {project.availableWorkstreams.length > 1 && <option value="" disabled>Select one Workstream explicitly</option>}
                     {project.availableWorkstreams.map((workstream) => <option key={workstream.workstreamId} value={workstream.workstreamId}>{workstream.displayName} · {workstream.workstreamId}</option>)}
                   </select></label>
-                  <div className="inline-form-actions"><button type="submit" className="quiet-action" disabled={busy || !createName.trim() || !createWorkstreamId}>Create Session</button><button type="button" className="quiet-action" disabled={busy} onClick={() => setCreatingWorkspaceId(null)}>Cancel</button></div>
+                  <div className="inline-form-actions"><button type="submit" className="quiet-action" disabled={busy || !createName.trim() || !createWorkstreamId}>Create Session</button><button type="button" className="quiet-action" disabled={busy} onClick={() => closeCreateSession(current.canonicalWorkspaceId)}>Cancel</button></div>
                 </form>
               )}
-              {!current.collapsed && <div className="session-list" aria-label={`${current.displayName} Sessions`}>
+              {renderedExpanded && <div className="session-list" aria-label={`${current.displayName} Sessions`}>
                 {project.sessions.map((session) => <SessionRow key={session.canonicalSessionId} session={session} selected={selectedSessionId === session.canonicalSessionId} busy={busy} writable={writable} canMoveUp={sessionReorderPlan(project.sessions, session.canonicalSessionId, -1) !== null} canMoveDown={sessionReorderPlan(project.sessions, session.canonicalSessionId, 1) !== null} onSelect={() => setSelectedSessionId(session.canonicalSessionId)} onRename={(displayName) => renameSession(session, displayName)} onPin={() => updateSession(session, { pinned: !session.pinned })} onMove={(direction) => moveSession(project, session.canonicalSessionId, direction)} onFocusKey={setFocusedControlKey} />)}
                 {project.sessions.length === 0 && <p className="session-empty">No Sessions in this Project</p>}
               </div>}
@@ -318,7 +332,9 @@ export function LeftDock() {
       </nav>
       <div className="dock-foot">
         <div className="projection-status" role="status" aria-live="polite">{status}</div>
-        <button type="button" className="quiet-action" data-focus-key="dock:refresh" onClick={() => void refresh()} disabled={busy}><span aria-hidden="true">↻</span>Refresh canonical snapshot</button>
+        <button type="button" className="quiet-action" data-focus-key="dock:refresh" onClick={() => {
+          void refresh().catch((error) => setStatus(`Refresh failed · ${errorMessage(error)}`));
+        }} disabled={busy}><span aria-hidden="true">↻</span>Refresh canonical snapshot</button>
       </div>
     </aside>
   );

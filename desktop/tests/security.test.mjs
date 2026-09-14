@@ -59,3 +59,17 @@ test('T132 sends reorder plans as one bounded host batch', () => {
   assert.match(bridge, /left_dock_update_project[\s\S]*request: \{ updates \}/);
   assert.match(bridge, /left_dock_update_session[\s\S]*request: \{ updates \}/);
 });
+
+
+test('T132 restores inline-form trigger focus only after explicit successful exits', () => {
+  const dock = readFileSync(join(root, 'src/leftDock/LeftDock.tsx'), 'utf8');
+  assert.match(dock, /function closeRenameEditor\(\)[\s\S]*onFocusKey\(renameTriggerKey\)[\s\S]*setEditing\(false\)/);
+  assert.match(dock, /if \(await onRename\(displayName\)\) closeRenameEditor\(\)/);
+  assert.match(dock, /closeCreateSession\(project\.project\.canonicalWorkspaceId\)/);
+  assert.match(dock, /onClick=\{\(\) => closeCreateSession\(current\.canonicalWorkspaceId\)\}/);
+});
+
+test('T132 manual refresh failures are surfaced instead of becoming unhandled rejections', () => {
+  const dock = readFileSync(join(root, 'src/leftDock/LeftDock.tsx'), 'utf8');
+  assert.match(dock, /refresh\(\)\.catch\(\(error\) => setStatus\(`Refresh failed/);
+});

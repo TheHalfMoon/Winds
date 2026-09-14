@@ -55,6 +55,16 @@ test('T132 runtime presentation preserves proof state instead of trusting labels
   assert.match(model.runtimeView(requested).proof, /not observed/);
 });
 
+test('T132 search renders a collapsed Project expanded when a matching Session is visible', () => {
+  const collapsed = project('project-only', [session('session-a', 'Needle Session')], { collapsed: true });
+  const filtered = model.filterProjects({ projects: [collapsed] }, 'needle');
+  assert.equal(filtered.length, 1);
+  assert.equal(filtered[0].sessions.length, 1);
+  assert.equal(model.projectRenderedExpanded(filtered[0], 'needle'), true);
+  assert.equal(model.projectRenderedExpanded(collapsed, ''), false);
+  assert.equal(model.projectRenderedExpanded(collapsed, 'project-only'), false);
+});
+
 test('T132 duplicate aliases resolve as ambiguous while exact canonical identity wins', () => {
   const snapshot = { projects: [project('workspace-a', [session('session-a', 'Duplicate'), session('session-b', 'Duplicate')])] };
   assert.deepEqual(model.resolveSessionSearch(snapshot, 'Duplicate'), {

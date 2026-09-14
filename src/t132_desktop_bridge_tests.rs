@@ -2,8 +2,9 @@ use crate::desktop::{
     DesktopBridgeCreateSessionRequest, DesktopBridgeProjectPresentationBatchRequest,
     DesktopBridgeProjectPresentationRequest, DesktopBridgeRenameSessionRequest,
     DesktopBridgeSessionPresentationBatchRequest, DesktopBridgeSessionPresentationRequest,
-    desktop_bridge_create_session, desktop_bridge_rename_session, desktop_bridge_snapshot,
-    desktop_bridge_update_project, desktop_bridge_update_session,
+    desktop_bridge_create_session, desktop_bridge_rename_session,
+    desktop_bridge_resolve_default_home, desktop_bridge_snapshot, desktop_bridge_update_project,
+    desktop_bridge_update_session,
 };
 use crate::store::{NewWorkspace, NewWorkstream, Store};
 use std::ffi::OsStr;
@@ -75,6 +76,38 @@ fn seed_workspace(store: &Store, suffix: &str, now_ms: i64) -> (String, String) 
         )
         .unwrap();
     (workspace_id, workstream_id)
+}
+
+#[test]
+fn bridge_default_home_skips_non_absolute_fallbacks_but_keeps_explicit_override_strict() {
+    let absolute_profile = std::env::current_dir().unwrap();
+    let resolved = desktop_bridge_resolve_default_home(
+        None,
+        Some(PathBuf::from("relative-home")),
+        Some(absolute_profile.clone()),
+    )
+    .unwrap();
+    assert_eq!(resolved, absolute_profile.join(".winds"));
+
+    let explicit = absolute_profile.join("explicit-winds-home");
+    assert_eq!(
+        desktop_bridge_resolve_default_home(
+            Some(explicit.clone()),
+            Some(absolute_profile.clone()),
+            None,
+        )
+        .unwrap(),
+        explicit
+    );
+
+    let error = desktop_bridge_resolve_default_home(
+        Some(PathBuf::from("relative-explicit")),
+        Some(absolute_profile),
+        None,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("WINDS_HOME must resolve to an absolute path"));
 }
 
 #[test]

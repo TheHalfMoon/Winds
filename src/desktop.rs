@@ -829,22 +829,34 @@ pub struct DesktopBridgeRenameSessionRequest {
     pub presentation: DesktopBridgeSessionPresentationRequest,
 }
 
-pub fn desktop_bridge_default_home() -> Result<std::path::PathBuf> {
-    let path = if let Some(path) = std::env::var_os("WINDS_HOME") {
-        std::path::PathBuf::from(path)
-    } else if let Some(home) = std::env::var_os("HOME") {
-        std::path::PathBuf::from(home).join(".winds")
-    } else if let Some(profile) = std::env::var_os("USERPROFILE") {
-        std::path::PathBuf::from(profile).join(".winds")
-    } else {
-        return Err(
-            "desktop Winds home is unavailable: WINDS_HOME, HOME, and USERPROFILE are unset".into(),
-        );
-    };
-    if !path.is_absolute() {
-        return Err("desktop WINDS_HOME must resolve to an absolute path".into());
+pub(crate) fn desktop_bridge_resolve_default_home(
+    winds_home: Option<std::path::PathBuf>,
+    home: Option<std::path::PathBuf>,
+    user_profile: Option<std::path::PathBuf>,
+) -> Result<std::path::PathBuf> {
+    if let Some(path) = winds_home {
+        if !path.is_absolute() {
+            return Err("desktop WINDS_HOME must resolve to an absolute path".into());
+        }
+        return Ok(path);
     }
-    Ok(path)
+    for path in [home, user_profile].into_iter().flatten() {
+        if path.is_absolute() {
+            return Ok(path.join(".winds"));
+        }
+    }
+    Err(
+        "desktop Winds home is unavailable: HOME and USERPROFILE do not resolve to absolute paths"
+            .into(),
+    )
+}
+
+pub fn desktop_bridge_default_home() -> Result<std::path::PathBuf> {
+    desktop_bridge_resolve_default_home(
+        std::env::var_os("WINDS_HOME").map(std::path::PathBuf::from),
+        std::env::var_os("HOME").map(std::path::PathBuf::from),
+        std::env::var_os("USERPROFILE").map(std::path::PathBuf::from),
+    )
 }
 
 pub fn desktop_bridge_snapshot(home: &std::path::Path) -> Result<DesktopBridgeSnapshot> {

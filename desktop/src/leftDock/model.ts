@@ -90,6 +90,13 @@ export function filterProjects(snapshot: BridgeSnapshot, query: string): readonl
   });
 }
 
+export function projectRenderedExpanded(project: BridgeProject, query: string): boolean {
+  const needle = normalizedSearchText(query);
+  if (!needle) return !project.project.collapsed;
+  return !project.project.collapsed
+    || project.sessions.some((session) => normalizedSearchText(session.searchInput).includes(needle));
+}
+
 export function reconcileSelectedSession(snapshot: BridgeSnapshot, selectedSessionId: string | null): string | null {
   if (!selectedSessionId) return null;
   return snapshot.projects.some((project) => project.sessions.some((session) => session.canonicalSessionId === selectedSessionId))
