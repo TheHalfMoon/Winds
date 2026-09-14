@@ -829,6 +829,41 @@ pub struct DesktopBridgeRenameSessionRequest {
     pub presentation: DesktopBridgeSessionPresentationRequest,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopBridgeLayoutPresentation {
+    pub workspace_id: String,
+    pub layout_mode: String,
+    pub left_session_id: Option<String>,
+    pub right_session_id: Option<String>,
+    pub split_basis_points: i64,
+    pub revision: i64,
+}
+
+impl From<DesktopLayoutPresentation> for DesktopBridgeLayoutPresentation {
+    fn from(value: DesktopLayoutPresentation) -> Self {
+        Self {
+            workspace_id: value.workspace_id,
+            layout_mode: value.layout_mode,
+            left_session_id: value.left_session_id,
+            right_session_id: value.right_session_id,
+            split_basis_points: value.split_basis_points,
+            revision: value.revision,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopBridgeLayoutRequest {
+    pub workspace_id: String,
+    pub layout_mode: String,
+    pub left_session_id: Option<String>,
+    pub right_session_id: Option<String>,
+    pub split_basis_points: i64,
+    pub expected_revision: Option<i64>,
+}
+
 pub(crate) fn desktop_bridge_resolve_default_home(
     winds_home: Option<std::path::PathBuf>,
     home: Option<std::path::PathBuf>,
@@ -908,6 +943,75 @@ pub fn desktop_bridge_snapshot(home: &std::path::Path) -> Result<DesktopBridgeSn
             )
     });
     Ok(DesktopBridgeSnapshot { projects })
+}
+
+pub fn desktop_bridge_load_layout(
+    home: &std::path::Path,
+    workspace_id: &str,
+) -> Result<Option<DesktopBridgeLayoutPresentation>> {
+    let store = Store::open(home)?;
+    DesktopFacade::new(&store)
+        .load_layout(workspace_id)
+        .map(|layout| layout.map(Into::into))
+}
+
+pub fn desktop_bridge_save_layout(
+    home: &std::path::Path,
+    request: DesktopBridgeLayoutRequest,
+) -> Result<DesktopBridgeLayoutPresentation> {
+    let store = Store::open(home)?;
+    let facade = DesktopFacade::new(&store);
+    let existing = facade.load_layout(&request.workspace_id)?;
+    let left_missing = request.left_session_id.is_none();
+    let right_missing = request.right_session_id.is_none();
+    let command = DesktopLayoutCommand {
+        workspace_id: request.workspace_id,
+        layout_mode: request.layout_mode,
+        left_session_id: request.left_session_id,
+        right_session_id: request.right_session_id,
+        split_basis_points: request.split_basis_points,
+        right_dock_surface: existing.as_ref().map_or_else(
+            || "FILES".to_owned(),
+            |value| value.right_dock_surface.clone(),
+        ),
+        right_dock_binding: existing.as_ref().map_or_else(
+            || "FOLLOW_FOCUS".to_owned(),
+            |value| match value.right_dock_binding.as_str() {
+                "LEFT_SESSION" if left_missing => "FOLLOW_FOCUS".to_owned(),
+                "RIGHT_SESSION" if right_missing => "FOLLOW_FOCUS".to_owned(),
+                _ => value.right_dock_binding.clone(),
+            },
+        ),
+        left_dock_collapsed: existing
+            .as_ref()
+            .is_some_and(|value| value.left_dock_collapsed),
+        left_dock_width_px: existing
+            .as_ref()
+            .map_or(280, |value| value.left_dock_width_px),
+        right_dock_collapsed: existing
+            .as_ref()
+            .is_some_and(|value| value.right_dock_collapsed),
+        right_dock_width_px: existing
+            .as_ref()
+            .map_or(360, |value| value.right_dock_width_px),
+        appearance: existing
+            .as_ref()
+            .map_or_else(|| "SYSTEM".to_owned(), |value| value.appearance.clone()),
+        contrast: existing
+            .as_ref()
+            .map_or_else(|| "STANDARD".to_owned(), |value| value.contrast.clone()),
+        density: existing
+            .as_ref()
+            .map_or_else(|| "COMPACT".to_owned(), |value| value.density.clone()),
+        reduced_motion: existing.as_ref().is_some_and(|value| value.reduced_motion),
+    };
+    facade
+        .save_layout(
+            &command,
+            request.expected_revision,
+            desktop_bridge_now_ms()?,
+        )
+        .map(Into::into)
 }
 
 const MAX_DESKTOP_PRESENTATION_BATCH: usize = 4096;

@@ -99,6 +99,26 @@ export interface RenameSessionRequest {
   readonly presentation: SessionPresentationRequest;
 }
 
+export type BridgeLayoutMode = "SINGLE" | "DUAL";
+
+export interface BridgeLayoutPresentation {
+  readonly workspaceId: string;
+  readonly layoutMode: BridgeLayoutMode;
+  readonly leftSessionId: string | null;
+  readonly rightSessionId: string | null;
+  readonly splitBasisPoints: number;
+  readonly revision: number | null;
+}
+
+export interface LayoutPresentationRequest {
+  readonly workspaceId: string;
+  readonly layoutMode: BridgeLayoutMode;
+  readonly leftSessionId: string | null;
+  readonly rightSessionId: string | null;
+  readonly splitBasisPoints: number;
+  readonly expectedRevision: number | null;
+}
+
 export interface LeftDockBridge {
   readonly source: "canonical" | "fixture";
   snapshot(): Promise<BridgeSnapshot>;
@@ -106,4 +126,6 @@ export interface LeftDockBridge {
   createSession(request: CreateSessionRequest): Promise<BridgeSessionSummary>;
   renameSession(request: RenameSessionRequest): Promise<BridgeSessionSummary>;
   updateSession(requests: readonly SessionPresentationRequest[]): Promise<readonly BridgeSessionSummary[]>;
+  loadLayout(workspaceId: string): Promise<BridgeLayoutPresentation | null>;
+  saveLayout(request: LayoutPresentationRequest): Promise<BridgeLayoutPresentation>;
 }

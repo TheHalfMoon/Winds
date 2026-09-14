@@ -55,7 +55,13 @@ function WorkEvent({
   );
 }
 
-export function SessionSurface({ session }: { readonly session: SessionSurfaceFixture }) {
+export function SessionSurface({
+  session,
+  focused = false,
+}: {
+  readonly session: SessionSurfaceFixture;
+  readonly focused?: boolean;
+}) {
   const [events, setEvents] = useState<readonly SessionWorkEvent[]>(session.events);
   const [draft, setDraft] = useState("");
   const [sequence, setSequence] = useState(1);
@@ -92,7 +98,7 @@ export function SessionSurface({ session }: { readonly session: SessionSurfaceFi
   return (
     <section
       className="session-pane session-surface"
-      data-primary="true"
+      data-primary={focused ? "true" : "false"}
       data-runtime-proof={session.runtime.proofState}
       data-composer-mode={session.composerMode}
       aria-label={`${session.displayName} Session work surface`}

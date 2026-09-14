@@ -9,6 +9,8 @@ const canonicalLeftDockBridge: LeftDockBridge = {
   createSession: (request) => invoke("left_dock_create_session", { request }),
   renameSession: (request) => invoke("left_dock_rename_session", { request }),
   updateSession: (updates) => invoke("left_dock_update_session", { request: { updates } }),
+  loadLayout: (workspaceId) => invoke("workspace_load_layout", { workspaceId }),
+  saveLayout: (request) => invoke("workspace_save_layout", { request }),
 };
 
 export function leftDockBridge(): LeftDockBridge {

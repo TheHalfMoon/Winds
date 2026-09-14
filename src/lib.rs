@@ -85,6 +85,8 @@ mod t123_model_mesh_adversarial_tests;
 mod t131_desktop_projection_tests;
 #[cfg(test)]
 mod t132_desktop_bridge_tests;
+#[cfg(test)]
+mod t134_dual_session_tests;
 mod workbench;
 mod workflow_cli;
 
