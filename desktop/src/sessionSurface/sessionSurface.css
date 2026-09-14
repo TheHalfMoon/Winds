@@ -1,0 +1,92 @@
+.session-surface .fixture-label {
+  max-width: 56%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-work-event[data-trust="agent_reported"] .stream-rail {
+  border-style: dashed;
+}
+
+.session-work-event[data-kind="error"] .stream-event-body {
+  padding: var(--space-3);
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-2);
+  background: var(--danger-surface);
+}
+
+.event-source,
+.event-meta,
+.composer-status {
+  color: var(--text-faint);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.event-source {
+  flex: 0 1 auto;
+  text-align: right;
+}
+
+.event-meta {
+  margin-top: var(--space-2) !important;
+  font-family: var(--font-mono);
+}
+
+.work-event-details {
+  margin-top: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-2);
+  color: var(--text-muted);
+  background: var(--surface-2);
+  font-size: 10px;
+}
+
+.work-event-details summary {
+  cursor: default;
+  color: var(--text);
+  font-weight: 650;
+}
+
+.work-event-details dl {
+  display: grid;
+  gap: 4px;
+  margin: var(--space-2) 0 0;
+}
+
+.work-event-details dl div {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+.work-event-details dt,
+.work-event-details dd {
+  margin: 0;
+}
+
+.work-event-details dt {
+  color: var(--text-faint);
+}
+
+.future-dock-action {
+  margin-top: var(--space-3);
+}
+
+.work-stream-state {
+  min-height: 180px;
+  display: grid;
+  place-content: center;
+  padding: var(--space-8);
+  text-align: center;
+}
+
+.composer-status {
+  margin: 0;
+  padding: 0 var(--space-3) var(--space-2);
+}
+
+.session-surface [disabled] {
+  cursor: not-allowed;
+}
