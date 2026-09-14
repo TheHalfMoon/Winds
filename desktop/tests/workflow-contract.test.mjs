@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
-const desktopRoot = new URL('..', import.meta.url).pathname;
+const desktopRoot = fileURLToPath(new URL('..', import.meta.url));
 const repositoryRoot = join(desktopRoot, '..');
 const workflow = readFileSync(join(repositoryRoot, '.github/workflows/desktop-quality.yml'), 'utf8');
 const pkg = JSON.parse(readFileSync(join(desktopRoot, 'package.json'), 'utf8'));

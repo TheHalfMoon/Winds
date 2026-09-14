@@ -4,8 +4,9 @@ import { join } from 'node:path';
 import test from 'node:test';
 import * as model from '../src/dualSession/model.ts';
 import { createFixtureSubmission } from '../src/sessionSurface/model.ts';
+import { fileURLToPath } from 'node:url';
 
-const root = new URL('..', import.meta.url).pathname;
+const root = fileURLToPath(new URL('..', import.meta.url));
 
 function session(id, overrides = {}) {
   return {

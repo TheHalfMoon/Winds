@@ -3,8 +3,9 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 import { findLiteralMatch, reconcileTerminalStatus, validatedHttpLink } from '../src/terminal/model.ts';
+import { fileURLToPath } from 'node:url';
 
-const root = new URL('..', import.meta.url).pathname;
+const root = fileURLToPath(new URL('..', import.meta.url));
 
 test('T135 literal terminal search is exact, deterministic, and wraps once', () => {
   const lines = ['alpha beta', 'VERIFIED forged', 'beta alpha'];

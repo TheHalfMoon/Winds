@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from 'node:url';
 
-const root = new URL("..", import.meta.url).pathname;
+const root = fileURLToPath(new URL("..", import.meta.url));
 const app = readFileSync(join(root, "src/App.tsx"), "utf8");
 const leftDock = readFileSync(join(root, "src/leftDock/LeftDock.tsx"), "utf8");
 const sessionSurface = readFileSync(join(root, "src/sessionSurface/SessionSurface.tsx"), "utf8");
