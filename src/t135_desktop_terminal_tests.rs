@@ -322,6 +322,37 @@ fn terminal_registry_rejects_cross_session_control_and_bounds_input_and_resize()
 
 #[cfg(unix)]
 #[test]
+fn terminal_registry_increments_generation_across_same_session_replacement() {
+    let root = fixture_root("generation-replacement");
+    let profile = fixture_profile(&root, "exec /bin/sh");
+    let mut registry = DesktopTerminalRegistry::new();
+    let first = registry
+        .start_with_test_profile("session-a", "workspace-a", &profile, &root, 24, 80)
+        .unwrap();
+    let first_generation = first.status.generation;
+    assert_eq!(first_generation, 1);
+    let first_target = DesktopTerminalTargetRequest {
+        canonical_session_id: "session-a".to_owned(),
+        terminal_id: first.status.terminal_id.clone(),
+    };
+    let _ = registry.close(first_target);
+    drop(first.output_reader);
+
+    let second = registry
+        .start_with_test_profile("session-a", "workspace-a", &profile, &root, 24, 80)
+        .unwrap();
+    assert!(second.status.generation > first_generation);
+    let second_target = DesktopTerminalTargetRequest {
+        canonical_session_id: "session-a".to_owned(),
+        terminal_id: second.status.terminal_id.clone(),
+    };
+    let _ = registry.close(second_target);
+    drop(second.output_reader);
+    cleanup(&root);
+}
+
+#[cfg(unix)]
+#[test]
 fn terminal_registry_preserves_control_sequence_bytes_without_trusting_them() {
     let root = fixture_root("control-bytes");
     let profile = fixture_profile(

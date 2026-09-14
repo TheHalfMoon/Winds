@@ -114,7 +114,7 @@ fn terminal_status(
 }
 
 #[tauri::command]
-fn terminal_start(
+async fn terminal_start(
     request: DesktopTerminalStartRequest,
     output: Channel<Response>,
     lifecycle: Channel<DesktopTerminalStatus>,
@@ -122,9 +122,31 @@ fn terminal_start(
 ) -> Result<DesktopTerminalStatus, String> {
     let home = bridge_home()?;
     let host_state = state.inner().clone();
-    let started = terminal_registry(&host_state)?
-        .start(&home, request)
-        .map_err(|error| host_error("terminal start", error))?;
+    let start_state = host_state.clone();
+    let started = tauri::async_runtime::spawn_blocking(move || {
+        let canonical_session_id = request.canonical_session_id.clone();
+        {
+            let mut registry = terminal_registry(&start_state)?;
+            registry
+                .reserve_start(&canonical_session_id)
+                .map_err(|error| host_error("terminal start reservation", error))?;
+        }
+        let prepared = match DesktopTerminalRegistry::prepare_start(&home, request) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                if let Ok(mut registry) = terminal_registry(&start_state) {
+                    registry.cancel_start(&canonical_session_id);
+                }
+                return Err(host_error("terminal start", error));
+            }
+        };
+        let mut registry = terminal_registry(&start_state)?;
+        registry
+            .commit_prepared_start(prepared)
+            .map_err(|error| host_error("terminal start commit", error))
+    })
+    .await
+    .map_err(|error| host_error("terminal start worker", error))??;
     let status = started.status.clone();
     let target = DesktopTerminalTargetRequest {
         canonical_session_id: status.canonical_session_id.clone(),

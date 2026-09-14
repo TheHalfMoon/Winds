@@ -26,7 +26,10 @@ export function reconcileTerminalStatus(
   current: TerminalStatus | null,
   incoming: TerminalStatus,
 ): TerminalStatus {
-  if (!current || current.terminalId !== incoming.terminalId) return incoming;
+  if (!current) return incoming;
+  if (incoming.generation < current.generation) return current;
+  if (incoming.generation > current.generation) return incoming;
+  if (current.terminalId !== incoming.terminalId) return current;
   if (current.lifecycle !== "live" && incoming.lifecycle === "live") return current;
   return incoming;
 }

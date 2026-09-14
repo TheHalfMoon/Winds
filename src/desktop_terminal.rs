@@ -5,7 +5,7 @@ use crate::git::terminal::{
 use crate::git::workspace::open_existing_workspace;
 use crate::git::workspace_inventory::inventory_workspace_environment;
 use crate::store::{Result, Store};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -29,6 +29,7 @@ pub enum DesktopTerminalLifecycle {
 #[serde(rename_all = "camelCase")]
 pub struct DesktopTerminalStatus {
     pub terminal_id: String,
+    pub generation: u64,
     pub canonical_session_id: String,
     pub canonical_workspace_id: String,
     pub profile_id: String,
@@ -78,6 +79,12 @@ pub struct DesktopTerminalStart {
     pub output_reader: Box<dyn Read + Send>,
 }
 
+pub struct DesktopTerminalPreparedStart {
+    status: DesktopTerminalStatus,
+    session: TerminalSession,
+    output_reader: Box<dyn Read + Send>,
+}
+
 struct DesktopOwnedTerminal {
     status: DesktopTerminalStatus,
     session: TerminalSession,
@@ -87,6 +94,8 @@ struct DesktopOwnedTerminal {
 pub struct DesktopTerminalRegistry {
     terminals: HashMap<String, DesktopOwnedTerminal>,
     terminal_by_session: HashMap<String, String>,
+    starting_sessions: HashSet<String>,
+    generation_by_session: HashMap<String, u64>,
     final_statuses: HashMap<String, DesktopTerminalStatus>,
     latest_final_by_session: HashMap<String, DesktopTerminalStatus>,
 }
@@ -124,18 +133,28 @@ impl DesktopTerminalRegistry {
         Ok(status.clone())
     }
 
-    pub fn start(
-        &mut self,
+    pub fn reserve_start(&mut self, canonical_session_id: &str) -> Result<()> {
+        if self.terminal_by_session.contains_key(canonical_session_id)
+            || self.starting_sessions.contains(canonical_session_id)
+        {
+            return Err(
+                "canonical Session already has an active or starting desktop terminal".into(),
+            );
+        }
+        self.starting_sessions
+            .insert(canonical_session_id.to_owned());
+        Ok(())
+    }
+
+    pub fn cancel_start(&mut self, canonical_session_id: &str) {
+        self.starting_sessions.remove(canonical_session_id);
+    }
+
+    pub fn prepare_start(
         home: &Path,
         request: DesktopTerminalStartRequest,
-    ) -> Result<DesktopTerminalStart> {
+    ) -> Result<DesktopTerminalPreparedStart> {
         validate_size(request.rows, request.cols)?;
-        if self
-            .terminal_by_session
-            .contains_key(&request.canonical_session_id)
-        {
-            return Err("canonical Session already has an active desktop terminal".into());
-        }
 
         let store = Store::open(home)?;
         let session = store.load_winds_session(&request.canonical_session_id)?;
@@ -169,7 +188,7 @@ impl DesktopTerminalRegistry {
         let inventory = inventory_workspace_environment(&observation)?;
         let profiles = discover_native_shell_profiles(&inventory)?;
         let profile = select_profile(&profiles)?;
-        self.start_with_profile(
+        Self::prepare_with_profile(
             request.canonical_session_id,
             workspace.workspace_id,
             profile,
@@ -179,20 +198,70 @@ impl DesktopTerminalRegistry {
         )
     }
 
-    fn start_with_profile(
+    pub fn commit_prepared_start(
         &mut self,
+        mut prepared: DesktopTerminalPreparedStart,
+    ) -> Result<DesktopTerminalStart> {
+        let canonical_session_id = prepared.status.canonical_session_id.clone();
+        if !self.starting_sessions.remove(&canonical_session_id) {
+            return Err("desktop terminal start reservation is missing".into());
+        }
+        if self.terminal_by_session.contains_key(&canonical_session_id) {
+            return Err("canonical Session already has an active desktop terminal".into());
+        }
+        let generation = self
+            .generation_by_session
+            .get(&canonical_session_id)
+            .copied()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or("desktop terminal generation overflow")?;
+        prepared.status.generation = generation;
+        self.generation_by_session
+            .insert(canonical_session_id.clone(), generation);
+
+        let terminal_id = prepared.status.terminal_id.clone();
+        let status = prepared.status.clone();
+        self.terminal_by_session
+            .insert(canonical_session_id, terminal_id.clone());
+        self.terminals.insert(
+            terminal_id,
+            DesktopOwnedTerminal {
+                status: status.clone(),
+                session: prepared.session,
+            },
+        );
+        Ok(DesktopTerminalStart {
+            status,
+            output_reader: prepared.output_reader,
+        })
+    }
+
+    pub fn start(
+        &mut self,
+        home: &Path,
+        request: DesktopTerminalStartRequest,
+    ) -> Result<DesktopTerminalStart> {
+        let canonical_session_id = request.canonical_session_id.clone();
+        self.reserve_start(&canonical_session_id)?;
+        match Self::prepare_start(home, request) {
+            Ok(prepared) => self.commit_prepared_start(prepared),
+            Err(error) => {
+                self.cancel_start(&canonical_session_id);
+                Err(error)
+            }
+        }
+    }
+
+    fn prepare_with_profile(
         canonical_session_id: String,
         canonical_workspace_id: String,
         profile: &ShellProfile,
         cwd: &Path,
         rows: u16,
         cols: u16,
-    ) -> Result<DesktopTerminalStart> {
+    ) -> Result<DesktopTerminalPreparedStart> {
         validate_size(rows, cols)?;
-        if self.terminal_by_session.contains_key(&canonical_session_id) {
-            return Err("canonical Session already has an active desktop terminal".into());
-        }
-
         let mut session = TerminalSession::start(profile, cwd, TerminalSize { rows, cols })?;
         let output_reader = match session.take_output_reader() {
             Ok(reader) => reader,
@@ -209,8 +278,9 @@ impl DesktopTerminalRegistry {
         };
         let terminal_id = next_terminal_id()?;
         let status = DesktopTerminalStatus {
-            terminal_id: terminal_id.clone(),
-            canonical_session_id: canonical_session_id.clone(),
+            terminal_id,
+            generation: 0,
+            canonical_session_id,
             canonical_workspace_id,
             profile_id: profile.profile_id.clone(),
             profile_display_name: profile.display_name.clone(),
@@ -221,19 +291,37 @@ impl DesktopTerminalRegistry {
             signal: None,
             close_reason: None,
         };
-        self.terminal_by_session
-            .insert(canonical_session_id, terminal_id.clone());
-        self.terminals.insert(
-            terminal_id,
-            DesktopOwnedTerminal {
-                status: status.clone(),
-                session,
-            },
-        );
-        Ok(DesktopTerminalStart {
+        Ok(DesktopTerminalPreparedStart {
             status,
+            session,
             output_reader,
         })
+    }
+
+    fn start_with_profile(
+        &mut self,
+        canonical_session_id: String,
+        canonical_workspace_id: String,
+        profile: &ShellProfile,
+        cwd: &Path,
+        rows: u16,
+        cols: u16,
+    ) -> Result<DesktopTerminalStart> {
+        self.reserve_start(&canonical_session_id)?;
+        match Self::prepare_with_profile(
+            canonical_session_id.clone(),
+            canonical_workspace_id,
+            profile,
+            cwd,
+            rows,
+            cols,
+        ) {
+            Ok(prepared) => self.commit_prepared_start(prepared),
+            Err(error) => {
+                self.cancel_start(&canonical_session_id);
+                Err(error)
+            }
+        }
     }
 
     pub fn send_input(
@@ -475,7 +563,10 @@ impl DesktopTerminalRegistry {
         terminal
             .session
             .suppress_drop_cleanup_after_ownership_loss();
-        let _ = reason;
+        eprintln!(
+            "Winds desktop terminal ownership lost for {}: {reason}",
+            target.terminal_id
+        );
         terminal.status.lifecycle = DesktopTerminalLifecycle::OwnershipLost;
         terminal.status.close_reason = Some("OWNERSHIP_LOST_PROCESS_STATE_UNKNOWN".to_owned());
         terminal.status.exit_code = None;

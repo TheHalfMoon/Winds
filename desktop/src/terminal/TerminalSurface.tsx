@@ -26,6 +26,7 @@ export function TerminalSurface({
   const attachedRef = useRef(false);
   const visibleRef = useRef(visible);
   const generationRef = useRef(0);
+  const streamGenerationRef = useRef(0);
   const initializingRef = useRef(false);
   const disposablesRef = useRef<IDisposable[]>([]);
   const observerRef = useRef<ResizeObserver | null>(null);
@@ -38,16 +39,21 @@ export function TerminalSurface({
       : "Browser fixture · canonical terminal host unavailable",
   );
   const [busy, setBusy] = useState(false);
+  const [ready, setReady] = useState(false);
   const [search, setSearch] = useState("");
   const [searchLine, setSearchLine] = useState(0);
 
-  const updateStatus = (status: TerminalStatus) => {
-    const reconciled = reconcileTerminalStatus(lifecycleRef.current, status);
+  const updateStatus = (status: TerminalStatus, detachOnFinal = false): boolean => {
+    const current = lifecycleRef.current;
+    const reconciled = reconcileTerminalStatus(current, status);
+    if (current && reconciled === current && status !== current) return false;
+    if (detachOnFinal && reconciled.lifecycle !== "live") attachedRef.current = false;
     lifecycleRef.current = reconciled;
     setTerminalStatus(reconciled);
     const terminal = terminalRef.current;
     if (terminal) terminal.options.disableStdin = reconciled.lifecycle !== "live" || !attachedRef.current;
     setMessage(lifecycleLabel(reconciled));
+    return true;
   };
 
   const flushOutput = () => {
@@ -84,6 +90,7 @@ export function TerminalSurface({
     const generation = generationRef.current;
     return () => {
       generationRef.current = generation + 1;
+      streamGenerationRef.current += 1;
       initializingRef.current = false;
       if (flushTimerRef.current !== null) window.clearTimeout(flushTimerRef.current);
       observerRef.current?.disconnect();
@@ -93,6 +100,7 @@ export function TerminalSurface({
       terminalRef.current = null;
       fitRef.current = null;
       attachedRef.current = false;
+      setReady(false);
     };
   }, [canonicalSessionId]);
 
@@ -139,6 +147,7 @@ export function TerminalSurface({
       terminalRef.current = terminal;
       fitRef.current = fit;
       fit.fit();
+      setReady(true);
 
       disposablesRef.current.push(terminal.onData((data) => {
         const current = lifecycleRef.current;
@@ -148,7 +157,11 @@ export function TerminalSurface({
           canonicalSessionId,
           terminalId: current.terminalId,
           bytes,
-        }).then(updateStatus).catch((error) => setMessage(`Terminal input failed · ${errorMessage(error)}`));
+        }).then(updateStatus).catch((error) => {
+          if (lifecycleRef.current?.generation === current.generation) {
+            setMessage(`Terminal input failed · ${errorMessage(error)}`);
+          }
+        });
       }));
       disposablesRef.current.push(terminal.onResize(({ rows, cols }) => {
         const current = lifecycleRef.current;
@@ -158,7 +171,11 @@ export function TerminalSurface({
           terminalId: current.terminalId,
           rows,
           cols,
-        }).then(updateStatus).catch((error) => setMessage(`Terminal resize failed · ${errorMessage(error)}`));
+        }).then(updateStatus).catch((error) => {
+          if (lifecycleRef.current?.generation === current.generation) {
+            setMessage(`Terminal resize failed · ${errorMessage(error)}`);
+          }
+        });
       }));
       const observer = new ResizeObserver(() => {
         if (visibleRef.current) fit.fit();
@@ -200,21 +217,27 @@ export function TerminalSurface({
     if (!terminal || bridge.source !== "canonical" || busy) return;
     setBusy(true);
     setMessage("Starting Rust-owned terminal…");
+    const streamGeneration = streamGenerationRef.current + 1;
+    streamGenerationRef.current = streamGeneration;
     try {
       const status = await bridge.start(
         { canonicalSessionId, rows: terminal.rows, cols: terminal.cols },
         {
-          onOutput: enqueueOutput,
+          onOutput: (bytes) => {
+            if (streamGenerationRef.current === streamGeneration) enqueueOutput(bytes);
+          },
           onLifecycle: (next) => {
-            attachedRef.current = false;
-            updateStatus(next);
+            if (streamGenerationRef.current !== streamGeneration) return;
+            updateStatus(next, true);
           },
         },
       );
-      attachedRef.current = true;
-      updateStatus(status);
-      terminal.options.disableStdin = false;
-      if (visibleRef.current) terminal.focus();
+      const accepted = updateStatus(status);
+      if (accepted && lifecycleRef.current?.lifecycle === "live") {
+        attachedRef.current = true;
+        terminal.options.disableStdin = false;
+        if (visibleRef.current) terminal.focus();
+      }
     } catch (error) {
       setMessage(`Terminal start failed · ${errorMessage(error)}`);
     } finally {
@@ -256,7 +279,7 @@ export function TerminalSurface({
   };
 
   const live = terminalStatus?.lifecycle === "live";
-  const canStart = bridge.source === "canonical" && !live && !busy && terminalRef.current !== null;
+  const canStart = bridge.source === "canonical" && !live && !busy && ready;
   return (
     <section className="terminal-surface" hidden={!visible} aria-label={`Terminal for canonical Session ${canonicalSessionId}`}>
       <header className="terminal-trust-bar">

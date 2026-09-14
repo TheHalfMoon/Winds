@@ -34,3 +34,12 @@ test('T135 exposes only the bounded left-dock, layout, and terminal Tauri comman
 test('T135 retains the native Windows Tauri icon resource', () => {
   assert.equal(existsSync(join(root, 'src-tauri/icons/icon.ico')), true);
 });
+
+
+test('T135 terminal startup is async and moves blocking preparation outside the registry lock', () => {
+  assert.match(host, /async fn terminal_start\(/);
+  assert.match(host, /tauri::async_runtime::spawn_blocking/);
+  assert.match(host, /reserve_start/);
+  assert.match(host, /DesktopTerminalRegistry::prepare_start/);
+  assert.match(host, /commit_prepared_start/);
+});

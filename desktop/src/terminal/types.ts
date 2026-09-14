@@ -2,6 +2,7 @@ export type TerminalLifecycle = "live" | "exited" | "interrupted" | "ownership_l
 
 export interface TerminalStatus {
   readonly terminalId: string;
+  readonly generation: number;
   readonly canonicalSessionId: string;
   readonly canonicalWorkspaceId: string;
   readonly profileId: string;

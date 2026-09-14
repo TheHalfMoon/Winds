@@ -51,10 +51,22 @@ test('T135 terminal is a sub-surface and does not replace the agent work stream'
 
 
 test('T135 terminal lifecycle cannot regress from a final state to live for the same terminal identity', () => {
-  const live = { terminalId: 'terminal-a', canonicalSessionId: 'session-a', canonicalWorkspaceId: 'workspace-a', profileId: 'shell-a', profileDisplayName: 'sh', lifecycle: 'live', rows: 24, cols: 80, exitCode: null, signal: null, closeReason: null };
+  const live = { terminalId: 'terminal-a', generation: 1, canonicalSessionId: 'session-a', canonicalWorkspaceId: 'workspace-a', profileId: 'shell-a', profileDisplayName: 'sh', lifecycle: 'live', rows: 24, cols: 80, exitCode: null, signal: null, closeReason: null };
   const exited = { ...live, lifecycle: 'exited', exitCode: 0, closeReason: 'PROCESS_EXITED' };
   assert.deepEqual(reconcileTerminalStatus(live, exited), exited);
   assert.deepEqual(reconcileTerminalStatus(exited, live), exited);
-  const nextLive = { ...live, terminalId: 'terminal-b' };
+  const nextLive = { ...live, terminalId: 'terminal-b', generation: 2 };
   assert.deepEqual(reconcileTerminalStatus(exited, nextLive), nextLive);
+  assert.deepEqual(reconcileTerminalStatus(nextLive, exited), nextLive);
+  const conflictingSameGeneration = { ...nextLive, terminalId: 'terminal-c' };
+  assert.deepEqual(reconcileTerminalStatus(nextLive, conflictingSameGeneration), nextLive);
+});
+
+
+test('T135 terminal readiness and stream callbacks are stateful and generation bounded', () => {
+  const surface = readFileSync(join(root, 'src/terminal/TerminalSurface.tsx'), 'utf8');
+  assert.match(surface, /const \[ready, setReady\] = useState\(false\)/);
+  assert.match(surface, /setReady\(true\)/);
+  assert.match(surface, /streamGenerationRef\.current !== streamGeneration/);
+  assert.match(surface, /const canStart = bridge\.source === "canonical" && !live && !busy && ready/);
 });
