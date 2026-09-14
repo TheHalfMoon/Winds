@@ -41,7 +41,7 @@ test('T135 confines renderer host invocation to the two typed bridge modules', (
     const text = readFileSync(path, 'utf8');
     return text.includes('@tauri-apps/api') || text.includes('invoke(');
   });
-  assert.deepEqual(invoking.map((path) => path.slice(sourceRoot.length + 1)).sort(), ['leftDock/bridge.ts', 'terminal/bridge.ts']);
+  assert.deepEqual(invoking.map((path) => path.slice(sourceRoot.length + 1).replaceAll('\\', '/')).sort(), ['leftDock/bridge.ts', 'terminal/bridge.ts']);
 });
 
 test('T132 host errors log detail locally but return bounded renderer messages', () => {
