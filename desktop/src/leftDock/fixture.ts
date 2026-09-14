@@ -1,4 +1,4 @@
-import type { BridgeSnapshot, LeftDockBridge } from "./types";
+import type { BridgeLayoutPresentation, BridgeSnapshot, LeftDockBridge } from "./types";
 
 const fixture: BridgeSnapshot = {
   projects: [
@@ -70,6 +70,15 @@ const fixture: BridgeSnapshot = {
   ],
 };
 
+let fixtureLayout: BridgeLayoutPresentation = {
+  workspaceId: "fixture-winds",
+  layoutMode: "DUAL",
+  leftSessionId: "fixture-session-a",
+  rightSessionId: "fixture-session-b",
+  splitBasisPoints: 5000,
+  revision: 1,
+};
+
 function readOnly(): Promise<never> {
   return Promise.reject(new Error("Fixture mode is read-only · no canonical authority"));
 }
@@ -81,4 +90,26 @@ export const fixtureLeftDockBridge: LeftDockBridge = {
   createSession: readOnly,
   renameSession: readOnly,
   updateSession: readOnly,
+  async loadLayout(workspaceId) {
+    return workspaceId === fixtureLayout.workspaceId ? fixtureLayout : null;
+  },
+  async saveLayout(request) {
+    if (request.workspaceId !== "fixture-winds") throw new Error("Fixture layout Project is unavailable");
+    const sessionIds = new Set(fixture.projects[0].sessions.map((session) => session.canonicalSessionId));
+    if (request.leftSessionId && !sessionIds.has(request.leftSessionId)) throw new Error("Fixture left Session is unavailable");
+    if (request.rightSessionId && !sessionIds.has(request.rightSessionId)) throw new Error("Fixture right Session is unavailable");
+    if (request.layoutMode === "DUAL" && (!request.leftSessionId || !request.rightSessionId || request.leftSessionId === request.rightSessionId)) {
+      throw new Error("Fixture dual layout requires two distinct Sessions");
+    }
+    if (request.expectedRevision !== fixtureLayout.revision) throw new Error("Fixture layout lost revision/update race");
+    fixtureLayout = {
+      workspaceId: request.workspaceId,
+      layoutMode: request.layoutMode,
+      leftSessionId: request.leftSessionId,
+      rightSessionId: request.layoutMode === "SINGLE" ? null : request.rightSessionId,
+      splitBasisPoints: request.splitBasisPoints,
+      revision: (fixtureLayout.revision ?? 0) + 1,
+    };
+    return fixtureLayout;
+  },
 };

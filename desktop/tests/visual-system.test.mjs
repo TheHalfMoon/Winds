@@ -7,7 +7,9 @@ const root = new URL("..", import.meta.url).pathname;
 const app = readFileSync(join(root, "src/App.tsx"), "utf8");
 const leftDock = readFileSync(join(root, "src/leftDock/LeftDock.tsx"), "utf8");
 const sessionSurface = readFileSync(join(root, "src/sessionSurface/SessionSurface.tsx"), "utf8");
+const dualSession = readFileSync(join(root, "src/dualSession/DualSessionWorkspace.tsx"), "utf8");
 const sessionSurfaceStyles = readFileSync(join(root, "src/sessionSurface/sessionSurface.css"), "utf8");
+const dualSessionStyles = readFileSync(join(root, "src/dualSession/dualSession.css"), "utf8");
 const main = readFileSync(join(root, "src/main.tsx"), "utf8");
 const styles = readFileSync(join(root, "src/styles.css"), "utf8");
 const tokens = readFileSync(join(root, "src/tokens.css"), "utf8");
@@ -34,10 +36,11 @@ test("T129 anatomy remains two visible Sessions with Files-first right dock", ()
     "Projects and Sessions", "Dual Session view", "Context dock", "Work Stream", "Terminal",
     "Files", "Changes", "Evidence", "Context", "Artifacts", "composer", "Rename",
   ];
-  const productSurface = `${app}\n${leftDock}\n${sessionSurface}`;
+  const productSurface = `${app}\n${leftDock}\n${sessionSurface}\n${dualSession}`;
   for (const value of required) assert.equal(productSurface.includes(value), true, value);
-  assert.equal((app.match(/<SessionSurface/g) ?? []).length, 1);
-  assert.equal((app.match(/<SessionPane/g) ?? []).length, 1);
+  assert.match(app, /<DualSessionWorkspace selection=\{selection\} \/>/);
+  assert.match(dualSession, /aria-label="Dual Session view"/);
+  assert.match(dualSession, /<SessionSurface/);
 });
 
 test("T129 runtime identity uses Winds-authored accessible marks", () => {
@@ -47,7 +50,7 @@ test("T129 runtime identity uses Winds-authored accessible marks", () => {
 });
 
 test("T129 visual grammar rejects clone-prone decorative patterns", () => {
-  const combined = `${styles}\n${sessionSurfaceStyles}\n${tokens}\n${fixtureModes}`.toLowerCase();
+  const combined = `${styles}\n${sessionSurfaceStyles}\n${dualSessionStyles}\n${tokens}\n${fixtureModes}`.toLowerCase();
   const forbidden = ["linear-gradient(", "radial-gradient(", "conic-gradient(", "backdrop-filter", "text-shadow:", "filter: blur("];
   for (const value of forbidden) assert.equal(combined.includes(value), false, value);
 });

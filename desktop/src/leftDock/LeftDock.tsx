@@ -127,7 +127,11 @@ function SessionRow({
   );
 }
 
-export function LeftDock() {
+export function LeftDock({
+  onSelectSession,
+}: {
+  readonly onSelectSession?: (workspaceId: string, sessionId: string) => void;
+}) {
   const bridge = useMemo<LeftDockBridge>(() => leftDockBridge(), []);
   const writable = bridge.source === "canonical";
   const [snapshot, setSnapshot] = useState<BridgeSnapshot>(emptySnapshot);
@@ -254,13 +258,15 @@ export function LeftDock() {
     const resolution = resolveSessionSearch(snapshot, query);
     if (resolution.kind === "unique") {
       setSelectedSessionId(resolution.sessionId);
+      const owner = snapshot.projects.find((project) => project.sessions.some((session) => session.canonicalSessionId === resolution.sessionId));
+      if (owner) onSelectSession?.(owner.project.canonicalWorkspaceId, resolution.sessionId);
       setStatus(`Selected canonical Session · ${resolution.sessionId}`);
     } else if (resolution.kind === "ambiguous") {
       setStatus(`Ambiguous Session search · ${resolution.sessionIds.join(", ")}`);
     } else {
       setStatus(query.trim() ? "No exact Session resolution" : "Enter a Session ID or alias to resolve");
     }
-  }, [query, snapshot]);
+  }, [onSelectSession, query, snapshot]);
 
   const onNavKeyDown = useCallback((event: React.KeyboardEvent<HTMLElement>) => {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
@@ -322,7 +328,7 @@ export function LeftDock() {
                 </form>
               )}
               {renderedExpanded && <div className="session-list" aria-label={`${current.displayName} Sessions`}>
-                {project.sessions.map((session) => <SessionRow key={session.canonicalSessionId} session={session} selected={selectedSessionId === session.canonicalSessionId} busy={busy} writable={writable} canMoveUp={sessionReorderPlan(project.sessions, session.canonicalSessionId, -1) !== null} canMoveDown={sessionReorderPlan(project.sessions, session.canonicalSessionId, 1) !== null} onSelect={() => setSelectedSessionId(session.canonicalSessionId)} onRename={(displayName) => renameSession(session, displayName)} onPin={() => updateSession(session, { pinned: !session.pinned })} onMove={(direction) => moveSession(project, session.canonicalSessionId, direction)} onFocusKey={setFocusedControlKey} />)}
+                {project.sessions.map((session) => <SessionRow key={session.canonicalSessionId} session={session} selected={selectedSessionId === session.canonicalSessionId} busy={busy} writable={writable} canMoveUp={sessionReorderPlan(project.sessions, session.canonicalSessionId, -1) !== null} canMoveDown={sessionReorderPlan(project.sessions, session.canonicalSessionId, 1) !== null} onSelect={() => { if (session.archived) { setStatus(`Archived Session is not an active workspace target · ${session.canonicalSessionId}`); return; } setSelectedSessionId(session.canonicalSessionId); onSelectSession?.(current.canonicalWorkspaceId, session.canonicalSessionId); }} onRename={(displayName) => renameSession(session, displayName)} onPin={() => updateSession(session, { pinned: !session.pinned })} onMove={(direction) => moveSession(project, session.canonicalSessionId, direction)} onFocusKey={setFocusedControlKey} />)}
                 {project.sessions.length === 0 && <p className="session-empty">No Sessions in this Project</p>}
               </div>}
             </section>
