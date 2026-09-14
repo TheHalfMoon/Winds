@@ -29,6 +29,11 @@ mod command;
     reason = "Spec 010 desktop projection and bounded T132 bridge include later-slice facade surfaces"
 )]
 pub mod desktop;
+#[allow(
+    dead_code,
+    reason = "Spec 010 T135 bounded desktop terminal bridge; Tauri host is the primary caller"
+)]
+pub mod desktop_terminal;
 mod domain;
 #[allow(
     dead_code,
@@ -87,6 +92,8 @@ mod t131_desktop_projection_tests;
 mod t132_desktop_bridge_tests;
 #[cfg(test)]
 mod t134_dual_session_tests;
+#[cfg(test)]
+mod t135_desktop_terminal_tests;
 mod workbench;
 mod workflow_cli;
 

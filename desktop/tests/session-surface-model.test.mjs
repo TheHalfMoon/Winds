@@ -4,8 +4,9 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { sessionSurfaceFixtures } from '../src/sessionSurface/fixtures.ts';
 import * as model from '../src/sessionSurface/model.ts';
+import { fileURLToPath } from 'node:url';
 
-const root = new URL('..', import.meta.url).pathname;
+const root = fileURLToPath(new URL('..', import.meta.url));
 const surface = readFileSync(join(root, 'src/sessionSurface/SessionSurface.tsx'), 'utf8');
 
 function event(source, body = 'content') {

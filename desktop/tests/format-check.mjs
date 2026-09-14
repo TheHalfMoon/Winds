@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { extname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const root = new URL('..', import.meta.url).pathname;
+const root = fileURLToPath(new URL('..', import.meta.url));
 const extensions = new Set(['.css', '.html', '.json', '.mjs', '.rs', '.toml', '.ts', '.tsx']);
 const ignored = new Set(['dist', 'gen', 'node_modules', 'target']);
 

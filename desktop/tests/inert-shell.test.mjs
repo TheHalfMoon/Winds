@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
-const root = new URL('..', import.meta.url).pathname;
+const root = fileURLToPath(new URL('..', import.meta.url));
 const host = readFileSync(join(root, 'src-tauri/src/main.rs'), 'utf8');
 const commandNames = [
   'left_dock_snapshot',
@@ -12,13 +13,33 @@ const commandNames = [
   'left_dock_rename_session',
   'left_dock_update_session',
   'workspace_load_layout',
-  'workspace_save_layout'
+  'workspace_save_layout',
+  'terminal_status',
+  'terminal_start',
+  'terminal_input',
+  'terminal_resize',
+  'terminal_interrupt',
+  'terminal_terminate',
+  'terminal_close'
 ];
 
-test('T134 exposes only the five left-dock plus two layout Tauri commands', () => {
+test('T135 exposes only the bounded left-dock, layout, and terminal Tauri commands', () => {
   assert.equal((host.match(/#\[tauri::command\]/g) ?? []).length, commandNames.length);
   for (const name of commandNames) assert.equal(host.includes(name), true, name);
   for (const forbidden of ['@tauri-apps/plugin-', 'Command::new(', 'std::fs', 'std::process']) {
     assert.equal(host.includes(forbidden), false, forbidden);
   }
+});
+
+test('T135 retains the native Windows Tauri icon resource', () => {
+  assert.equal(existsSync(join(root, 'src-tauri/icons/icon.ico')), true);
+});
+
+
+test('T135 terminal startup is async and moves blocking preparation outside the registry lock', () => {
+  assert.match(host, /async fn terminal_start\(/);
+  assert.match(host, /tauri::async_runtime::spawn_blocking/);
+  assert.match(host, /reserve_start/);
+  assert.match(host, /DesktopTerminalRegistry::prepare_start/);
+  assert.match(host, /commit_prepared_start/);
 });
