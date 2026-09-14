@@ -39,6 +39,14 @@ export function DualSessionWorkspace({
   const [status, setStatus] = useState("Loading Session layout…");
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
+  const pendingSelectionRef = useRef<DualSessionSelection | null>(null);
+  const [selectionReplayNonce, setSelectionReplayNonce] = useState(0);
+
+  const finishBusy = () => {
+    busyRef.current = false;
+    setBusy(false);
+    if (pendingSelectionRef.current) setSelectionReplayNonce((value) => value + 1);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -81,76 +89,84 @@ export function DualSessionWorkspace({
       }
       return false;
     } finally {
-      busyRef.current = false;
-      setBusy(false);
+      finishBusy();
     }
   };
 
   useEffect(() => {
-    if (!selection || busyRef.current) return;
+    const requestedSelection = pendingSelectionRef.current ?? selection;
+    if (!requestedSelection) return;
+    if (busyRef.current) {
+      pendingSelectionRef.current = requestedSelection;
+      return;
+    }
+    pendingSelectionRef.current = null;
+    busyRef.current = true;
+    setBusy(true);
     let cancelled = false;
     const applySelection = async () => {
-      const snapshot = await bridge.snapshot();
-      const owner = snapshot.projects.find((candidate) => candidate.project.canonicalWorkspaceId === selection.workspaceId);
-      if (!owner || cancelled) {
-        if (!cancelled) setStatus(`Selected Session Project is unavailable · ${selection.workspaceId}`);
-        return;
-      }
-      const targetExists = owner.sessions.some((session) => !session.archived && session.canonicalSessionId === selection.sessionId);
-      if (!targetExists) {
-        if (!cancelled) setStatus(`Selected canonical Session is unavailable · ${selection.sessionId}`);
-        return;
-      }
-      const currentLayout = project?.project.canonicalWorkspaceId === owner.project.canonicalWorkspaceId && layout
-        ? layout
-        : reconcileLayout(await bridge.loadLayout(owner.project.canonicalWorkspaceId), owner);
-      const occupiedSlot = slotForSession(currentLayout, selection.sessionId);
-      if (occupiedSlot) {
-        if (cancelled) return;
-        setProject(owner);
-        setLayout(currentLayout);
-        setFocusedSlot(occupiedSlot);
-        setMaximizedSlot(null);
-        setStatus(`Focused exact canonical Session · ${selection.sessionId} · presentation only`);
-        return;
-      }
-      const next = selectSessionForSlot(currentLayout, owner, focusedSlot, selection.sessionId)
-        ?? (currentLayout.layoutMode === "SINGLE" && focusedSlot === "right"
-          ? selectSessionForSlot(currentLayout, owner, "left", selection.sessionId)
-          : null);
-      if (!next) {
-        if (!cancelled) setStatus(`Selected Session already occupies the peer Slot · ${selection.sessionId}`);
-        return;
-      }
-      if (cancelled) return;
-      setProject(owner);
-      setMaximizedSlot(null);
-      if (next.leftSessionId === currentLayout.leftSessionId && next.rightSessionId === currentLayout.rightSessionId) {
-        setLayout(currentLayout);
-        setStatus(`Focused exact canonical Session · ${selection.sessionId}`);
-        return;
-      }
-      busyRef.current = true;
-      setBusy(true);
-      setStatus(`Selecting exact canonical Session · ${selection.sessionId}`);
       try {
+        const snapshot = await bridge.snapshot();
+        const owner = snapshot.projects.find((candidate) => candidate.project.canonicalWorkspaceId === requestedSelection.workspaceId);
+        if (!owner || cancelled) {
+          if (!cancelled) setStatus(`Selected Session Project is unavailable · ${requestedSelection.workspaceId}`);
+          return;
+        }
+        const targetExists = owner.sessions.some((session) => !session.archived && session.canonicalSessionId === requestedSelection.sessionId);
+        if (!targetExists) {
+          if (!cancelled) setStatus(`Selected canonical Session is unavailable · ${requestedSelection.sessionId}`);
+          return;
+        }
+        const currentLayout = project?.project.canonicalWorkspaceId === owner.project.canonicalWorkspaceId && layout
+          ? layout
+          : reconcileLayout(await bridge.loadLayout(owner.project.canonicalWorkspaceId), owner);
+        const occupiedSlot = slotForSession(currentLayout, requestedSelection.sessionId);
+        if (occupiedSlot) {
+          if (cancelled) return;
+          setProject(owner);
+          setLayout(currentLayout);
+          setFocusedSlot(occupiedSlot);
+          setMaximizedSlot(null);
+          setStatus(`Focused exact canonical Session · ${requestedSelection.sessionId} · presentation only`);
+          return;
+        }
+        let destinationSlot = focusedSlot;
+        let next = selectSessionForSlot(currentLayout, owner, destinationSlot, requestedSelection.sessionId);
+        if (!next && currentLayout.layoutMode === "SINGLE" && destinationSlot === "right") {
+          destinationSlot = "left";
+          next = selectSessionForSlot(currentLayout, owner, destinationSlot, requestedSelection.sessionId);
+        }
+        if (!next) {
+          if (!cancelled) setStatus(`Selected Session already occupies the peer Slot · ${requestedSelection.sessionId}`);
+          return;
+        }
+        if (cancelled) return;
+        if (next.leftSessionId === currentLayout.leftSessionId && next.rightSessionId === currentLayout.rightSessionId) {
+          setProject(owner);
+          setLayout(currentLayout);
+          setFocusedSlot(destinationSlot);
+          setMaximizedSlot(null);
+          setStatus(`Focused exact canonical Session · ${requestedSelection.sessionId}`);
+          return;
+        }
+        setStatus(`Selecting exact canonical Session · ${requestedSelection.sessionId}`);
         const saved = await bridge.saveLayout(layoutSaveRequest(next));
         if (!cancelled) {
+          setProject(owner);
           setLayout(reconcileLayout(saved, owner));
-          setStatus(`Focused exact canonical Session · ${selection.sessionId} · presentation only`);
+          setFocusedSlot(destinationSlot);
+          setMaximizedSlot(null);
+          setStatus(`Focused exact canonical Session · ${requestedSelection.sessionId} · presentation only`);
         }
       } catch (error) {
         if (!cancelled) setStatus(`Session selection failed · ${errorMessage(error)}`);
       } finally {
-        busyRef.current = false;
-        if (!cancelled) setBusy(false);
+        finishBusy();
       }
     };
-    void applySelection().catch((error) => {
-      if (!cancelled) setStatus(`Session selection failed · ${errorMessage(error)}`);
-    });
+    void applySelection();
     return () => { cancelled = true; };
-  }, [bridge, selection]);
+  }, [bridge, selection, selectionReplayNonce]);
 
   if (!project || !layout) {
     return <div className="dual-session-empty" data-state="loading">{status}</div>;
@@ -201,7 +217,7 @@ export function DualSessionWorkspace({
           </select>
         </label>
         <button type="button" className="text-button" disabled={busy} onClick={() => setMaximizedSlot(slot)}>Maximize</button>
-        <button type="button" className="text-button" disabled={busy} onClick={() => { setMaximizedSlot(null); operate(closeSlot(layout, slot), `Closed ${slot} Slot only`); }}>Close</button>
+        <button type="button" className="text-button" disabled={busy} onClick={() => { setFocusedSlot("left"); setMaximizedSlot(null); operate(closeSlot(layout, slot), `Closed ${slot} Slot only`); }}>Close</button>
       </div>
       <SessionSurface session={sessionForSlot(project, session.canonicalSessionId, templateIndex) ?? session} focused={focusedSlot === slot} />
     </section>

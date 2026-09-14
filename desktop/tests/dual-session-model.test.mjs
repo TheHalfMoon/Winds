@@ -140,3 +140,17 @@ test('T134 renderer has explicit narrow fallback and no new direct host or runti
   assert.match(app, /selection=\{selection\}/);
   assert.match(dock, /onSelectSession\?\.\(current\.canonicalWorkspaceId, session\.canonicalSessionId\)/);
 });
+
+
+test('T134 review regressions preserve flexible layout, queued selection, atomic Project/layout commit, surviving focus, and archived navigation refusal', () => {
+  const workspace = readFileSync(join(root, 'src/dualSession/DualSessionWorkspace.tsx'), 'utf8');
+  const dock = readFileSync(join(root, 'src/leftDock/LeftDock.tsx'), 'utf8');
+  const styles = readFileSync(join(root, 'src/dualSession/dualSession.css'), 'utf8');
+  assert.match(styles, /\.dual-session-layout\s*\{\s*grid-row:\s*4;/);
+  assert.match(workspace, /pendingSelectionRef/);
+  assert.match(workspace, /setSelectionReplayNonce/);
+  assert.equal(workspace.includes('if (!selection || busyRef.current) return;'), false);
+  assert.match(workspace, /await bridge\.saveLayout\(layoutSaveRequest\(next\)\);[\s\S]*?setProject\(owner\);[\s\S]*?setLayout\(reconcileLayout\(saved, owner\)\)/);
+  assert.match(workspace, /setFocusedSlot\("left"\); setMaximizedSlot\(null\); operate\(closeSlot/);
+  assert.match(dock, /if \(session\.archived\) \{ setStatus\(`Archived Session is not an active workspace target/);
+});
