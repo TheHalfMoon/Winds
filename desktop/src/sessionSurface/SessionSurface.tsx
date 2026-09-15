@@ -119,6 +119,9 @@ export function SessionSurface({
         </div>
         <div className="session-header-actions">
           <span className="status-chip">{session.lifecycle}</span>
+          {session.composerMode === "unavailable" && (
+            <span className="status-chip" data-tone="muted">Direct launch unavailable</span>
+          )}
         </div>
       </header>
 
@@ -155,7 +158,7 @@ export function SessionSurface({
         </div>
         <textarea
           aria-label={`Prompt fixture for ${session.displayName}`}
-          placeholder={availability.enabled ? "Record a local fixture prompt…" : "Live input unavailable before T139"}
+          placeholder={availability.enabled ? "Record a local fixture prompt…" : "Direct runtime launch unavailable"}
           rows={3}
           value={draft}
           disabled={!availability.enabled}
