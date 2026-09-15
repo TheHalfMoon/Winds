@@ -18,6 +18,9 @@ const commandNames = [
   'right_dock_files',
   'right_dock_preview_file',
   'right_dock_changes',
+  'right_dock_evidence',
+  'right_dock_context',
+  'right_dock_artifacts',
   'terminal_status',
   'terminal_start',
   'terminal_input',
@@ -27,7 +30,7 @@ const commandNames = [
   'terminal_close'
 ];
 
-test('T136 exposes only bounded left-dock, layout, right-dock, and terminal Tauri commands', () => {
+test('T137 exposes only bounded left-dock, layout, right-dock inspection, and terminal Tauri commands', () => {
   assert.equal((host.match(/#\[tauri::command\]/g) ?? []).length, commandNames.length);
   for (const name of commandNames) assert.equal(host.includes(name), true, name);
   for (const forbidden of ['@tauri-apps/plugin-', 'Command::new(', 'std::fs', 'std::process']) {

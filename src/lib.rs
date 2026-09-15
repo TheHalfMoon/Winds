@@ -30,6 +30,7 @@ mod command;
 )]
 pub mod desktop;
 pub mod desktop_files;
+pub mod desktop_inspection;
 #[allow(
     dead_code,
     reason = "Spec 010 T135 bounded desktop terminal bridge; Tauri host is the primary caller"
@@ -97,6 +98,8 @@ mod t134_dual_session_tests;
 mod t135_desktop_terminal_tests;
 #[cfg(test)]
 mod t136_desktop_files_tests;
+#[cfg(test)]
+mod t137_desktop_inspection_tests;
 mod workbench;
 mod workflow_cli;
 

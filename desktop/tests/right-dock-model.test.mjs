@@ -58,7 +58,7 @@ test('T136 path presentation escapes control and bidi-format characters without 
   assert.equal(model.displayPath(`spoof${String.fromCodePoint(0x202e)}txt`), 'spoof\\u{202E}txt');
 });
 test('T136 renderer exposes only fixed right-dock commands and no arbitrary filesystem/Git dispatcher', () => {
-  for (const command of ['right_dock_bind', 'right_dock_files', 'right_dock_preview_file', 'right_dock_changes']) {
+  for (const command of ['right_dock_bind', 'right_dock_files', 'right_dock_preview_file', 'right_dock_changes', 'right_dock_evidence', 'right_dock_context', 'right_dock_artifacts']) {
     assert.equal(bridge.includes(`invoke("${command}"`), true, command);
   }
   for (const forbidden of ['plugin-fs', 'plugin-shell', 'readTextFile', 'openPath', 'Command.create', 'git -C']) {
@@ -74,6 +74,13 @@ test('T136 delayed responses are generation- and immutable-binding checked befor
   assert.match(surface, /Discarded stale Files result/);
   assert.match(surface, /Discarded stale Changes result/);
   assert.match(surface, /Discarded stale file preview/);
+  assert.match(surface, /Discarded stale Evidence result/);
+  assert.match(surface, /Discarded stale Context result/);
+  assert.match(surface, /Discarded stale Artifacts result/);
+  assert.match(surface, /TRUTH_REVALIDATION_MS = 2_000/);
+  assert.match(surface, /Bound candidate\/tree moved · trusted dock treatment removed before refresh/);
+  assert.match(surface, /Truth revalidation failed closed/);
+  assert.match(surface, /setTruthRefresh\(\(value\) => value \+ 1\)/);
 });
 
 test('T136 right dock follows exact focused Session and file-change intent', () => {
@@ -82,4 +89,16 @@ test('T136 right dock follows exact focused Session and file-change intent', () 
   assert.match(app, /<RightDock target=\{dockTarget\} requestedSurface=\{dockSurface\}/);
   assert.match(sessionSurface, /onDockIntent\?\.\(event\.dockIntent, session\.canonicalWorkspaceId, session\.canonicalSessionId\)/);
   assert.equal(sessionSurface.includes('verified=true'), false);
+});
+
+
+test('T137 Evidence Context and Artifacts preserve source and authority boundaries', () => {
+  for (const tab of ['evidence', 'context', 'artifacts']) {
+    assert.equal(surface.includes(`surface === "${tab}"`), true, tab);
+  }
+  assert.match(surface, /Only persisted ELIGIBLE Winds evidence for the exact current candidate receives trusted treatment/);
+  assert.match(surface, /Context is a source-labelled read-only projection/);
+  assert.match(surface, /Artifact presence never grants verification authority/);
+  assert.match(surface, /Safe in-dock reveal · no host open/);
+  assert.equal(surface.includes('dangerouslySetInnerHTML'), false);
 });

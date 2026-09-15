@@ -382,7 +382,10 @@ fn current_binding(
     Ok(binding)
 }
 
-fn require_current_binding(store: &Store, expected: &DesktopRightDockBinding) -> Result<()> {
+pub(crate) fn require_current_binding(
+    store: &Store,
+    expected: &DesktopRightDockBinding,
+) -> Result<()> {
     if expected.binding_digest != binding_digest(expected) {
         return Err("desktop right dock binding digest is invalid".into());
     }
