@@ -63,6 +63,7 @@ const evidence = {
     deterministic_system_appearance_and_high_dpi_contract: true,
   },
   nonclaims: [
+    'No OS-level Tauri-window focus automation is claimed by T142.',
     'No OS-level IME injection automation is claimed by T142.',
     'No live native system-theme transition automation is claimed by T142.',
     'T142 does not substitute platform builds for the human visual acceptance required by T144.',

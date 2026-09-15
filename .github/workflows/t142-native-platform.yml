@@ -3,6 +3,9 @@ name: t142-native-platform
 on:
   pull_request:
     paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
       - "desktop/**"
       - "src/**"
       - "scripts/ci/t142-platform-evidence.mjs"
@@ -12,6 +15,9 @@ on:
   push:
     branches: [main]
     paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
       - "desktop/**"
       - "src/**"
       - "scripts/ci/t142-platform-evidence.mjs"

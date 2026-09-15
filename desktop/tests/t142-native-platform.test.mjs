@@ -20,6 +20,9 @@ function requireText(text, values) {
 test('T142 directly builds the exact desktop candidate on Linux macOS and Windows', () => {
   requireText(workflow, [
     'os: [ubuntu-24.04, macos-15, windows-2025]',
+    'Cargo.toml',
+    'Cargo.lock',
+    'rust-toolchain.toml',
     'fail-fast: false',
     'ref: ${{ env.CANDIDATE_SHA }}',
     'git rev-parse HEAD',
@@ -87,6 +90,7 @@ test('T142 keeps unsupported native GUI automation as explicit truthful nonclaim
     'PLATFORM_BUILD_SUBSTITUTES_FOR_T144_HUMAN_VISUAL_ACCEPTANCE=NO',
   ]);
   requireText(evidenceScript, [
+    'No OS-level Tauri-window focus automation is claimed by T142.',
     'No OS-level IME injection automation is claimed by T142.',
     'No live native system-theme transition automation is claimed by T142.',
     'T142 does not substitute platform builds for the human visual acceptance required by T144.',
