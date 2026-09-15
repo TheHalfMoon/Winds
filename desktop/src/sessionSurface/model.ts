@@ -46,7 +46,7 @@ export function composerAvailability(session: SessionSurfaceFixture): {
   }
   return {
     enabled: false,
-    label: "Input unavailable · live runtime input is not authorized before T139",
+    label: "Direct runtime input unavailable · canonical desktop launch authority is not established",
   };
 }
 

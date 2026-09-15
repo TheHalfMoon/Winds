@@ -153,7 +153,7 @@ export function sessionForSlot(
     worktreeContext: project.project.canonicalRepoRoot,
     runtime: { family, proofState: state, label, proof },
     surfaceState: unavailable ? "empty" : "ready",
-    composerMode: unavailable ? "unavailable" : "fixture_only",
+    composerMode: "unavailable",
     events: [{
       id: `${session.canonicalSessionId}-layout-${templateIndex}`,
       kind: "agent_response",

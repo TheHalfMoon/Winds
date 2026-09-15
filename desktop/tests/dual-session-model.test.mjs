@@ -119,10 +119,10 @@ test('T134 adversarial target race cannot turn one Slot composer into peer or br
     layout = model.replaceSlot(layout, owner, 'left', replacement) ?? layout;
     assert.equal(layout.rightSessionId, rightIdentity);
     const leftSurface = model.sessionForSlot(owner, layout.leftSessionId, 0);
-    const submission = createFixtureSubmission(leftSurface, `prompt-${index}`, index + 1);
-    assert.equal(submission.targetSessionId, layout.leftSessionId);
-    assert.equal(submission.delivery, 'fixture_only');
-    assert.notEqual(submission.targetSessionId, layout.rightSessionId);
+    assert.equal(leftSurface.canonicalSessionId, layout.leftSessionId);
+    assert.equal(leftSurface.composerMode, 'unavailable');
+    assert.equal(createFixtureSubmission(leftSurface, `prompt-${index}`, index + 1), null);
+    assert.notEqual(leftSurface.canonicalSessionId, layout.rightSessionId);
   }
 });
 

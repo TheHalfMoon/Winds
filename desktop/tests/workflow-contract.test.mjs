@@ -49,3 +49,18 @@ test('T135 terminal renderer qualification runs the exact focused bridge and loc
   assert.match(terminalWorkflow, /cargo clippy --manifest-path desktop\/src-tauri\/Cargo\.toml --locked/);
   assert.match(terminalWorkflow, /npm run desktop:build/);
 });
+
+const runtimeAuthorityWorkflow = readFileSync(
+  join(repositoryRoot, '.github/workflows/t139-runtime-authority.yml'),
+  'utf8',
+);
+
+test('T139 runtime authority qualification binds exact candidate and proves unavailable decisions', () => {
+  assert.match(runtimeAuthorityWorkflow, /CANDIDATE_SHA/);
+  assert.match(runtimeAuthorityWorkflow, /git rev-parse HEAD/);
+  assert.match(runtimeAuthorityWorkflow, /persist-credentials: false/);
+  assert.match(runtimeAuthorityWorkflow, /npm ci --ignore-scripts/);
+  assert.match(runtimeAuthorityWorkflow, /npm run format:check && npm run typecheck && npm run lint && npm test && npm run frontend:build/);
+  assert.match(runtimeAuthorityWorkflow, /DESKTOP_DIRECT_CODEX_LAUNCH=UNAUTHORIZED/);
+  assert.match(runtimeAuthorityWorkflow, /DESKTOP_DIRECT_CLAUDE_LAUNCH=UNAUTHORIZED/);
+});
