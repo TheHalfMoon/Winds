@@ -8,6 +8,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const host = readFileSync(join(root, 'src-tauri/src/main.rs'), 'utf8');
 const commandNames = [
   'left_dock_snapshot',
+  'left_dock_attention_snapshot',
   'left_dock_update_project',
   'left_dock_create_session',
   'left_dock_rename_session',
@@ -30,7 +31,7 @@ const commandNames = [
   'terminal_close'
 ];
 
-test('T137 exposes only bounded left-dock, layout, right-dock inspection, and terminal Tauri commands', () => {
+test('T138 exposes only bounded desktop projection, navigation, and terminal Tauri commands', () => {
   assert.equal((host.match(/#\[tauri::command\]/g) ?? []).length, commandNames.length);
   for (const name of commandNames) assert.equal(host.includes(name), true, name);
   for (const forbidden of ['@tauri-apps/plugin-', 'Command::new(', 'std::fs', 'std::process']) {

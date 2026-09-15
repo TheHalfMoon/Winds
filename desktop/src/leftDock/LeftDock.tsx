@@ -129,8 +129,10 @@ function SessionRow({
 
 export function LeftDock({
   onSelectSession,
+  requestedSessionId,
 }: {
   readonly onSelectSession?: (workspaceId: string, sessionId: string) => void;
+  readonly requestedSessionId?: string | null;
 }) {
   const bridge = useMemo<LeftDockBridge>(() => leftDockBridge(), []);
   const writable = bridge.source === "canonical";
@@ -157,6 +159,10 @@ export function LeftDock({
   useEffect(() => {
     void refresh().catch((error) => setStatus(`Load failed · ${errorMessage(error)}`));
   }, [refresh]);
+
+  useEffect(() => {
+    if (requestedSessionId !== undefined) setSelectedSessionId(requestedSessionId);
+  }, [requestedSessionId]);
 
   useEffect(() => {
     if (!focusedControlKey || busy) return;

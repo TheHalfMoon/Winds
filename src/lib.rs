@@ -100,6 +100,8 @@ mod t135_desktop_terminal_tests;
 mod t136_desktop_files_tests;
 #[cfg(test)]
 mod t137_desktop_inspection_tests;
+#[cfg(test)]
+mod t138_desktop_attention_tests;
 mod workbench;
 mod workflow_cli;
 

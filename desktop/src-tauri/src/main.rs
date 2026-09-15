@@ -4,13 +4,14 @@ use std::time::Duration;
 use tauri::State;
 use tauri::ipc::{Channel, Response};
 use winds_control::desktop::{
-    DesktopBridgeCreateSessionRequest, DesktopBridgeLayoutPresentation, DesktopBridgeLayoutRequest,
+    DesktopBridgeAttentionSnapshot, DesktopBridgeCreateSessionRequest,
+    DesktopBridgeLayoutPresentation, DesktopBridgeLayoutRequest,
     DesktopBridgeProjectPresentationBatchRequest, DesktopBridgeProjectSummary,
     DesktopBridgeRenameSessionRequest, DesktopBridgeSessionPresentationBatchRequest,
-    DesktopBridgeSessionSummary, DesktopBridgeSnapshot, desktop_bridge_create_session,
-    desktop_bridge_default_home, desktop_bridge_load_layout, desktop_bridge_rename_session,
-    desktop_bridge_save_layout, desktop_bridge_snapshot, desktop_bridge_update_project,
-    desktop_bridge_update_session,
+    DesktopBridgeSessionSummary, DesktopBridgeSnapshot, desktop_bridge_attention_snapshot,
+    desktop_bridge_create_session, desktop_bridge_default_home, desktop_bridge_load_layout,
+    desktop_bridge_rename_session, desktop_bridge_save_layout, desktop_bridge_snapshot,
+    desktop_bridge_update_project, desktop_bridge_update_session,
 };
 use winds_control::desktop_files::{
     DesktopBoundDockRequest, DesktopChangesResponse, DesktopFilePreviewRequest,
@@ -57,6 +58,13 @@ fn terminal_registry(
 fn left_dock_snapshot() -> Result<DesktopBridgeSnapshot, String> {
     let home = bridge_home()?;
     desktop_bridge_snapshot(&home).map_err(|error| host_error("left dock snapshot", error))
+}
+
+#[tauri::command]
+fn left_dock_attention_snapshot() -> Result<DesktopBridgeAttentionSnapshot, String> {
+    let home = bridge_home()?;
+    desktop_bridge_attention_snapshot(&home)
+        .map_err(|error| host_error("attention snapshot", error))
 }
 
 #[tauri::command]
@@ -330,6 +338,7 @@ fn main() {
         .manage(Arc::new(TerminalHostState::default()))
         .invoke_handler(tauri::generate_handler![
             left_dock_snapshot,
+            left_dock_attention_snapshot,
             left_dock_update_project,
             left_dock_create_session,
             left_dock_rename_session,

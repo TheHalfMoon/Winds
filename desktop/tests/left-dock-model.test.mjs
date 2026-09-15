@@ -151,3 +151,13 @@ test('T132 1000-Session fixture keeps search, filter, and selection deterministi
     assert.equal(filtered[0].sessions[0].canonicalSessionId, 'session-099-09');
   }
 });
+
+
+test('T138 collapsed Project keeps blocked attention visible and actionable', () => {
+  const blocked = project('workspace-blocked', [session('session-blocked', 'Blocked work', { attention: 'blocked' })], {
+    collapsed: true, attentionCount: 1, attention: 'blocked'
+  });
+  assert.equal(model.projectRenderedExpanded(blocked, ''), false);
+  assert.deepEqual(model.attentionView('blocked'), { label: 'Blocked', actionable: true });
+  assert.equal(blocked.project.attentionCount, 1);
+});

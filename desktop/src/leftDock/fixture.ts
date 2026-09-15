@@ -86,6 +86,24 @@ function readOnly(): Promise<never> {
 export const fixtureLeftDockBridge: LeftDockBridge = {
   source: "fixture",
   async snapshot() { return fixture; },
+  async attentionSnapshot() {
+    return {
+      items: [{
+        workspaceId: "fixture-winds",
+        sessionId: "fixture-session-b",
+        workflowRunId: "fixture-workflow",
+        stageRunId: "fixture-stage",
+        stageKey: "review",
+        state: "waiting_approval",
+        reason: "fixture canonical approval gate",
+        source: "WINDS_OBSERVED",
+        authority: "WINDS_POLICY",
+        candidateOid: "fixture-candidate",
+        candidateTree: "fixture-candidate-tree",
+        approvalActionAvailable: false,
+      }],
+    };
+  },
   updateProject: readOnly,
   createSession: readOnly,
   renameSession: readOnly,

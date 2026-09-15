@@ -102,3 +102,36 @@ test('T137 Evidence Context and Artifacts preserve source and authority boundari
   assert.match(surface, /Safe in-dock reveal · no host open/);
   assert.equal(surface.includes('dangerouslySetInnerHTML'), false);
 });
+
+
+test('T138 Needs You is trusted read-only attention with no approval dispatcher', () => {
+  assert.equal(surface.includes('surface === "needs_you"'), true);
+  assert.match(surface, /Needs You is derived only from accepted canonical stage facts/);
+  assert.match(surface, /Approve\/deny unavailable · no authorized desktop seam/);
+  assert.match(app, /onFocusAttention=/);
+  assert.equal(surface.includes('approve_attention'), false);
+  assert.equal(surface.includes('deny_attention'), false);
+});
+
+
+test('T138 Cmd Ctrl K opens navigation-only palette without execution authority', () => {
+  assert.match(app, /event\.metaKey \|\| event\.ctrlKey/);
+  assert.match(app, /event\.key\.toLowerCase\(\) === "k"/);
+  assert.match(app, /setCommandPaletteOpen/);
+  for (const forbidden of ['terminal_input', 'terminal_start', 'approve_attention', 'deny_attention']) {
+    assert.equal(app.includes(forbidden), false, forbidden);
+  }
+});
+
+
+test('T138 command palette traps and restores keyboard focus with generation-bounded refresh', () => {
+  const palette = readFileSync(join(root, 'src/commandPalette/CommandPalette.tsx'), 'utf8');
+  assert.match(palette, /priorFocusRef/);
+  assert.match(palette, /requestGeneration/);
+  assert.match(palette, /event\.key !== "Tab"/);
+  assert.match(palette, /priorFocusRef\.current\?\.focus\(\)/);
+  assert.match(palette, /generation !== requestGeneration\.current/);
+  assert.match(palette, /requestGeneration\.current \+= 1/);
+  assert.match(palette, /const generation = \+\+requestGeneration\.current/);
+  assert.match(palette, /if \(generation === requestGeneration\.current\) setStatus\(`Refresh failed/);
+});

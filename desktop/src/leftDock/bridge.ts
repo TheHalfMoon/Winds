@@ -5,6 +5,7 @@ import type { LeftDockBridge } from "./types";
 const canonicalLeftDockBridge: LeftDockBridge = {
   source: "canonical",
   snapshot: () => invoke("left_dock_snapshot"),
+  attentionSnapshot: () => invoke("left_dock_attention_snapshot"),
   updateProject: (updates) => invoke("left_dock_update_project", { request: { updates } }),
   createSession: (request) => invoke("left_dock_create_session", { request }),
   renameSession: (request) => invoke("left_dock_rename_session", { request }),

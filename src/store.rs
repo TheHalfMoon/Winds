@@ -5503,9 +5503,17 @@ impl Store {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DesktopAttentionFact {
+    pub(crate) session_id: String,
+    pub(crate) workspace_id: String,
+    pub(crate) workflow_run_id: String,
+    pub(crate) stage_run_id: String,
+    pub(crate) stage_key: String,
     pub(crate) lifecycle_state: StageLifecycleState,
     pub(crate) source: Option<TruthSource>,
+    pub(crate) authority: Option<StageTransitionAuthority>,
     pub(crate) outcome_reason: Option<String>,
+    pub(crate) candidate_oid: Option<String>,
+    pub(crate) candidate_tree: Option<String>,
 }
 
 #[allow(
@@ -5576,7 +5584,7 @@ impl Store {
         &self,
         session_id: &str,
     ) -> Result<Vec<DesktopAttentionFact>> {
-        self.load_winds_session(session_id)?;
+        let session = self.load_winds_session(session_id)?;
         let mut statement = self.connection.prepare(
             "SELECT DISTINCT stage.stage_run_id
              FROM workflow_actor_bindings actor
@@ -5600,13 +5608,140 @@ impl Store {
             .into_iter()
             .map(|stage_run_id| {
                 let stored = self.load_stage_run(&stage_run_id)?;
+                let workflow = self.load_workflow_run(&stored.identity.workflow_run_id)?;
+                if workflow.identity.workstream_id != session.workstream_id {
+                    return Err(
+                        "desktop attention stage crosses canonical Session workstream".into(),
+                    );
+                }
+                let candidate = self
+                    .connection
+                    .query_row(
+                        "SELECT candidate_oid, candidate_tree
+                         FROM workflow_artifact_baselines
+                         WHERE stage_run_id = ?1
+                           AND candidate_oid IS NOT NULL
+                           AND candidate_tree IS NOT NULL
+                         ORDER BY created_unix_ms DESC, baseline_id DESC
+                         LIMIT 1",
+                        params![stage_run_id],
+                        |row| {
+                            Ok((
+                                row.get::<_, Option<String>>(0)?,
+                                row.get::<_, Option<String>>(1)?,
+                            ))
+                        },
+                    )
+                    .optional()?
+                    .unwrap_or((None, None));
+                match (&candidate.0, &candidate.1) {
+                    (None, None) | (Some(_), Some(_)) => {}
+                    _ => return Err("desktop attention candidate identity is incomplete".into()),
+                }
+                let transition = stored.last_transition.as_ref();
                 Ok(DesktopAttentionFact {
+                    session_id: session_id.to_owned(),
+                    workspace_id: workflow.identity.workspace_id,
+                    workflow_run_id: stored.identity.workflow_run_id,
+                    stage_run_id: stored.identity.stage_run_id,
+                    stage_key: stored.identity.stage_key,
                     lifecycle_state: stored.lifecycle_state,
-                    source: stored.last_transition.as_ref().map(|value| value.source),
+                    source: transition.map(|value| value.source),
+                    authority: transition.map(|value| value.authority),
                     outcome_reason: stored.outcome_reason,
+                    candidate_oid: candidate.0,
+                    candidate_tree: candidate.1,
                 })
             })
             .collect()
+    }
+
+    pub(crate) fn desktop_attention_facts_all(&self) -> Result<Vec<DesktopAttentionFact>> {
+        let mut statement = self.connection.prepare(
+            "SELECT DISTINCT actor.winds_session_id, workflow.workspace_id,
+                    stage.workflow_run_id, stage.stage_run_id, stage.stage_key,
+                    stage.lifecycle_state, stage.last_transition_source,
+                    stage.last_transition_authority, stage.outcome_reason,
+                    (SELECT baseline.candidate_oid
+                     FROM workflow_artifact_baselines baseline
+                     WHERE baseline.stage_run_id = stage.stage_run_id
+                       AND baseline.candidate_oid IS NOT NULL
+                       AND baseline.candidate_tree IS NOT NULL
+                     ORDER BY baseline.created_unix_ms DESC, baseline.baseline_id DESC
+                     LIMIT 1),
+                    (SELECT baseline.candidate_tree
+                     FROM workflow_artifact_baselines baseline
+                     WHERE baseline.stage_run_id = stage.stage_run_id
+                       AND baseline.candidate_oid IS NOT NULL
+                       AND baseline.candidate_tree IS NOT NULL
+                     ORDER BY baseline.created_unix_ms DESC, baseline.baseline_id DESC
+                     LIMIT 1)
+             FROM workflow_actor_bindings actor
+             JOIN workflow_stage_runs stage ON stage.stage_run_id = actor.stage_run_id
+             JOIN workflow_runs workflow ON workflow.workflow_run_id = stage.workflow_run_id
+             JOIN winds_sessions session
+               ON session.session_id = actor.winds_session_id
+              AND session.workstream_id = workflow.workstream_id
+             WHERE NOT EXISTS (
+                 SELECT 1
+                 FROM workflow_stage_runs newer
+                 WHERE newer.workflow_run_id = stage.workflow_run_id
+                   AND newer.stage_key = stage.stage_key
+                   AND newer.attempt_ordinal > stage.attempt_ordinal
+             )
+             ORDER BY workflow.workspace_id, actor.winds_session_id,
+                      stage.updated_unix_ms, stage.stage_run_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, Option<String>>(6)?,
+                row.get::<_, Option<String>>(7)?,
+                row.get::<_, Option<String>>(8)?,
+                row.get::<_, Option<String>>(9)?,
+                row.get::<_, Option<String>>(10)?,
+            ))
+        })?;
+        let mut facts = Vec::new();
+        for row in rows {
+            let row = row?;
+            let lifecycle_state = parse_stage_state(&row.5)?;
+            let (source, authority) = match (&row.6, &row.7) {
+                (None, None) => (None, None),
+                (Some(source), Some(authority)) => (
+                    Some(TruthSource::from_db(source).ok_or_else(|| {
+                        format!("unknown desktop attention truth source: {source}")
+                    })?),
+                    Some(StageTransitionAuthority::from_db(authority).ok_or_else(|| {
+                        format!("unknown desktop attention transition authority: {authority}")
+                    })?),
+                ),
+                _ => return Err("desktop attention transition provenance is incomplete".into()),
+            };
+            match (&row.9, &row.10) {
+                (None, None) | (Some(_), Some(_)) => {}
+                _ => return Err("desktop attention candidate identity is incomplete".into()),
+            }
+            facts.push(DesktopAttentionFact {
+                session_id: row.0,
+                workspace_id: row.1,
+                workflow_run_id: row.2,
+                stage_run_id: row.3,
+                stage_key: row.4,
+                lifecycle_state,
+                source,
+                authority,
+                outcome_reason: row.8,
+                candidate_oid: row.9,
+                candidate_tree: row.10,
+            });
+        }
+        Ok(facts)
     }
 }
 
