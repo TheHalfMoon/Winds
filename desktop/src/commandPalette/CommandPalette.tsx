@@ -53,7 +53,7 @@ export function CommandPalette({
     const focusTimer = window.setTimeout(() => inputRef.current?.focus(), 0);
     return () => {
       window.clearTimeout(focusTimer);
-      if (requestGeneration.current === generation) requestGeneration.current += 1;
+      requestGeneration.current += 1;
       priorFocusRef.current?.focus();
       priorFocusRef.current = null;
     };
@@ -87,7 +87,10 @@ export function CommandPalette({
       return;
     }
     if (item.kind === "action" && item.id === "action:refresh") {
-      void refresh().catch((error) => setStatus(`Refresh failed · ${errorMessage(error)}`));
+      const generation = ++requestGeneration.current;
+      void refresh(generation).catch((error) => {
+        if (generation === requestGeneration.current) setStatus(`Refresh failed · ${errorMessage(error)}`);
+      });
     }
   };
 

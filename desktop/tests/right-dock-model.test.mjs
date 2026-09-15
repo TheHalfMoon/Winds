@@ -131,4 +131,7 @@ test('T138 command palette traps and restores keyboard focus with generation-bou
   assert.match(palette, /event\.key !== "Tab"/);
   assert.match(palette, /priorFocusRef\.current\?\.focus\(\)/);
   assert.match(palette, /generation !== requestGeneration\.current/);
+  assert.match(palette, /requestGeneration\.current \+= 1/);
+  assert.match(palette, /const generation = \+\+requestGeneration\.current/);
+  assert.match(palette, /if \(generation === requestGeneration\.current\) setStatus\(`Refresh failed/);
 });
