@@ -42,6 +42,30 @@
       "width": 1440,
       "height": 900,
       "query": "?theme=dark&scale=125"
+    },
+    {
+      "id": "desktop-1440-scaled-text-200",
+      "width": 1440,
+      "height": 900,
+      "query": "?theme=dark&scale=200"
+    },
+    {
+      "id": "desktop-1440-reduced-motion",
+      "width": 1440,
+      "height": 900,
+      "query": "?theme=dark&motion=reduced"
+    },
+    {
+      "id": "desktop-1440-compact",
+      "width": 1440,
+      "height": 900,
+      "query": "?theme=dark&density=compact"
+    },
+    {
+      "id": "desktop-900-narrow",
+      "width": 900,
+      "height": 800,
+      "query": "?theme=dark&layout=narrow"
     }
   ]
 }

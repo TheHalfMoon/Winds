@@ -14,6 +14,7 @@ function errorMessage(error: unknown): string {
 }
 
 const TRUTH_REVALIDATION_MS = 2_000;
+const RIGHT_DOCK_SURFACES = ["files", "changes", "evidence", "context", "artifacts", "needs_you"] as const satisfies readonly RightDockSurface[];
 
 function surfaceTitle(surface: RightDockSurface): string {
   if (surface === "needs_you") return "Needs You";
@@ -50,6 +51,7 @@ export function RightDock({
   const [busy, setBusy] = useState(false);
   const [truthRefresh, setTruthRefresh] = useState(0);
   const requestGeneration = useRef(0);
+  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
 
   useEffect(() => setSurface(requestedSurface), [requestedSurface]);
 
@@ -229,12 +231,38 @@ export function RightDock({
   return (
     <aside className="right-dock" aria-label="Context dock" data-source={bridge.source}>
       <div className="right-tabs" role="tablist" aria-label="Context surfaces">
-        {(["files", "changes", "evidence", "context", "artifacts", "needs_you"] as const).map((tab) => (
-          <button type="button" role="tab" aria-selected={surface === tab} className="right-tab" data-active={surface === tab ? "true" : "false"} onClick={() => setSurface(tab)} key={tab}>{surfaceTitle(tab)}</button>
+        {RIGHT_DOCK_SURFACES.map((tab, index) => (
+          <button
+            type="button"
+            role="tab"
+            id={`right-dock-tab-${tab}`}
+            aria-controls="right-dock-panel"
+            aria-selected={surface === tab}
+            tabIndex={surface === tab ? 0 : -1}
+            className="right-tab"
+            data-active={surface === tab ? "true" : "false"}
+            ref={(node) => { tabRefs.current[index] = node; }}
+            onClick={() => setSurface(tab)}
+            onKeyDown={(event) => {
+              let nextIndex: number | null = null;
+              if (event.key === "ArrowRight") nextIndex = (index + 1) % RIGHT_DOCK_SURFACES.length;
+              if (event.key === "ArrowLeft") nextIndex = (index - 1 + RIGHT_DOCK_SURFACES.length) % RIGHT_DOCK_SURFACES.length;
+              if (event.key === "Home") nextIndex = 0;
+              if (event.key === "End") nextIndex = RIGHT_DOCK_SURFACES.length - 1;
+              if (nextIndex === null) return;
+              event.preventDefault();
+              const nextSurface = RIGHT_DOCK_SURFACES[nextIndex];
+              setSurface(nextSurface);
+              tabRefs.current[nextIndex]?.focus();
+            }}
+            key={tab}
+          >
+            {surfaceTitle(tab)}
+          </button>
         ))}
       </div>
 
-      <div className="right-dock-body" role="tabpanel" aria-label={surfaceTitle(surface)}>
+      <div id="right-dock-panel" className="right-dock-body" role="tabpanel" aria-labelledby={`right-dock-tab-${surface}`}>
         <div className="right-dock-heading">
           <div><p className="section-kicker">Exact Session scope</p><h2>{surfaceTitle(surface)}</h2></div>
           <span className="dock-source-badge">{bridge.source === "canonical" ? "Rust-owned" : "Fixture"}</span>

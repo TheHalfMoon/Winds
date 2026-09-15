@@ -7,6 +7,7 @@ import {
   eventCanClaimTrustedState,
   eventSourceLabel,
   eventTrust,
+  shouldSubmitComposerShortcut,
 } from "./model";
 import type { SessionSurfaceFixture, SessionWorkEvent } from "./types";
 import "./sessionSurface.css";
@@ -86,11 +87,14 @@ export function SessionSurface({
   };
 
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.nativeEvent.isComposing) return;
-    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-      event.preventDefault();
-      event.currentTarget.form?.requestSubmit();
-    }
+    if (!shouldSubmitComposerShortcut({
+      isComposing: event.nativeEvent.isComposing,
+      key: event.key,
+      metaKey: event.metaKey,
+      ctrlKey: event.ctrlKey,
+    })) return;
+    event.preventDefault();
+    event.currentTarget.form?.requestSubmit();
   };
 
   const handleDockIntent = (event: SessionWorkEvent) => {
@@ -107,7 +111,7 @@ export function SessionSurface({
       data-primary={focused ? "true" : "false"}
       data-runtime-proof={session.runtime.proofState}
       data-composer-mode={session.composerMode}
-      aria-label={`${session.displayName} Session work surface`}
+      aria-label={`${session.displayName} Session work surface. ${session.runtime.label}. ${session.runtime.proof}. ${session.lifecycle}.`}
     >
       <header className="session-header">
         <div className="session-identity">
@@ -126,9 +130,37 @@ export function SessionSurface({
       </header>
 
       <div className="stream-toolbar" aria-label="Session stream controls">
-        <div className="segmented-control" aria-label="Session surface view">
-          <button type="button" data-active={surface === "work_stream" ? "true" : "false"} onClick={() => setSurface("work_stream")}>Work Stream</button>
-          <button type="button" data-active={surface === "terminal" ? "true" : "false"} onClick={() => setSurface("terminal")}>Terminal</button>
+        <div className="segmented-control" role="group" aria-label="Session surface view">
+          <button
+            type="button"
+            aria-pressed={surface === "work_stream"}
+            data-active={surface === "work_stream" ? "true" : "false"}
+            onClick={() => setSurface("work_stream")}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowRight" || event.key === "ArrowDown" || event.key === "End") {
+                event.preventDefault();
+                setSurface("terminal");
+                event.currentTarget.nextElementSibling instanceof HTMLElement && event.currentTarget.nextElementSibling.focus();
+              }
+            }}
+          >
+            Work Stream
+          </button>
+          <button
+            type="button"
+            aria-pressed={surface === "terminal"}
+            data-active={surface === "terminal" ? "true" : "false"}
+            onClick={() => setSurface("terminal")}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowLeft" || event.key === "ArrowUp" || event.key === "Home") {
+                event.preventDefault();
+                setSurface("work_stream");
+                event.currentTarget.previousElementSibling instanceof HTMLElement && event.currentTarget.previousElementSibling.focus();
+              }
+            }}
+          >
+            Terminal
+          </button>
         </div>
         <span className="fixture-label">{session.runtime.proof}</span>
       </div>

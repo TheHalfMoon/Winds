@@ -77,8 +77,11 @@ test('T133 renderer has no live runtime, terminal, or Tauri dispatch seam', () =
 });
 
 test('T133 composer protects IME and preserves plain Enter for multiline input', () => {
-  assert.match(surface, /nativeEvent\.isComposing/);
-  assert.match(surface, /event\.key === "Enter" && \(event\.metaKey \|\| event\.ctrlKey\)/);
+  assert.equal(model.shouldSubmitComposerShortcut({ isComposing: true, key: 'Enter', metaKey: true, ctrlKey: false }), false);
+  assert.equal(model.shouldSubmitComposerShortcut({ isComposing: false, key: 'Enter', metaKey: false, ctrlKey: false }), false);
+  assert.equal(model.shouldSubmitComposerShortcut({ isComposing: false, key: 'Enter', metaKey: true, ctrlKey: false }), true);
+  assert.equal(model.shouldSubmitComposerShortcut({ isComposing: false, key: 'Enter', metaKey: false, ctrlKey: true }), true);
+  assert.match(surface, /shouldSubmitComposerShortcut/);
   assert.match(surface, /requestSubmit\(\)/);
 });
 

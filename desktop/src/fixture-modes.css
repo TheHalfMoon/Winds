@@ -18,8 +18,81 @@
   display: none;
 }
 
+:root[data-scale="200"] body {
+  min-width: 0;
+  overflow: auto;
+}
+
+:root[data-scale="200"] .winds-app {
+  width: 50%;
+  min-height: 50vh;
+  transform: scale(2);
+  transform-origin: top left;
+}
+
+:root[data-scale="200"] .workspace-grid {
+  grid-template-columns: minmax(176px, var(--left-dock-width)) minmax(0, 1fr);
+}
+
+:root[data-scale="200"] .right-dock,
+:root[data-scale="200"] .static-mode {
+  display: none;
+}
+
+:root[data-scale="200"] .narrow-dual-fallback {
+  display: block;
+}
+
+:root[data-scale="200"] .dual-session-layout[data-mode="DUAL"] {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+
+:root[data-scale="200"] .dual-session-layout[data-mode="DUAL"] .session-divider,
+:root[data-scale="200"] .dual-session-layout[data-mode="DUAL"] .session-slot[data-focused="false"] {
+  display: none;
+}
+
+:root[data-motion="reduced"] *,
+:root[data-motion="reduced"] *::before,
+:root[data-motion="reduced"] *::after {
+  scroll-behavior: auto !important;
+  transition-duration: 0ms !important;
+  animation-duration: 0ms !important;
+  animation-iteration-count: 1 !important;
+}
+
+:root[data-layout="narrow"] {
+  --left-dock-width: 198px;
+  --right-dock-width: 0px;
+  --pane-min-width: 280px;
+}
+
+:root[data-layout="narrow"] .workspace-grid {
+  grid-template-columns: var(--left-dock-width) minmax(0, 1fr);
+}
+
+:root[data-layout="narrow"] .right-dock,
+:root[data-layout="narrow"] .workspace-crumbs > span:last-child,
+:root[data-layout="narrow"] .chrome-separator {
+  display: none;
+}
+
+:root[data-layout="narrow"] .narrow-dual-fallback {
+  display: block;
+}
+
+:root[data-layout="narrow"] .dual-session-layout[data-mode="DUAL"] {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+
+:root[data-layout="narrow"] .dual-session-layout[data-mode="DUAL"] .session-divider,
+:root[data-layout="narrow"] .dual-session-layout[data-mode="DUAL"] .session-slot[data-focused="false"] {
+  display: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  :root[data-scale="125"] .winds-app {
+  :root[data-scale="125"] .winds-app,
+  :root[data-scale="200"] .winds-app {
     transition: none;
   }
 }

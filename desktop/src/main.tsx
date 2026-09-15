@@ -11,20 +11,34 @@ if (!root) {
 }
 
 const params = new URLSearchParams(window.location.search);
+const documentRoot = document.documentElement;
 const theme = params.get("theme");
 
 if (theme === "dark" || theme === "light" || theme === "contrast") {
-  document.documentElement.dataset.theme = theme;
+  documentRoot.dataset.theme = theme;
 } else {
-  document.documentElement.dataset.theme = "dark";
+  delete documentRoot.dataset.theme;
 }
 
 if (params.get("fixture") === "keyboard-focus") {
-  document.documentElement.dataset.fixture = "keyboard-focus";
+  documentRoot.dataset.fixture = "keyboard-focus";
 }
 
-if (params.get("scale") === "125") {
-  document.documentElement.dataset.scale = "125";
+const scale = params.get("scale");
+if (scale === "125" || scale === "200") {
+  documentRoot.dataset.scale = scale;
+}
+
+if (params.get("motion") === "reduced") {
+  documentRoot.dataset.motion = "reduced";
+}
+
+if (params.get("density") === "compact") {
+  documentRoot.dataset.density = "compact";
+}
+
+if (params.get("layout") === "narrow") {
+  documentRoot.dataset.layout = "narrow";
 }
 
 createRoot(root).render(

@@ -136,7 +136,12 @@ export function CommandPalette({
           type="search"
           value={query}
           onChange={(event) => setQuery(event.currentTarget.value)}
+          role="combobox"
           aria-label="Search commands Projects and Sessions"
+          aria-expanded="true"
+          aria-controls="command-palette-options"
+          aria-activedescendant={items[activeIndex] ? `command-option-${activeIndex}` : undefined}
+          aria-autocomplete="list"
           placeholder={projectScope ? "Filter Sessions in this Project" : "Search Projects, Sessions, docks, safe actions"}
           onKeyDown={(event) => {
             if (event.key === "ArrowDown" && items.length > 0) { event.preventDefault(); setActiveIndex((value) => (value + 1) % items.length); return; }
@@ -144,11 +149,13 @@ export function CommandPalette({
             if (event.key === "Enter" && items[activeIndex]) { event.preventDefault(); choose(items[activeIndex]); }
           }}
         />
-        <div className="command-palette-list" role="listbox" aria-label="Available commands">
+        <div id="command-palette-options" className="command-palette-list" role="listbox" aria-label="Available commands">
           {items.map((item, index) => (
             <button
               type="button"
               role="option"
+              id={`command-option-${index}`}
+              tabIndex={-1}
               aria-selected={index === activeIndex}
               className="command-palette-item"
               data-active={index === activeIndex ? "true" : "false"}

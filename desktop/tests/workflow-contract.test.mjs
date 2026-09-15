@@ -64,3 +64,16 @@ test('T139 runtime authority qualification binds exact candidate and proves unav
   assert.match(runtimeAuthorityWorkflow, /DESKTOP_DIRECT_CODEX_LAUNCH=UNAUTHORIZED/);
   assert.match(runtimeAuthorityWorkflow, /DESKTOP_DIRECT_CLAUDE_LAUNCH=UNAUTHORIZED/);
 });
+
+const accessibilityWorkflow = readFileSync(
+  join(repositoryRoot, '.github/workflows/t140-accessibility.yml'),
+  'utf8',
+);
+
+test('T140 accessibility qualification binds exact candidate and exercises all claimed desktop OS families', () => {
+  assert.match(accessibilityWorkflow, /CANDIDATE_SHA/);
+  assert.match(accessibilityWorkflow, /persist-credentials: false/);
+  assert.match(accessibilityWorkflow, /ubuntu-24\.04, macos-15, windows-2025/);
+  assert.match(accessibilityWorkflow, /npm run format:check && npm run typecheck && npm run lint && npm test && npm run frontend:build/);
+  assert.match(accessibilityWorkflow, /npm run desktop:build/);
+});
