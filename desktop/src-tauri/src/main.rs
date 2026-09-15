@@ -112,15 +112,13 @@ fn workspace_save_layout(
 #[tauri::command]
 fn right_dock_bind(request: DesktopRightDockTarget) -> Result<DesktopRightDockBinding, String> {
     let home = bridge_home()?;
-    desktop_right_dock_bind(&home, request)
-        .map_err(|error| host_error("right dock binding", error))
+    desktop_right_dock_bind(&home, request).map_err(|error| host_error("right dock binding", error))
 }
 
 #[tauri::command]
 fn right_dock_files(request: DesktopBoundDockRequest) -> Result<DesktopFilesResponse, String> {
     let home = bridge_home()?;
-    desktop_right_dock_files(&home, request)
-        .map_err(|error| host_error("right dock Files", error))
+    desktop_right_dock_files(&home, request).map_err(|error| host_error("right dock Files", error))
 }
 
 #[tauri::command]
@@ -133,9 +131,7 @@ fn right_dock_preview_file(
 }
 
 #[tauri::command]
-fn right_dock_changes(
-    request: DesktopBoundDockRequest,
-) -> Result<DesktopChangesResponse, String> {
+fn right_dock_changes(request: DesktopBoundDockRequest) -> Result<DesktopChangesResponse, String> {
     let home = bridge_home()?;
     desktop_right_dock_changes(&home, request)
         .map_err(|error| host_error("right dock Changes", error))
