@@ -77,7 +77,9 @@ test("T140 deterministic appearance fixtures cover system light compact reduced 
   assert.match(main, /dataset\.density = "compact"/);
   assert.match(main, /dataset\.layout = "narrow"/);
   assert.match(fixtureModes, /data-scale="200"/);
-  assert.match(fixtureModes, /transform: scale\(2\)/);
+  assert.match(fixtureModes, /:root\[data-scale="200"\] \.narrow-dual-fallback/);
+  assert.match(fixtureModes, /:root\[data-scale="200"\] \.dual-session-layout\[data-mode="DUAL"\]/);
+  assert.match(fixtureModes, /:root\[data-scale="200"\][\s\S]*\.session-slot\[data-focused="false"\]/);
   assert.match(fixtureModes, /data-layout="narrow"/);
   assert.match(fixtureModes, /data-motion="reduced"/);
 
@@ -124,6 +126,7 @@ test("T140 screen reader structure preserves Project Session runtime attention a
   assert.match(commandPalette, /aria-activedescendant/);
   assert.match(commandPalette, /role="listbox"/);
   assert.match(commandPalette, /role="option"/);
+  assert.match(commandPalette, /tabIndex=\{-1\}/);
 });
 
 test("T140 keeps keyboard and pointer routes paired without adding runtime authority", () => {

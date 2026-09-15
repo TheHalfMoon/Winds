@@ -155,6 +155,7 @@ export function CommandPalette({
               type="button"
               role="option"
               id={`command-option-${index}`}
+              tabIndex={-1}
               aria-selected={index === activeIndex}
               className="command-palette-item"
               data-active={index === activeIndex ? "true" : "false"}

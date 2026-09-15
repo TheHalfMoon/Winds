@@ -39,6 +39,19 @@
   display: none;
 }
 
+:root[data-scale="200"] .narrow-dual-fallback {
+  display: block;
+}
+
+:root[data-scale="200"] .dual-session-layout[data-mode="DUAL"] {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+
+:root[data-scale="200"] .dual-session-layout[data-mode="DUAL"] .session-divider,
+:root[data-scale="200"] .dual-session-layout[data-mode="DUAL"] .session-slot[data-focused="false"] {
+  display: none;
+}
+
 :root[data-motion="reduced"] *,
 :root[data-motion="reduced"] *::before,
 :root[data-motion="reduced"] *::after {
