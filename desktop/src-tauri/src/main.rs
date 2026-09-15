@@ -18,6 +18,10 @@ use winds_control::desktop_files::{
     DesktopRightDockTarget, desktop_right_dock_bind, desktop_right_dock_changes,
     desktop_right_dock_files, desktop_right_dock_preview_file,
 };
+use winds_control::desktop_inspection::{
+    DesktopArtifactsResponse, DesktopContextResponse, DesktopEvidenceResponse,
+    desktop_right_dock_artifacts, desktop_right_dock_context, desktop_right_dock_evidence,
+};
 use winds_control::desktop_terminal::{
     DesktopTerminalInputRequest, DesktopTerminalRegistry, DesktopTerminalResizeRequest,
     DesktopTerminalStartRequest, DesktopTerminalStatus, DesktopTerminalTargetRequest,
@@ -135,6 +139,31 @@ fn right_dock_changes(request: DesktopBoundDockRequest) -> Result<DesktopChanges
     let home = bridge_home()?;
     desktop_right_dock_changes(&home, request)
         .map_err(|error| host_error("right dock Changes", error))
+}
+
+#[tauri::command]
+fn right_dock_evidence(
+    request: DesktopBoundDockRequest,
+) -> Result<DesktopEvidenceResponse, String> {
+    let home = bridge_home()?;
+    desktop_right_dock_evidence(&home, request)
+        .map_err(|error| host_error("right dock Evidence", error))
+}
+
+#[tauri::command]
+fn right_dock_context(request: DesktopBoundDockRequest) -> Result<DesktopContextResponse, String> {
+    let home = bridge_home()?;
+    desktop_right_dock_context(&home, request)
+        .map_err(|error| host_error("right dock Context", error))
+}
+
+#[tauri::command]
+fn right_dock_artifacts(
+    request: DesktopBoundDockRequest,
+) -> Result<DesktopArtifactsResponse, String> {
+    let home = bridge_home()?;
+    desktop_right_dock_artifacts(&home, request)
+        .map_err(|error| host_error("right dock Artifacts", error))
 }
 
 #[tauri::command]
@@ -311,6 +340,9 @@ fn main() {
             right_dock_files,
             right_dock_preview_file,
             right_dock_changes,
+            right_dock_evidence,
+            right_dock_context,
+            right_dock_artifacts,
             terminal_status,
             terminal_start,
             terminal_input,

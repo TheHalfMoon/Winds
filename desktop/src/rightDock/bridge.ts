@@ -1,7 +1,8 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { fileFixtures } from "../fixtures/workspace";
 import type {
-  FilePreviewResponse, RightDockBinding, RightDockBridge, RightDockChangesResponse,
+  FilePreviewResponse, RightDockArtifactsResponse, RightDockBinding, RightDockBridge,
+  RightDockChangesResponse, RightDockContextResponse, RightDockEvidenceResponse,
   RightDockFilesResponse, RightDockTarget,
 } from "./types";
 
@@ -41,6 +42,15 @@ const fixtureBridge: RightDockBridge = {
     diff: "Fixture diff only · not verification evidence",
     diffLossy: false,
   }),
+  evidence: async (binding): Promise<RightDockEvidenceResponse> => ({ binding, entries: [] }),
+  context: async (binding): Promise<RightDockContextResponse> => ({
+    binding,
+    facts: [
+      { key: "session", value: binding.sessionId, source: "FIXTURE_ONLY", authority: "PRESENTATION_ONLY" },
+      { key: "candidate_oid", value: binding.candidateOid ?? "unavailable", source: "FIXTURE_ONLY", authority: "PRESENTATION_ONLY" },
+    ],
+  }),
+  artifacts: async (binding): Promise<RightDockArtifactsResponse> => ({ binding, entries: [] }),
 };
 
 const canonicalBridge: RightDockBridge = {
@@ -49,6 +59,9 @@ const canonicalBridge: RightDockBridge = {
   files: (binding) => invoke("right_dock_files", { request: { binding } }),
   preview: (binding, path) => invoke("right_dock_preview_file", { request: { binding, path } }),
   changes: (binding) => invoke("right_dock_changes", { request: { binding } }),
+  evidence: (binding) => invoke("right_dock_evidence", { request: { binding } }),
+  context: (binding) => invoke("right_dock_context", { request: { binding } }),
+  artifacts: (binding) => invoke("right_dock_artifacts", { request: { binding } }),
 };
 
 export function rightDockBridge(): RightDockBridge {
