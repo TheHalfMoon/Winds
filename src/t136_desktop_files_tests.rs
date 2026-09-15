@@ -2,6 +2,7 @@ use crate::desktop_files::{
     DesktopBoundDockRequest, DesktopFilePreviewRequest, DesktopFilePreviewState,
     DesktopRightDockTarget, desktop_right_dock_bind, desktop_right_dock_changes,
     desktop_right_dock_files, desktop_right_dock_preview_file,
+    desktop_right_dock_preview_file_with_open_hook,
 };
 use crate::store::{NewWindsSession, NewWorkspace, NewWorkstream, Store};
 use std::fs;
@@ -288,6 +289,38 @@ fn symlink_preview_fails_closed_even_when_git_lists_the_path() {
     .unwrap_err()
     .to_string();
     assert!(error.contains("refuses symlink"), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+fn regular_file_to_symlink_swap_during_preview_fails_closed() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = fixture("preview-swap");
+    let preview_path = fixture.repo.join("swap.txt");
+    let outside = fixture.root.join("outside-secret.txt");
+    fs::write(&preview_path, "inside\n").unwrap();
+    fs::write(&outside, "outside secret must never render\n").unwrap();
+    let binding = bind(&fixture);
+
+    let preview_path_for_swap = preview_path.clone();
+    let outside_for_swap = outside.clone();
+    let error = desktop_right_dock_preview_file_with_open_hook(
+        &fixture.home,
+        DesktopFilePreviewRequest {
+            binding,
+            path: "swap.txt".to_owned(),
+        },
+        move || {
+            fs::remove_file(&preview_path_for_swap).unwrap();
+            symlink(&outside_for_swap, &preview_path_for_swap).unwrap();
+        },
+    )
+    .unwrap_err()
+    .to_string();
+
+    assert!(error.contains("refuses symlink"), "{error}");
+    assert!(!error.contains("outside secret must never render"));
 }
 
 #[test]

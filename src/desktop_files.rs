@@ -6,6 +6,23 @@ use std::fs;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
+#[cfg(unix)]
+use std::ffi::CString;
+#[cfg(windows)]
+use std::ffi::{OsString, c_void};
+#[cfg(windows)]
+use std::mem::MaybeUninit;
+#[cfg(unix)]
+use std::os::fd::{AsRawFd, FromRawFd};
+#[cfg(unix)]
+use std::os::unix::ffi::OsStrExt;
+#[cfg(windows)]
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
+#[cfg(windows)]
+use std::os::windows::io::{AsRawHandle, FromRawHandle};
+
 const MAX_FILE_LIST_ENTRIES: usize = 4096;
 const MAX_FILE_PREVIEW_BYTES: u64 = 256 * 1024;
 
@@ -171,11 +188,35 @@ pub fn desktop_right_dock_preview_file(
     home: &Path,
     request: DesktopFilePreviewRequest,
 ) -> Result<DesktopFilePreviewResponse> {
+    desktop_right_dock_preview_file_inner(home, request, || {})
+}
+
+#[cfg(test)]
+pub(crate) fn desktop_right_dock_preview_file_with_open_hook<F>(
+    home: &Path,
+    request: DesktopFilePreviewRequest,
+    before_final_open: F,
+) -> Result<DesktopFilePreviewResponse>
+where
+    F: FnOnce(),
+{
+    desktop_right_dock_preview_file_inner(home, request, before_final_open)
+}
+
+fn desktop_right_dock_preview_file_inner<F>(
+    home: &Path,
+    request: DesktopFilePreviewRequest,
+    before_final_open: F,
+) -> Result<DesktopFilePreviewResponse>
+where
+    F: FnOnce(),
+{
     let store = Store::open(home)?;
     require_current_binding(&store, &request.binding)?;
     let root = Path::new(&request.binding.worktree_root);
-    let path = resolve_regular_file_without_symlinks(root, &request.path)?;
-    let metadata = fs::metadata(&path)?;
+    let relative = validated_relative_path(&request.path)?;
+    let file = open_regular_file_beneath_root(root, &relative, before_final_open)?;
+    let metadata = file.metadata()?;
     let byte_len = metadata.len();
     let response = if byte_len > MAX_FILE_PREVIEW_BYTES {
         DesktopFilePreviewResponse {
@@ -187,8 +228,7 @@ pub fn desktop_right_dock_preview_file(
         }
     } else {
         let mut bytes = Vec::with_capacity(byte_len as usize);
-        fs::File::open(&path)?
-            .take(MAX_FILE_PREVIEW_BYTES + 1)
+        file.take(MAX_FILE_PREVIEW_BYTES + 1)
             .read_to_end(&mut bytes)?;
         if bytes.len() as u64 > MAX_FILE_PREVIEW_BYTES {
             return Err("desktop file preview changed size while being read".into());
@@ -472,28 +512,445 @@ fn validated_relative_path(value: &str) -> Result<PathBuf> {
     Ok(normalized)
 }
 
-fn resolve_regular_file_without_symlinks(root: &Path, value: &str) -> Result<PathBuf> {
-    let relative = validated_relative_path(value)?;
-    let canonical_root = root.canonicalize()?;
-    let mut current = canonical_root.clone();
-    for component in relative.components() {
-        let Component::Normal(part) = component else {
-            unreachable!()
-        };
-        current.push(part);
-        let metadata = fs::symlink_metadata(&current)?;
-        if metadata.file_type().is_symlink() {
-            return Err("desktop file preview refuses symlink paths".into());
+#[cfg(unix)]
+fn open_regular_file_beneath_root<F>(
+    root: &Path,
+    relative: &Path,
+    before_final_open: F,
+) -> Result<fs::File>
+where
+    F: FnOnce(),
+{
+    let mut directory = open_unix_absolute_directory(root)?;
+    let components = relative
+        .components()
+        .map(|component| match component {
+            Component::Normal(value) => Ok(value),
+            _ => Err("desktop file path must contain only normal relative components".into()),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let (file_name, parent_components) = components
+        .split_last()
+        .ok_or("desktop file path must identify a file")?;
+    for component in parent_components {
+        directory = open_unix_directory_at(
+            directory.as_raw_fd(),
+            component,
+            "desktop file preview directory",
+        )?;
+    }
+    before_final_open();
+    let name = unix_component_cstring(file_name, "desktop file preview")?;
+    let fd = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+        )
+    };
+    if fd < 0 {
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::ELOOP) {
+            return Err("desktop file preview refuses symlink final targets".into());
+        }
+        return Err(format!(
+            "desktop file preview could not open the final file without following links: {error}"
+        )
+        .into());
+    }
+    let file = unsafe { fs::File::from_raw_fd(fd) };
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Err("desktop file preview requires a real regular file".into());
+    }
+    Ok(file)
+}
+
+#[cfg(unix)]
+fn open_unix_absolute_directory(path: &Path) -> Result<fs::File> {
+    if !path.is_absolute() {
+        return Err("desktop canonical worktree root must be absolute".into());
+    }
+    let root_name = CString::new("/").expect("static root path has no NUL");
+    let root_fd = unsafe {
+        libc::open(
+            root_name.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if root_fd < 0 {
+        return Err(format!(
+            "desktop filesystem root could not be opened safely: {}",
+            std::io::Error::last_os_error()
+        )
+        .into());
+    }
+    let mut directory = unsafe { fs::File::from_raw_fd(root_fd) };
+    for component in path.components() {
+        match component {
+            Component::RootDir => {}
+            Component::Normal(value) => {
+                directory = open_unix_directory_at(
+                    directory.as_raw_fd(),
+                    value,
+                    "desktop canonical worktree component",
+                )?;
+            }
+            _ => {
+                return Err(
+                    "desktop canonical worktree root contains a non-canonical component".into(),
+                );
+            }
         }
     }
-    let canonical_file = current.canonicalize()?;
-    if !canonical_file.starts_with(&canonical_root) {
-        return Err("desktop file preview escaped the canonical worktree".into());
+    Ok(directory)
+}
+
+#[cfg(unix)]
+fn open_unix_directory_at(parent_fd: i32, name: &std::ffi::OsStr, label: &str) -> Result<fs::File> {
+    let name = unix_component_cstring(name, label)?;
+    let fd = unsafe {
+        libc::openat(
+            parent_fd,
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(format!(
+            "{label} could not be opened without following links: {}",
+            std::io::Error::last_os_error()
+        )
+        .into());
     }
-    if !canonical_file.is_file() {
-        return Err("desktop file preview target is not a regular file".into());
+    Ok(unsafe { fs::File::from_raw_fd(fd) })
+}
+
+#[cfg(unix)]
+fn unix_component_cstring(name: &std::ffi::OsStr, label: &str) -> Result<CString> {
+    CString::new(name.as_bytes())
+        .map_err(|_| format!("{label} contains an embedded NUL byte").into())
+}
+
+#[cfg(windows)]
+const WINDOWS_FILE_SHARE_READ: u32 = 0x0000_0001;
+#[cfg(windows)]
+const WINDOWS_FILE_SHARE_WRITE: u32 = 0x0000_0002;
+#[cfg(windows)]
+const WINDOWS_FILE_SHARE_DELETE: u32 = 0x0000_0004;
+#[cfg(windows)]
+const WINDOWS_FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
+#[cfg(windows)]
+const WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0000_0400;
+#[cfg(windows)]
+const WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+#[cfg(windows)]
+const WINDOWS_FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+#[cfg(windows)]
+const WINDOWS_FILE_ATTRIBUTE_TAG_INFO_CLASS: i32 = 9;
+#[cfg(windows)]
+const WINDOWS_FINAL_PATH_BUFFER: usize = 32_768;
+#[cfg(windows)]
+const WINDOWS_GENERIC_READ: u32 = 0x8000_0000;
+#[cfg(windows)]
+const WINDOWS_SYNCHRONIZE: u32 = 0x0010_0000;
+#[cfg(windows)]
+const WINDOWS_FILE_LIST_DIRECTORY: u32 = 0x0000_0001;
+#[cfg(windows)]
+const WINDOWS_FILE_TRAVERSE: u32 = 0x0000_0020;
+#[cfg(windows)]
+const WINDOWS_FILE_READ_ATTRIBUTES: u32 = 0x0000_0080;
+#[cfg(windows)]
+const WINDOWS_OBJ_CASE_INSENSITIVE: u32 = 0x0000_0040;
+#[cfg(windows)]
+const WINDOWS_FILE_OPEN: u32 = 0x0000_0001;
+#[cfg(windows)]
+const WINDOWS_FILE_DIRECTORY_FILE: u32 = 0x0000_0001;
+#[cfg(windows)]
+const WINDOWS_FILE_SYNCHRONOUS_IO_NONALERT: u32 = 0x0000_0020;
+#[cfg(windows)]
+const WINDOWS_FILE_NON_DIRECTORY_FILE: u32 = 0x0000_0040;
+#[cfg(windows)]
+const WINDOWS_FILE_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+
+#[cfg(windows)]
+#[repr(C)]
+struct WindowsFileAttributeTagInfo {
+    file_attributes: u32,
+    _reparse_tag: u32,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct WindowsUnicodeString {
+    length: u16,
+    maximum_length: u16,
+    buffer: *mut u16,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct WindowsObjectAttributes {
+    length: u32,
+    root_directory: *mut c_void,
+    object_name: *mut WindowsUnicodeString,
+    attributes: u32,
+    security_descriptor: *mut c_void,
+    security_quality_of_service: *mut c_void,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+union WindowsIoStatusValue {
+    status: i32,
+    pointer: *mut c_void,
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct WindowsIoStatusBlock {
+    value: WindowsIoStatusValue,
+    information: usize,
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GetFileInformationByHandleEx(
+        file_handle: *mut c_void,
+        file_information_class: i32,
+        file_information: *mut c_void,
+        buffer_size: u32,
+    ) -> i32;
+    fn GetFinalPathNameByHandleW(
+        file_handle: *mut c_void,
+        file_path: *mut u16,
+        file_path_size: u32,
+        flags: u32,
+    ) -> u32;
+}
+
+#[cfg(windows)]
+#[link(name = "ntdll")]
+unsafe extern "system" {
+    fn NtCreateFile(
+        file_handle: *mut *mut c_void,
+        desired_access: u32,
+        object_attributes: *mut WindowsObjectAttributes,
+        io_status_block: *mut WindowsIoStatusBlock,
+        allocation_size: *mut i64,
+        file_attributes: u32,
+        share_access: u32,
+        create_disposition: u32,
+        create_options: u32,
+        ea_buffer: *mut c_void,
+        ea_length: u32,
+    ) -> i32;
+}
+
+#[cfg(windows)]
+fn open_regular_file_beneath_root<F>(
+    root: &Path,
+    relative: &Path,
+    before_final_open: F,
+) -> Result<fs::File>
+where
+    F: FnOnce(),
+{
+    let mut directory = open_windows_root(root)?;
+    require_windows_object_type(&directory, true, "desktop canonical worktree root")?;
+    let root_handle_path = windows_final_path(&directory, "desktop canonical worktree root")?;
+    if normalize_windows_handle_path(&root_handle_path) != normalize_windows_handle_path(root) {
+        return Err("desktop canonical worktree root handle does not match its stored path".into());
     }
-    Ok(canonical_file)
+
+    let components = relative
+        .components()
+        .map(|component| match component {
+            Component::Normal(value) => Ok(value),
+            _ => Err("desktop file path must contain only normal relative components".into()),
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let (file_name, parent_components) = components
+        .split_last()
+        .ok_or("desktop file path must identify a file")?;
+    for component in parent_components {
+        directory = open_windows_relative_object(
+            &directory,
+            component,
+            true,
+            "desktop file preview directory",
+        )?;
+        require_windows_object_type(&directory, true, "desktop file preview directory")?;
+    }
+
+    before_final_open();
+    let file = open_windows_relative_object(&directory, file_name, false, "desktop file preview")?;
+    require_windows_object_type(&file, false, "desktop file preview")?;
+    Ok(file)
+}
+
+#[cfg(windows)]
+fn open_windows_root(path: &Path) -> Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options
+        .access_mode(0)
+        .share_mode(WINDOWS_FILE_SHARE_READ | WINDOWS_FILE_SHARE_WRITE | WINDOWS_FILE_SHARE_DELETE)
+        .custom_flags(WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT | WINDOWS_FILE_FLAG_BACKUP_SEMANTICS);
+    options.open(path).map_err(|error| {
+        format!("desktop canonical worktree root could not be opened without following its final reparse point: {error}").into()
+    })
+}
+
+#[cfg(windows)]
+fn open_windows_relative_object(
+    parent: &fs::File,
+    name: &std::ffi::OsStr,
+    directory: bool,
+    label: &str,
+) -> Result<fs::File> {
+    let mut name_wide = name.encode_wide().collect::<Vec<_>>();
+    if name_wide.is_empty() || name_wide.contains(&0) {
+        return Err(format!("{label} has an invalid Windows path component").into());
+    }
+    let byte_len = name_wide
+        .len()
+        .checked_mul(std::mem::size_of::<u16>())
+        .ok_or("Windows path component length overflow")?;
+    let byte_len = u16::try_from(byte_len)
+        .map_err(|_| format!("{label} Windows path component is too long"))?;
+    let mut unicode = WindowsUnicodeString {
+        length: byte_len,
+        maximum_length: byte_len,
+        buffer: name_wide.as_mut_ptr(),
+    };
+    let mut attributes = WindowsObjectAttributes {
+        length: u32::try_from(std::mem::size_of::<WindowsObjectAttributes>())?,
+        root_directory: parent.as_raw_handle(),
+        object_name: &mut unicode,
+        attributes: WINDOWS_OBJ_CASE_INSENSITIVE,
+        security_descriptor: std::ptr::null_mut(),
+        security_quality_of_service: std::ptr::null_mut(),
+    };
+    let mut io_status = WindowsIoStatusBlock {
+        value: WindowsIoStatusValue { status: 0 },
+        information: 0,
+    };
+    let mut handle = std::ptr::null_mut();
+    let desired_access = if directory {
+        WINDOWS_FILE_LIST_DIRECTORY
+            | WINDOWS_FILE_TRAVERSE
+            | WINDOWS_FILE_READ_ATTRIBUTES
+            | WINDOWS_SYNCHRONIZE
+    } else {
+        WINDOWS_GENERIC_READ | WINDOWS_FILE_READ_ATTRIBUTES | WINDOWS_SYNCHRONIZE
+    };
+    let create_options = WINDOWS_FILE_OPEN_REPARSE_POINT
+        | WINDOWS_FILE_SYNCHRONOUS_IO_NONALERT
+        | if directory {
+            WINDOWS_FILE_DIRECTORY_FILE
+        } else {
+            WINDOWS_FILE_NON_DIRECTORY_FILE
+        };
+    let status = unsafe {
+        NtCreateFile(
+            &mut handle,
+            desired_access,
+            &mut attributes,
+            &mut io_status,
+            std::ptr::null_mut(),
+            0,
+            WINDOWS_FILE_SHARE_READ | WINDOWS_FILE_SHARE_WRITE | WINDOWS_FILE_SHARE_DELETE,
+            WINDOWS_FILE_OPEN,
+            create_options,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if status < 0 || handle.is_null() {
+        return Err(format!(
+            "{label} could not be opened relative to its owned parent without following reparse points: NTSTATUS 0x{:08x}",
+            status as u32
+        )
+        .into());
+    }
+    Ok(unsafe { fs::File::from_raw_handle(handle) })
+}
+
+#[cfg(windows)]
+fn require_windows_object_type(handle: &fs::File, directory: bool, label: &str) -> Result<()> {
+    let mut info = MaybeUninit::<WindowsFileAttributeTagInfo>::uninit();
+    let result = unsafe {
+        GetFileInformationByHandleEx(
+            handle.as_raw_handle(),
+            WINDOWS_FILE_ATTRIBUTE_TAG_INFO_CLASS,
+            info.as_mut_ptr().cast::<c_void>(),
+            std::mem::size_of::<WindowsFileAttributeTagInfo>() as u32,
+        )
+    };
+    if result == 0 {
+        return Err(format!(
+            "{label} handle attributes cannot be inspected: {}",
+            std::io::Error::last_os_error()
+        )
+        .into());
+    }
+    let info = unsafe { info.assume_init() };
+    let is_directory = info.file_attributes & WINDOWS_FILE_ATTRIBUTE_DIRECTORY != 0;
+    if info.file_attributes & WINDOWS_FILE_ATTRIBUTE_REPARSE_POINT != 0 || is_directory != directory
+    {
+        return Err(format!("{label} is a reparse point or has the wrong object type").into());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn windows_final_path(handle: &fs::File, label: &str) -> Result<PathBuf> {
+    let mut buffer = vec![0_u16; WINDOWS_FINAL_PATH_BUFFER];
+    let length = unsafe {
+        GetFinalPathNameByHandleW(
+            handle.as_raw_handle(),
+            buffer.as_mut_ptr(),
+            u32::try_from(buffer.len())?,
+            0,
+        )
+    };
+    if length == 0 {
+        return Err(format!(
+            "{label} final path cannot be inspected: {}",
+            std::io::Error::last_os_error()
+        )
+        .into());
+    }
+    let length = usize::try_from(length)?;
+    if length >= buffer.len() {
+        return Err(format!("{label} final path exceeded the bounded Windows buffer").into());
+    }
+    Ok(PathBuf::from(OsString::from_wide(&buffer[..length])))
+}
+
+#[cfg(windows)]
+fn normalize_windows_handle_path(path: &Path) -> PathBuf {
+    let value = path.as_os_str().to_string_lossy();
+    if let Some(rest) = value.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    if let Some(rest) = value.strip_prefix(r"\\?\") {
+        return PathBuf::from(rest);
+    }
+    path.to_path_buf()
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_regular_file_beneath_root<F>(
+    _root: &Path,
+    _relative: &Path,
+    _before_final_open: F,
+) -> Result<fs::File>
+where
+    F: FnOnce(),
+{
+    Err("desktop file preview safe open is unsupported on this platform".into())
 }
 
 fn parse_porcelain_v1_status(output: &[u8]) -> Result<Vec<DesktopChangeEntry>> {
