@@ -10,11 +10,31 @@ export type BridgeRuntimeState =
 export type BridgeAttentionState =
   | "recovery_required"
   | "waiting_approval"
+  | "blocked"
   | "retry_required"
   | "waiting_external"
   | "stale"
   | "unknown"
   | "none";
+
+export interface BridgeAttentionItem {
+  readonly workspaceId: string;
+  readonly sessionId: string;
+  readonly workflowRunId: string;
+  readonly stageRunId: string;
+  readonly stageKey: string;
+  readonly state: BridgeAttentionState;
+  readonly reason: string;
+  readonly source: string;
+  readonly authority: string;
+  readonly candidateOid: string | null;
+  readonly candidateTree: string | null;
+  readonly approvalActionAvailable: boolean;
+}
+
+export interface BridgeAttentionSnapshot {
+  readonly items: readonly BridgeAttentionItem[];
+}
 
 export interface BridgeRuntimeProjection {
   readonly state: BridgeRuntimeState;
@@ -122,6 +142,7 @@ export interface LayoutPresentationRequest {
 export interface LeftDockBridge {
   readonly source: "canonical" | "fixture";
   snapshot(): Promise<BridgeSnapshot>;
+  attentionSnapshot(): Promise<BridgeAttentionSnapshot>;
   updateProject(requests: readonly ProjectPresentationRequest[]): Promise<readonly BridgeProjectSummary[]>;
   createSession(request: CreateSessionRequest): Promise<BridgeSessionSummary>;
   renameSession(request: RenameSessionRequest): Promise<BridgeSessionSummary>;

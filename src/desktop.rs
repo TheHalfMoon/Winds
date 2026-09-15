@@ -3,12 +3,13 @@ use crate::agentic_runtime::{
 };
 use crate::domain::workflow::{
     RETRY_OUTCOME_AMBIGUOUS_EFFECT, RETRY_OUTCOME_BUDGET_EXHAUSTED, RETRY_OUTCOME_FAILURE_RECORDED,
-    RETRY_OUTCOME_NO_PROGRESS, StageLifecycleState, TruthSource,
+    RETRY_OUTCOME_NO_PROGRESS, StageLifecycleState, StageTransitionAuthority, TruthSource,
 };
 use crate::domain::{WindsSessionRecord, WorkspaceRecord};
 use crate::store::{
-    DesktopLayoutPresentation, DesktopLayoutPresentationInput, DesktopProjectPresentationInput,
-    DesktopSessionPresentationInput, NewWindsSession, Result, Store,
+    DesktopAttentionFact, DesktopLayoutPresentation, DesktopLayoutPresentationInput,
+    DesktopProjectPresentationInput, DesktopSessionPresentationInput, NewWindsSession, Result,
+    Store,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -48,6 +49,7 @@ pub(crate) struct DesktopRuntimeProjection {
 pub(crate) enum DesktopAttentionState {
     RecoveryRequired,
     WaitingApproval,
+    Blocked,
     RetryRequired,
     WaitingExternal,
     Stale,
@@ -60,13 +62,29 @@ impl DesktopAttentionState {
         match self {
             Self::RecoveryRequired => 0,
             Self::WaitingApproval => 1,
-            Self::RetryRequired => 2,
-            Self::WaitingExternal => 3,
-            Self::Stale => 4,
-            Self::Unknown => 5,
-            Self::None => 6,
+            Self::Blocked => 2,
+            Self::RetryRequired => 3,
+            Self::WaitingExternal => 4,
+            Self::Stale => 5,
+            Self::Unknown => 6,
+            Self::None => 7,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DesktopAttentionItem {
+    pub(crate) workspace_id: String,
+    pub(crate) session_id: String,
+    pub(crate) workflow_run_id: String,
+    pub(crate) stage_run_id: String,
+    pub(crate) stage_key: String,
+    pub(crate) state: DesktopAttentionState,
+    pub(crate) reason: String,
+    pub(crate) source: TruthSource,
+    pub(crate) authority: StageTransitionAuthority,
+    pub(crate) candidate_oid: Option<String>,
+    pub(crate) candidate_tree: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -521,47 +539,110 @@ impl<'a> DesktopFacade<'a> {
     }
 
     fn attention_projection(&self, session_id: &str) -> Result<DesktopAttentionState> {
-        let mut state = DesktopAttentionState::None;
-        for fact in self.store.desktop_attention_facts(session_id)? {
-            let trusted = matches!(
-                fact.source,
-                Some(TruthSource::WindsObserved | TruthSource::HumanDecided)
-            );
-            let candidate = if fact.source.is_none()
-                && fact.lifecycle_state == StageLifecycleState::Prepared
-            {
-                DesktopAttentionState::None
-            } else if !trusted {
-                DesktopAttentionState::Unknown
-            } else {
-                match fact.lifecycle_state {
-                    StageLifecycleState::WaitingApproval => DesktopAttentionState::WaitingApproval,
-                    StageLifecycleState::WaitingExternal => DesktopAttentionState::WaitingExternal,
-                    StageLifecycleState::RecoveryRequired => {
-                        DesktopAttentionState::RecoveryRequired
-                    }
-                    StageLifecycleState::Stale => DesktopAttentionState::Stale,
-                    StageLifecycleState::Blocked => DesktopAttentionState::Unknown,
-                    StageLifecycleState::Failed => match fact.outcome_reason.as_deref() {
-                        Some(RETRY_OUTCOME_BUDGET_EXHAUSTED | RETRY_OUTCOME_AMBIGUOUS_EFFECT) => {
-                            DesktopAttentionState::RecoveryRequired
-                        }
-                        Some(RETRY_OUTCOME_FAILURE_RECORDED | RETRY_OUTCOME_NO_PROGRESS) => {
-                            DesktopAttentionState::RetryRequired
-                        }
-                        _ => DesktopAttentionState::Unknown,
-                    },
-                    StageLifecycleState::Prepared
-                    | StageLifecycleState::Active
-                    | StageLifecycleState::Cancelled
-                    | StageLifecycleState::Completed => DesktopAttentionState::None,
+        Ok(self
+            .store
+            .desktop_attention_facts(session_id)?
+            .iter()
+            .map(attention_state_for_fact)
+            .min_by_key(|state| state.rank())
+            .unwrap_or(DesktopAttentionState::None))
+    }
+
+    pub(crate) fn attention_items(&self) -> Result<Vec<DesktopAttentionItem>> {
+        let mut items = self
+            .store
+            .desktop_attention_facts_all()?
+            .into_iter()
+            .filter_map(|fact| {
+                let state = attention_state_for_fact(&fact);
+                if matches!(
+                    state,
+                    DesktopAttentionState::Unknown | DesktopAttentionState::None
+                ) {
+                    return None;
                 }
-            };
-            if candidate.rank() < state.rank() {
-                state = candidate;
+                let source = fact.source?;
+                let authority = fact.authority.unwrap_or(StageTransitionAuthority::None);
+                Some(DesktopAttentionItem {
+                    workspace_id: fact.workspace_id,
+                    session_id: fact.session_id,
+                    workflow_run_id: fact.workflow_run_id,
+                    stage_run_id: fact.stage_run_id,
+                    stage_key: fact.stage_key,
+                    state,
+                    reason: attention_reason(state, fact.outcome_reason.as_deref()),
+                    source,
+                    authority,
+                    candidate_oid: fact.candidate_oid,
+                    candidate_tree: fact.candidate_tree,
+                })
+            })
+            .collect::<Vec<_>>();
+        items.sort_by(|left, right| {
+            left.state
+                .rank()
+                .cmp(&right.state.rank())
+                .then(left.workspace_id.cmp(&right.workspace_id))
+                .then(left.session_id.cmp(&right.session_id))
+                .then(left.workflow_run_id.cmp(&right.workflow_run_id))
+                .then(left.stage_run_id.cmp(&right.stage_run_id))
+        });
+        Ok(items)
+    }
+}
+
+fn attention_state_for_fact(fact: &DesktopAttentionFact) -> DesktopAttentionState {
+    let trusted = matches!(
+        fact.source,
+        Some(TruthSource::WindsObserved | TruthSource::HumanDecided)
+    );
+    if fact.source.is_none() && fact.lifecycle_state == StageLifecycleState::Prepared {
+        return DesktopAttentionState::None;
+    }
+    if !trusted {
+        return DesktopAttentionState::Unknown;
+    }
+    match fact.lifecycle_state {
+        StageLifecycleState::WaitingApproval => DesktopAttentionState::WaitingApproval,
+        StageLifecycleState::WaitingExternal => DesktopAttentionState::WaitingExternal,
+        StageLifecycleState::RecoveryRequired => DesktopAttentionState::RecoveryRequired,
+        StageLifecycleState::Stale => DesktopAttentionState::Stale,
+        StageLifecycleState::Blocked => DesktopAttentionState::Blocked,
+        StageLifecycleState::Failed => match fact.outcome_reason.as_deref() {
+            Some(RETRY_OUTCOME_BUDGET_EXHAUSTED | RETRY_OUTCOME_AMBIGUOUS_EFFECT) => {
+                DesktopAttentionState::RecoveryRequired
             }
+            Some(RETRY_OUTCOME_FAILURE_RECORDED | RETRY_OUTCOME_NO_PROGRESS) => {
+                DesktopAttentionState::RetryRequired
+            }
+            _ => DesktopAttentionState::Unknown,
+        },
+        StageLifecycleState::Prepared
+        | StageLifecycleState::Active
+        | StageLifecycleState::Cancelled
+        | StageLifecycleState::Completed => DesktopAttentionState::None,
+    }
+}
+
+fn attention_reason(state: DesktopAttentionState, outcome_reason: Option<&str>) -> String {
+    if let Some(reason) = outcome_reason {
+        return reason.to_owned();
+    }
+    match state {
+        DesktopAttentionState::RecoveryRequired => "canonical stage requires recovery".to_owned(),
+        DesktopAttentionState::WaitingApproval => {
+            "canonical stage is waiting for human approval".to_owned()
         }
-        Ok(state)
+        DesktopAttentionState::Blocked => "canonical stage is blocked".to_owned(),
+        DesktopAttentionState::RetryRequired => {
+            "canonical stage requires an explicit retry".to_owned()
+        }
+        DesktopAttentionState::WaitingExternal => {
+            "canonical stage is waiting on an external condition".to_owned()
+        }
+        DesktopAttentionState::Stale => "canonical stage context is stale".to_owned(),
+        DesktopAttentionState::Unknown => "canonical attention state is unknown".to_owned(),
+        DesktopAttentionState::None => "no material attention".to_owned(),
     }
 }
 
@@ -643,6 +724,7 @@ impl From<DesktopRuntimeState> for DesktopBridgeRuntimeState {
 pub enum DesktopBridgeAttentionState {
     RecoveryRequired,
     WaitingApproval,
+    Blocked,
     RetryRequired,
     WaitingExternal,
     Stale,
@@ -655,6 +737,7 @@ impl From<DesktopAttentionState> for DesktopBridgeAttentionState {
         match value {
             DesktopAttentionState::RecoveryRequired => Self::RecoveryRequired,
             DesktopAttentionState::WaitingApproval => Self::WaitingApproval,
+            DesktopAttentionState::Blocked => Self::Blocked,
             DesktopAttentionState::RetryRequired => Self::RetryRequired,
             DesktopAttentionState::WaitingExternal => Self::WaitingExternal,
             DesktopAttentionState::Stale => Self::Stale,
@@ -680,6 +763,48 @@ impl From<DesktopRuntimeProjection> for DesktopBridgeRuntimeProjection {
             observed: value.observed.into_iter().map(Into::into).collect(),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopBridgeAttentionItem {
+    pub workspace_id: String,
+    pub session_id: String,
+    pub workflow_run_id: String,
+    pub stage_run_id: String,
+    pub stage_key: String,
+    pub state: DesktopBridgeAttentionState,
+    pub reason: String,
+    pub source: String,
+    pub authority: String,
+    pub candidate_oid: Option<String>,
+    pub candidate_tree: Option<String>,
+    pub approval_action_available: bool,
+}
+
+impl From<DesktopAttentionItem> for DesktopBridgeAttentionItem {
+    fn from(value: DesktopAttentionItem) -> Self {
+        Self {
+            workspace_id: value.workspace_id,
+            session_id: value.session_id,
+            workflow_run_id: value.workflow_run_id,
+            stage_run_id: value.stage_run_id,
+            stage_key: value.stage_key,
+            state: value.state.into(),
+            reason: value.reason,
+            source: value.source.as_db_str().to_owned(),
+            authority: value.authority.as_db_str().to_owned(),
+            candidate_oid: value.candidate_oid,
+            candidate_tree: value.candidate_tree,
+            approval_action_available: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopBridgeAttentionSnapshot {
+    pub items: Vec<DesktopBridgeAttentionItem>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -943,6 +1068,18 @@ pub fn desktop_bridge_snapshot(home: &std::path::Path) -> Result<DesktopBridgeSn
             )
     });
     Ok(DesktopBridgeSnapshot { projects })
+}
+
+pub fn desktop_bridge_attention_snapshot(
+    home: &std::path::Path,
+) -> Result<DesktopBridgeAttentionSnapshot> {
+    let store = Store::open(home)?;
+    let items = DesktopFacade::new(&store)
+        .attention_items()?
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    Ok(DesktopBridgeAttentionSnapshot { items })
 }
 
 pub fn desktop_bridge_load_layout(

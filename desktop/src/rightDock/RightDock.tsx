@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { leftDockBridge } from "../leftDock/bridge";
+import type { BridgeAttentionSnapshot } from "../leftDock/types";
 import { rightDockBridge } from "./bridge";
 import { displayPath, sameRightDockBinding, shortIdentity, statusLabel } from "./model";
 import type {
@@ -14,6 +16,7 @@ function errorMessage(error: unknown): string {
 const TRUTH_REVALIDATION_MS = 2_000;
 
 function surfaceTitle(surface: RightDockSurface): string {
+  if (surface === "needs_you") return "Needs You";
   return surface.charAt(0).toUpperCase() + surface.slice(1);
 }
 
@@ -24,11 +27,14 @@ function isTruthSensitiveSurface(surface: RightDockSurface): boolean {
 export function RightDock({
   target,
   requestedSurface = "files",
+  onFocusAttention,
 }: {
   readonly target: RightDockTarget | null;
   readonly requestedSurface?: RightDockSurface;
+  readonly onFocusAttention?: (workspaceId: string, sessionId: string) => void;
 }) {
   const bridge = useMemo(() => rightDockBridge(), []);
+  const attentionBridge = useMemo(() => leftDockBridge(), []);
   const [surface, setSurface] = useState<RightDockSurface>(requestedSurface);
   const [binding, setBinding] = useState<RightDockBinding | null>(null);
   const [files, setFiles] = useState<RightDockFilesResponse | null>(null);
@@ -36,6 +42,7 @@ export function RightDock({
   const [evidence, setEvidence] = useState<RightDockEvidenceResponse | null>(null);
   const [context, setContext] = useState<RightDockContextResponse | null>(null);
   const [artifacts, setArtifacts] = useState<RightDockArtifactsResponse | null>(null);
+  const [attention, setAttention] = useState<BridgeAttentionSnapshot | null>(null);
   const [preview, setPreview] = useState<FilePreviewResponse | null>(null);
   const [selectedArtifact, setSelectedArtifact] = useState<RightDockArtifactEntry | null>(null);
   const [filter, setFilter] = useState("");
@@ -54,8 +61,28 @@ export function RightDock({
     setEvidence(null);
     setContext(null);
     setArtifacts(null);
+    setAttention(null);
     setPreview(null);
     setSelectedArtifact(null);
+    if (surface === "needs_you") {
+      setBusy(true);
+      setStatus("Loading trusted canonical attention…");
+      void attentionBridge.attentionSnapshot()
+        .then((response) => {
+          if (generation !== requestGeneration.current) return;
+          setAttention(response);
+          setStatus(`${response.items.length} trusted attention item${response.items.length === 1 ? "" : "s"} · ranking grants no authority`);
+        })
+        .catch((error) => {
+          if (generation === requestGeneration.current) setStatus(`Needs You unavailable · ${errorMessage(error)}`);
+        })
+        .finally(() => {
+          if (generation === requestGeneration.current) setBusy(false);
+        });
+      return () => {
+        if (requestGeneration.current === generation) requestGeneration.current += 1;
+      };
+    }
     if (!target) {
       setBusy(false);
       setStatus("Select a Session to bind the right dock");
@@ -124,7 +151,7 @@ export function RightDock({
     return () => {
       if (requestGeneration.current === generation) requestGeneration.current += 1;
     };
-  }, [bridge, target?.workspaceId, target?.sessionId, surface, truthRefresh]);
+  }, [attentionBridge, bridge, target?.workspaceId, target?.sessionId, surface, truthRefresh]);
 
   useEffect(() => {
     if (!target || !binding || !isTruthSensitiveSurface(surface)) return;
@@ -202,7 +229,7 @@ export function RightDock({
   return (
     <aside className="right-dock" aria-label="Context dock" data-source={bridge.source}>
       <div className="right-tabs" role="tablist" aria-label="Context surfaces">
-        {(["files", "changes", "evidence", "context", "artifacts"] as const).map((tab) => (
+        {(["files", "changes", "evidence", "context", "artifacts", "needs_you"] as const).map((tab) => (
           <button type="button" role="tab" aria-selected={surface === tab} className="right-tab" data-active={surface === tab ? "true" : "false"} onClick={() => setSurface(tab)} key={tab}>{surfaceTitle(tab)}</button>
         ))}
       </div>
@@ -213,7 +240,7 @@ export function RightDock({
           <span className="dock-source-badge">{bridge.source === "canonical" ? "Rust-owned" : "Fixture"}</span>
         </div>
 
-        {binding ? (
+        {surface !== "needs_you" && (binding ? (
           <dl className="dock-binding" aria-label="Immutable right dock binding">
             <div><dt>Session</dt><dd>{binding.sessionId}</dd></div>
             <div><dt>HEAD</dt><dd>{shortIdentity(binding.headOid)}</dd></div>
@@ -222,7 +249,7 @@ export function RightDock({
             <div><dt>Stage</dt><dd>{binding.stageRunId ?? "none bound"}</dd></div>
             <div><dt>Binding</dt><dd>{shortIdentity(binding.bindingDigest, 12)}</dd></div>
           </dl>
-        ) : <div className="dock-empty-binding">No canonical binding</div>}
+        ) : <div className="dock-empty-binding">No canonical binding</div>)}
 
         {surface === "files" && (
           <div className="right-dock-surface">
@@ -296,6 +323,34 @@ export function RightDock({
             </div>
             {selectedArtifact && <section className="dock-inspector" aria-label="Artifact identity details"><p className="section-kicker">Safe in-dock reveal · no host open</p><strong>{displayPath(selectedArtifact.baselineId)}</strong><dl><div><dt>Reference</dt><dd>{displayPath(selectedArtifact.stableReference)}</dd></div><div><dt>Provenance</dt><dd>{selectedArtifact.provenance}</dd></div><div><dt>Candidate</dt><dd>{selectedArtifact.candidateOid ? shortIdentity(selectedArtifact.candidateOid, 12) : "not candidate-bound"}</dd></div><div><dt>Authority</dt><dd>{selectedArtifact.grantsVerificationAuthority ? "verification authority" : "none from artifact presence"}</dd></div></dl></section>}
             <p className="dock-trust-note">Artifact presence never grants verification authority. Reveal stays inside this bounded dock; no arbitrary host-open capability is exposed.</p>
+          </div>
+        )}
+
+
+        {surface === "needs_you" && (
+          <div className="right-dock-surface truth-surface" aria-busy={busy}>
+            <div className="needs-you-toolbar"><button type="button" className="quiet-action" disabled={busy} onClick={() => setTruthRefresh((value) => value + 1)}>Refresh canonical attention</button></div>
+            <div className="truth-list" aria-label="Trusted human attention items">
+              {attention?.items.map((item) => (
+                <article className="truth-row needs-you-row" data-state={item.state} key={`${item.stageRunId}-${item.sessionId}`}>
+                  <div className="truth-row-heading"><strong>{displayPath(item.reason)}</strong><span className="truth-badge">{item.state.replaceAll("_", " ")}</span></div>
+                  <dl className="needs-you-context">
+                    <div><dt>Project</dt><dd>{displayPath(item.workspaceId)}</dd></div>
+                    <div><dt>Session</dt><dd>{displayPath(item.sessionId)}</dd></div>
+                    <div><dt>Workflow</dt><dd>{displayPath(item.workflowRunId)}</dd></div>
+                    <div><dt>Stage</dt><dd>{displayPath(item.stageKey)} · {displayPath(item.stageRunId)}</dd></div>
+                    <div><dt>Candidate</dt><dd>{item.candidateOid ? `${shortIdentity(item.candidateOid, 12)} / ${shortIdentity(item.candidateTree, 12)}` : "none bound"}</dd></div>
+                    <div><dt>Truth</dt><dd>{item.source} · {item.authority}</dd></div>
+                  </dl>
+                  <div className="needs-you-actions">
+                    <button type="button" className="quiet-action" onClick={() => onFocusAttention?.(item.workspaceId, item.sessionId)}>Focus exact Session</button>
+                    <span>{item.approvalActionAvailable ? "Canonical approval action available" : "Approve/deny unavailable · no authorized desktop seam"}</span>
+                  </div>
+                </article>
+              ))}
+              {!busy && attention && attention.items.length === 0 && <div className="dock-empty-state">No trusted canonical state currently requires human attention.</div>}
+            </div>
+            <p className="dock-trust-note">Needs You is derived only from accepted canonical stage facts. Agent text, ranking, and visual prominence grant no approval or decision authority.</p>
           </div>
         )}
 

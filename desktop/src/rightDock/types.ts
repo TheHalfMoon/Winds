@@ -1,4 +1,4 @@
-export type RightDockSurface = "files" | "changes" | "evidence" | "context" | "artifacts";
+export type RightDockSurface = "files" | "changes" | "evidence" | "context" | "artifacts" | "needs_you";
 
 export interface RightDockTarget {
   readonly workspaceId: string;

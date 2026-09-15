@@ -31,6 +31,7 @@ const runtimeName = { codex: "Codex", claude: "Claude" } as const;
 const attention: Record<BridgeAttentionState, AttentionPresentation> = {
   recovery_required: { label: "Recovery required", actionable: true },
   waiting_approval: { label: "Approval required", actionable: true },
+  blocked: { label: "Blocked", actionable: true },
   retry_required: { label: "Retry required", actionable: true },
   waiting_external: { label: "Waiting on external condition", actionable: true },
   stale: { label: "Refresh required", actionable: true },
