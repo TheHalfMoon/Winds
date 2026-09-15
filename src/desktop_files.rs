@@ -191,7 +191,7 @@ pub fn desktop_right_dock_preview_file(
     desktop_right_dock_preview_file_inner(home, request, || {})
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub(crate) fn desktop_right_dock_preview_file_with_open_hook<F>(
     home: &Path,
     request: DesktopFilePreviewRequest,

@@ -1,8 +1,9 @@
+#[cfg(unix)]
+use crate::desktop_files::desktop_right_dock_preview_file_with_open_hook;
 use crate::desktop_files::{
     DesktopBoundDockRequest, DesktopFilePreviewRequest, DesktopFilePreviewState,
     DesktopRightDockTarget, desktop_right_dock_bind, desktop_right_dock_changes,
     desktop_right_dock_files, desktop_right_dock_preview_file,
-    desktop_right_dock_preview_file_with_open_hook,
 };
 use crate::store::{NewWindsSession, NewWorkspace, NewWorkstream, Store};
 use std::fs;
