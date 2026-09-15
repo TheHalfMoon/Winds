@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
-import { findLiteralMatch, reconcileTerminalStatus, validatedHttpLink } from '../src/terminal/model.ts';
+import {
+  drainTerminalOutput,
+  findLiteralMatch,
+  reconcileTerminalStatus,
+  validatedHttpLink,
+} from '../src/terminal/model.ts';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -49,7 +54,6 @@ test('T135 terminal is a sub-surface and does not replace the agent work stream'
   assert.match(surface, /hidden=\{surface !== "work_stream"\}/);
 });
 
-
 test('T135 terminal lifecycle cannot regress from a final state to live for the same terminal identity', () => {
   const live = { terminalId: 'terminal-a', generation: 1, canonicalSessionId: 'session-a', canonicalWorkspaceId: 'workspace-a', profileId: 'shell-a', profileDisplayName: 'sh', lifecycle: 'live', rows: 24, cols: 80, exitCode: null, signal: null, closeReason: null };
   const exited = { ...live, lifecycle: 'exited', exitCode: 0, closeReason: 'PROCESS_EXITED' };
@@ -62,6 +66,27 @@ test('T135 terminal lifecycle cannot regress from a final state to live for the 
   assert.deepEqual(reconcileTerminalStatus(nextLive, conflictingSameGeneration), nextLive);
 });
 
+test('T135 queued output cannot cross terminal stream generations after exit-before-EOF replacement', () => {
+  const oldOutput = new Uint8Array([111, 108, 100]);
+  const replacementOutput = new Uint8Array([110, 101, 119]);
+  const queued = [
+    { streamGeneration: 7, bytes: oldOutput },
+    { streamGeneration: 8, bytes: replacementOutput },
+  ];
+
+  const staleFlush = drainTerminalOutput(queued, 7, 8);
+  assert.deepEqual(staleFlush.chunks, []);
+  assert.deepEqual(staleFlush.remaining, [{ streamGeneration: 8, bytes: replacementOutput }]);
+
+  const replacementFlush = drainTerminalOutput(staleFlush.remaining, 8, 8);
+  assert.deepEqual(replacementFlush.chunks, [replacementOutput]);
+  assert.deepEqual(replacementFlush.remaining, []);
+
+  const surface = readFileSync(join(root, 'src/terminal/TerminalSurface.tsx'), 'utf8');
+  assert.match(surface, /if \(acceptedFinalTransition\) invalidateOutputStream\(\)/);
+  assert.match(surface, /invalidateOutputStream\(\);\n    const streamGeneration = streamGenerationRef\.current;/);
+  assert.match(surface, /enqueueOutput\(bytes, streamGeneration\)/);
+});
 
 test('T135 terminal readiness and stream callbacks are stateful and generation bounded', () => {
   const surface = readFileSync(join(root, 'src/terminal/TerminalSurface.tsx'), 'utf8');

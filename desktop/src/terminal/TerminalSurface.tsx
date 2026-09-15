@@ -3,7 +3,14 @@ import type { FitAddon as XTermFitAddon } from "@xterm/addon-fit";
 import type { IDisposable, Terminal as XTermTerminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { terminalBridge } from "./bridge";
-import { findLiteralMatch, lifecycleLabel, reconcileTerminalStatus, validatedHttpLink } from "./model";
+import {
+  drainTerminalOutput,
+  findLiteralMatch,
+  lifecycleLabel,
+  reconcileTerminalStatus,
+  validatedHttpLink,
+} from "./model";
+import type { TerminalOutputBatch } from "./model";
 import type { TerminalStatus, TerminalTargetRequest } from "./types";
 import "./terminal.css";
 
@@ -30,7 +37,7 @@ export function TerminalSurface({
   const initializingRef = useRef(false);
   const disposablesRef = useRef<IDisposable[]>([]);
   const observerRef = useRef<ResizeObserver | null>(null);
-  const pendingOutputRef = useRef<Uint8Array[]>([]);
+  const pendingOutputRef = useRef<TerminalOutputBatch[]>([]);
   const flushTimerRef = useRef<number | null>(null);
   const [terminalStatus, setTerminalStatus] = useState<TerminalStatus | null>(null);
   const [message, setMessage] = useState(
@@ -43,10 +50,30 @@ export function TerminalSurface({
   const [search, setSearch] = useState("");
   const [searchLine, setSearchLine] = useState(0);
 
+  const discardPendingOutput = () => {
+    pendingOutputRef.current = [];
+    if (flushTimerRef.current !== null) {
+      window.clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+  };
+
+  const invalidateOutputStream = () => {
+    streamGenerationRef.current += 1;
+    discardPendingOutput();
+  };
+
   const updateStatus = (status: TerminalStatus, detachOnFinal = false): boolean => {
     const current = lifecycleRef.current;
     const reconciled = reconcileTerminalStatus(current, status);
     if (current && reconciled === current && status !== current) return false;
+    const acceptedFinalTransition = reconciled.lifecycle !== "live" && (
+      !current
+      || current.lifecycle === "live"
+      || current.generation !== reconciled.generation
+      || current.terminalId !== reconciled.terminalId
+    );
+    if (acceptedFinalTransition) invalidateOutputStream();
     if (detachOnFinal && reconciled.lifecycle !== "live") attachedRef.current = false;
     lifecycleRef.current = reconciled;
     setTerminalStatus(reconciled);
@@ -56,24 +83,37 @@ export function TerminalSurface({
     return true;
   };
 
-  const flushOutput = () => {
-    flushTimerRef.current = null;
-    if (pendingOutputRef.current.length === 0) return;
-    const chunks = pendingOutputRef.current.splice(0);
-    const total = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+  const flushOutput = (scheduledGeneration: number) => {
+    const drained = drainTerminalOutput(
+      pendingOutputRef.current,
+      scheduledGeneration,
+      streamGenerationRef.current,
+    );
+    pendingOutputRef.current = [...drained.remaining];
+    if (drained.chunks.length === 0) return;
+    const total = drained.chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
     const combined = new Uint8Array(total);
     let offset = 0;
-    for (const chunk of chunks) {
+    for (const chunk of drained.chunks) {
       combined.set(chunk, offset);
       offset += chunk.byteLength;
     }
     terminalRef.current?.write(combined);
   };
 
-  const enqueueOutput = (bytes: Uint8Array) => {
-    pendingOutputRef.current.push(bytes);
+  const scheduleOutputFlush = (streamGeneration: number, delay: number) => {
     if (flushTimerRef.current !== null) return;
-    flushTimerRef.current = window.setTimeout(flushOutput, visibleRef.current ? 16 : 60);
+    const timer = window.setTimeout(() => {
+      if (flushTimerRef.current === timer) flushTimerRef.current = null;
+      flushOutput(streamGeneration);
+    }, delay);
+    flushTimerRef.current = timer;
+  };
+
+  const enqueueOutput = (bytes: Uint8Array, streamGeneration: number) => {
+    if (streamGenerationRef.current !== streamGeneration) return;
+    pendingOutputRef.current.push({ streamGeneration, bytes });
+    scheduleOutputFlush(streamGeneration, visibleRef.current ? 16 : 60);
   };
 
   useEffect(() => {
@@ -81,7 +121,7 @@ export function TerminalSurface({
     if (visible) {
       window.setTimeout(() => fitRef.current?.fit(), 0);
       if (flushTimerRef.current === null && pendingOutputRef.current.length > 0) {
-        flushTimerRef.current = window.setTimeout(flushOutput, 0);
+        scheduleOutputFlush(streamGenerationRef.current, 0);
       }
     }
   }, [visible]);
@@ -90,9 +130,8 @@ export function TerminalSurface({
     const generation = generationRef.current;
     return () => {
       generationRef.current = generation + 1;
-      streamGenerationRef.current += 1;
+      invalidateOutputStream();
       initializingRef.current = false;
-      if (flushTimerRef.current !== null) window.clearTimeout(flushTimerRef.current);
       observerRef.current?.disconnect();
       observerRef.current = null;
       for (const disposable of disposablesRef.current.splice(0)) disposable.dispose();
@@ -217,14 +256,14 @@ export function TerminalSurface({
     if (!terminal || bridge.source !== "canonical" || busy) return;
     setBusy(true);
     setMessage("Starting Rust-owned terminal…");
-    const streamGeneration = streamGenerationRef.current + 1;
-    streamGenerationRef.current = streamGeneration;
+    invalidateOutputStream();
+    const streamGeneration = streamGenerationRef.current;
     try {
       const status = await bridge.start(
         { canonicalSessionId, rows: terminal.rows, cols: terminal.cols },
         {
           onOutput: (bytes) => {
-            if (streamGenerationRef.current === streamGeneration) enqueueOutput(bytes);
+            enqueueOutput(bytes, streamGeneration);
           },
           onLifecycle: (next) => {
             if (streamGenerationRef.current !== streamGeneration) return;

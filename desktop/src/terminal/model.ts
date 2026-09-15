@@ -6,6 +6,16 @@ export interface LiteralMatch {
   readonly length: number;
 }
 
+export interface TerminalOutputBatch {
+  readonly streamGeneration: number;
+  readonly bytes: Uint8Array;
+}
+
+export interface DrainedTerminalOutput {
+  readonly chunks: readonly Uint8Array[];
+  readonly remaining: readonly TerminalOutputBatch[];
+}
+
 export function findLiteralMatch(
   lines: readonly string[],
   query: string,
@@ -21,6 +31,25 @@ export function findLiteralMatch(
   return null;
 }
 
+export function drainTerminalOutput(
+  batches: readonly TerminalOutputBatch[],
+  scheduledGeneration: number,
+  activeGeneration: number,
+): DrainedTerminalOutput {
+  const chunks: Uint8Array[] = [];
+  const remaining: TerminalOutputBatch[] = [];
+  for (const batch of batches) {
+    if (batch.streamGeneration > scheduledGeneration) {
+      remaining.push(batch);
+    } else if (
+      batch.streamGeneration === scheduledGeneration
+      && scheduledGeneration === activeGeneration
+    ) {
+      chunks.push(batch.bytes);
+    }
+  }
+  return { chunks, remaining };
+}
 
 export function reconcileTerminalStatus(
   current: TerminalStatus | null,
