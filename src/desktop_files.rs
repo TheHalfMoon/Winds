@@ -794,7 +794,7 @@ where
 fn open_windows_root(path: &Path) -> Result<fs::File> {
     let mut options = fs::OpenOptions::new();
     options
-        .access_mode(0)
+        .access_mode(WINDOWS_FILE_READ_ATTRIBUTES | WINDOWS_SYNCHRONIZE)
         .share_mode(WINDOWS_FILE_SHARE_READ | WINDOWS_FILE_SHARE_WRITE | WINDOWS_FILE_SHARE_DELETE)
         .custom_flags(WINDOWS_FILE_FLAG_OPEN_REPARSE_POINT | WINDOWS_FILE_FLAG_BACKUP_SEMANTICS);
     options.open(path).map_err(|error| {

@@ -323,6 +323,23 @@ fn regular_file_to_symlink_swap_during_preview_fails_closed() {
     assert!(!error.contains("outside secret must never render"));
 }
 
+#[cfg(windows)]
+#[test]
+fn windows_preview_root_handle_supports_attribute_revalidation() {
+    let fixture = fixture("windows-root-access");
+    let binding = bind(&fixture);
+    let preview = desktop_right_dock_preview_file(
+        &fixture.home,
+        DesktopFilePreviewRequest {
+            binding,
+            path: "README.md".to_owned(),
+        },
+    )
+    .unwrap();
+    assert_eq!(preview.state, DesktopFilePreviewState::Text);
+    assert_eq!(preview.content.as_deref(), Some("hello from Winds\n"));
+}
+
 #[test]
 fn canonical_git_root_mismatch_is_rejected_before_projection() {
     let fixture = fixture("root-mismatch");
