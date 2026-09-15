@@ -9,6 +9,7 @@ const app = readFileSync(join(root, "src/App.tsx"), "utf8");
 const leftDock = readFileSync(join(root, "src/leftDock/LeftDock.tsx"), "utf8");
 const sessionSurface = readFileSync(join(root, "src/sessionSurface/SessionSurface.tsx"), "utf8");
 const dualSession = readFileSync(join(root, "src/dualSession/DualSessionWorkspace.tsx"), "utf8");
+const rightDock = readFileSync(join(root, "src/rightDock/RightDock.tsx"), "utf8");
 const sessionSurfaceStyles = readFileSync(join(root, "src/sessionSurface/sessionSurface.css"), "utf8");
 const dualSessionStyles = readFileSync(join(root, "src/dualSession/dualSession.css"), "utf8");
 const main = readFileSync(join(root, "src/main.tsx"), "utf8");
@@ -37,9 +38,9 @@ test("T129 anatomy remains two visible Sessions with Files-first right dock", ()
     "Projects and Sessions", "Dual Session view", "Context dock", "Work Stream", "Terminal",
     "Files", "Changes", "Evidence", "Context", "Artifacts", "composer", "Rename",
   ];
-  const productSurface = `${app}\n${leftDock}\n${sessionSurface}\n${dualSession}`;
+  const productSurface = `${app}\n${leftDock}\n${sessionSurface}\n${dualSession}\n${rightDock}`;
   for (const value of required) assert.equal(productSurface.includes(value), true, value);
-  assert.match(app, /<DualSessionWorkspace selection=\{selection\} \/>/);
+  assert.match(app, /<DualSessionWorkspace selection=\{selection\}/);
   assert.match(dualSession, /aria-label="Dual Session view"/);
   assert.match(dualSession, /<SessionSurface/);
 });

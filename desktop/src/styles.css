@@ -1324,3 +1324,153 @@ button[aria-disabled="true"] {
     animation-duration: 0ms !important;
   }
 }
+
+/* T136: exact-binding Files/Changes presentation */
+.right-tab:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.dock-source-badge {
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-faint);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.dock-binding {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.dock-binding div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+.dock-binding dt,
+.dock-binding dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dock-binding dd {
+  color: var(--text-muted);
+}
+
+.dock-empty-binding,
+.dock-empty-state,
+.dock-status,
+.dock-warning {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 9px;
+}
+
+.dock-empty-binding {
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.right-dock-surface {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+
+.right-dock-surface .file-filter {
+  margin-top: var(--space-2);
+}
+
+.file-row > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-preview,
+.changes-diff {
+  max-height: 210px;
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  color: var(--text-muted);
+  background: var(--surface-1);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.changes-surface {
+  grid-template-rows: minmax(96px, 0.7fr) minmax(120px, 1.3fr);
+}
+
+.change-list {
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-2);
+}
+
+.change-row {
+  min-height: 28px;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-1);
+  color: var(--text-muted);
+  font-size: 9px;
+}
+
+.change-row:hover {
+  background: var(--surface-hover);
+}
+
+.change-row code {
+  color: var(--accent-strong);
+  font-family: var(--font-mono);
+}
+
+.change-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.change-row small {
+  grid-column: 2;
+  margin-top: -5px;
+  color: var(--text-faint);
+  font-size: 8px;
+}
+
+.dock-status {
+  min-height: 28px;
+  padding: var(--space-2) var(--space-3);
+  border-top: 1px solid var(--border);
+  background: var(--surface-1);
+}

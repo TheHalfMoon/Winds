@@ -26,10 +26,18 @@ export interface DualSessionSelection {
   readonly sessionId: string;
 }
 
+export interface DualSessionDockIntent extends DualSessionSelection {
+  readonly surface: "files" | "changes";
+}
+
 export function DualSessionWorkspace({
   selection,
+  onFocusSession,
+  onDockIntent,
 }: {
   readonly selection: DualSessionSelection | null;
+  readonly onFocusSession?: (target: DualSessionSelection) => void;
+  readonly onDockIntent?: (intent: DualSessionDockIntent) => void;
 }) {
   const bridge = useMemo(() => leftDockBridge(), []);
   const [project, setProject] = useState<BridgeProject | null>(null);
@@ -168,6 +176,16 @@ export function DualSessionWorkspace({
     return () => { cancelled = true; };
   }, [bridge, selection, selectionReplayNonce]);
 
+  useEffect(() => {
+    if (!project || !layout) return;
+    const sessionId = focusedSlot === "left" ? layout.leftSessionId : layout.rightSessionId;
+    if (!sessionId) return;
+    onFocusSession?.({
+      workspaceId: project.project.canonicalWorkspaceId,
+      sessionId,
+    });
+  }, [focusedSlot, layout?.leftSessionId, layout?.rightSessionId, onFocusSession, project?.project.canonicalWorkspaceId]);
+
   if (!project || !layout) {
     return <div className="dual-session-empty" data-state="loading">{status}</div>;
   }
@@ -219,7 +237,11 @@ export function DualSessionWorkspace({
         <button type="button" className="text-button" disabled={busy} onClick={() => setMaximizedSlot(slot)}>Maximize</button>
         <button type="button" className="text-button" disabled={busy} onClick={() => { setFocusedSlot("left"); setMaximizedSlot(null); operate(closeSlot(layout, slot), `Closed ${slot} Slot only`); }}>Close</button>
       </div>
-      <SessionSurface session={sessionForSlot(project, session.canonicalSessionId, templateIndex) ?? session} focused={focusedSlot === slot} />
+      <SessionSurface
+        session={sessionForSlot(project, session.canonicalSessionId, templateIndex) ?? session}
+        focused={focusedSlot === slot}
+        onDockIntent={(surface, workspaceId, sessionId) => onDockIntent?.({ surface, workspaceId, sessionId })}
+      />
     </section>
   );
 
