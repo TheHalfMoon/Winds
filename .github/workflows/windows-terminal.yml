@@ -11,6 +11,10 @@ on:
       - "migrations/**"
       - "scripts/ci/t062-wsl2-proof.ps1"
       - ".github/workflows/windows-terminal.yml"
+      - "scripts/ci/t142-platform-evidence.mjs"
+      - "desktop/tests/t142-native-platform.test.mjs"
+      - "docs/provenance/010-t142-native-platform.md"
+      - ".github/workflows/t142-native-platform.yml"
   push:
     branches: [main]
     paths:
@@ -22,6 +26,10 @@ on:
       - "migrations/**"
       - "scripts/ci/t062-wsl2-proof.ps1"
       - ".github/workflows/windows-terminal.yml"
+      - "scripts/ci/t142-platform-evidence.mjs"
+      - "desktop/tests/t142-native-platform.test.mjs"
+      - "docs/provenance/010-t142-native-platform.md"
+      - ".github/workflows/t142-native-platform.yml"
 
 permissions:
   contents: read
