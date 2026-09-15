@@ -59,9 +59,11 @@ function WorkEvent({
 export function SessionSurface({
   session,
   focused = false,
+  onDockIntent,
 }: {
   readonly session: SessionSurfaceFixture;
   readonly focused?: boolean;
+  readonly onDockIntent?: (surface: "files" | "changes", workspaceId: string, sessionId: string) => void;
 }) {
   const [events, setEvents] = useState<readonly SessionWorkEvent[]>(session.events);
   const [surface, setSurface] = useState<"work_stream" | "terminal">("work_stream");
@@ -92,8 +94,10 @@ export function SessionSurface({
   };
 
   const handleDockIntent = (event: SessionWorkEvent) => {
+    if (!event.dockIntent) return;
+    onDockIntent?.(event.dockIntent, session.canonicalWorkspaceId, session.canonicalSessionId);
     setStatus(
-      `${event.dockIntent === "changes" ? "Changes" : "Files"} binding is intentionally unavailable until T136`,
+      `Opened ${event.dockIntent === "changes" ? "Changes" : "Files"} for exact Session · ${session.canonicalSessionId}`,
     );
   };
 

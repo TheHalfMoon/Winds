@@ -781,7 +781,7 @@ where
     Ok(output.stdout_truncated || !output.stdout.is_empty())
 }
 
-pub(super) fn run_read_only_git_bytes<I, S>(cwd: &Path, args: I, label: &str) -> Result<Vec<u8>>
+pub(crate) fn run_read_only_git_bytes<I, S>(cwd: &Path, args: I, label: &str) -> Result<Vec<u8>>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,

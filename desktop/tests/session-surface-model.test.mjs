@@ -82,9 +82,9 @@ test('T133 composer protects IME and preserves plain Enter for multiline input',
   assert.match(surface, /requestSubmit\(\)/);
 });
 
-test('T133 file and diff affordance remains a future local intent, not verification', () => {
+test('T136 file and diff affordance routes exact local intent without inventing verification', () => {
   const fileEvent = sessionSurfaceFixtures[0].events.find(({ kind }) => kind === 'file_change');
   assert.equal(fileEvent.dockIntent, 'changes');
-  assert.match(surface, /binding is intentionally unavailable until T136/);
+  assert.match(surface, /onDockIntent\?\.\(event\.dockIntent, session\.canonicalWorkspaceId, session\.canonicalSessionId\)/);
   assert.equal(surface.includes('verified=true'), false);
 });

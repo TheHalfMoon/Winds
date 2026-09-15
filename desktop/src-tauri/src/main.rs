@@ -12,6 +12,12 @@ use winds_control::desktop::{
     desktop_bridge_save_layout, desktop_bridge_snapshot, desktop_bridge_update_project,
     desktop_bridge_update_session,
 };
+use winds_control::desktop_files::{
+    DesktopBoundDockRequest, DesktopChangesResponse, DesktopFilePreviewRequest,
+    DesktopFilePreviewResponse, DesktopFilesResponse, DesktopRightDockBinding,
+    DesktopRightDockTarget, desktop_right_dock_bind, desktop_right_dock_changes,
+    desktop_right_dock_files, desktop_right_dock_preview_file,
+};
 use winds_control::desktop_terminal::{
     DesktopTerminalInputRequest, DesktopTerminalRegistry, DesktopTerminalResizeRequest,
     DesktopTerminalStartRequest, DesktopTerminalStatus, DesktopTerminalTargetRequest,
@@ -101,6 +107,38 @@ fn workspace_save_layout(
     let home = bridge_home()?;
     desktop_bridge_save_layout(&home, request)
         .map_err(|error| host_error("workspace layout save", error))
+}
+
+#[tauri::command]
+fn right_dock_bind(request: DesktopRightDockTarget) -> Result<DesktopRightDockBinding, String> {
+    let home = bridge_home()?;
+    desktop_right_dock_bind(&home, request)
+        .map_err(|error| host_error("right dock binding", error))
+}
+
+#[tauri::command]
+fn right_dock_files(request: DesktopBoundDockRequest) -> Result<DesktopFilesResponse, String> {
+    let home = bridge_home()?;
+    desktop_right_dock_files(&home, request)
+        .map_err(|error| host_error("right dock Files", error))
+}
+
+#[tauri::command]
+fn right_dock_preview_file(
+    request: DesktopFilePreviewRequest,
+) -> Result<DesktopFilePreviewResponse, String> {
+    let home = bridge_home()?;
+    desktop_right_dock_preview_file(&home, request)
+        .map_err(|error| host_error("right dock file preview", error))
+}
+
+#[tauri::command]
+fn right_dock_changes(
+    request: DesktopBoundDockRequest,
+) -> Result<DesktopChangesResponse, String> {
+    let home = bridge_home()?;
+    desktop_right_dock_changes(&home, request)
+        .map_err(|error| host_error("right dock Changes", error))
 }
 
 #[tauri::command]
@@ -273,6 +311,10 @@ fn main() {
             left_dock_update_session,
             workspace_load_layout,
             workspace_save_layout,
+            right_dock_bind,
+            right_dock_files,
+            right_dock_preview_file,
+            right_dock_changes,
             terminal_status,
             terminal_start,
             terminal_input,
