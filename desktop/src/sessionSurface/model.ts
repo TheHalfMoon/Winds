@@ -50,6 +50,18 @@ export function composerAvailability(session: SessionSurfaceFixture): {
   };
 }
 
+
+export interface ComposerShortcutInput {
+  readonly isComposing: boolean;
+  readonly key: string;
+  readonly metaKey: boolean;
+  readonly ctrlKey: boolean;
+}
+
+export function shouldSubmitComposerShortcut(input: ComposerShortcutInput): boolean {
+  return !input.isComposing && input.key === "Enter" && (input.metaKey || input.ctrlKey);
+}
+
 export function createFixtureSubmission(
   session: SessionSurfaceFixture,
   draft: string,

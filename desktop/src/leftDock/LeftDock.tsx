@@ -94,6 +94,7 @@ function SessionRow({
         data-active={selected ? "true" : "false"}
         data-attention={attention.actionable ? "true" : "false"}
         aria-current={selected ? "page" : undefined}
+        aria-label={`${session.displayName}. ${runtime.label}. ${runtime.proof}. ${session.archived ? "Archived Session" : "Active Session"}. ${attention.label}.`}
         onClick={onSelect}
         onFocus={() => onFocusKey(sessionFocusKey(session.canonicalSessionId, "select"))}
       >
@@ -310,7 +311,7 @@ export function LeftDock({
           return (
             <section className="project-group" key={current.canonicalWorkspaceId} data-open={renderedExpanded ? "true" : "false"}>
               <div className="project-row-shell">
-                <button type="button" className="project-row" data-focus-key={projectFocusKey(current.canonicalWorkspaceId, "toggle")} aria-expanded={renderedExpanded} disabled={mutationDisabled} onClick={() => updateProject(project, { collapsed: !current.collapsed })}>
+                <button type="button" className="project-row" data-focus-key={projectFocusKey(current.canonicalWorkspaceId, "toggle")} aria-expanded={renderedExpanded} aria-label={`${current.displayName} Project. ${current.sessionCount} Sessions. ${current.attentionCount} need attention.`} disabled={mutationDisabled} onClick={() => updateProject(project, { collapsed: !current.collapsed })}>
                   <span className="disclosure" aria-hidden="true">{renderedExpanded ? "⌄" : "›"}</span>
                   <span className="project-copy"><span className="project-name">{current.displayName}</span><span className="project-meta">{current.canonicalWorkspaceId}</span></span>
                   <span className="project-count">{current.sessionCount}</span>

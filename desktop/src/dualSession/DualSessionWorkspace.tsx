@@ -212,7 +212,8 @@ export function DualSessionWorkspace({
       key={session.canonicalSessionId}
       onFocusCapture={() => setFocusedSlot(slot)}
       onPointerDown={() => setFocusedSlot(slot)}
-      aria-label={`${slot} Session Slot`}
+      aria-label={`${slot} Session Slot. ${session.displayName}.${focusedSlot === slot ? " Focused." : ""}`}
+      aria-current={focusedSlot === slot ? "true" : undefined}
     >
       <div className="session-slot-controls">
         <label>

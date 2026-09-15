@@ -62,9 +62,9 @@ test("T129 primary controls have explicit focus, hover, active, disabled, loadin
   for (const value of required) assert.equal(styles.includes(value), true, value);
 });
 
-test("T129 focus and 125% scale fixtures create observable rendered differences", () => {
+test("T129 focus and scale fixtures create observable rendered differences", () => {
   assert.match(main, /dataset\.fixture = "keyboard-focus"/);
-  assert.match(main, /dataset\.scale = "125"/);
+  assert.match(main, /scale === "125" \|\| scale === "200"/);
   assert.match(fixtureModes, /data-fixture="keyboard-focus"/);
   assert.match(fixtureModes, /outline: 2px solid var\(--focus\)/);
   assert.match(fixtureModes, /data-scale="125"/);
@@ -77,11 +77,15 @@ test("T129 focus and 125% scale fixtures create observable rendered differences"
 test("T129 fixture matrix contains the required viewport and accessibility surfaces", () => {
   const fixtures = fixtureManifest.fixtures;
   assert.equal(fixtureManifest.schema, "winds-quiet-current-visual-fixtures/1");
-  assert.equal(fixtures.length, 7);
+  assert.equal(fixtures.length, 11);
   assert.deepEqual(fixtures.slice(0, 3).map(({ width, height }) => [width, height]), [[1280, 800], [1440, 900], [1920, 1080]]);
   const queries = fixtures.map(({ query }) => query);
   assert.equal(queries.includes("?theme=light"), true);
   assert.equal(queries.includes("?theme=contrast"), true);
   assert.equal(queries.some((query) => query.includes("keyboard-focus")), true);
   assert.equal(queries.some((query) => query.includes("scale=125")), true);
+  assert.equal(queries.some((query) => query.includes("scale=200")), true);
+  assert.equal(queries.some((query) => query.includes("density=compact")), true);
+  assert.equal(queries.some((query) => query.includes("motion=reduced")), true);
+  assert.equal(queries.some((query) => query.includes("layout=narrow")), true);
 });

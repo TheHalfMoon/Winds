@@ -48,8 +48,10 @@ test('T135 renderer terminal bridge exposes only exact typed terminal commands',
 
 test('T135 terminal is a sub-surface and does not replace the agent work stream', () => {
   const surface = readFileSync(join(root, 'src/sessionSurface/SessionSurface.tsx'), 'utf8');
-  assert.match(surface, />Work Stream<\/button>/);
-  assert.match(surface, />Terminal<\/button>/);
+  assert.match(surface, /Work Stream/);
+  assert.match(surface, /Terminal/);
+  assert.match(surface, /aria-pressed=\{surface === \"work_stream\"\}/);
+  assert.match(surface, /aria-pressed=\{surface === \"terminal\"\}/);
   assert.match(surface, /<TerminalSurface canonicalSessionId=\{session\.canonicalSessionId\}/);
   assert.match(surface, /hidden=\{surface !== "work_stream"\}/);
 });
