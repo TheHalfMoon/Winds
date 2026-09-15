@@ -4,13 +4,14 @@ use std::time::Duration;
 use tauri::State;
 use tauri::ipc::{Channel, Response};
 use winds_control::desktop::{
-    DesktopBridgeAttentionSnapshot, DesktopBridgeCreateSessionRequest, DesktopBridgeLayoutPresentation, DesktopBridgeLayoutRequest,
+    DesktopBridgeAttentionSnapshot, DesktopBridgeCreateSessionRequest,
+    DesktopBridgeLayoutPresentation, DesktopBridgeLayoutRequest,
     DesktopBridgeProjectPresentationBatchRequest, DesktopBridgeProjectSummary,
     DesktopBridgeRenameSessionRequest, DesktopBridgeSessionPresentationBatchRequest,
-    DesktopBridgeSessionSummary, DesktopBridgeSnapshot, desktop_bridge_create_session,
-    desktop_bridge_attention_snapshot, desktop_bridge_default_home, desktop_bridge_load_layout, desktop_bridge_rename_session,
-    desktop_bridge_save_layout, desktop_bridge_snapshot, desktop_bridge_update_project,
-    desktop_bridge_update_session,
+    DesktopBridgeSessionSummary, DesktopBridgeSnapshot, desktop_bridge_attention_snapshot,
+    desktop_bridge_create_session, desktop_bridge_default_home, desktop_bridge_load_layout,
+    desktop_bridge_rename_session, desktop_bridge_save_layout, desktop_bridge_snapshot,
+    desktop_bridge_update_project, desktop_bridge_update_session,
 };
 use winds_control::desktop_files::{
     DesktopBoundDockRequest, DesktopChangesResponse, DesktopFilePreviewRequest,
