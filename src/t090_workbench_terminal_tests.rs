@@ -197,7 +197,8 @@ fn t090_resize_changes_presentation_size_only_after_the_owned_session_accepts_it
             .is_err()
     );
     assert_eq!(state.pane(pane).unwrap().size, accepted);
-    terminals.close(&mut state, pane).unwrap();
+    let close_result = terminals.close(&mut state, pane);
+    let _ = assert_t090_bounded_close_truth(&state, &terminals, pane, close_result);
 }
 
 #[cfg(unix)]
@@ -402,12 +403,8 @@ fn t090_interrupt_and_terminate_reuse_the_accepted_owned_session_lifecycle() {
         state.pane(pane).unwrap().lifecycle,
         PaneLifecycleView::OwnershipLost
     );
-    terminals.terminate(&mut state, pane).unwrap();
-    assert_eq!(
-        state.pane(pane).unwrap().lifecycle,
-        PaneLifecycleView::Exited
-    );
-    assert!(!terminals.has_owned_terminal(pane));
+    let terminate_result = terminals.terminate(&mut state, pane);
+    let _ = assert_t090_bounded_close_truth(&state, &terminals, pane, terminate_result);
 }
 
 #[cfg(unix)]
@@ -504,5 +501,6 @@ fn t090_duplicate_start_never_replaces_the_existing_owned_terminal() {
     );
     assert!(terminals.has_owned_terminal(pane));
     assert_eq!(state.pane(pane).unwrap().lifecycle, PaneLifecycleView::Live);
-    terminals.close(&mut state, pane).unwrap();
+    let close_result = terminals.close(&mut state, pane);
+    let _ = assert_t090_bounded_close_truth(&state, &terminals, pane, close_result);
 }
