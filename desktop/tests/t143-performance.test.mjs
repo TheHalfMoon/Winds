@@ -14,6 +14,7 @@ const hostManifest = readFileSync(join(desktopRoot, 'src-tauri/Cargo.toml'), 'ut
 const main = readFileSync(join(desktopRoot, 'src/main.tsx'), 'utf8');
 const fixture = readFileSync(join(desktopRoot, 'src/leftDock/fixture.ts'), 'utf8');
 const bridge = readFileSync(join(desktopRoot, 'src/leftDock/bridge.ts'), 'utf8');
+const rightDockBridge = readFileSync(join(desktopRoot, 'src/rightDock/bridge.ts'), 'utf8');
 const nativeHarness = readFileSync(join(desktopRoot, 'tests/performance/t143_native.py'), 'utf8');
 const webkitHarness = readFileSync(join(desktopRoot, 'tests/performance/t143_webkit.py'), 'utf8');
 
@@ -25,6 +26,8 @@ test('T143 native readiness is renderer-only and adds no host feature or product
   assert.match(main, /document\.title = "Winds \[T143 Ready\]"/);
   assert.doesNotMatch(main, /searchParams\.set\("t143-ready"|location\.replace/);
   assert.match(bridge, /VITE_WINDS_T143_NATIVE_READY === "1"/);
+  assert.match(rightDockBridge, /VITE_WINDS_T143_NATIVE_READY === "1"/);
+  assert.match(rightDockBridge, /return fixtureBridge/);
   assert.doesNotMatch(main, /@tauri-apps\/api|invoke\(/);
 });
 

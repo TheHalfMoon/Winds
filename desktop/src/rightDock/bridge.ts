@@ -65,5 +65,9 @@ const canonicalBridge: RightDockBridge = {
 };
 
 export function rightDockBridge(): RightDockBridge {
+  if (
+    import.meta.env.VITE_WINDS_T143_BENCHMARK === "1"
+    || import.meta.env.VITE_WINDS_T143_NATIVE_READY === "1"
+  ) return fixtureBridge;
   return isTauri() ? canonicalBridge : fixtureBridge;
 }
