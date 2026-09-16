@@ -51,6 +51,16 @@ test('T143 native harness directly enforces cold-launch and idle CPU RSS ceiling
   assert.match(nativeHarness, /descendants\(proc\.pid\)/);
 });
 
+
+test('T143 Linux reference runtime applies the product WebKit JIT memory profile', () => {
+  const runLinux = readFileSync(join(desktopRoot, 'tests/performance/t143_run_linux.sh'), 'utf8');
+  assert.match(host, /configure_linux_webkit_memory_profile/);
+  assert.match(host, /var_os\("JSC_useJIT"\)\.is_none\(\)/);
+  assert.match(host, /set_var\("JSC_useJIT", "false"\)/);
+  assert.match(runLinux, /export JSC_useJIT=false/);
+  assert.doesNotMatch(host, /VITE_WINDS_T143_BENCHMARK.*JSC_useJIT/);
+});
+
 test('T143 WebKitGTK harness retains raw samples for every frozen local interaction budget', () => {
   for (const needle of [
     'selection_p95_le_50_ms',

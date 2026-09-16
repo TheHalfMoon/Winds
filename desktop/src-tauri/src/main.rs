@@ -337,7 +337,18 @@ fn terminal_close(
         .map_err(|error| host_error("terminal close", error))
 }
 
+#[cfg(target_os = "linux")]
+fn configure_linux_webkit_memory_profile() {
+    if std::env::var_os("JSC_useJIT").is_none() {
+        // SAFETY: main calls this before Tauri creates its WebKitGTK runtime or worker threads.
+        unsafe { std::env::set_var("JSC_useJIT", "false") };
+    }
+}
+
 fn main() {
+    #[cfg(target_os = "linux")]
+    configure_linux_webkit_memory_profile();
+
     let builder = tauri::Builder::default().manage(Arc::new(TerminalHostState::default()));
 
     #[cfg(feature = "t143-benchmark")]
