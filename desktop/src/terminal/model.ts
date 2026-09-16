@@ -16,6 +16,10 @@ export interface DrainedTerminalOutput {
   readonly remaining: readonly TerminalOutputBatch[];
 }
 
+export function terminalOutputFlushDelay(visible: boolean): number {
+  return visible ? 16 : 60;
+}
+
 export function findLiteralMatch(
   lines: readonly string[],
   query: string,

@@ -8,6 +8,7 @@ import {
   findLiteralMatch,
   lifecycleLabel,
   reconcileTerminalStatus,
+  terminalOutputFlushDelay,
   validatedHttpLink,
 } from "./model";
 import type { TerminalOutputBatch } from "./model";
@@ -113,7 +114,7 @@ export function TerminalSurface({
   const enqueueOutput = (bytes: Uint8Array, streamGeneration: number) => {
     if (streamGenerationRef.current !== streamGeneration) return;
     pendingOutputRef.current.push({ streamGeneration, bytes });
-    scheduleOutputFlush(streamGeneration, visibleRef.current ? 16 : 60);
+    scheduleOutputFlush(streamGeneration, terminalOutputFlushDelay(visibleRef.current));
   };
 
   useEffect(() => {

@@ -53,3 +53,35 @@ createRoot(root).render(
     <App />
   </StrictMode>,
 );
+
+
+if (import.meta.env.VITE_WINDS_T143_BENCHMARK === "1" && params.get("t143-ready") !== "1") {
+  let reported = false;
+  const markReady = () => {
+    const status = document.querySelector<HTMLElement>(".chat-tool-status");
+    const sessionOptions = document.querySelectorAll("#chat-session-target option");
+    const visibleSlots = document.querySelectorAll(".session-slot");
+    if (
+      !document.querySelector(".winds-app")
+      || !status
+      || /Loading|Binding/.test(status.textContent ?? "")
+      || sessionOptions.length < 3
+      || visibleSlots.length < 2
+    ) return false;
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        if (reported) return;
+        reported = true;
+        const readyUrl = new URL(window.location.href);
+        readyUrl.searchParams.set("t143-ready", "1");
+        window.location.replace(readyUrl.toString());
+      });
+    });
+    return true;
+  };
+  const observer = new MutationObserver(() => {
+    if (markReady()) observer.disconnect();
+  });
+  observer.observe(root, { childList: true, subtree: true, characterData: true });
+  if (markReady()) observer.disconnect();
+}

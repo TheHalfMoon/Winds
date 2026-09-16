@@ -1,8 +1,12 @@
 use std::io::Read;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
+#[cfg(feature = "t143-benchmark")]
+use std::time::Instant;
 use tauri::State;
 use tauri::ipc::{Channel, Response};
+#[cfg(feature = "t143-benchmark")]
+use tauri::webview::PageLoadEvent;
 use winds_control::desktop::{
     DesktopBridgeAttentionSnapshot, DesktopBridgeCreateSessionRequest,
     DesktopBridgeLayoutPresentation, DesktopBridgeLayoutRequest,
@@ -334,8 +338,27 @@ fn terminal_close(
 }
 
 fn main() {
-    tauri::Builder::default()
-        .manage(Arc::new(TerminalHostState::default()))
+    let builder = tauri::Builder::default().manage(Arc::new(TerminalHostState::default()));
+
+    #[cfg(feature = "t143-benchmark")]
+    let builder = {
+        let started = Instant::now();
+        builder.on_page_load(move |_webview, payload| {
+            if matches!(payload.event(), PageLoadEvent::Started)
+                && payload
+                    .url()
+                    .query_pairs()
+                    .any(|(key, value)| key == "t143-ready" && value == "1")
+            {
+                eprintln!(
+                    "WINDS_T143_READY_MS={:.3}",
+                    started.elapsed().as_secs_f64() * 1000.0
+                );
+            }
+        })
+    };
+
+    builder
         .invoke_handler(tauri::generate_handler![
             left_dock_snapshot,
             left_dock_attention_snapshot,

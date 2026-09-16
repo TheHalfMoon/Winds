@@ -1,0 +1,50 @@
+# Spec 010 T143 — Performance and Stress Qualification
+
+Status: CANDIDATE
+
+## Canonical authority
+
+- Canonical predecessor: T142A guarded merge `8d75cab455f11afddeaa6fbe6244dbb1021d1467`.
+- The T142A merge tree is `0b5a601b8103aa23e8b30a6169308afdde1a9241` and all 11 workflows triggered by that merge completed successfully.
+- T143 is authorized by the accepted Spec 010 task order. T144 remains blocked until T143 is `CLOSED_CANONICAL`.
+
+## Purpose
+
+T143 qualifies the final pre-Founder-review desktop shell against the frozen launch, interaction, render, idle-resource, large-scale, output, and resize budgets. It measures before optimizing. No performance framework, WebGL path, virtualization layer, renderer package, or runtime dependency is added by this task.
+
+## Measurement boundary
+
+The reference performance environment is the exact GitHub `ubuntu-24.04` runner used by the `t143-performance` workflow. Evidence records the runner image identity, exact candidate/tree, toolchain versions, WebKitGTK package/runtime version, browser host, release binary hash, renderer-dist hash, fixture identity, raw samples, and threshold disposition.
+
+Native launch and idle-resource measurements use the release Tauri host plus its descendant WebKitGTK processes. The benchmark-only build feature adds a page-load observation hook but no Tauri command, IPC authority, dependency, persistence path, network service, or production behavior. The renderer marks a populated two-Session fixture shell ready after two animation-frame boundaries, then performs a same-origin benchmark marker navigation observed by the host hook.
+
+Renderer interaction measurements use WebKitGTK automation through `WebKitWebDriver` and GNOME Web/Epiphany in automation mode. The browser host is a measurement harness for the same WebKitGTK engine; it does not substitute for the native Tauri cold-launch/idle measurements.
+
+## Required campaigns
+
+The exact-head workflow retains raw/lossless-enough results for:
+
+- at least 20 native cold launches with p95 `<= 1500 ms`;
+- at least 1000 exact Session-selection samples with p95 `<= 50 ms`;
+- at least 1000 composer keystroke-to-paint samples with p95 `<= 16 ms`;
+- at least 1000 single/dual layout transitions with p95 `<= 100 ms`;
+- at least 1000 local right-dock tab switches with p95 `<= 50 ms`;
+- at least 1000 divider resize samples under two visible representative Session work streams;
+- a `>=100 Project / >=1000 Session` fixture with measured search, scroll, and focus behavior;
+- 60 seconds of native Tauri/WebKitGTK idle CPU/RSS sampling with CPU `<=2%` of one logical core and renderer+host RSS `<=300 MiB`;
+- inherited exact-candidate live output stress processing at least 10 MiB and 100,000 logical lines while preserving terminal lifecycle/ownership plus 1000 backend resize operations;
+- deterministic hidden-output batching across multiple simulated sessions proving bytes are coalesced before renderer writes rather than scheduling one full-frame action per byte.
+
+## Non-authority and nonclaim boundaries
+
+The composer timing harness temporarily enables the fixture textarea in the measurement DOM only. It never submits a prompt, calls a runtime/provider, or changes canonical T139 composer availability. This is a paint-overhead measurement, not runtime-input evidence.
+
+The large fixture exists only in `VITE_WINDS_T143_BENCHMARK=1` builds. Production builds retain the canonical/fixture bridge choice established before T143. The production Tauri command count remains 22 and the standard security/authority workflows remain authoritative.
+
+No T143 result may be used as cross-platform performance equivalence. T142 remains the direct platform-coverage authority; T143 performance ceilings are qualified on the declared Ubuntu/WebKitGTK reference environment.
+
+## Closure discipline
+
+T143 may close only after the complete exact-head candidate passes deterministic gates, the T143 performance workflow, all other applicable workflows, author correctness/safety review, Ponytail/YAGNI review, fresh independent substantive review with zero material findings, zero unresolved review threads, guarded expected-head merge, verified merge parentage/tree/signature, and every workflow actually triggered by the merge commit.
+
+T143 closure authorizes T144 only. It does not create or substitute the human Founder visual acceptance required by T144.

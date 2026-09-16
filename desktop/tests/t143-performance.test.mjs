@@ -1,0 +1,70 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+const desktopRoot = fileURLToPath(new URL('..', import.meta.url));
+const repoRoot = join(desktopRoot, '..');
+const workflow = readFileSync(join(repoRoot, '.github/workflows/t143-performance.yml'), 'utf8');
+const host = readFileSync(join(desktopRoot, 'src-tauri/src/main.rs'), 'utf8');
+const hostManifest = readFileSync(join(desktopRoot, 'src-tauri/Cargo.toml'), 'utf8');
+const main = readFileSync(join(desktopRoot, 'src/main.tsx'), 'utf8');
+const fixture = readFileSync(join(desktopRoot, 'src/leftDock/fixture.ts'), 'utf8');
+const bridge = readFileSync(join(desktopRoot, 'src/leftDock/bridge.ts'), 'utf8');
+const nativeHarness = readFileSync(join(desktopRoot, 'tests/performance/t143_native.py'), 'utf8');
+const webkitHarness = readFileSync(join(desktopRoot, 'tests/performance/t143_webkit.py'), 'utf8');
+
+test('T143 benchmark instrumentation is build-feature gated and adds no production Tauri command', () => {
+  assert.match(hostManifest, /\[features\][\s\S]*t143-benchmark = \[\]/);
+  assert.equal((host.match(/#\[tauri::command\]/g) ?? []).length, 22);
+  assert.doesNotMatch(host, /fn t143_benchmark_ready/);
+  assert.match(host, /#\[cfg\(feature = "t143-benchmark"\)\][\s\S]*PageLoadEvent/);
+  assert.match(main, /VITE_WINDS_T143_BENCHMARK === "1"/);
+  assert.match(main, /searchParams\.set\("t143-ready", "1"\)/);
+  assert.doesNotMatch(main, /@tauri-apps\/api|invoke\(/);
+});
+
+test('T143 large performance fixture is benchmark-only and exceeds the frozen scale floor', () => {
+  assert.match(fixture, /T143_PROJECT_COUNT = 100/);
+  assert.match(fixture, /T143_SESSIONS_PER_PROJECT = 10/);
+  assert.match(fixture, /VITE_WINDS_T143_BENCHMARK !== "1"/);
+  assert.match(bridge, /VITE_WINDS_T143_BENCHMARK === "1"/);
+  assert.match(fixture, /t143-large/);
+});
+
+test('T143 native harness directly enforces cold-launch and idle CPU RSS ceilings', () => {
+  assert.match(nativeHarness, /--launches.*default=20/);
+  assert.match(nativeHarness, /--idle-seconds.*default=60\.0/);
+  assert.match(nativeHarness, /cold_launch_p95_le_1500_ms/);
+  assert.match(nativeHarness, /idle_cpu_le_2_percent_one_core/);
+  assert.match(nativeHarness, /renderer_host_idle_rss_le_300_mib/);
+  assert.match(nativeHarness, /descendants\(proc\.pid\)/);
+});
+
+test('T143 WebKitGTK harness retains raw samples for every frozen local interaction budget', () => {
+  for (const needle of [
+    'selection_p95_le_50_ms',
+    'single_dual_p95_le_100_ms',
+    'composer_p95_le_16_ms',
+    'cached_right_dock_p95_le_50_ms',
+    'resize_p95_le_100_ms',
+    'large_search_p95_le_50_ms',
+    'large_scroll_p95_le_50_ms',
+    'large_focus_p95_le_50_ms',
+  ]) assert.equal(webkitHarness.includes(needle), true, needle);
+  assert.match(webkitHarness, /"raw_ms"/);
+  assert.match(webkitHarness, /visibleSessionWorkEvents/);
+});
+
+test('T143 workflow binds exact Ubuntu WebKitGTK Tauri evidence without new package dependency', () => {
+  assert.match(workflow, /runs-on: ubuntu-24\.04/);
+  assert.match(workflow, /CANDIDATE_SHA/);
+  assert.match(workflow, /git rev-parse HEAD/);
+  assert.match(workflow, /webkit2gtk-driver epiphany-browser xvfb dbus-x11/);
+  assert.match(workflow, /VITE_WINDS_T143_BENCHMARK=1 npm run frontend:build/);
+  assert.match(workflow, /--features t143-benchmark/);
+  assert.match(workflow, /t097_release_benchmark_campaign/);
+  assert.match(workflow, /t143_assemble\.py/);
+  assert.match(workflow, /actions\/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a/);
+});
