@@ -20,10 +20,6 @@ const nativeHarness = readFileSync(join(desktopRoot, 'tests/performance/t143_nat
 const platformBaselineHarness = readFileSync(join(desktopRoot, 'tests/performance/t143_platform_baseline.py'), 'utf8');
 const platformBaselineHtml = readFileSync(join(desktopRoot, 'tests/performance/t143_platform_baseline/index.html'), 'utf8');
 const webkitHarness = readFileSync(join(desktopRoot, 'tests/performance/t143_webkit.py'), 'utf8');
-const app = readFileSync(join(desktopRoot, 'src/App.tsx'), 'utf8');
-const sessionSurface = readFileSync(join(desktopRoot, 'src/sessionSurface/SessionSurface.tsx'), 'utf8');
-const terminalShell = readFileSync(join(desktopRoot, 'src/terminal/TerminalSurface.tsx'), 'utf8');
-const terminalRuntime = readFileSync(join(desktopRoot, 'src/terminal/TerminalRuntimeSurface.tsx'), 'utf8');
 
 test('T143 native readiness uses a qualification-only window-title capability and no production command', () => {
   assert.doesNotMatch(hostManifest, /t143-benchmark/);
@@ -122,22 +118,6 @@ test('T143 platform baseline measures the same-host minimal-renderer baseline wi
   assert.match(workflow, /platform-baseline-binary\.sha256/);
   assert.match(workflow, /test \"\$baseline_sha\" != \"\$product_sha\"/);
   assert.doesNotMatch(workflow, /--native t143-evidence\/platform-baseline\.json/);
-});
-
-test('T143 shipped idle shell defers dormant renderer work without changing terminal authority', () => {
-  assert.match(app, /lazy\(async \(\) =>/);
-  assert.match(app, /import\("\.\/leftDock\/LeftDock"\)/);
-  assert.match(app, /import\("\.\/commandPalette\/CommandPalette"\)/);
-  assert.match(app, /commandPaletteOpen &&/);
-  assert.match(terminalShell, /import\("\.\/TerminalRuntimeSurface"\)/);
-  assert.match(terminalShell, /activatedSessions = new Set<string>\(\)/);
-  assert.match(terminalShell, /Start terminal/);
-  assert.match(terminalShell, /bridge\.status\(canonicalSessionId\)/);
-  assert.match(terminalShell, /Terminal status failed/);
-  assert.doesNotMatch(terminalShell, /terminal_start|terminal_input|terminal_resize/);
-  assert.match(terminalRuntime, /invoke|terminalBridge|initializeTerminal/);
-  assert.match(sessionSurface, /surface === "work_stream" &&/);
-  assert.match(sessionSurface, /mode === "workbench" \? "terminal" : "work_stream"/);
 });
 
 test('T143 WebKitGTK harness retains raw samples for every frozen local interaction budget', () => {

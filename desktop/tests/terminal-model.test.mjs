@@ -12,9 +12,6 @@ import {
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
-const terminalShell = readFileSync(join(root, 'src/terminal/TerminalSurface.tsx'), 'utf8');
-const terminalRuntime = readFileSync(join(root, 'src/terminal/TerminalRuntimeSurface.tsx'), 'utf8');
-const terminalImplementation = `${terminalShell}\n${terminalRuntime}`;
 
 test('T135 literal terminal search is exact, deterministic, and wraps once', () => {
   const lines = ['alpha beta', 'VERIFIED forged', 'beta alpha'];
@@ -30,7 +27,7 @@ test('T135 terminal link validation admits only http and https while host openin
   for (const value of ['javascript:alert(1)', 'file:///etc/passwd', 'mailto:test@example.com', 'not a url']) {
     assert.equal(validatedHttpLink(value), null);
   }
-  const surface = terminalImplementation;
+  const surface = readFileSync(join(root, 'src/terminal/TerminalSurface.tsx'), 'utf8');
   assert.match(surface, /registerOscHandler\(52/);
   assert.match(surface, /allowNonHttpProtocols: false/);
   assert.equal(surface.includes('window.open'), false);
@@ -88,14 +85,14 @@ test('T135 queued output cannot cross terminal stream generations after exit-bef
   assert.deepEqual(replacementFlush.chunks, [replacementOutput]);
   assert.deepEqual(replacementFlush.remaining, []);
 
-  const surface = terminalImplementation;
+  const surface = readFileSync(join(root, 'src/terminal/TerminalSurface.tsx'), 'utf8');
   assert.match(surface, /if \(acceptedFinalTransition\) invalidateOutputStream\(\)/);
   assert.match(surface, /invalidateOutputStream\(\);\n    const streamGeneration = streamGenerationRef\.current;/);
   assert.match(surface, /enqueueOutput\(bytes, streamGeneration\)/);
 });
 
 test('T135 terminal readiness and stream callbacks are stateful and generation bounded', () => {
-  const surface = terminalImplementation;
+  const surface = readFileSync(join(root, 'src/terminal/TerminalSurface.tsx'), 'utf8');
   assert.match(surface, /const \[ready, setReady\] = useState\(false\)/);
   assert.match(surface, /setReady\(true\)/);
   assert.match(surface, /streamGenerationRef\.current !== streamGeneration/);
@@ -103,7 +100,7 @@ test('T135 terminal readiness and stream callbacks are stateful and generation b
 });
 
 test('T143 idle terminal surfaces defer xterm allocation until explicit terminal start', () => {
-  const surface = terminalImplementation;
+  const surface = readFileSync(join(root, 'src/terminal/TerminalSurface.tsx'), 'utf8');
   assert.match(surface, /const initializeTerminal = async/);
   assert.match(surface, /const terminal = await initializeTerminal\(\);/);
   assert.match(surface, /disabled=\{!ready\}/);
@@ -124,7 +121,7 @@ test('T143 hidden output batches multiple sessions instead of scheduling full-fr
     assert.equal(drained.chunks.length, 1000);
     assert.deepEqual(drained.remaining, []);
   }
-  const surface = terminalImplementation;
+  const surface = readFileSync(join(root, 'src/terminal/TerminalSurface.tsx'), 'utf8');
   assert.match(surface, /scheduleOutputFlush\(streamGeneration, terminalOutputFlushDelay\(visibleRef\.current\)\)/);
   assert.doesNotMatch(surface, /terminalRef\.current\?\.write\(bytes\)/);
 });

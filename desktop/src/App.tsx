@@ -1,20 +1,12 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { ActivityRail, type LeftToolSurface } from "./activityRail/ActivityRail";
+import { CommandPalette } from "./commandPalette/CommandPalette";
 import { CurrentMark } from "./components/CurrentMark";
 import { DualSessionWorkspace, type DualSessionDockIntent, type DualSessionSelection } from "./dualSession/DualSessionWorkspace";
 import { ChatToolWindow } from "./leftDock/ChatToolWindow";
+import { LeftDock } from "./leftDock/LeftDock";
 import { RightDock } from "./rightDock/RightDock";
 import type { RightDockSurface } from "./rightDock/types";
-
-const CommandPalette = lazy(async () => {
-  const module = await import("./commandPalette/CommandPalette");
-  return { default: module.CommandPalette };
-});
-
-const LeftDock = lazy(async () => {
-  const module = await import("./leftDock/LeftDock");
-  return { default: module.LeftDock };
-});
 
 function initialLeftTool(): LeftToolSurface {
   return document.documentElement.dataset.leftTool === "projects" ? "projects" : "chat";
@@ -76,9 +68,7 @@ export function App() {
         {leftTool === "chat" ? (
           <ChatToolWindow selection={selection} onSelectSession={selectSession} />
         ) : (
-          <Suspense fallback={<aside className="left-dock" aria-label="Projects and Sessions">Loading Projects…</aside>}>
-            <LeftDock onSelectSession={selectProjectSession} requestedSessionId={selection?.sessionId ?? null} />
-          </Suspense>
+          <LeftDock onSelectSession={selectProjectSession} requestedSessionId={selection?.sessionId ?? null} />
         )}
         <main className="center-workspace" aria-label="Workbench">
           <DualSessionWorkspace selection={selection} onFocusSession={focusDock} onDockIntent={openDockIntent} />
@@ -86,16 +76,12 @@ export function App() {
         <RightDock target={dockTarget} requestedSurface={dockSurface} onFocusAttention={(workspaceId, sessionId) => { focusDock({ workspaceId, sessionId }); setDockSurface("context"); }} />
       </div>
 
-      {commandPaletteOpen && (
-        <Suspense fallback={null}>
-          <CommandPalette
-            open
-            onClose={() => setCommandPaletteOpen(false)}
-            onSelectSession={(workspaceId, sessionId) => { selectSession(workspaceId, sessionId); setLeftTool("chat"); }}
-            onOpenSurface={setDockSurface}
-          />
-        </Suspense>
-      )}
+      <CommandPalette
+        open={commandPaletteOpen}
+        onClose={() => setCommandPaletteOpen(false)}
+        onSelectSession={(workspaceId, sessionId) => { selectSession(workspaceId, sessionId); setLeftTool("chat"); }}
+        onOpenSurface={setDockSurface}
+      />
 
       <footer className="status-rail" aria-label="Desktop status">
         <div><span className="status-dot" data-tone="ok" /> renderer boundary · immutable truth surfaces · trusted Needs You</div>

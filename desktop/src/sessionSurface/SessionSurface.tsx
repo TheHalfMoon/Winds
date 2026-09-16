@@ -167,23 +167,21 @@ export function SessionSurface({
         <span className="fixture-label">{session.runtime.proof}</span>
       </div>
 
-      {surface === "work_stream" && (
-        <div className="work-stream" hidden={surface !== "work_stream"} tabIndex={surface === "work_stream" ? 0 : -1} aria-label={`${session.displayName} Work Stream`}>
-          <div className="stream-day"><span>User-visible work events</span></div>
-          {session.surfaceState === "loading" ? (
-            <div className="work-stream-state" data-state="loading">Loading fixture work events…</div>
-          ) : session.surfaceState === "error" ? (
-            <div className="work-stream-state" data-state="error">Fixture surface error · runtime identity remains explicit</div>
-          ) : events.length === 0 ? (
-            <div className="empty-state" data-state="empty">
-              <strong>No work events yet</strong>
-              <span>This fixture cannot imply runtime launch, input, or verification evidence.</span>
-            </div>
-          ) : (
-            events.map((event) => <WorkEvent event={event} onDockIntent={handleDockIntent} key={event.id} />)
-          )}
-        </div>
-      )}
+      <div className="work-stream" hidden={surface !== "work_stream"} tabIndex={surface === "work_stream" ? 0 : -1} aria-label={`${session.displayName} Work Stream`}>
+        <div className="stream-day"><span>User-visible work events</span></div>
+        {session.surfaceState === "loading" ? (
+          <div className="work-stream-state" data-state="loading">Loading fixture work events…</div>
+        ) : session.surfaceState === "error" ? (
+          <div className="work-stream-state" data-state="error">Fixture surface error · runtime identity remains explicit</div>
+        ) : events.length === 0 ? (
+          <div className="empty-state" data-state="empty">
+            <strong>No work events yet</strong>
+            <span>This fixture cannot imply runtime launch, input, or verification evidence.</span>
+          </div>
+        ) : (
+          events.map((event) => <WorkEvent event={event} onDockIntent={handleDockIntent} key={event.id} />)
+        )}
+      </div>
 
       <TerminalSurface canonicalSessionId={session.canonicalSessionId} visible={surface === "terminal"} />
 
