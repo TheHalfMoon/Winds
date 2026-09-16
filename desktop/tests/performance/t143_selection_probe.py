@@ -18,6 +18,13 @@ from pathlib import Path
 from typing import Any
 
 
+NUL = chr(0)
+
+
+def session_key(workspace_id: str, session_id: str) -> str:
+    return f"{workspace_id}{NUL}{session_id}"
+
+
 def request_json(
     base: str,
     method: str,
@@ -164,8 +171,8 @@ def main() -> int:
         )
         result["ready_snapshot"] = execute(args.webdriver, session, SNAPSHOT_SCRIPT)
 
-        session_a = "fixture-winds\u0000fixture-session-a"
-        session_b = "fixture-winds\u0000fixture-session-b"
+        session_a = session_key("fixture-winds", "fixture-session-a")
+        session_b = session_key("fixture-winds", "fixture-session-b")
         for index, target in enumerate((session_b, session_a, session_b, session_a, session_b, session_a)):
             attempt: dict[str, Any] = {"index": index, "target": target}
             attempt["before"] = execute(args.webdriver, session, SNAPSHOT_SCRIPT)

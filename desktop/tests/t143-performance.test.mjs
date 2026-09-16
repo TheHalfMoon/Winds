@@ -22,6 +22,7 @@ const platformBaselineHtml = readFileSync(join(desktopRoot, 'tests/performance/t
 const reactBaselineHtml = readFileSync(join(desktopRoot, 'tests/performance/t143_react_baseline/index.html'), 'utf8');
 const reactBaselineMain = readFileSync(join(desktopRoot, 'tests/performance/t143_react_baseline/main.tsx'), 'utf8');
 const webkitHarness = readFileSync(join(desktopRoot, 'tests/performance/t143_webkit.py'), 'utf8');
+const selectionProbe = readFileSync(join(desktopRoot, 'tests/performance/t143_selection_probe.py'), 'utf8');
 const assembleHarness = readFileSync(join(desktopRoot, 'tests/performance/t143_assemble.py'), 'utf8');
 
 test('T143 native readiness uses a qualification-only window-title capability and no production command', () => {
@@ -165,6 +166,11 @@ test('T143 WebKitGTK harness retains raw samples for every frozen local interact
   assert.match(webkitHarness, /WINDS_T143_WEBKIT_BROWSER_NAME\", \"MiniBrowser/);
   assert.match(webkitHarness, /WINDS_T143_WEBKIT_ARGUMENT\", \"--automation/);
   assert.doesNotMatch(webkitHarness, /epiphany|--automation-mode/);
+  assert.match(selectionProbe, /NUL = chr\(0\)/);
+  assert.match(selectionProbe, /session_key\("fixture-winds", "fixture-session-a"\)/);
+  assert.match(selectionProbe, /session_key\("fixture-winds", "fixture-session-b"\)/);
+  assert.doesNotMatch(selectionProbe, /fixture-winds\\\\u0000fixture-session-/);
+  assert.match(selectionProbe, /Diagnostic only; never contributes to T143 qualification checks or sample floors/);
   assert.match(webkitHarness, /WEBDRIVER_CAMPAIGN_HTTP_TIMEOUT_SECONDS = 330\.0/);
   assert.match(webkitHarness, /"script": WEBDRIVER_SCRIPT_TIMEOUT_MS/);
   assert.match(webkitHarness, /timeout=WEBDRIVER_CAMPAIGN_HTTP_TIMEOUT_SECONDS/);
