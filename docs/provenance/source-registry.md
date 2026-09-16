@@ -99,6 +99,7 @@ Fresh audit on 2026-09-16:
 - Founder permission statement: Founder states they have permission to copy/use all Herdr source code (`FOUNDER_PERMISSION_ASSERTION`);
 - current source audit: `docs/research/020-herdr-current-source-audit.md`;
 - full parity program: `docs/research/020-herdr-full-parity-program.md`.
+- exhaustive omission-prevention ledger: `docs/research/021-herdr-exhaustive-capability-ledger.md` (217 tracked rows: 24 agent families, 17 installable integration targets, 104 public API methods, 72 additional runtime/UI/transport/config/plugin/packaging capabilities).
 
 Admission boundary: the full-parity target is accepted as Founder product direction, but no persistent owner, IPC, remote execution, plugin runtime, marketplace, or Herdr code slice becomes implementation-authorized while Spec 010 remains open. After Spec 010 canonical close, each direct/adapted copy must bind exact source paths, license/notice obligations, third-party/vendor provenance, reuse mode, security/authority delta, tests, and review evidence through the successor Spec/Plan/Tasks program. Root Apache-2.0 status does not create blanket admission for vendored or third-party material.
 

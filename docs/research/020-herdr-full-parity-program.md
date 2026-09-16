@@ -43,6 +43,10 @@ WINDS_AUTHORITY_AND_VERIFICATION_INVARIANTS=PRESERVED
 
 Parity means capability semantics and user outcomes, not visual cloning. Winds must retain its own brand, information architecture, canonical Project/Session identity, authority model, evidence model, and human-decision boundaries.
 
+## 2A. Zero-omission capability ledger
+
+The required parity scope is enumerated in `docs/research/021-herdr-exhaustive-capability-ledger.md`. That ledger is normative for omission prevention inside this research program: every recorded Herdr capability must reach `PROVEN_WINDS_PARITY`, `PROVEN_WINDS_SUPERSET`, or an explicit `FOUNDER_ACCEPTED_NOT_APPLICABLE` disposition before full-program closeout. A successor Spec may redesign a mechanism but may not silently remove a ledger row.
+
 ## 3. Current Herdr capability floor
 
 The pinned source and tests establish the following parity floor for later formal specifications:
