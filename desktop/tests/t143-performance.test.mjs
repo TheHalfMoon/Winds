@@ -17,6 +17,8 @@ const fixture = readFileSync(join(desktopRoot, 'src/leftDock/fixture.ts'), 'utf8
 const bridge = readFileSync(join(desktopRoot, 'src/leftDock/bridge.ts'), 'utf8');
 const rightDockBridge = readFileSync(join(desktopRoot, 'src/rightDock/bridge.ts'), 'utf8');
 const nativeHarness = readFileSync(join(desktopRoot, 'tests/performance/t143_native.py'), 'utf8');
+const platformBaselineHarness = readFileSync(join(desktopRoot, 'tests/performance/t143_platform_baseline.py'), 'utf8');
+const platformBaselineHtml = readFileSync(join(desktopRoot, 'tests/performance/t143_platform_baseline/index.html'), 'utf8');
 const webkitHarness = readFileSync(join(desktopRoot, 'tests/performance/t143_webkit.py'), 'utf8');
 
 test('T143 native readiness uses a qualification-only window-title capability and no production command', () => {
@@ -84,11 +86,9 @@ test('T143 Linux reference runtime carries measured allocator defaults and the p
   assert.match(runLinux, /Malloc=1/);
   assert.match(host, /set_var\("MALLOC_ARENA_MAX", "1"\)/);
   assert.match(runLinux, /MALLOC_ARENA_MAX=1/);
-  assert.match(host, /var_os\("GLIBC_TUNABLES"\)\.is_none\(\)/);
-  assert.match(host, /set_var\("GLIBC_TUNABLES", "glibc\.malloc\.tcache_count=0"\)/);
-  assert.match(runLinux, /GLIBC_TUNABLES=glibc\.malloc\.tcache_count=0/);
-  assert.doesNotMatch(runLinux, /export (?:JSC_useJIT|Malloc|MALLOC_ARENA_MAX|GLIBC_TUNABLES)=/);
-  assert.match(runLinux, /GLIBC_TUNABLES=glibc\.malloc\.tcache_count=0[\s\S]*WebKitWebDriver --port=4444/);
+  assert.doesNotMatch(host, /GLIBC_TUNABLES|glibc\.malloc\.tcache_count/);
+  assert.doesNotMatch(runLinux, /GLIBC_TUNABLES|glibc\.malloc\.tcache_count/);
+  assert.doesNotMatch(runLinux, /export (?:JSC_useJIT|Malloc|MALLOC_ARENA_MAX)=/);
   assert.doesNotMatch(host, /JSC_forceRAMSize/);
   assert.doesNotMatch(runLinux, /JSC_forceRAMSize/);
   assert.doesNotMatch(host, /JSC_aggressiveHeapThresholdInMB/);
@@ -99,6 +99,25 @@ test('T143 Linux reference runtime carries measured allocator defaults and the p
   assert.doesNotMatch(runLinux, /MALLOC_TRIM_THRESHOLD_/);
   assert.doesNotMatch(host, /JSC_libpasScavengeContinuously/);
   assert.doesNotMatch(runLinux, /JSC_libpasScavengeContinuously/);
+});
+
+test('T143 platform baseline measures the same-host minimal-renderer baseline without changing the product gate', () => {
+  const runLinux = readFileSync(join(desktopRoot, 'tests/performance/t143_run_linux.sh'), 'utf8');
+  assert.match(platformBaselineHtml, /Winds T143 platform baseline/);
+  assert.match(platformBaselineHarness, /Diagnostic same-host minimal-renderer baseline/);
+  assert.match(platformBaselineHarness, /native\.idle_campaign\(proc, args\.idle_seconds, settle=2\.0\)/);
+  assert.match(platformBaselineHarness, /renderer_present_every_idle_sample/);
+  assert.match(platformBaselineHarness, /renderer_host_process_count_ge_2_every_idle_sample/);
+  assert.match(platformBaselineHarness, /diagnostic_renderer_host_idle_rss_le_300_mib/);
+  assert.doesNotMatch(platformBaselineHarness, /all_checks_pass/);
+  assert.match(runLinux, /t143_platform_baseline\.py/);
+  assert.match(runLinux, /platform-baseline\.json/);
+  assert.match(runLinux, /--idle-seconds 60/);
+  assert.equal(workflow.includes('frontendDist\":\"../tests/performance/t143_platform_baseline'), true);
+  assert.match(workflow, /Winds \[T143 Platform Baseline\]/);
+  assert.match(workflow, /platform-baseline-binary\.sha256/);
+  assert.match(workflow, /test \"\$baseline_sha\" != \"\$product_sha\"/);
+  assert.doesNotMatch(workflow, /--native t143-evidence\/platform-baseline\.json/);
 });
 
 test('T143 WebKitGTK harness retains raw samples for every frozen local interaction budget', () => {

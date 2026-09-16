@@ -4,6 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 binary="${1:-$repo_root/desktop/src-tauri/target/release/winds-desktop-host}"
 out_dir="${2:-$repo_root/t143-evidence}"
+baseline_binary="${3:-}"
 mkdir -p "$out_dir"
 
 export DISPLAY="${DISPLAY:-:99}"
@@ -27,6 +28,13 @@ trap cleanup EXIT
 sleep 1
 kill -0 "$xvfb_pid"
 
+if [[ -n "$baseline_binary" ]]; then
+  python3 "$repo_root/desktop/tests/performance/t143_platform_baseline.py" \
+    --binary "$baseline_binary" \
+    --output "$out_dir/platform-baseline.json" \
+    --idle-seconds 60
+fi
+
 python3 "$repo_root/desktop/tests/performance/t143_native.py" \
   --binary "$binary" \
   --output "$out_dir/native.json" \
@@ -39,7 +47,6 @@ env \
   JSC_useJIT=false \
   Malloc=1 \
   MALLOC_ARENA_MAX=1 \
-  GLIBC_TUNABLES=glibc.malloc.tcache_count=0 \
   WebKitWebDriver --port=4444 >"$webdriver_log" 2>&1 &
 webdriver_pid=$!
 
