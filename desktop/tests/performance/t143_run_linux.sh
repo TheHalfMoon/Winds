@@ -8,6 +8,8 @@ mkdir -p "$out_dir"
 
 export DISPLAY="${DISPLAY:-:99}"
 export GDK_BACKEND=x11
+# Xvfb has no production DMABUF path; keep the pinned reference runner on WebKitGTK's supported fallback.
+export WEBKIT_DISABLE_DMABUF_RENDERER=1
 export JSC_useJIT=false
 export Malloc=1
 export MALLOC_ARENA_MAX=1

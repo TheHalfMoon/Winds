@@ -1,8 +1,12 @@
 use std::io::Read;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
+#[cfg(target_os = "linux")]
+use tauri::Manager;
 use tauri::State;
 use tauri::ipc::{Channel, Response};
+#[cfg(target_os = "linux")]
+use webkit2gtk::{SettingsExt, WebViewExt};
 use winds_control::desktop::{
     DesktopBridgeAttentionSnapshot, DesktopBridgeCreateSessionRequest,
     DesktopBridgeLayoutPresentation, DesktopBridgeLayoutRequest,
@@ -350,11 +354,36 @@ fn configure_linux_webkit_memory_profile() {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn configure_linux_webkit_webview(app: &tauri::App) -> tauri::Result<()> {
+    let Some(main) = app.get_webview_window("main") else {
+        return Ok(());
+    };
+
+    main.with_webview(|webview| {
+        if let Some(settings) = webview.inner().settings() {
+            #[allow(deprecated)]
+            settings.set_enable_accelerated_2d_canvas(false);
+            settings.set_enable_webgl(false);
+            settings.set_enable_webaudio(false);
+            settings.set_enable_webrtc(false);
+            settings.set_enable_page_cache(false);
+        }
+    })?;
+
+    Ok(())
+}
+
 fn main() {
     #[cfg(target_os = "linux")]
     configure_linux_webkit_memory_profile();
 
     tauri::Builder::default()
+        .setup(|_app| {
+            #[cfg(target_os = "linux")]
+            configure_linux_webkit_webview(_app)?;
+            Ok(())
+        })
         .manage(Arc::new(TerminalHostState::default()))
         .invoke_handler(tauri::generate_handler![
             left_dock_snapshot,

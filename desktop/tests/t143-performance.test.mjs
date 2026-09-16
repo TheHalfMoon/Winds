@@ -73,7 +73,7 @@ test('T143 native harness directly enforces cold-launch and idle CPU RSS ceiling
 });
 
 
-test('T143 Linux reference runtime carries only measured-beneficial product memory defaults', () => {
+test('T143 Linux reference runtime carries measured product memory defaults and disables unused WebKit capabilities', () => {
   const runLinux = readFileSync(join(desktopRoot, 'tests/performance/t143_run_linux.sh'), 'utf8');
   assert.match(host, /configure_linux_webkit_memory_profile/);
   assert.match(host, /var_os\("JSC_useJIT"\)\.is_none\(\)/);
@@ -84,16 +84,18 @@ test('T143 Linux reference runtime carries only measured-beneficial product memo
   assert.match(runLinux, /export Malloc=1/);
   assert.match(host, /set_var\("MALLOC_ARENA_MAX", "1"\)/);
   assert.match(runLinux, /export MALLOC_ARENA_MAX=1/);
+  assert.match(runLinux, /export WEBKIT_DISABLE_DMABUF_RENDERER=1/);
+  assert.match(host, /configure_linux_webkit_webview/);
+  assert.match(host, /set_enable_accelerated_2d_canvas\(false\)/);
+  assert.match(host, /set_enable_webgl\(false\)/);
+  assert.match(host, /set_enable_webaudio\(false\)/);
+  assert.match(host, /set_enable_webrtc\(false\)/);
+  assert.match(host, /set_enable_page_cache\(false\)/);
+  assert.match(hostManifest, /target\.'cfg\(target_os = "linux"\)'\.dependencies[\s\S]*webkit2gtk = "=2\.0\.2"/);
   assert.doesNotMatch(host, /JSC_forceRAMSize/);
-  assert.doesNotMatch(runLinux, /JSC_forceRAMSize/);
   assert.doesNotMatch(host, /JSC_aggressiveHeapThresholdInMB/);
-  assert.doesNotMatch(runLinux, /JSC_aggressiveHeapThresholdInMB/);
-  assert.doesNotMatch(runLinux, /WEBKIT_DISABLE_DMABUF_RENDERER/);
-  assert.doesNotMatch(nativeHarness, /WEBKIT_DISABLE_DMABUF_RENDERER/);
   assert.doesNotMatch(host, /MALLOC_TRIM_THRESHOLD_/);
-  assert.doesNotMatch(runLinux, /MALLOC_TRIM_THRESHOLD_/);
   assert.doesNotMatch(host, /JSC_libpasScavengeContinuously/);
-  assert.doesNotMatch(runLinux, /JSC_libpasScavengeContinuously/);
 });
 
 test('T143 WebKitGTK harness retains raw samples for every frozen local interaction budget', () => {
@@ -116,7 +118,7 @@ test('T143 WebKitGTK harness retains raw samples for every frozen local interact
   assert.match(webkitHarness, /urlopen\(request, timeout=timeout\)/);
 });
 
-test('T143 workflow separates native qualification bytes from benchmark renderer bytes without new package dependency', () => {
+test('T143 workflow separates native qualification bytes and permits only the already-locked Linux WebKit crate', () => {
   assert.match(workflow, /runs-on: ubuntu-24\.04/);
   assert.match(workflow, /CANDIDATE_SHA/);
   assert.match(workflow, /git rev-parse HEAD/);
@@ -131,6 +133,9 @@ test('T143 workflow separates native qualification bytes from benchmark renderer
   assert.match(workflow, /t097_release_benchmark_campaign/);
   assert.match(workflow, /t143_assemble\.py/);
   assert.match(workflow, /actions\/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a/);
+  assert.match(workflow, /unexpected T143 Linux dependency set/);
+  assert.match(workflow, /introduced or changed a locked third-party package/);
+  assert.match(workflow, /unexpected winds-desktop-host lock dependency change/);
 });
 
 
