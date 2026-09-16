@@ -39,7 +39,6 @@ def launch_env(home: str) -> dict[str, str]:
     env.update({
         "WINDS_HOME": home,
         "GDK_BACKEND": "x11",
-        "WEBKIT_DISABLE_DMABUF_RENDERER": "1",
     })
     return env
 
