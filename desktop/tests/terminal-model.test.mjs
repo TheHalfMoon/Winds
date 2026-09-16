@@ -96,7 +96,15 @@ test('T135 terminal readiness and stream callbacks are stateful and generation b
   assert.match(surface, /const \[ready, setReady\] = useState\(false\)/);
   assert.match(surface, /setReady\(true\)/);
   assert.match(surface, /streamGenerationRef\.current !== streamGeneration/);
-  assert.match(surface, /const canStart = bridge\.source === "canonical" && !live && !busy && ready/);
+  assert.match(surface, /const canStart = bridge\.source === "canonical" && !live && !busy/);
+});
+
+test('T143 idle terminal surfaces defer xterm allocation until explicit terminal start', () => {
+  const surface = readFileSync(join(root, 'src/terminal/TerminalSurface.tsx'), 'utf8');
+  assert.match(surface, /const initializeTerminal = async/);
+  assert.match(surface, /const terminal = await initializeTerminal\(\);/);
+  assert.match(surface, /disabled=\{!ready\}/);
+  assert.doesNotMatch(surface, /useEffect\(\(\) => \{\n    if \(!visible \|\| terminalRef\.current \|\| initializingRef\.current\) return;/);
 });
 
 

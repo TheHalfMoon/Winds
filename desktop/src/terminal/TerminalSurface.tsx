@@ -144,19 +144,23 @@ export function TerminalSurface({
     };
   }, [canonicalSessionId]);
 
-  useEffect(() => {
-    if (!visible || terminalRef.current || initializingRef.current) return;
+  const initializeTerminal = async (): Promise<XTermTerminal> => {
+    if (terminalRef.current) return terminalRef.current;
+    if (initializingRef.current) throw new Error("Terminal renderer initialization already in progress");
     const host = hostRef.current;
-    if (!host) return;
+    if (!host) throw new Error("Terminal renderer host unavailable");
     const generation = generationRef.current;
     initializingRef.current = true;
 
-    const initialize = async () => {
+    try {
       const [{ Terminal }, { FitAddon }] = await Promise.all([
         import("@xterm/xterm"),
         import("@xterm/addon-fit"),
       ]);
-      if (generationRef.current !== generation || terminalRef.current) return;
+      if (generationRef.current !== generation) {
+        throw new Error("Terminal renderer target changed during initialization");
+      }
+      if (terminalRef.current) return terminalRef.current;
 
       const terminal = new Terminal({
         allowProposedApi: false,
@@ -222,27 +226,30 @@ export function TerminalSurface({
       });
       observer.observe(host);
       observerRef.current = observer;
+      return terminal;
+    } finally {
+      if (generationRef.current === generation) initializingRef.current = false;
+    }
+  };
 
-      const status = await bridge.status(canonicalSessionId);
-      if (generationRef.current !== generation || !status) return;
-      lifecycleRef.current = status;
-      setTerminalStatus(status);
-      terminal.options.disableStdin = true;
-      setMessage(
-        status.lifecycle === "live"
-          ? "Live Rust terminal already exists · prior output stream cannot be reattached in T135"
-          : lifecycleLabel(status),
-      );
-    };
-
-    void initialize()
+  useEffect(() => {
+    if (!visible) return;
+    const generation = generationRef.current;
+    void bridge.status(canonicalSessionId)
+      .then((status) => {
+        if (generationRef.current !== generation || !status) return;
+        lifecycleRef.current = status;
+        setTerminalStatus(status);
+        setMessage(
+          status.lifecycle === "live"
+            ? "Live Rust terminal already exists · prior output stream cannot be reattached in T135"
+            : lifecycleLabel(status),
+        );
+      })
       .catch((error) => {
         if (generationRef.current === generation) {
-          setMessage(`Terminal initialization failed · ${errorMessage(error)}`);
+          setMessage(`Terminal status failed · ${errorMessage(error)}`);
         }
-      })
-      .finally(() => {
-        if (generationRef.current === generation) initializingRef.current = false;
       });
   }, [bridge, canonicalSessionId, visible]);
 
@@ -253,13 +260,14 @@ export function TerminalSurface({
   };
 
   const start = async () => {
-    const terminal = terminalRef.current;
-    if (!terminal || bridge.source !== "canonical" || busy) return;
+    if (bridge.source !== "canonical" || busy) return;
     setBusy(true);
-    setMessage("Starting Rust-owned terminal…");
+    setMessage("Preparing terminal renderer…");
     invalidateOutputStream();
     const streamGeneration = streamGenerationRef.current;
     try {
+      const terminal = await initializeTerminal();
+      setMessage("Starting Rust-owned terminal…");
       const status = await bridge.start(
         { canonicalSessionId, rows: terminal.rows, cols: terminal.cols },
         {
@@ -319,7 +327,7 @@ export function TerminalSurface({
   };
 
   const live = terminalStatus?.lifecycle === "live";
-  const canStart = bridge.source === "canonical" && !live && !busy && ready;
+  const canStart = bridge.source === "canonical" && !live && !busy;
   return (
     <section className="terminal-surface" hidden={!visible} aria-label={`Terminal for canonical Session ${canonicalSessionId}`}>
       <header className="terminal-trust-bar">
@@ -340,12 +348,13 @@ export function TerminalSurface({
           <span>Literal search</span>
           <input
             value={search}
+            disabled={!ready}
             onChange={(event) => { setSearch(event.currentTarget.value); setSearchLine(0); }}
             onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); searchLiteral(); } }}
-            placeholder="Exact text"
+            placeholder={ready ? "Exact text" : "Start terminal to load renderer"}
           />
         </label>
-        <button type="button" className="text-button" disabled={!search} onClick={searchLiteral}>Find next</button>
+        <button type="button" className="text-button" disabled={!ready || !search} onClick={searchLiteral}>Find next</button>
       </div>
       <div className="terminal-host" ref={hostRef} aria-label="Untrusted interactive terminal output" />
       <p className="terminal-status" role="status" aria-live="polite">{message}</p>
