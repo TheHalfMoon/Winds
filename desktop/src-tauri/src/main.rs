@@ -339,9 +339,15 @@ fn terminal_close(
 
 #[cfg(target_os = "linux")]
 fn configure_linux_webkit_memory_profile() {
-    if std::env::var_os("JSC_useJIT").is_none() {
-        // SAFETY: main calls this before Tauri creates its WebKitGTK runtime or worker threads.
-        unsafe { std::env::set_var("JSC_useJIT", "false") };
+    // These WebKitGTK/JSC switches are product defaults on Linux, not benchmark-only overrides.
+    // SAFETY: main calls this before Tauri creates its WebKitGTK runtime or worker threads.
+    unsafe {
+        if std::env::var_os("JSC_useJIT").is_none() {
+            std::env::set_var("JSC_useJIT", "false");
+        }
+        if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
+            std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+        }
     }
 }
 

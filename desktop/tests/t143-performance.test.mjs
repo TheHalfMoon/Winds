@@ -57,8 +57,11 @@ test('T143 Linux reference runtime applies the product WebKit JIT memory profile
   assert.match(host, /configure_linux_webkit_memory_profile/);
   assert.match(host, /var_os\("JSC_useJIT"\)\.is_none\(\)/);
   assert.match(host, /set_var\("JSC_useJIT", "false"\)/);
+  assert.match(host, /var_os\("WEBKIT_DISABLE_COMPOSITING_MODE"\)\.is_none\(\)/);
+  assert.match(host, /set_var\("WEBKIT_DISABLE_COMPOSITING_MODE", "1"\)/);
   assert.match(runLinux, /export JSC_useJIT=false/);
-  assert.doesNotMatch(host, /VITE_WINDS_T143_BENCHMARK.*JSC_useJIT/);
+  assert.match(runLinux, /export WEBKIT_DISABLE_COMPOSITING_MODE=1/);
+  assert.doesNotMatch(host, /VITE_WINDS_T143_BENCHMARK.*(?:JSC_useJIT|WEBKIT_DISABLE_COMPOSITING_MODE)/);
 });
 
 test('T143 WebKitGTK harness retains raw samples for every frozen local interaction budget', () => {
