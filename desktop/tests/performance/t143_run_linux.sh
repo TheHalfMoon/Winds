@@ -10,9 +10,6 @@ export DISPLAY="${DISPLAY:-:99}"
 export GDK_BACKEND=x11
 # Xvfb has no production DMABUF path; keep the pinned reference runner on WebKitGTK's supported fallback.
 export WEBKIT_DISABLE_DMABUF_RENDERER=1
-export JSC_useJIT=false
-export Malloc=1
-export MALLOC_ARENA_MAX=1
 
 xvfb_log="$out_dir/xvfb.log"
 http_log="$out_dir/http.log"
@@ -38,7 +35,12 @@ python3 "$repo_root/desktop/tests/performance/t143_native.py" \
 
 python3 -m http.server 4173 --bind 127.0.0.1 --directory "$repo_root/desktop/dist" >"$http_log" 2>&1 &
 http_pid=$!
-WebKitWebDriver --port=4444 >"$webdriver_log" 2>&1 &
+env \
+  JSC_useJIT=false \
+  Malloc=1 \
+  MALLOC_ARENA_MAX=1 \
+  GLIBC_TUNABLES=glibc.malloc.tcache_count=0 \
+  WebKitWebDriver --port=4444 >"$webdriver_log" 2>&1 &
 webdriver_pid=$!
 
 python3 - <<'PY'

@@ -1,12 +1,8 @@
 use std::io::Read;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
-#[cfg(target_os = "linux")]
-use tauri::Manager;
 use tauri::State;
 use tauri::ipc::{Channel, Response};
-#[cfg(target_os = "linux")]
-use webkit2gtk::{SettingsExt, WebViewExt};
 use winds_control::desktop::{
     DesktopBridgeAttentionSnapshot, DesktopBridgeCreateSessionRequest,
     DesktopBridgeLayoutPresentation, DesktopBridgeLayoutRequest,
@@ -339,8 +335,9 @@ fn terminal_close(
 
 #[cfg(target_os = "linux")]
 fn configure_linux_webkit_memory_profile() {
-    // These JavaScriptCore switches are Linux product defaults, not benchmark-only overrides.
-    // SAFETY: main calls this before Tauri creates its WebKitGTK runtime or worker threads.
+    // These Linux WebKit process-memory settings are product defaults, not benchmark-only overrides.
+    // SAFETY: main calls this before Tauri creates WebKitGTK child processes or worker threads;
+    // process-start-only glibc tunables affect descendants, not the already-running Tauri host.
     unsafe {
         if std::env::var_os("JSC_useJIT").is_none() {
             std::env::set_var("JSC_useJIT", "false");
@@ -351,27 +348,10 @@ fn configure_linux_webkit_memory_profile() {
         if std::env::var_os("MALLOC_ARENA_MAX").is_none() {
             std::env::set_var("MALLOC_ARENA_MAX", "1");
         }
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn configure_linux_webkit_webview(app: &tauri::App) -> tauri::Result<()> {
-    let Some(main) = app.get_webview_window("main") else {
-        return Ok(());
-    };
-
-    main.with_webview(|webview| {
-        if let Some(settings) = webview.inner().settings() {
-            #[allow(deprecated)]
-            settings.set_enable_accelerated_2d_canvas(false);
-            settings.set_enable_webgl(false);
-            settings.set_enable_webaudio(false);
-            settings.set_enable_webrtc(false);
-            settings.set_enable_page_cache(false);
+        if std::env::var_os("GLIBC_TUNABLES").is_none() {
+            std::env::set_var("GLIBC_TUNABLES", "glibc.malloc.tcache_count=0");
         }
-    })?;
-
-    Ok(())
+    }
 }
 
 fn main() {
@@ -379,11 +359,6 @@ fn main() {
     configure_linux_webkit_memory_profile();
 
     tauri::Builder::default()
-        .setup(|_app| {
-            #[cfg(target_os = "linux")]
-            configure_linux_webkit_webview(_app)?;
-            Ok(())
-        })
         .manage(Arc::new(TerminalHostState::default()))
         .invoke_handler(tauri::generate_handler![
             left_dock_snapshot,

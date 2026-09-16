@@ -73,29 +73,32 @@ test('T143 native harness directly enforces cold-launch and idle CPU RSS ceiling
 });
 
 
-test('T143 Linux reference runtime carries measured product memory defaults and disables unused WebKit capabilities', () => {
+test('T143 Linux reference runtime carries measured allocator defaults and the pinned Xvfb fallback', () => {
   const runLinux = readFileSync(join(desktopRoot, 'tests/performance/t143_run_linux.sh'), 'utf8');
   assert.match(host, /configure_linux_webkit_memory_profile/);
   assert.match(host, /var_os\("JSC_useJIT"\)\.is_none\(\)/);
   assert.match(host, /set_var\("JSC_useJIT", "false"\)/);
-  assert.match(runLinux, /export JSC_useJIT=false/);
+  assert.match(runLinux, /JSC_useJIT=false/);
   assert.match(host, /var_os\("Malloc"\)\.is_none\(\)/);
   assert.match(host, /set_var\("Malloc", "1"\)/);
-  assert.match(runLinux, /export Malloc=1/);
+  assert.match(runLinux, /Malloc=1/);
   assert.match(host, /set_var\("MALLOC_ARENA_MAX", "1"\)/);
-  assert.match(runLinux, /export MALLOC_ARENA_MAX=1/);
-  assert.match(runLinux, /export WEBKIT_DISABLE_DMABUF_RENDERER=1/);
-  assert.match(host, /configure_linux_webkit_webview/);
-  assert.match(host, /set_enable_accelerated_2d_canvas\(false\)/);
-  assert.match(host, /set_enable_webgl\(false\)/);
-  assert.match(host, /set_enable_webaudio\(false\)/);
-  assert.match(host, /set_enable_webrtc\(false\)/);
-  assert.match(host, /set_enable_page_cache\(false\)/);
-  assert.match(hostManifest, /target\.'cfg\(target_os = "linux"\)'\.dependencies[\s\S]*webkit2gtk = "=2\.0\.2"/);
+  assert.match(runLinux, /MALLOC_ARENA_MAX=1/);
+  assert.match(host, /var_os\("GLIBC_TUNABLES"\)\.is_none\(\)/);
+  assert.match(host, /set_var\("GLIBC_TUNABLES", "glibc\.malloc\.tcache_count=0"\)/);
+  assert.match(runLinux, /GLIBC_TUNABLES=glibc\.malloc\.tcache_count=0/);
+  assert.doesNotMatch(runLinux, /export (?:JSC_useJIT|Malloc|MALLOC_ARENA_MAX|GLIBC_TUNABLES)=/);
+  assert.match(runLinux, /GLIBC_TUNABLES=glibc\.malloc\.tcache_count=0[\s\S]*WebKitWebDriver --port=4444/);
   assert.doesNotMatch(host, /JSC_forceRAMSize/);
+  assert.doesNotMatch(runLinux, /JSC_forceRAMSize/);
   assert.doesNotMatch(host, /JSC_aggressiveHeapThresholdInMB/);
+  assert.doesNotMatch(runLinux, /JSC_aggressiveHeapThresholdInMB/);
+  assert.match(runLinux, /export WEBKIT_DISABLE_DMABUF_RENDERER=1/);
+  assert.doesNotMatch(nativeHarness, /WEBKIT_DISABLE_DMABUF_RENDERER/);
   assert.doesNotMatch(host, /MALLOC_TRIM_THRESHOLD_/);
+  assert.doesNotMatch(runLinux, /MALLOC_TRIM_THRESHOLD_/);
   assert.doesNotMatch(host, /JSC_libpasScavengeContinuously/);
+  assert.doesNotMatch(runLinux, /JSC_libpasScavengeContinuously/);
 });
 
 test('T143 WebKitGTK harness retains raw samples for every frozen local interaction budget', () => {
@@ -118,7 +121,7 @@ test('T143 WebKitGTK harness retains raw samples for every frozen local interact
   assert.match(webkitHarness, /urlopen\(request, timeout=timeout\)/);
 });
 
-test('T143 workflow separates native qualification bytes and permits only the already-locked Linux WebKit crate', () => {
+test('T143 workflow separates native qualification bytes from benchmark renderer bytes without new package dependency', () => {
   assert.match(workflow, /runs-on: ubuntu-24\.04/);
   assert.match(workflow, /CANDIDATE_SHA/);
   assert.match(workflow, /git rev-parse HEAD/);
@@ -133,9 +136,8 @@ test('T143 workflow separates native qualification bytes and permits only the al
   assert.match(workflow, /t097_release_benchmark_campaign/);
   assert.match(workflow, /t143_assemble\.py/);
   assert.match(workflow, /actions\/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a/);
-  assert.match(workflow, /unexpected T143 Linux dependency set/);
-  assert.match(workflow, /introduced or changed a locked third-party package/);
-  assert.match(workflow, /unexpected winds-desktop-host lock dependency change/);
+  assert.match(workflow, /desktop\/src-tauri\/Cargo\.toml desktop\/src-tauri\/Cargo\.lock/);
+  assert.doesNotMatch(workflow, /unexpected T143 Linux dependency set/);
 });
 
 
