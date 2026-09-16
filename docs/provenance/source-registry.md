@@ -87,9 +87,20 @@ Detailed roadmap reconciliation: `docs/research/014-loopforge-skillhone-roadmap-
 
 Founder supplied `https://herdr.dev`. The associated canonical repository resolved during research is:
 
-- https://github.com/herdrdev/herdr — **DERIVED_CANONICAL / UNADMITTED**.
+- https://github.com/herdrdev/herdr — **DERIVED_CANONICAL / FOUNDER-DIRECTED FUTURE DONOR / NOT YET IMPLEMENTATION-ADMITTED**.
 
-Observed research facts at registry creation: Rust project; package metadata identifies Herdr as a terminal workspace manager for AI coding agents; inspected package metadata reported Apache-2.0 and `portable-pty = 0.9.0`. Its server/socket/API/plugin/persistent-session design is useful future donor evidence but is intentionally **not** imported into Spec 003.
+Fresh audit on 2026-09-16:
+
+- exact commit: `18061191fdc019498610aee81f0df93f6c2ebd31`;
+- exact tree: `ab44d1c6939f1e9b5657512e831c6e50969941a2`;
+- root repository license: Apache-2.0;
+- delta from prior Winds Herdr research pin `ef2674bab8a3b38984578473c1a80589ebcbb333`: 181 commits;
+- Founder direction: Winds should reach full Herdr feature parity;
+- Founder permission statement: Founder states they have permission to copy/use all Herdr source code (`FOUNDER_PERMISSION_ASSERTION`);
+- current source audit: `docs/research/020-herdr-current-source-audit.md`;
+- full parity program: `docs/research/020-herdr-full-parity-program.md`.
+
+Admission boundary: the full-parity target is accepted as Founder product direction, but no persistent owner, IPC, remote execution, plugin runtime, marketplace, or Herdr code slice becomes implementation-authorized while Spec 010 remains open. After Spec 010 canonical close, each direct/adapted copy must bind exact source paths, license/notice obligations, third-party/vendor provenance, reuse mode, security/authority delta, tests, and review evidence through the successor Spec/Plan/Tasks program. Root Apache-2.0 status does not create blanket admission for vendored or third-party material.
 
 ## nicobailon Pi ecosystem snapshot
 
