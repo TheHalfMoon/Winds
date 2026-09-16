@@ -77,7 +77,7 @@ test("T129 focus and scale fixtures create observable rendered differences", () 
 test("T129 fixture matrix contains the required viewport and accessibility surfaces", () => {
   const fixtures = fixtureManifest.fixtures;
   assert.equal(fixtureManifest.schema, "winds-quiet-current-visual-fixtures/1");
-  assert.equal(fixtures.length, 11);
+  assert.equal(fixtures.length, 15);
   assert.deepEqual(fixtures.slice(0, 3).map(({ width, height }) => [width, height]), [[1280, 800], [1440, 900], [1920, 1080]]);
   const queries = fixtures.map(({ query }) => query);
   assert.equal(queries.includes("?theme=light"), true);

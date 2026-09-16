@@ -12,6 +12,13 @@ if (!root) {
 
 const params = new URLSearchParams(window.location.search);
 const documentRoot = document.documentElement;
+const leftTool = params.get("tool");
+if (leftTool === "chat" || leftTool === "projects") {
+  documentRoot.dataset.leftTool = leftTool;
+} else {
+  delete documentRoot.dataset.leftTool;
+}
+
 const theme = params.get("theme");
 
 if (theme === "dark" || theme === "light" || theme === "contrast") {

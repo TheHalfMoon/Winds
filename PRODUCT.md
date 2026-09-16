@@ -2,27 +2,35 @@
 
 Winds is a local-first agentic work environment for people who run serious work across multiple coding agents, terminals, files, evidence, and repository state.
 
-The desktop product is not a terminal wrapper and not a chat client. It is a precision workspace for parallel intelligence: Projects organize durable context, Sessions organize active work, and the center workspace keeps execution, conversation, evidence, and human attention legible without collapsing them into one transcript.
+The desktop product is a professional coding-agent IDE rather than a dashboard, terminal wrapper, or centered chat client. Projects organize durable context, Sessions identify exact active work, Chat keeps the selected Session conversation visible, and the Workbench keeps execution surfaces primary without collapsing authority into a transcript.
 
 ## Product promise
 
-Winds should feel calm while carrying dense work. The interface must make it obvious what is active, what needs attention, which runtime a Session is using, and which files or evidence are in scope. Visual polish must never upgrade authority: an icon, color, label, or agent message is presentation, not proof.
+Winds should feel precise and energetic while carrying dense work for hours. The interface must make it obvious which exact Session is selected, what needs attention, which runtime identity is proven, and which files or evidence are in scope. Visual polish never upgrades authority: an icon, color, label, agent message, or selected tool window is presentation, not proof.
 
 ## Primary desktop anatomy
 
-1. **Left dock — Projects and Sessions.** Projects group Sessions for organization. Sessions are renameable presentation identities over canonical Winds Sessions. Runtime marks sit with the Session, not as global branding.
-2. **Center workspace — one or two independent Session panes.** Each pane has its own Work Stream, focus, composer, runtime mark, and contextual status. Dual view never implies broadcast input.
-3. **Right dock — Files first, context second.** Files, Changes, Evidence, Context, and Artifacts are contextual projections of the selected Session or pane. The dock never becomes a generic file manager or raw host bridge.
-4. **Quiet status rail.** Canonical repository/workspace context and non-authoritative presentation status stay visible without dominating the work.
+1. **Winds activity rail.** A narrow far-left rail carries Winds-owned Current Mark geometry and switches bounded tool windows. Chat is the default; Projects is a sibling tool window; command navigation remains a safe global action.
+2. **Left Chat tool window.** Chat presents the exact selected canonical Session identity, its bounded conversation/work-stream projection, and truthful composer availability. It never broadcasts and never implies runtime input when direct dispatch is unavailable.
+3. **Left Projects tool window.** Projects and nested Sessions remain directly reachable for organization, exact-target selection, rename, pin, ordering, and allowed Session creation. Selecting a Session returns the operator to Chat without changing the peer Session identity or granting cross-session authority.
+4. **Center Workbench.** One or two exact Session identities occupy the Workbench. Terminal is the primary execution surface; Activity remains available as a secondary work-event surface. A Workbench composer is intentionally absent so the center does not duplicate the primary Chat surface.
+5. **Contextual Inspector.** Files, Changes, Evidence, Context, Artifacts, and Needs You remain bound to the focused exact Session. The Inspector never becomes a generic host bridge or verification shortcut.
+6. **Compact status rail.** Repository/workspace presentation context and non-authoritative status remain visible without dominating the work.
+
+## Current Spectrum identity
+
+Current Spectrum evolves the earlier Quiet Current foundation into an independent Winds IDE identity: deep graphite and ink surfaces, precise separators, compact geometry, and restrained violet, indigo/azure, magenta, and coral energy for identity, focus, navigation, and agent activity.
+
+The visual energy may be informed by premium professional IDEs, but Winds owns its composition, marks, spacing, typography, tokens, and interaction grammar. Winds does not copy competitor layout details, proprietary assets, logos, exact color sampling, typography, icons, or trade dress.
 
 ## Interaction character
 
-Winds is compact-professional rather than minimal-for-minimalism. It favors typographic hierarchy, aligned data, quiet separators, restrained accents, and fast keyboard focus. It avoids dashboard cards, floating glass panels, oversized chat bubbles, neon terminals, AI-purple gradients, decorative glow, and copied competitor trade dress.
+Winds is compact-professional rather than minimal-for-minimalism. It favors typographic hierarchy, aligned data, quiet separators, small radii, restrained spectral accents, and fast keyboard focus. It avoids dashboard cards, floating glass panels, oversized chat bubbles, gradient text, neon terminals, decorative AI glow, and copied competitor chrome.
 
-## First-program runtime presentation
+## Runtime presentation
 
-The first desktop program visually distinguishes Codex, Claude, shell, unknown, unavailable, conflicting, and stale states. Codex and Claude use Winds-authored text glyphs/monograms with accessible labels. No proprietary logo file is required for recognition.
+The desktop program visually distinguishes Codex, Claude, shell, unknown, unavailable, conflicting, and stale states. Runtime marks are Winds-authored accessible presentation glyphs. Runtime labels never substitute for observed runtime proof.
 
 ## Truth boundary
 
-T129 is a static visual slice. Fixture Projects, Sessions, files, activity, runtime labels, and statuses are illustrative only. They must not be interpreted as live Store, Git, PTY, provider, workflow, or verification truth. Data binding begins only in later authorized tasks.
+T142A changes presentation and renderer composition only. It adds no Rust, host, Git, filesystem, runtime, provider, credential, persistence, network, migration, dependency, lockfile, or verification authority. Fixture work events remain illustrative unless their provenance says otherwise. Canonical Sessions keep direct runtime input unavailable whenever T139 authority says it is unavailable.
