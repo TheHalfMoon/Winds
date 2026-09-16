@@ -4939,7 +4939,6 @@ version = "0.1.0"
 dependencies = [
  "tauri",
  "tauri-build",
- "webkit2gtk",
  "winds-control",
 ]
 
