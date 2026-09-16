@@ -137,7 +137,8 @@ jobs:
           set -euo pipefail
           mkdir -p t143-evidence
           (cd desktop && VITE_WINDS_T143_NATIVE_READY=1 npm run frontend:build)
-          cargo build --release --locked --manifest-path desktop/src-tauri/Cargo.toml
+          TAURI_CONFIG='{"app":{"security":{"capabilities":[{"identifier":"t143-native-ready","windows":["main"],"permissions":["core:window:allow-set-title"]}]}}}' \
+            cargo build --release --locked --manifest-path desktop/src-tauri/Cargo.toml
           test -x desktop/src-tauri/target/release/winds-desktop-host
           rm -rf t143-evidence/native-renderer-dist
           cp -a desktop/dist t143-evidence/native-renderer-dist

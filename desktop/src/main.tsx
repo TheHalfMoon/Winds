@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { markT143NativeReadyWindow } from "./leftDock/bridge";
 import "./styles.css";
 import "./fixture-modes.css";
 
@@ -72,7 +73,9 @@ if (import.meta.env.VITE_WINDS_T143_NATIVE_READY === "1") {
       window.requestAnimationFrame(() => {
         if (reported) return;
         reported = true;
-        document.title = "Winds [T143 Ready]";
+        void markT143NativeReadyWindow().catch((error: unknown) => {
+          console.error("T143 native ready title failed", error);
+        });
       });
     });
     return true;

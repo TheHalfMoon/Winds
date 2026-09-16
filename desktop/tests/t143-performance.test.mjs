@@ -11,6 +11,7 @@ const workflow = readFileSync(join(repoRoot, '.github/workflows/t143-performance
 const t142aWorkflow = readFileSync(join(repoRoot, '.github/workflows/t142a-winds-identity.yml'), 'utf8');
 const host = readFileSync(join(desktopRoot, 'src-tauri/src/main.rs'), 'utf8');
 const hostManifest = readFileSync(join(desktopRoot, 'src-tauri/Cargo.toml'), 'utf8');
+const tauriConfig = readFileSync(join(desktopRoot, 'src-tauri/tauri.conf.json'), 'utf8');
 const main = readFileSync(join(desktopRoot, 'src/main.tsx'), 'utf8');
 const fixture = readFileSync(join(desktopRoot, 'src/leftDock/fixture.ts'), 'utf8');
 const bridge = readFileSync(join(desktopRoot, 'src/leftDock/bridge.ts'), 'utf8');
@@ -18,17 +19,24 @@ const rightDockBridge = readFileSync(join(desktopRoot, 'src/rightDock/bridge.ts'
 const nativeHarness = readFileSync(join(desktopRoot, 'tests/performance/t143_native.py'), 'utf8');
 const webkitHarness = readFileSync(join(desktopRoot, 'tests/performance/t143_webkit.py'), 'utf8');
 
-test('T143 native readiness is renderer-only and adds no host feature or production Tauri command', () => {
+test('T143 native readiness uses a qualification-only window-title capability and no production command', () => {
   assert.doesNotMatch(hostManifest, /t143-benchmark/);
   assert.equal((host.match(/#\[tauri::command\]/g) ?? []).length, 22);
   assert.doesNotMatch(host, /PageLoadEvent|WINDS_T143_READY_MS|t143-ready/);
   assert.match(main, /VITE_WINDS_T143_NATIVE_READY === "1"/);
-  assert.match(main, /document\.title = "Winds \[T143 Ready\]"/);
+  assert.match(main, /markT143NativeReadyWindow\(\)/);
+  assert.doesNotMatch(main, /@tauri-apps\/api/);
+  assert.match(bridge, /markT143NativeReadyWindow/);
+  assert.match(bridge, /import\("@tauri-apps\/api\/window"\)/);
+  assert.match(bridge, /getCurrentWindow\(\)\.setTitle\("Winds \[T143 Ready\]"\)/);
   assert.doesNotMatch(main, /searchParams\.set\("t143-ready"|location\.replace/);
   assert.match(bridge, /VITE_WINDS_T143_NATIVE_READY === "1"/);
   assert.match(rightDockBridge, /VITE_WINDS_T143_NATIVE_READY === "1"/);
   assert.match(rightDockBridge, /return fixtureBridge/);
-  assert.doesNotMatch(main, /@tauri-apps\/api|invoke\(/);
+  assert.match(tauriConfig, /"capabilities": \[\]/);
+  assert.match(workflow, /TAURI_CONFIG=.*t143-native-ready/);
+  assert.match(workflow, /core:window:allow-set-title/);
+  assert.doesNotMatch(workflow, /core:window:allow-(?!set-title)/);
 });
 
 test('T143 large performance fixture is benchmark-only and exceeds the frozen scale floor', () => {
@@ -92,6 +100,7 @@ test('T143 workflow separates native qualification bytes from benchmark renderer
   assert.match(workflow, /git rev-parse HEAD/);
   assert.match(workflow, /webkit2gtk-driver epiphany-browser xvfb dbus-x11 xdotool/);
   assert.match(workflow, /VITE_WINDS_T143_NATIVE_READY=1 npm run frontend:build/);
+  assert.match(workflow, /TAURI_CONFIG=.*core:window:allow-set-title/);
   assert.match(workflow, /cargo build --release --locked --manifest-path desktop\/src-tauri\/Cargo\.toml/);
   assert.doesNotMatch(workflow, /--features t143-benchmark/);
   assert.match(workflow, /native-renderer-dist/);
