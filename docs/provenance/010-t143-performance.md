@@ -53,6 +53,8 @@ T143 repairs that stale gate without weakening the accepted T142A boundary. The 
 
 The first independent exact-head review of successor `6e4744afae775a63eea091f196d9f6d74b62b2d8` found one material harness gap: the 60-second idle CPU/RSS campaign recorded process counts and names but did not require a WebKit renderer to remain present, so a host-only remainder could theoretically satisfy the frozen `renderer+host` resource ceilings. That reviewed head is therefore not qualification authority.
 
+The first live campaign after that repair, on successor `6fb4a1d75a2410e1a3ecf05ddf53866f5049ca48`, failed the unchanged `renderer+host idle RSS <=300 MiB` gate with an aggregate process-tree RSS maximum of `420.891 MiB`; launch, idle CPU, renderer-presence, and process-count checks passed. That failure is retained as real diagnostic evidence and is not rerun-to-green. The next successor adds per-process RSS attribution only; it does not change the RSS scope, threshold, sample duration, or pass/fail calculation.
+
 The forward-only successor requires every retained idle sample to include at least one descendant process whose Linux `comm` contains `WebKit`, requires at least two processes (host plus descendant) in every idle sample, records per-sample names and renderer-presence truth, and includes both predicates in the native checks propagated into combined `all_checks_pass`. This closes the review finding without changing the product command surface or performance ceilings.
 
 ## Closure discipline

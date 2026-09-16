@@ -149,26 +149,49 @@ def idle_campaign(proc: subprocess.Popen[bytes], seconds: float, settle: float) 
     min_process_count: int | None = None
     observed_names: set[str] = set()
     renderer_present_samples = 0
+    max_rss_by_role = {"host": 0, "renderer": 0, "network": 0, "other": 0}
     samples: list[dict[str, Any]] = []
 
     while time.monotonic() - started < seconds:
         pids = descendants(proc.pid)
         rss = 0
-        sample_names = {proc_name(pid) for pid in pids}
-        renderer_present = any("WebKit" in name for name in sample_names)
-        if renderer_present:
-            renderer_present_samples += 1
-        observed_names.update(sample_names)
-        for pid in pids:
+        process_rss: list[dict[str, Any]] = []
+        sample_names: set[str] = set()
+        renderer_present = False
+        for pid in sorted(pids):
+            name = proc_name(pid)
+            sample_names.add(name)
+            if "WebKit" in name:
+                renderer_present = True
             stat = proc_stat(pid)
             if stat is None:
                 continue
             ticks, pages = stat
-            rss += pages * page_size
+            rss_bytes = pages * page_size
+            rss += rss_bytes
+            if pid == proc.pid:
+                role = "host"
+            elif "WebKitWeb" in name:
+                role = "renderer"
+            elif "WebKitNetwork" in name:
+                role = "network"
+            else:
+                role = "other"
+            max_rss_by_role[role] = max(max_rss_by_role[role], rss_bytes)
+            process_rss.append({
+                "pid": pid,
+                "name": name,
+                "role": role,
+                "rss_bytes": rss_bytes,
+                "rss_mib": round(rss_bytes / (1024 * 1024), 3),
+            })
             prior = previous_ticks.get(pid)
             if prior is not None and ticks >= prior:
                 accumulated_ticks += ticks - prior
             previous_ticks[pid] = ticks
+        if renderer_present:
+            renderer_present_samples += 1
+        observed_names.update(sample_names)
         max_rss = max(max_rss, rss)
         max_process_count = max(max_process_count, len(pids))
         min_process_count = len(pids) if min_process_count is None else min(min_process_count, len(pids))
@@ -178,6 +201,7 @@ def idle_campaign(proc: subprocess.Popen[bytes], seconds: float, settle: float) 
             "process_count": len(pids),
             "renderer_present": renderer_present,
             "process_names": sorted(name for name in sample_names if name),
+            "process_rss": process_rss,
         })
         time.sleep(0.25)
 
@@ -197,6 +221,10 @@ def idle_campaign(proc: subprocess.Popen[bytes], seconds: float, settle: float) 
         "renderer_present_sample_count": renderer_present_samples,
         "renderer_present_every_sample": bool(samples) and renderer_present_samples == len(samples),
         "observed_process_names": sorted(name for name in observed_names if name),
+        "rss_max_by_role_bytes": max_rss_by_role,
+        "rss_max_by_role_mib": {
+            role: round(value / (1024 * 1024), 3) for role, value in max_rss_by_role.items()
+        },
         "raw_samples": samples,
     }
 
