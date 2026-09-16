@@ -69,12 +69,15 @@ test('T143 native harness directly enforces cold-launch and idle CPU RSS ceiling
 });
 
 
-test('T143 Linux reference runtime retains only the measured-beneficial JSC JIT profile', () => {
+test('T143 Linux reference runtime carries the measured JIT profile and current allocator experiment', () => {
   const runLinux = readFileSync(join(desktopRoot, 'tests/performance/t143_run_linux.sh'), 'utf8');
   assert.match(host, /configure_linux_webkit_memory_profile/);
   assert.match(host, /var_os\("JSC_useJIT"\)\.is_none\(\)/);
   assert.match(host, /set_var\("JSC_useJIT", "false"\)/);
   assert.match(runLinux, /export JSC_useJIT=false/);
+  assert.match(host, /var_os\("Malloc"\)\.is_none\(\)/);
+  assert.match(host, /set_var\("Malloc", "1"\)/);
+  assert.match(runLinux, /export Malloc=1/);
   assert.doesNotMatch(host, /JSC_libpasScavengeContinuously/);
   assert.doesNotMatch(runLinux, /JSC_libpasScavengeContinuously/);
 });

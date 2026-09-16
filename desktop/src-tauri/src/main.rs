@@ -341,6 +341,9 @@ fn configure_linux_webkit_memory_profile() {
         if std::env::var_os("JSC_useJIT").is_none() {
             std::env::set_var("JSC_useJIT", "false");
         }
+        if std::env::var_os("Malloc").is_none() {
+            std::env::set_var("Malloc", "1");
+        }
     }
 }
 
