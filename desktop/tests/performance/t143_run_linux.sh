@@ -80,6 +80,10 @@ test -x "$minibrowser"
 export WINDS_T143_WEBKIT_BINARY="$minibrowser"
 export WINDS_T143_WEBKIT_BROWSER_NAME=MiniBrowser
 export WINDS_T143_WEBKIT_ARGUMENT=--automation
+python3 "$repo_root/desktop/tests/performance/t143_selection_probe.py" \
+  --base-url http://127.0.0.1:4173/ \
+  --webdriver http://127.0.0.1:4444 \
+  --output "$out_dir/renderer-selection-probe.json"
 python3 "$repo_root/desktop/tests/performance/t143_webkit.py" \
   --base-url http://127.0.0.1:4173/ \
   --webdriver http://127.0.0.1:4444 \
