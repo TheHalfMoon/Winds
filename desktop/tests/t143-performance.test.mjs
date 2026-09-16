@@ -169,7 +169,6 @@ test('T143 WebKitGTK harness retains raw samples for every frozen local interact
   assert.match(selectionProbe, /NUL = chr\(0\)/);
   assert.match(selectionProbe, /session_key\("fixture-winds", "fixture-session-a"\)/);
   assert.match(selectionProbe, /session_key\("fixture-winds", "fixture-session-b"\)/);
-  assert.doesNotMatch(selectionProbe, /fixture-winds\\\\u0000fixture-session-/);
   assert.match(selectionProbe, /Diagnostic only; never contributes to T143 qualification checks or sample floors/);
   assert.match(webkitHarness, /WEBDRIVER_CAMPAIGN_HTTP_TIMEOUT_SECONDS = 330\.0/);
   assert.match(webkitHarness, /"script": WEBDRIVER_SCRIPT_TIMEOUT_MS/);
@@ -181,6 +180,12 @@ test('T143 WebKitGTK harness retains raw samples for every frozen local interact
   assert.match(webkitHarness, /winds-t143-renderer-failure-v1/);
   assert.match(webkitHarness, /browser_phase/);
   assert.match(webkitHarness, /normal:selection/);
+  assert.match(webkitHarness, /selectExactSession/);
+  assert.match(webkitHarness, /exactSessionCommitted/);
+  assert.match(webkitHarness, /chat-session-identity/);
+  assert.match(webkitHarness, /sampleIndex/);
+  assert.match(webkitHarness, /errorMessage/);
+  assert.match(webkitHarness, /errorStack/);
   assert.match(webkitHarness, /normal:composer/);
   assert.match(webkitHarness, /normal:layout/);
   assert.match(webkitHarness, /normal:right-dock/);

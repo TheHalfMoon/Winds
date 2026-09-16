@@ -147,6 +147,7 @@ const done = arguments[arguments.length - 1];
     throw new Error(`timed out waiting for ${label}`);
   };
   const paintSample = async (index, action, predicate) => {
+    document.documentElement.dataset.t143Sample = String(index);
     await frame();
     await phase(index);
     const started = performance.now();
@@ -159,17 +160,29 @@ const done = arguments[arguments.length - 1];
 
   document.documentElement.dataset.t143Phase = 'normal:selector-precondition';
   await waitFor(() => document.querySelector('#chat-session-target')?.querySelectorAll('option').length >= 3, 'Chat Session selector');
-  const selector = document.querySelector('#chat-session-target');
   const sessionA = 'fixture-winds\u0000fixture-session-a';
   const sessionB = 'fixture-winds\u0000fixture-session-b';
+  const selectExactSession = (target) => {
+    const currentSelector = document.querySelector('#chat-session-target');
+    if (!currentSelector) throw new Error('Chat Session selector missing during selection sample');
+    currentSelector.value = target;
+    currentSelector.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+  const exactSessionCommitted = (target, sessionId) => {
+    const currentSelector = document.querySelector('#chat-session-target');
+    const identity = document.querySelector('.chat-session-identity');
+    return currentSelector?.value === target && identity?.textContent?.includes(sessionId);
+  };
   document.documentElement.dataset.t143Phase = 'normal:selection';
   const selection = [];
   for (let index = 0; index < 1000; index += 1) {
     const target = index % 2 === 0 ? sessionB : sessionA;
-    selection.push(await paintSample(index, () => {
-      selector.value = target;
-      selector.dispatchEvent(new Event('change', { bubbles: true }));
-    }, () => selector.value === target));
+    const sessionId = index % 2 === 0 ? 'fixture-session-b' : 'fixture-session-a';
+    selection.push(await paintSample(
+      index,
+      () => selectExactSession(target),
+      () => exactSessionCommitted(target, sessionId),
+    ));
   }
 
   document.documentElement.dataset.t143Phase = 'normal:composer';
@@ -208,10 +221,12 @@ const done = arguments[arguments.length - 1];
   }
 
   document.documentElement.dataset.t143Phase = 'normal:right-dock';
-  // Ensure an exact target is selected so the right dock remains bound.
-  selector.value = sessionA;
-  selector.dispatchEvent(new Event('change', { bubbles: true }));
-  await waitFor(() => document.querySelector('.right-dock'), 'right dock');
+  // Ensure an exact committed target is selected so the right dock remains bound.
+  selectExactSession(sessionA);
+  await waitFor(
+    () => exactSessionCommitted(sessionA, 'fixture-session-a') && Boolean(document.querySelector('.right-dock')),
+    'right dock exact Session binding',
+  );
   const rightDockSamples = [];
   const tabs = () => Array.from(document.querySelectorAll('.right-tab'));
   for (let index = 0; index < 1000; index += 1) {
@@ -248,7 +263,15 @@ const done = arguments[arguments.length - 1];
     resizeSamples,
     composerMeasurementBoundary: 'measurement-only DOM enablement; no submit or runtime dispatch; canonical T139 composer availability remains unchanged',
   };
-})().then((value) => done({ ok: true, value })).catch((error) => done({ ok: false, phase: document.documentElement.dataset.t143Phase ?? null, error: String(error?.stack ?? error) }));
+})().then((value) => done({ ok: true, value })).catch((error) => done({
+  ok: false,
+  phase: document.documentElement.dataset.t143Phase ?? null,
+  sampleIndex: document.documentElement.dataset.t143Sample ?? null,
+  errorName: error?.name ?? null,
+  errorMessage: error?.message ?? String(error),
+  errorStack: error?.stack ?? null,
+  error: String(error?.message ?? error?.stack ?? error),
+}));
 """
 
 LARGE_CAMPAIGN = r"""
@@ -265,6 +288,7 @@ const done = arguments[arguments.length - 1];
     throw new Error(`timed out waiting for ${label}`);
   };
   const sample = async (index, action, predicate) => {
+    document.documentElement.dataset.t143Sample = String(index);
     await frame();
     await phase(index);
     const started = performance.now();
@@ -335,7 +359,15 @@ const done = arguments[arguments.length - 1];
     focusSamples,
     selectedBaseSessionPreserved: Boolean(document.querySelector('.session-row-shell[data-selected="true"] .session-row[data-session-id="fixture-session-a"]')),
   };
-})().then((value) => done({ ok: true, value })).catch((error) => done({ ok: false, phase: document.documentElement.dataset.t143Phase ?? null, error: String(error?.stack ?? error) }));
+})().then((value) => done({ ok: true, value })).catch((error) => done({
+  ok: false,
+  phase: document.documentElement.dataset.t143Phase ?? null,
+  sampleIndex: document.documentElement.dataset.t143Sample ?? null,
+  errorName: error?.name ?? null,
+  errorMessage: error?.message ?? String(error),
+  errorStack: error?.stack ?? null,
+  error: String(error?.message ?? error?.stack ?? error),
+}));
 """
 
 
