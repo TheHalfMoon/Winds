@@ -5,14 +5,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import select
 import shutil
 import signal
 import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 READY_WINDOW_PATTERN = r"^Winds \[T143 Ready\]$"
 
@@ -45,16 +44,23 @@ def launch_env(home: str) -> dict[str, str]:
     return env
 
 
-def start(binary: str, home: str) -> tuple[subprocess.Popen[bytes], int]:
+def start(binary: str, home: str) -> tuple[subprocess.Popen[bytes], int, BinaryIO]:
+    log = tempfile.TemporaryFile()
     started_ns = time.perf_counter_ns()
     proc = subprocess.Popen(
         [binary],
-        stdout=subprocess.PIPE,
+        stdout=log,
         stderr=subprocess.STDOUT,
         env=launch_env(home),
         start_new_session=True,
     )
-    return proc, started_ns
+    return proc, started_ns, log
+
+
+def log_tail(log: BinaryIO, limit: int = 4000) -> bytes:
+    size = os.fstat(log.fileno()).st_size
+    length = min(limit, size)
+    return os.pread(log.fileno(), length, max(0, size - length))
 
 
 def ready_window_present() -> bool:
@@ -67,25 +73,24 @@ def ready_window_present() -> bool:
     return result.returncode == 0
 
 
-def await_ready(proc: subprocess.Popen[bytes], started_ns: int, timeout: float = 15.0) -> tuple[float, bytes]:
-    assert proc.stdout is not None
-    captured = bytearray()
+def await_ready(
+    proc: subprocess.Popen[bytes],
+    started_ns: int,
+    log: BinaryIO,
+    timeout: float = 15.0,
+) -> tuple[float, bytes]:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if proc.poll() is not None:
-            remainder = proc.stdout.read() or b""
-            captured.extend(remainder)
-            raise RuntimeError(f"Winds exited before T143 ready window: rc={proc.returncode} output={captured[-4000:]!r}")
-        remaining = max(0.0, deadline - time.monotonic())
-        readable, _, _ = select.select([proc.stdout.fileno()], [], [], min(0.05, remaining))
-        if readable:
-            chunk = os.read(proc.stdout.fileno(), 4096)
-            if chunk:
-                captured.extend(chunk)
+            captured = log_tail(log)
+            raise RuntimeError(
+                f"Winds exited before T143 ready window: rc={proc.returncode} output={captured!r}"
+            )
         if ready_window_present():
             external_ms = (time.perf_counter_ns() - started_ns) / 1_000_000.0
-            return external_ms, bytes(captured)
-    raise RuntimeError(f"T143 ready window missing after {timeout}s: {captured[-4000:]!r}")
+            return external_ms, log_tail(log)
+        time.sleep(0.05)
+    raise RuntimeError(f"T143 ready window missing after {timeout}s: {log_tail(log)!r}")
 
 
 def terminate(proc: subprocess.Popen[bytes]) -> None:
@@ -115,9 +120,14 @@ def descendants(root: int) -> set[int]:
         if pid in seen or not Path(f"/proc/{pid}").exists():
             continue
         seen.add(pid)
-        children = Path(f"/proc/{pid}/task/{pid}/children")
         try:
-            pending.extend(int(value) for value in children.read_text().split())
+            for task in Path(f"/proc/{pid}/task").iterdir():
+                try:
+                    pending.extend(
+                        int(value) for value in (task / "children").read_text().split()
+                    )
+                except (FileNotFoundError, PermissionError, ProcessLookupError):
+                    continue
         except (FileNotFoundError, PermissionError, ProcessLookupError):
             continue
     return seen
@@ -260,24 +270,30 @@ def main() -> int:
     for index in range(args.launches):
         home = tempfile.mkdtemp(prefix=f"winds-t143-launch-{index:02d}-")
         proc: subprocess.Popen[bytes] | None = None
+        log: BinaryIO | None = None
         try:
-            proc, started_ns = start(binary, home)
-            external_ms, _ = await_ready(proc, started_ns)
+            proc, started_ns, log = start(binary, home)
+            external_ms, _ = await_ready(proc, started_ns, log)
             external_samples.append(external_ms)
         finally:
             if proc is not None:
                 terminate(proc)
+            if log is not None:
+                log.close()
             shutil.rmtree(home, ignore_errors=True)
 
     idle_home = tempfile.mkdtemp(prefix="winds-t143-idle-")
     idle_proc: subprocess.Popen[bytes] | None = None
+    idle_log: BinaryIO | None = None
     try:
-        idle_proc, started_ns = start(binary, idle_home)
-        idle_external_ms, _ = await_ready(idle_proc, started_ns)
+        idle_proc, started_ns, idle_log = start(binary, idle_home)
+        idle_external_ms, _ = await_ready(idle_proc, started_ns, idle_log)
         idle = idle_campaign(idle_proc, args.idle_seconds, args.settle_seconds)
     finally:
         if idle_proc is not None:
             terminate(idle_proc)
+        if idle_log is not None:
+            idle_log.close()
         shutil.rmtree(idle_home, ignore_errors=True)
 
     result = {

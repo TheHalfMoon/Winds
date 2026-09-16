@@ -13,7 +13,17 @@ from pathlib import Path
 from typing import Any
 
 
-def request_json(base: str, method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
+WEBDRIVER_SCRIPT_TIMEOUT_MS = 300_000
+WEBDRIVER_CAMPAIGN_HTTP_TIMEOUT_SECONDS = 330.0
+
+
+def request_json(
+    base: str,
+    method: str,
+    path: str,
+    payload: dict[str, Any] | None = None,
+    timeout: float = 30.0,
+) -> Any:
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
         f"{base}{path}",
@@ -22,7 +32,7 @@ def request_json(base: str, method: str, path: str, payload: dict[str, Any] | No
         headers={"Content-Type": "application/json; charset=utf-8"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             body = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
         body = error.read().decode("utf-8", errors="replace")
@@ -50,9 +60,21 @@ def summary(values: list[float]) -> dict[str, Any]:
     }
 
 
-def execute(base: str, session: str, script: str, async_: bool = False) -> Any:
+def execute(
+    base: str,
+    session: str,
+    script: str,
+    async_: bool = False,
+    timeout: float = 30.0,
+) -> Any:
     endpoint = "async" if async_ else "sync"
-    return request_json(base, "POST", f"/session/{session}/execute/{endpoint}", {"script": script, "args": []})
+    return request_json(
+        base,
+        "POST",
+        f"/session/{session}/execute/{endpoint}",
+        {"script": script, "args": []},
+        timeout=timeout,
+    )
 
 
 def wait_for_shell(base: str, session: str) -> None:
@@ -286,18 +308,30 @@ def main() -> int:
     session = session_value["sessionId"]
     resolved_capabilities = session_value.get("capabilities", {})
     try:
-        request_json(args.webdriver, "POST", f"/session/{session}/timeouts", {"script": 180_000, "pageLoad": 30_000})
+        request_json(args.webdriver, "POST", f"/session/{session}/timeouts", {"script": WEBDRIVER_SCRIPT_TIMEOUT_MS, "pageLoad": 30_000})
         normal_url = f"{args.base_url}?tool=chat&theme=dark"
         request_json(args.webdriver, "POST", f"/session/{session}/url", {"url": normal_url})
         wait_for_shell(args.webdriver, session)
-        normal = execute(args.webdriver, session, NORMAL_CAMPAIGN, async_=True)
+        normal = execute(
+            args.webdriver,
+            session,
+            NORMAL_CAMPAIGN,
+            async_=True,
+            timeout=WEBDRIVER_CAMPAIGN_HTTP_TIMEOUT_SECONDS,
+        )
         if not isinstance(normal, dict) or not normal.get("ok"):
             raise RuntimeError(f"normal renderer campaign failed: {normal}")
 
         large_url = f"{args.base_url}?tool=projects&theme=dark&perf=t143-large"
         request_json(args.webdriver, "POST", f"/session/{session}/url", {"url": large_url})
         wait_for_shell(args.webdriver, session)
-        large = execute(args.webdriver, session, LARGE_CAMPAIGN, async_=True)
+        large = execute(
+            args.webdriver,
+            session,
+            LARGE_CAMPAIGN,
+            async_=True,
+            timeout=WEBDRIVER_CAMPAIGN_HTTP_TIMEOUT_SECONDS,
+        )
         if not isinstance(large, dict) or not large.get("ok"):
             raise RuntimeError(f"large renderer campaign failed: {large}")
     finally:

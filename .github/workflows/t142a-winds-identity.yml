@@ -61,6 +61,12 @@ jobs:
           head_tree = subprocess.check_output(["git", "rev-parse", f"{canonical_head}^{{tree}}"], text=True).strip()
           if (first_parent, second_parent, merge_tree) != (canonical_base, canonical_head, head_tree):
               raise SystemExit("canonical T142A merge identity no longer matches its accepted base/head/tree")
+          ancestry = subprocess.run(
+              ["git", "merge-base", "--is-ancestor", canonical_merge, "HEAD"],
+              check=False,
+          )
+          if ancestry.returncode != 0:
+              raise SystemExit("current candidate does not descend from the canonical T142A merge")
 
           changed = subprocess.check_output(["git", "diff", "--name-only", canonical_base, canonical_head], text=True).splitlines()
           allowed_exact = {

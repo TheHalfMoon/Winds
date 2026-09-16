@@ -11,6 +11,7 @@ export GDK_BACKEND=x11
 export WEBKIT_DISABLE_DMABUF_RENDERER=1
 export JSC_useJIT=false
 export Malloc=1
+export MALLOC_ARENA_MAX=1
 
 xvfb_log="$out_dir/xvfb.log"
 http_log="$out_dir/http.log"

@@ -66,6 +66,10 @@ test('T143 native harness directly enforces cold-launch and idle CPU RSS ceiling
   assert.match(nativeHarness, /if role == \"renderer\":/);
   assert.match(nativeHarness, /renderer_present = true|renderer_present = True/);
   assert.match(nativeHarness, /descendants\(proc\.pid\)/);
+  assert.match(nativeHarness, /tempfile\.TemporaryFile\(\)/);
+  assert.match(nativeHarness, /os\.pread\(/);
+  assert.doesNotMatch(nativeHarness, /stdout=subprocess\.PIPE/);
+  assert.match(nativeHarness, /Path\(f"\/proc\/\{pid\}\/task"\)\.iterdir\(\)/);
 });
 
 
@@ -78,6 +82,8 @@ test('T143 Linux reference runtime carries the measured JIT profile and current 
   assert.match(host, /var_os\("Malloc"\)\.is_none\(\)/);
   assert.match(host, /set_var\("Malloc", "1"\)/);
   assert.match(runLinux, /export Malloc=1/);
+  assert.match(host, /set_var\("MALLOC_ARENA_MAX", "1"\)/);
+  assert.match(runLinux, /export MALLOC_ARENA_MAX=1/);
   assert.doesNotMatch(host, /JSC_libpasScavengeContinuously/);
   assert.doesNotMatch(runLinux, /JSC_libpasScavengeContinuously/);
 });
@@ -95,6 +101,11 @@ test('T143 WebKitGTK harness retains raw samples for every frozen local interact
   ]) assert.equal(webkitHarness.includes(needle), true, needle);
   assert.match(webkitHarness, /"raw_ms"/);
   assert.match(webkitHarness, /visibleSessionWorkEvents/);
+  assert.match(webkitHarness, /WEBDRIVER_SCRIPT_TIMEOUT_MS = 300_000/);
+  assert.match(webkitHarness, /WEBDRIVER_CAMPAIGN_HTTP_TIMEOUT_SECONDS = 330\.0/);
+  assert.match(webkitHarness, /"script": WEBDRIVER_SCRIPT_TIMEOUT_MS/);
+  assert.match(webkitHarness, /timeout=WEBDRIVER_CAMPAIGN_HTTP_TIMEOUT_SECONDS/);
+  assert.match(webkitHarness, /urlopen\(request, timeout=timeout\)/);
 });
 
 test('T143 workflow separates native qualification bytes from benchmark renderer bytes without new package dependency', () => {
@@ -122,5 +133,7 @@ test('T143 repairs the closed T142A regression gate without reapplying historica
   assert.match(t142aWorkflow, /8d75cab455f11afddeaa6fbe6244dbb1021d1467/);
   assert.doesNotMatch(t142aWorkflow, /BASE_SHA|os\.environ\[\"BASE_SHA\"\]/);
   assert.match(t142aWorkflow, /git\", \"diff\", \"--name-only\", canonical_base, canonical_head/);
+  assert.match(t142aWorkflow, /merge-base\", \"--is-ancestor\", canonical_merge, \"HEAD\"/);
+  assert.match(t142aWorkflow, /current candidate does not descend from the canonical T142A merge/);
   assert.match(t142aWorkflow, /Current Spectrum deterministic gates/);
 });
