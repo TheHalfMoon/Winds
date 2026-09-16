@@ -43,6 +43,12 @@ The large fixture exists only in `VITE_WINDS_T143_BENCHMARK=1` builds. Productio
 
 No T143 result may be used as cross-platform performance equivalence. T142 remains the direct platform-coverage authority; T143 performance ceilings are qualified on the declared Ubuntu/WebKitGTK reference environment.
 
+## Qualification-discovered workflow regression repair
+
+The first exact-head T143 candidate (`d40053bcf3ccd54e4ea20d761f27c7ce13a48447`) exposed a repository-owned CI defect before qualification could close: the already-closed `t142a-winds-identity` workflow compared every later desktop PR against the current PR base/head and re-applied the historical T142A implementation allowlist. It therefore rejected T143's separately authorized workflow, Tauri benchmark feature/hook, and T143 provenance paths before running the intended T142A regression checks.
+
+T143 repairs that stale gate without weakening the accepted T142A boundary. The workflow now re-verifies the immutable canonical T142A base/head/merge parentage, tree identity, and original path allowlist, then runs the Current Spectrum deterministic regression gates against the current candidate. It no longer treats T142A's historical implementation scope as the authority model for later canonically authorized tasks. The failed first run remains historical evidence and is not rerun-to-green on the stale candidate.
+
 ## Closure discipline
 
 T143 may close only after the complete exact-head candidate passes deterministic gates, the T143 performance workflow, all other applicable workflows, author correctness/safety review, Ponytail/YAGNI review, fresh independent substantive review with zero material findings, zero unresolved review threads, guarded expected-head merge, verified merge parentage/tree/signature, and every workflow actually triggered by the merge commit.

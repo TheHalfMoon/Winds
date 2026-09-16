@@ -7,6 +7,8 @@ import { fileURLToPath } from 'node:url';
 const desktopRoot = fileURLToPath(new URL('..', import.meta.url));
 const repoRoot = join(desktopRoot, '..');
 const workflow = readFileSync(join(repoRoot, '.github/workflows/t143-performance.yml'), 'utf8');
+
+const t142aWorkflow = readFileSync(join(repoRoot, '.github/workflows/t142a-winds-identity.yml'), 'utf8');
 const host = readFileSync(join(desktopRoot, 'src-tauri/src/main.rs'), 'utf8');
 const hostManifest = readFileSync(join(desktopRoot, 'src-tauri/Cargo.toml'), 'utf8');
 const main = readFileSync(join(desktopRoot, 'src/main.tsx'), 'utf8');
@@ -67,4 +69,15 @@ test('T143 workflow binds exact Ubuntu WebKitGTK Tauri evidence without new pack
   assert.match(workflow, /t097_release_benchmark_campaign/);
   assert.match(workflow, /t143_assemble\.py/);
   assert.match(workflow, /actions\/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a/);
+});
+
+
+test('T143 repairs the closed T142A regression gate without reapplying historical task scope to successors', () => {
+  assert.match(t142aWorkflow, /Verify closed T142A historical scope and merge identity/);
+  assert.match(t142aWorkflow, /54880f256551659be5fb4b4456754c7c9f69d9d9/);
+  assert.match(t142aWorkflow, /521787cdad46ef89325b3d97b43be397e4673b01/);
+  assert.match(t142aWorkflow, /8d75cab455f11afddeaa6fbe6244dbb1021d1467/);
+  assert.doesNotMatch(t142aWorkflow, /BASE_SHA|os\.environ\[\"BASE_SHA\"\]/);
+  assert.match(t142aWorkflow, /git\", \"diff\", \"--name-only\", canonical_base, canonical_head/);
+  assert.match(t142aWorkflow, /Current Spectrum deterministic gates/);
 });
