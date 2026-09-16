@@ -75,9 +75,11 @@ for port in (4173, 4444):
         raise SystemExit(f"service on port {port} did not become ready")
 PY
 
-export WINDS_T143_WEBKIT_BINARY="$(command -v epiphany)"
-export WINDS_T143_WEBKIT_BROWSER_NAME=Epiphany
-export WINDS_T143_WEBKIT_ARGUMENT=--automation-mode
+minibrowser=/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/MiniBrowser
+test -x "$minibrowser"
+export WINDS_T143_WEBKIT_BINARY="$minibrowser"
+export WINDS_T143_WEBKIT_BROWSER_NAME=MiniBrowser
+export WINDS_T143_WEBKIT_ARGUMENT=--automation
 python3 "$repo_root/desktop/tests/performance/t143_webkit.py" \
   --base-url http://127.0.0.1:4173/ \
   --webdriver http://127.0.0.1:4444 \

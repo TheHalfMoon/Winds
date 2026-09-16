@@ -91,6 +91,10 @@ test('T143 Linux reference runtime carries measured allocator defaults and the p
   assert.match(runLinux, /Malloc=1/);
   assert.match(host, /set_var\("MALLOC_ARENA_MAX", "1"\)/);
   assert.match(runLinux, /MALLOC_ARENA_MAX=1/);
+  assert.match(runLinux, /WINDS_T143_WEBKIT_BROWSER_NAME=MiniBrowser/);
+  assert.match(runLinux, /WINDS_T143_WEBKIT_ARGUMENT=--automation/);
+  assert.match(runLinux, /webkit2gtk-4\.1\/MiniBrowser/);
+  assert.doesNotMatch(runLinux, /epiphany|--automation-mode/);
   assert.doesNotMatch(host, /GLIBC_TUNABLES|glibc\.malloc\.tcache_count/);
   assert.doesNotMatch(runLinux, /GLIBC_TUNABLES|glibc\.malloc\.tcache_count/);
   assert.doesNotMatch(runLinux, /export (?:JSC_useJIT|Malloc|MALLOC_ARENA_MAX)=/);
@@ -157,6 +161,10 @@ test('T143 WebKitGTK harness retains raw samples for every frozen local interact
   assert.match(webkitHarness, /"raw_ms"/);
   assert.match(webkitHarness, /visibleSessionWorkEvents/);
   assert.match(webkitHarness, /WEBDRIVER_SCRIPT_TIMEOUT_MS = 300_000/);
+  assert.match(webkitHarness, /webkit2gtk-4\.1\/MiniBrowser/);
+  assert.match(webkitHarness, /WINDS_T143_WEBKIT_BROWSER_NAME\", \"MiniBrowser/);
+  assert.match(webkitHarness, /WINDS_T143_WEBKIT_ARGUMENT\", \"--automation/);
+  assert.doesNotMatch(webkitHarness, /epiphany|--automation-mode/);
   assert.match(webkitHarness, /WEBDRIVER_CAMPAIGN_HTTP_TIMEOUT_SECONDS = 330\.0/);
   assert.match(webkitHarness, /"script": WEBDRIVER_SCRIPT_TIMEOUT_MS/);
   assert.match(webkitHarness, /timeout=WEBDRIVER_CAMPAIGN_HTTP_TIMEOUT_SECONDS/);
@@ -169,7 +177,9 @@ test('T143 workflow separates native qualification bytes from benchmark renderer
   assert.match(workflow, /T143_RSS_AMENDMENT_SHA: 55c29ebb5833a1f2856e6f3a820cc5484940b705/);
   assert.match(workflow, /git merge-base --is-ancestor \"\$T143_RSS_AMENDMENT_SHA\" \"\$CANDIDATE_SHA\"/);
   assert.match(workflow, /git rev-parse HEAD/);
-  assert.match(workflow, /webkit2gtk-driver epiphany-browser xvfb dbus-x11 xdotool/);
+  assert.match(workflow, /libwebkit2gtk-4\.1-dev webkit2gtk-driver xvfb dbus-x11 xdotool/);
+  assert.doesNotMatch(workflow, /epiphany-browser/);
+  assert.match(workflow, /test -x \/usr\/lib\/x86_64-linux-gnu\/webkit2gtk-4\.1\/MiniBrowser/);
   assert.match(workflow, /VITE_WINDS_T143_NATIVE_READY=1 npm run frontend:build/);
   assert.match(workflow, /TAURI_CONFIG=.*core:window:allow-set-title/);
   assert.match(workflow, /cargo build --release --locked --manifest-path desktop\/src-tauri\/Cargo\.toml/);
@@ -182,6 +192,10 @@ test('T143 workflow separates native qualification bytes from benchmark renderer
   assert.match(assembleHarness, /rss_budget_amendment/);
   assert.match(assembleHarness, /renderer_host_idle_rss_budget_mib/);
   assert.match(assembleHarness, /320/);
+  assert.match(assembleHarness, /minibrowser_path/);
+  assert.match(assembleHarness, /minibrowser_sha256/);
+  assert.match(assembleHarness, /minibrowser_package/);
+  assert.doesNotMatch(assembleHarness, /epiphany/);
   assert.match(workflow, /actions\/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a/);
   assert.match(workflow, /desktop\/src-tauri\/Cargo\.toml desktop\/src-tauri\/Cargo\.lock/);
   assert.doesNotMatch(workflow, /unexpected T143 Linux dependency set/);

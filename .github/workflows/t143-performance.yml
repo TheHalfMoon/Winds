@@ -64,13 +64,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential curl file libayatana-appindicator3-dev librsvg2-dev libssl-dev libxdo-dev \
-            libwebkit2gtk-4.1-dev webkit2gtk-driver epiphany-browser xvfb dbus-x11 xdotool
+            libwebkit2gtk-4.1-dev webkit2gtk-driver xvfb dbus-x11 xdotool
           command -v WebKitWebDriver
-          command -v epiphany
+          test -x /usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/MiniBrowser
           command -v Xvfb
           command -v xdotool
           pkg-config --modversion webkit2gtk-4.1
-          dpkg-query -W -f='${Package}=${Version}\n' libwebkit2gtk-4.1-0 webkit2gtk-driver epiphany-browser
+          dpkg-query -W -f='${Package}=${Version}\n' libwebkit2gtk-4.1-0 webkit2gtk-driver
 
       - name: Install exact Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6

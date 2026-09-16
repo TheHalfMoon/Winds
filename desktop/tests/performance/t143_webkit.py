@@ -291,9 +291,9 @@ def main() -> int:
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
-    binary = os.environ.get("WINDS_T143_WEBKIT_BINARY", "/usr/bin/epiphany")
-    browser_name = os.environ.get("WINDS_T143_WEBKIT_BROWSER_NAME", "Epiphany")
-    browser_arg = os.environ.get("WINDS_T143_WEBKIT_ARGUMENT", "--automation-mode")
+    binary = os.environ.get("WINDS_T143_WEBKIT_BINARY", "/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/MiniBrowser")
+    browser_name = os.environ.get("WINDS_T143_WEBKIT_BROWSER_NAME", "MiniBrowser")
+    browser_arg = os.environ.get("WINDS_T143_WEBKIT_ARGUMENT", "--automation")
     capabilities = {
         "capabilities": {
             "alwaysMatch": {

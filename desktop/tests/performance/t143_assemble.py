@@ -97,8 +97,10 @@ def main() -> int:
             "webkitgtk": optional_command("pkg-config", "--modversion", "webkit2gtk-4.1"),
             "webkitgtk_package": optional_command("dpkg-query", "-W", "-f=${Version}", "libwebkit2gtk-4.1-0"),
             "webdriver_package": optional_command("dpkg-query", "-W", "-f=${Version}", "webkit2gtk-driver"),
-            "epiphany_package": optional_command("dpkg-query", "-W", "-f=${Version}", "epiphany-browser"),
-            "epiphany": optional_command("epiphany", "--version"),
+            "minibrowser_path": "/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/MiniBrowser",
+            "minibrowser_package": optional_command("dpkg-query", "-W", "-f=${Version}", "libwebkit2gtk-4.1-0"),
+            "minibrowser_sha256": sha256("/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/MiniBrowser")
+            if Path("/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/MiniBrowser").is_file() else "UNAVAILABLE",
         },
         "build": {
             "profile": "release",
