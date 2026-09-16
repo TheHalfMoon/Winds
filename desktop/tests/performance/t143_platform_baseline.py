@@ -13,12 +13,12 @@ from typing import BinaryIO
 
 import t143_native as native
 
-READY_WINDOW_PATTERN = r"^Winds \[T143 Platform Baseline\]$"
+DEFAULT_READY_WINDOW_PATTERN = r"^Winds \[T143 Platform Baseline\]$"
 
 
-def ready_window_present() -> bool:
+def ready_window_present(pattern: str) -> bool:
     result = subprocess.run(
-        ["xdotool", "search", "--name", READY_WINDOW_PATTERN],
+        ["xdotool", "search", "--name", pattern],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         check=False,
@@ -29,6 +29,7 @@ def ready_window_present() -> bool:
 def await_ready(
     proc: subprocess.Popen[bytes],
     log: BinaryIO,
+    ready_window_pattern: str,
     timeout: float = 15.0,
 ) -> None:
     deadline = time.monotonic() + timeout
@@ -38,7 +39,7 @@ def await_ready(
                 "T143 platform baseline exited before its window became visible: "
                 f"rc={proc.returncode} output={native.log_tail(log)!r}"
             )
-        if ready_window_present():
+        if ready_window_present(ready_window_pattern):
             return
         time.sleep(0.05)
     raise RuntimeError(
@@ -51,6 +52,12 @@ def main() -> int:
     parser.add_argument("--binary", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--idle-seconds", type=float, default=10.0)
+    parser.add_argument("--ready-window-pattern", default=DEFAULT_READY_WINDOW_PATTERN)
+    parser.add_argument("--schema", default="winds-t143-platform-baseline-v1")
+    parser.add_argument(
+        "--purpose",
+        default="Diagnostic same-host minimal-renderer baseline; never substitutes for the frozen product RSS gate.",
+    )
     args = parser.parse_args()
 
     binary = str(Path(args.binary).resolve())
@@ -62,7 +69,7 @@ def main() -> int:
     log: BinaryIO | None = None
     try:
         proc, _, log = native.start(binary, home)
-        await_ready(proc, log)
+        await_ready(proc, log, args.ready_window_pattern)
         idle = native.idle_campaign(proc, args.idle_seconds, settle=2.0)
     finally:
         if proc is not None:
@@ -76,8 +83,8 @@ def main() -> int:
         "renderer_host_process_count_ge_2_every_idle_sample": idle["min_process_count"] >= 2,
     }
     result = {
-        "schema": "winds-t143-platform-baseline-v1",
-        "purpose": "Diagnostic same-host minimal-renderer baseline; never substitutes for the frozen product RSS gate.",
+        "schema": args.schema,
+        "purpose": args.purpose,
         "binary": binary,
         "idle": idle,
         "checks": checks,

@@ -127,13 +127,26 @@ jobs:
           sha256sum t143-evidence/winds-desktop-host-platform-baseline > t143-evidence/platform-baseline-binary.sha256
           baseline_sha="$(cut -d' ' -f1 t143-evidence/platform-baseline-binary.sha256)"
           cargo clean --release -p winds-desktop-host --manifest-path desktop/src-tauri/Cargo.toml
+          rm -rf desktop/tests/performance/t143_react_baseline/dist
+          (cd desktop && npx vite build tests/performance/t143_react_baseline --config vite.config.ts)
+          TAURI_CONFIG='{"build":{"frontendDist":"../tests/performance/t143_react_baseline/dist"},"app":{"windows":[{"label":"main","title":"Winds [T143 React Baseline Loading]","width":1280,"height":800,"minWidth":960,"minHeight":640,"resizable":true}],"security":{"capabilities":[{"identifier":"t143-native-ready","windows":["main"],"permissions":["core:window:allow-set-title"]}]}}}' \
+            cargo build --release --locked --manifest-path desktop/src-tauri/Cargo.toml
+          test -x desktop/src-tauri/target/release/winds-desktop-host
+          cp desktop/src-tauri/target/release/winds-desktop-host t143-evidence/winds-desktop-host-react-baseline
+          sha256sum t143-evidence/winds-desktop-host-react-baseline > t143-evidence/react-baseline-binary.sha256
+          react_baseline_sha="$(cut -d' ' -f1 t143-evidence/react-baseline-binary.sha256)"
+          rm -rf t143-evidence/react-baseline-dist
+          cp -a desktop/tests/performance/t143_react_baseline/dist t143-evidence/react-baseline-dist
+          test "$baseline_sha" != "$react_baseline_sha"
+          cargo clean --release -p winds-desktop-host --manifest-path desktop/src-tauri/Cargo.toml
           (cd desktop && VITE_WINDS_T143_NATIVE_READY=1 npm run frontend:build)
           TAURI_CONFIG='{"app":{"security":{"capabilities":[{"identifier":"t143-native-ready","windows":["main"],"permissions":["core:window:allow-set-title"]}]}}}' \
             cargo build --release --locked --manifest-path desktop/src-tauri/Cargo.toml
           test -x desktop/src-tauri/target/release/winds-desktop-host
           product_sha="$(sha256sum desktop/src-tauri/target/release/winds-desktop-host | cut -d' ' -f1)"
           test "$baseline_sha" != "$product_sha"
-          printf 'baseline_sha=%s\nproduct_sha=%s\n' "$baseline_sha" "$product_sha"
+          test "$react_baseline_sha" != "$product_sha"
+          printf 'baseline_sha=%s\nreact_baseline_sha=%s\nproduct_sha=%s\n' "$baseline_sha" "$react_baseline_sha" "$product_sha"
           rm -rf t143-evidence/native-renderer-dist
           cp -a desktop/dist t143-evidence/native-renderer-dist
           (cd desktop && VITE_WINDS_T143_BENCHMARK=1 npm run frontend:build)
@@ -148,7 +161,8 @@ jobs:
           dbus-run-session -- desktop/tests/performance/t143_run_linux.sh \
             desktop/src-tauri/target/release/winds-desktop-host \
             t143-evidence \
-            t143-evidence/winds-desktop-host-platform-baseline
+            t143-evidence/winds-desktop-host-platform-baseline \
+            t143-evidence/winds-desktop-host-react-baseline
 
       - name: Run inherited huge-output and resize stress on exact candidate
         shell: bash

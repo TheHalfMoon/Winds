@@ -5,6 +5,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 binary="${1:-$repo_root/desktop/src-tauri/target/release/winds-desktop-host}"
 out_dir="${2:-$repo_root/t143-evidence}"
 baseline_binary="${3:-}"
+react_baseline_binary="${4:-}"
 mkdir -p "$out_dir"
 
 export DISPLAY="${DISPLAY:-:99}"
@@ -33,6 +34,16 @@ if [[ -n "$baseline_binary" ]]; then
     --binary "$baseline_binary" \
     --output "$out_dir/platform-baseline.json" \
     --idle-seconds 60
+fi
+
+if [[ -n "$react_baseline_binary" ]]; then
+  python3 "$repo_root/desktop/tests/performance/t143_platform_baseline.py" \
+    --binary "$react_baseline_binary" \
+    --output "$out_dir/react-baseline.json" \
+    --idle-seconds 60 \
+    --ready-window-pattern '^Winds \[T143 React Baseline\]$' \
+    --schema winds-t143-react-baseline-v1 \
+    --purpose 'Diagnostic same-host minimal React renderer baseline; never substitutes for the frozen product RSS gate.'
 fi
 
 python3 "$repo_root/desktop/tests/performance/t143_native.py" \

@@ -19,6 +19,8 @@ const rightDockBridge = readFileSync(join(desktopRoot, 'src/rightDock/bridge.ts'
 const nativeHarness = readFileSync(join(desktopRoot, 'tests/performance/t143_native.py'), 'utf8');
 const platformBaselineHarness = readFileSync(join(desktopRoot, 'tests/performance/t143_platform_baseline.py'), 'utf8');
 const platformBaselineHtml = readFileSync(join(desktopRoot, 'tests/performance/t143_platform_baseline/index.html'), 'utf8');
+const reactBaselineHtml = readFileSync(join(desktopRoot, 'tests/performance/t143_react_baseline/index.html'), 'utf8');
+const reactBaselineMain = readFileSync(join(desktopRoot, 'tests/performance/t143_react_baseline/main.tsx'), 'utf8');
 const webkitHarness = readFileSync(join(desktopRoot, 'tests/performance/t143_webkit.py'), 'utf8');
 
 test('T143 native readiness uses a qualification-only window-title capability and no production command', () => {
@@ -118,6 +120,24 @@ test('T143 platform baseline measures the same-host minimal-renderer baseline wi
   assert.match(workflow, /platform-baseline-binary\.sha256/);
   assert.match(workflow, /test \"\$baseline_sha\" != \"\$product_sha\"/);
   assert.doesNotMatch(workflow, /--native t143-evidence\/platform-baseline\.json/);
+});
+
+test('T143 React baseline isolates selected frontend runtime cost without substituting for the product gate', () => {
+  const runLinux = readFileSync(join(desktopRoot, 'tests/performance/t143_run_linux.sh'), 'utf8');
+  assert.match(reactBaselineHtml, /Winds T143 React Baseline/);
+  assert.match(reactBaselineMain, /StrictMode/);
+  assert.match(reactBaselineMain, /createRoot/);
+  assert.match(reactBaselineMain, /getCurrentWindow/);
+  assert.match(reactBaselineMain, /Winds \[T143 React Baseline\]/);
+  assert.match(workflow, /npx vite build tests\/performance\/t143_react_baseline --config vite\.config\.ts/);
+  assert.equal(workflow.includes('frontendDist\":\"../tests/performance/t143_react_baseline/dist'), true);
+  assert.match(workflow, /react-baseline-binary\.sha256/);
+  assert.match(workflow, /winds-desktop-host-react-baseline/);
+  assert.match(runLinux, /react-baseline\.json/);
+  assert.match(runLinux, /winds-t143-react-baseline-v1/);
+  assert.match(runLinux, /Diagnostic same-host minimal React renderer baseline/);
+  assert.match(runLinux, /--idle-seconds 60/);
+  assert.doesNotMatch(workflow, /--native t143-evidence\/react-baseline\.json/);
 });
 
 test('T143 WebKitGTK harness retains raw samples for every frozen local interaction budget', () => {
