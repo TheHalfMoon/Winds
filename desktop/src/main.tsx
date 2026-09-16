@@ -55,7 +55,7 @@ createRoot(root).render(
 );
 
 
-if (import.meta.env.VITE_WINDS_T143_BENCHMARK === "1" && params.get("t143-ready") !== "1") {
+if (import.meta.env.VITE_WINDS_T143_NATIVE_READY === "1") {
   let reported = false;
   const markReady = () => {
     const status = document.querySelector<HTMLElement>(".chat-tool-status");
@@ -72,9 +72,7 @@ if (import.meta.env.VITE_WINDS_T143_BENCHMARK === "1" && params.get("t143-ready"
       window.requestAnimationFrame(() => {
         if (reported) return;
         reported = true;
-        const readyUrl = new URL(window.location.href);
-        readyUrl.searchParams.set("t143-ready", "1");
-        window.location.replace(readyUrl.toString());
+        document.title = "Winds [T143 Ready]";
       });
     });
     return true;

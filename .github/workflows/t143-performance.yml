@@ -63,10 +63,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential curl file libayatana-appindicator3-dev librsvg2-dev libssl-dev libxdo-dev \
-            libwebkit2gtk-4.1-dev webkit2gtk-driver epiphany-browser xvfb dbus-x11
+            libwebkit2gtk-4.1-dev webkit2gtk-driver epiphany-browser xvfb dbus-x11 xdotool
           command -v WebKitWebDriver
           command -v epiphany
           command -v Xvfb
+          command -v xdotool
           pkg-config --modversion webkit2gtk-4.1
           dpkg-query -W -f='${Package}=${Version}\n' libwebkit2gtk-4.1-0 webkit2gtk-driver epiphany-browser
 
@@ -130,13 +131,19 @@ jobs:
           cargo fmt --manifest-path desktop/src-tauri/Cargo.toml -- --check
           cargo clippy --manifest-path desktop/src-tauri/Cargo.toml --locked -- -D warnings
 
-      - name: Build benchmark-only populated renderer and feature-gated Tauri host
+      - name: Build native qualification host and separate benchmark renderer
         shell: bash
         run: |
           set -euo pipefail
-          (cd desktop && VITE_WINDS_T143_BENCHMARK=1 npm run frontend:build)
-          cargo build --release --locked --manifest-path desktop/src-tauri/Cargo.toml --features t143-benchmark
+          mkdir -p t143-evidence
+          (cd desktop && VITE_WINDS_T143_NATIVE_READY=1 npm run frontend:build)
+          cargo build --release --locked --manifest-path desktop/src-tauri/Cargo.toml
           test -x desktop/src-tauri/target/release/winds-desktop-host
+          rm -rf t143-evidence/native-renderer-dist
+          cp -a desktop/dist t143-evidence/native-renderer-dist
+          (cd desktop && VITE_WINDS_T143_BENCHMARK=1 npm run frontend:build)
+          rm -rf t143-evidence/benchmark-renderer-dist
+          cp -a desktop/dist t143-evidence/benchmark-renderer-dist
 
       - name: Run native Tauri and WebKitGTK renderer campaigns
         shell: bash
@@ -165,7 +172,8 @@ jobs:
             --renderer t143-evidence/renderer.json \
             --backend-log t143-evidence/backend.log \
             --binary desktop/src-tauri/target/release/winds-desktop-host \
-            --dist desktop/dist \
+            --native-dist t143-evidence/native-renderer-dist \
+            --benchmark-dist t143-evidence/benchmark-renderer-dist \
             --output t143-evidence/combined.json
           python3 - <<'PY'
           import json, os

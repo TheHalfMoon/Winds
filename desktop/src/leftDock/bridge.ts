@@ -15,6 +15,9 @@ const canonicalLeftDockBridge: LeftDockBridge = {
 };
 
 export function leftDockBridge(): LeftDockBridge {
-  if (import.meta.env.VITE_WINDS_T143_BENCHMARK === "1") return fixtureLeftDockBridge;
+  if (
+    import.meta.env.VITE_WINDS_T143_BENCHMARK === "1"
+    || import.meta.env.VITE_WINDS_T143_NATIVE_READY === "1"
+  ) return fixtureLeftDockBridge;
   return isTauri() ? canonicalLeftDockBridge : fixtureLeftDockBridge;
 }

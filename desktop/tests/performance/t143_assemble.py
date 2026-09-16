@@ -56,7 +56,8 @@ def main() -> int:
     parser.add_argument("--renderer", required=True)
     parser.add_argument("--backend-log", required=True)
     parser.add_argument("--binary", required=True)
-    parser.add_argument("--dist", required=True)
+    parser.add_argument("--native-dist", required=True)
+    parser.add_argument("--benchmark-dist", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
@@ -93,9 +94,12 @@ def main() -> int:
         },
         "build": {
             "profile": "release",
-            "tauri_feature": "t143-benchmark",
+            "tauri_feature": None,
             "binary_sha256": sha256(args.binary),
-            "renderer_dist_sha256": directory_digest(args.dist),
+            "native_renderer_dist_sha256": directory_digest(args.native_dist),
+            "benchmark_renderer_dist_sha256": directory_digest(args.benchmark_dist),
+            "native_renderer_profile": "VITE_WINDS_T143_NATIVE_READY=1 deterministic two-Session qualification renderer",
+            "benchmark_renderer_profile": "VITE_WINDS_T143_BENCHMARK=1 renderer-only interaction and scale fixture",
             "production_dependency_or_lockfile_change": False,
             "new_runtime_dependency": False,
             "new_renderer_dependency": False,

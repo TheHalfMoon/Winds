@@ -10,7 +10,6 @@ export DISPLAY="${DISPLAY:-:99}"
 export GDK_BACKEND=x11
 export WEBKIT_DISABLE_DMABUF_RENDERER=1
 export JSC_useJIT=false
-export JSC_libpasScavengeContinuously=true
 
 xvfb_log="$out_dir/xvfb.log"
 http_log="$out_dir/http.log"

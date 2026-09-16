@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import select
 import shutil
 import signal
@@ -15,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-READY = re.compile(rb"WINDS_T143_READY_MS=([0-9]+(?:\.[0-9]+)?)")
+READY_WINDOW_PATTERN = r"^Winds \[T143 Ready\]$"
 
 
 def percentile(values: list[float], percent: int) -> float:
@@ -58,7 +57,17 @@ def start(binary: str, home: str) -> tuple[subprocess.Popen[bytes], int]:
     return proc, started_ns
 
 
-def await_ready(proc: subprocess.Popen[bytes], started_ns: int, timeout: float = 15.0) -> tuple[float, float, bytes]:
+def ready_window_present() -> bool:
+    result = subprocess.run(
+        ["xdotool", "search", "--name", READY_WINDOW_PATTERN],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def await_ready(proc: subprocess.Popen[bytes], started_ns: int, timeout: float = 15.0) -> tuple[float, bytes]:
     assert proc.stdout is not None
     captured = bytearray()
     deadline = time.monotonic() + timeout
@@ -66,21 +75,17 @@ def await_ready(proc: subprocess.Popen[bytes], started_ns: int, timeout: float =
         if proc.poll() is not None:
             remainder = proc.stdout.read() or b""
             captured.extend(remainder)
-            raise RuntimeError(f"Winds exited before T143 readiness marker: rc={proc.returncode} output={captured[-4000:]!r}")
+            raise RuntimeError(f"Winds exited before T143 ready window: rc={proc.returncode} output={captured[-4000:]!r}")
         remaining = max(0.0, deadline - time.monotonic())
-        readable, _, _ = select.select([proc.stdout.fileno()], [], [], min(0.25, remaining))
-        if not readable:
-            continue
-        chunk = os.read(proc.stdout.fileno(), 4096)
-        if not chunk:
-            continue
-        captured.extend(chunk)
-        match = READY.search(captured)
-        if match:
+        readable, _, _ = select.select([proc.stdout.fileno()], [], [], min(0.05, remaining))
+        if readable:
+            chunk = os.read(proc.stdout.fileno(), 4096)
+            if chunk:
+                captured.extend(chunk)
+        if ready_window_present():
             external_ms = (time.perf_counter_ns() - started_ns) / 1_000_000.0
-            internal_ms = float(match.group(1))
-            return external_ms, internal_ms, bytes(captured)
-    raise RuntimeError(f"T143 readiness marker missing after {timeout}s: {captured[-4000:]!r}")
+            return external_ms, bytes(captured)
+    raise RuntimeError(f"T143 ready window missing after {timeout}s: {captured[-4000:]!r}")
 
 
 def terminate(proc: subprocess.Popen[bytes]) -> None:
@@ -144,7 +149,8 @@ def idle_campaign(proc: subprocess.Popen[bytes], seconds: float, settle: float) 
     started = time.monotonic()
     previous_ticks: dict[int, int] = {}
     accumulated_ticks = 0
-    max_rss = 0
+    max_renderer_host_rss = 0
+    max_process_tree_rss = 0
     max_process_count = 0
     min_process_count: int | None = None
     observed_names: set[str] = set()
@@ -154,29 +160,32 @@ def idle_campaign(proc: subprocess.Popen[bytes], seconds: float, settle: float) 
 
     while time.monotonic() - started < seconds:
         pids = descendants(proc.pid)
-        rss = 0
+        renderer_host_rss = 0
+        process_tree_rss = 0
         process_rss: list[dict[str, Any]] = []
         sample_names: set[str] = set()
         renderer_present = False
         for pid in sorted(pids):
             name = proc_name(pid)
             sample_names.add(name)
-            if "WebKit" in name:
-                renderer_present = True
             stat = proc_stat(pid)
             if stat is None:
                 continue
             ticks, pages = stat
             rss_bytes = pages * page_size
-            rss += rss_bytes
+            process_tree_rss += rss_bytes
             if pid == proc.pid:
                 role = "host"
-            elif "WebKitWeb" in name:
-                role = "renderer"
             elif "WebKitNetwork" in name:
                 role = "network"
+            elif "WebKit" in name:
+                role = "renderer"
             else:
                 role = "other"
+            if role in {"host", "renderer"}:
+                renderer_host_rss += rss_bytes
+            if role == "renderer":
+                renderer_present = True
             max_rss_by_role[role] = max(max_rss_by_role[role], rss_bytes)
             process_rss.append({
                 "pid": pid,
@@ -192,12 +201,15 @@ def idle_campaign(proc: subprocess.Popen[bytes], seconds: float, settle: float) 
         if renderer_present:
             renderer_present_samples += 1
         observed_names.update(sample_names)
-        max_rss = max(max_rss, rss)
+        max_renderer_host_rss = max(max_renderer_host_rss, renderer_host_rss)
+        max_process_tree_rss = max(max_process_tree_rss, process_tree_rss)
         max_process_count = max(max_process_count, len(pids))
         min_process_count = len(pids) if min_process_count is None else min(min_process_count, len(pids))
         samples.append({
             "elapsed_ms": round((time.monotonic() - started) * 1000.0, 3),
-            "rss_bytes": rss,
+            "rss_bytes": renderer_host_rss,
+            "renderer_host_rss_bytes": renderer_host_rss,
+            "process_tree_rss_bytes": process_tree_rss,
             "process_count": len(pids),
             "renderer_present": renderer_present,
             "process_names": sorted(name for name in sample_names if name),
@@ -213,9 +225,11 @@ def idle_campaign(proc: subprocess.Popen[bytes], seconds: float, settle: float) 
         "settle_ms": round(settle * 1000.0, 3),
         "cpu_percent_one_logical_core": round(cpu_percent_one_core, 5),
         "cpu_scope": "Tauri host plus descendant WebKitGTK processes; no terminal/agent action executed",
-        "rss_max_bytes": max_rss,
-        "rss_max_mib": round(max_rss / (1024 * 1024), 3),
-        "rss_scope": "Tauri host plus descendant WebKitGTK processes; child agents/terminals absent by fixture design",
+        "rss_max_bytes": max_renderer_host_rss,
+        "rss_max_mib": round(max_renderer_host_rss / (1024 * 1024), 3),
+        "rss_scope": "Tauri host plus WebKit rendering descendants; WebKit network process is retained separately as diagnostic and excluded from the frozen renderer+host gate; child agents/terminals absent by fixture design",
+        "process_tree_rss_max_bytes": max_process_tree_rss,
+        "process_tree_rss_max_mib": round(max_process_tree_rss / (1024 * 1024), 3),
         "max_process_count": max_process_count,
         "min_process_count": min_process_count or 0,
         "renderer_present_sample_count": renderer_present_samples,
@@ -243,15 +257,13 @@ def main() -> int:
         raise RuntimeError(f"T143 binary missing: {binary}")
 
     external_samples: list[float] = []
-    internal_samples: list[float] = []
     for index in range(args.launches):
         home = tempfile.mkdtemp(prefix=f"winds-t143-launch-{index:02d}-")
         proc: subprocess.Popen[bytes] | None = None
         try:
             proc, started_ns = start(binary, home)
-            external_ms, internal_ms, _ = await_ready(proc, started_ns)
+            external_ms, _ = await_ready(proc, started_ns)
             external_samples.append(external_ms)
-            internal_samples.append(internal_ms)
         finally:
             if proc is not None:
                 terminate(proc)
@@ -261,7 +273,7 @@ def main() -> int:
     idle_proc: subprocess.Popen[bytes] | None = None
     try:
         idle_proc, started_ns = start(binary, idle_home)
-        idle_external_ms, idle_internal_ms, _ = await_ready(idle_proc, started_ns)
+        idle_external_ms, _ = await_ready(idle_proc, started_ns)
         idle = idle_campaign(idle_proc, args.idle_seconds, args.settle_seconds)
     finally:
         if idle_proc is not None:
@@ -273,11 +285,10 @@ def main() -> int:
         "binary": binary,
         "launch": {
             "external_process_to_useful_shell": summary(external_samples),
-            "host_internal_to_ready_navigation": summary(internal_samples),
             "sample_count": args.launches,
-            "measurement_boundary": "process start to benchmark-only populated two-Session shell after two requestAnimationFrame boundaries; readiness is observed by feature-gated Tauri page-load hook without adding IPC commands",
+            "measurement_boundary": "process start to deterministic two-Session native qualification shell after two requestAnimationFrame boundaries; readiness is observed from an X11 title sentinel without renderer reload, host feature, or IPC command",
         },
-        "idle_launch": {"external_ms": round(idle_external_ms, 4), "internal_ms": round(idle_internal_ms, 4)},
+        "idle_launch": {"external_ms": round(idle_external_ms, 4)},
         "idle": idle,
     }
     checks = {
