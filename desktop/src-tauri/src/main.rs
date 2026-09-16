@@ -3,10 +3,14 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 #[cfg(feature = "t143-benchmark")]
 use std::time::Instant;
+#[cfg(target_os = "linux")]
+use tauri::Manager;
 use tauri::State;
 use tauri::ipc::{Channel, Response};
 #[cfg(feature = "t143-benchmark")]
 use tauri::webview::PageLoadEvent;
+#[cfg(target_os = "linux")]
+use webkit2gtk::{CacheModel, WebContextExt, WebViewExt};
 use winds_control::desktop::{
     DesktopBridgeAttentionSnapshot, DesktopBridgeCreateSessionRequest,
     DesktopBridgeLayoutPresentation, DesktopBridgeLayoutRequest,
@@ -345,10 +349,19 @@ fn configure_linux_webkit_memory_profile() {
         if std::env::var_os("JSC_useJIT").is_none() {
             std::env::set_var("JSC_useJIT", "false");
         }
-        if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
-            std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
-        }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn configure_linux_webkit_context(app: &tauri::App) -> tauri::Result<()> {
+    let Some(main) = app.get_webview_window("main") else {
+        return Ok(());
+    };
+    main.with_webview(|webview| {
+        if let Some(context) = webview.inner().context() {
+            context.set_cache_model(CacheModel::DocumentViewer);
+        }
+    })
 }
 
 fn main() {
@@ -374,6 +387,12 @@ fn main() {
             }
         })
     };
+
+    let builder = builder.setup(|_app| {
+        #[cfg(target_os = "linux")]
+        configure_linux_webkit_context(_app)?;
+        Ok(())
+    });
 
     builder
         .invoke_handler(tauri::generate_handler![

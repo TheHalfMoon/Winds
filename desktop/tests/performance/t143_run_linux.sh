@@ -9,7 +9,6 @@ mkdir -p "$out_dir"
 export DISPLAY="${DISPLAY:-:99}"
 export GDK_BACKEND=x11
 export WEBKIT_DISABLE_DMABUF_RENDERER=1
-export WEBKIT_DISABLE_COMPOSITING_MODE=1
 export JSC_useJIT=false
 
 xvfb_log="$out_dir/xvfb.log"

@@ -99,23 +99,42 @@ jobs:
           set -euo pipefail
           test -n "$BASE_SHA"
           git diff --exit-code "$BASE_SHA" "$CANDIDATE_SHA" -- \
-            Cargo.toml Cargo.lock desktop/package.json desktop/package-lock.json desktop/src-tauri/Cargo.lock
+            Cargo.toml Cargo.lock desktop/package.json desktop/package-lock.json
           python3 - <<'PY'
-          import subprocess
+          import os, subprocess, tomllib
           from pathlib import Path
-          base = subprocess.check_output(['git', 'show', f'{__import__("os").environ["BASE_SHA"]}:desktop/src-tauri/Cargo.toml'], text=True)
-          head = Path('desktop/src-tauri/Cargo.toml').read_text()
-          def sections(text):
-              keep = {}
-              active = None
-              for line in text.splitlines():
-                  if line.startswith('[') and line.endswith(']'):
-                      active = line
-                  if active in {'[dependencies]', '[build-dependencies]'}:
-                      keep.setdefault(active, []).append(line)
-              return keep
-          if sections(base) != sections(head):
-              raise SystemExit('T143 changed production Tauri dependency sections')
+
+          base_manifest = tomllib.loads(subprocess.check_output(
+              ['git', 'show', f'{os.environ["BASE_SHA"]}:desktop/src-tauri/Cargo.toml'], text=True
+          ))
+          head_manifest = tomllib.loads(Path('desktop/src-tauri/Cargo.toml').read_text())
+          for section in ('dependencies', 'build-dependencies'):
+              if base_manifest.get(section, {}) != head_manifest.get(section, {}):
+                  raise SystemExit(f'T143 changed pre-existing production Tauri {section}')
+
+          linux_dependencies = (
+              head_manifest.get('target', {})
+              .get('cfg(target_os = "linux")', {})
+              .get('dependencies', {})
+          )
+          if linux_dependencies != {'webkit2gtk': '=2.0.2'}:
+              raise SystemExit(f'unexpected T143 Linux dependency set: {linux_dependencies!r}')
+
+          base_lock = tomllib.loads(subprocess.check_output(
+              ['git', 'show', f'{os.environ["BASE_SHA"]}:desktop/src-tauri/Cargo.lock'], text=True
+          ))
+          head_lock = tomllib.loads(Path('desktop/src-tauri/Cargo.lock').read_text())
+          base_packages = base_lock['package']
+          head_packages = head_lock['package']
+          base_non_host = [package for package in base_packages if package['name'] != 'winds-desktop-host']
+          head_non_host = [package for package in head_packages if package['name'] != 'winds-desktop-host']
+          if base_non_host != head_non_host:
+              raise SystemExit('T143 introduced or changed a locked third-party package')
+          base_host = next(package for package in base_packages if package['name'] == 'winds-desktop-host')
+          head_host = next(package for package in head_packages if package['name'] == 'winds-desktop-host')
+          expected = sorted([*base_host.get('dependencies', []), 'webkit2gtk'])
+          if sorted(head_host.get('dependencies', [])) != expected:
+              raise SystemExit('unexpected winds-desktop-host lock dependency change')
           PY
           test "$(grep -c '#\[tauri::command\]' desktop/src-tauri/src/main.rs)" -eq 22
 

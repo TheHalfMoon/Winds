@@ -52,16 +52,17 @@ test('T143 native harness directly enforces cold-launch and idle CPU RSS ceiling
 });
 
 
-test('T143 Linux reference runtime applies the product WebKit JIT memory profile', () => {
+test('T143 Linux reference runtime applies the product WebKit low-memory profile', () => {
   const runLinux = readFileSync(join(desktopRoot, 'tests/performance/t143_run_linux.sh'), 'utf8');
   assert.match(host, /configure_linux_webkit_memory_profile/);
   assert.match(host, /var_os\("JSC_useJIT"\)\.is_none\(\)/);
   assert.match(host, /set_var\("JSC_useJIT", "false"\)/);
-  assert.match(host, /var_os\("WEBKIT_DISABLE_COMPOSITING_MODE"\)\.is_none\(\)/);
-  assert.match(host, /set_var\("WEBKIT_DISABLE_COMPOSITING_MODE", "1"\)/);
+  assert.match(host, /configure_linux_webkit_context/);
+  assert.match(host, /CacheModel::DocumentViewer/);
+  assert.match(hostManifest, /target\.'cfg\(target_os = "linux"\)'\.dependencies[\s\S]*webkit2gtk = "=2\.0\.2"/);
   assert.match(runLinux, /export JSC_useJIT=false/);
-  assert.match(runLinux, /export WEBKIT_DISABLE_COMPOSITING_MODE=1/);
-  assert.doesNotMatch(host, /VITE_WINDS_T143_BENCHMARK.*(?:JSC_useJIT|WEBKIT_DISABLE_COMPOSITING_MODE)/);
+  assert.doesNotMatch(runLinux, /WEBKIT_DISABLE_COMPOSITING_MODE/);
+  assert.doesNotMatch(host, /VITE_WINDS_T143_BENCHMARK.*(?:JSC_useJIT|DocumentViewer)/);
 });
 
 test('T143 WebKitGTK harness retains raw samples for every frozen local interaction budget', () => {
@@ -79,7 +80,7 @@ test('T143 WebKitGTK harness retains raw samples for every frozen local interact
   assert.match(webkitHarness, /visibleSessionWorkEvents/);
 });
 
-test('T143 workflow binds exact Ubuntu WebKitGTK Tauri evidence without new package dependency', () => {
+test('T143 workflow binds exact Ubuntu WebKitGTK Tauri evidence without a new locked third-party package', () => {
   assert.match(workflow, /runs-on: ubuntu-24\.04/);
   assert.match(workflow, /CANDIDATE_SHA/);
   assert.match(workflow, /git rev-parse HEAD/);
