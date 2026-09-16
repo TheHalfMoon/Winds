@@ -49,6 +49,12 @@ The first exact-head T143 candidate (`d40053bcf3ccd54e4ea20d761f27c7ce13a48447`)
 
 T143 repairs that stale gate without weakening the accepted T142A boundary. The workflow now re-verifies the immutable canonical T142A base/head/merge parentage, tree identity, and original path allowlist, then runs the Current Spectrum deterministic regression gates against the current candidate. It no longer treats T142A's historical implementation scope as the authority model for later canonically authorized tasks. The failed first run remains historical evidence and is not rerun-to-green on the stale candidate.
 
+## Independent-review repair
+
+The first independent exact-head review of successor `6e4744afae775a63eea091f196d9f6d74b62b2d8` found one material harness gap: the 60-second idle CPU/RSS campaign recorded process counts and names but did not require a WebKit renderer to remain present, so a host-only remainder could theoretically satisfy the frozen `renderer+host` resource ceilings. That reviewed head is therefore not qualification authority.
+
+The forward-only successor requires every retained idle sample to include at least one descendant process whose Linux `comm` contains `WebKit`, requires at least two processes (host plus descendant) in every idle sample, records per-sample names and renderer-presence truth, and includes both predicates in the native checks propagated into combined `all_checks_pass`. This closes the review finding without changing the product command surface or performance ceilings.
+
 ## Closure discipline
 
 T143 may close only after the complete exact-head candidate passes deterministic gates, the T143 performance workflow, all other applicable workflows, author correctness/safety review, Ponytail/YAGNI review, fresh independent substantive review with zero material findings, zero unresolved review threads, guarded expected-head merge, verified merge parentage/tree/signature, and every workflow actually triggered by the merge commit.

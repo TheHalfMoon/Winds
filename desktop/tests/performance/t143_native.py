@@ -146,14 +146,20 @@ def idle_campaign(proc: subprocess.Popen[bytes], seconds: float, settle: float) 
     accumulated_ticks = 0
     max_rss = 0
     max_process_count = 0
+    min_process_count: int | None = None
     observed_names: set[str] = set()
+    renderer_present_samples = 0
     samples: list[dict[str, Any]] = []
 
     while time.monotonic() - started < seconds:
         pids = descendants(proc.pid)
         rss = 0
+        sample_names = {proc_name(pid) for pid in pids}
+        renderer_present = any("WebKit" in name for name in sample_names)
+        if renderer_present:
+            renderer_present_samples += 1
+        observed_names.update(sample_names)
         for pid in pids:
-            observed_names.add(proc_name(pid))
             stat = proc_stat(pid)
             if stat is None:
                 continue
@@ -165,10 +171,13 @@ def idle_campaign(proc: subprocess.Popen[bytes], seconds: float, settle: float) 
             previous_ticks[pid] = ticks
         max_rss = max(max_rss, rss)
         max_process_count = max(max_process_count, len(pids))
+        min_process_count = len(pids) if min_process_count is None else min(min_process_count, len(pids))
         samples.append({
             "elapsed_ms": round((time.monotonic() - started) * 1000.0, 3),
             "rss_bytes": rss,
             "process_count": len(pids),
+            "renderer_present": renderer_present,
+            "process_names": sorted(name for name in sample_names if name),
         })
         time.sleep(0.25)
 
@@ -184,6 +193,9 @@ def idle_campaign(proc: subprocess.Popen[bytes], seconds: float, settle: float) 
         "rss_max_mib": round(max_rss / (1024 * 1024), 3),
         "rss_scope": "Tauri host plus descendant WebKitGTK processes; child agents/terminals absent by fixture design",
         "max_process_count": max_process_count,
+        "min_process_count": min_process_count or 0,
+        "renderer_present_sample_count": renderer_present_samples,
+        "renderer_present_every_sample": bool(samples) and renderer_present_samples == len(samples),
         "observed_process_names": sorted(name for name in observed_names if name),
         "raw_samples": samples,
     }
@@ -245,6 +257,8 @@ def main() -> int:
         "launch_samples_ge_20": args.launches >= 20,
         "idle_cpu_le_2_percent_one_core": idle["cpu_percent_one_logical_core"] <= 2.0,
         "renderer_host_idle_rss_le_300_mib": idle["rss_max_bytes"] <= 300 * 1024 * 1024,
+        "renderer_present_every_idle_sample": bool(idle["renderer_present_every_sample"]),
+        "renderer_host_process_count_ge_2_every_idle_sample": idle["min_process_count"] >= 2,
     }
     result["checks"] = checks
     Path(args.output).write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")

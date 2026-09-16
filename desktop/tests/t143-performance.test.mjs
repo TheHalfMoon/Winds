@@ -41,6 +41,10 @@ test('T143 native harness directly enforces cold-launch and idle CPU RSS ceiling
   assert.match(nativeHarness, /cold_launch_p95_le_1500_ms/);
   assert.match(nativeHarness, /idle_cpu_le_2_percent_one_core/);
   assert.match(nativeHarness, /renderer_host_idle_rss_le_300_mib/);
+  assert.match(nativeHarness, /renderer_present_every_idle_sample/);
+  assert.match(nativeHarness, /renderer_host_process_count_ge_2_every_idle_sample/);
+  assert.match(nativeHarness, /renderer_present_samples == len\(samples\)/);
+  assert.match(nativeHarness, /any\(\"WebKit\" in name for name in sample_names\)/);
   assert.match(nativeHarness, /descendants\(proc\.pid\)/);
 });
 
