@@ -66,6 +66,30 @@
       "width": 900,
       "height": 800,
       "query": "?theme=dark&layout=narrow"
+    },
+    {
+      "id": "desktop-1440-current-spectrum-chat-dark",
+      "width": 1440,
+      "height": 900,
+      "query": "?theme=dark&tool=chat"
+    },
+    {
+      "id": "desktop-1440-current-spectrum-projects-dark",
+      "width": 1440,
+      "height": 900,
+      "query": "?theme=dark&tool=projects"
+    },
+    {
+      "id": "desktop-1440-current-spectrum-chat-light",
+      "width": 1440,
+      "height": 900,
+      "query": "?theme=light&tool=chat"
+    },
+    {
+      "id": "desktop-1440-current-spectrum-projects-light",
+      "width": 1440,
+      "height": 900,
+      "query": "?theme=light&tool=projects"
     }
   ]
 }

@@ -61,13 +61,15 @@ export function SessionSurface({
   session,
   focused = false,
   onDockIntent,
+  mode = "conversation",
 }: {
   readonly session: SessionSurfaceFixture;
   readonly focused?: boolean;
   readonly onDockIntent?: (surface: "files" | "changes", workspaceId: string, sessionId: string) => void;
+  readonly mode?: "conversation" | "workbench";
 }) {
   const [events, setEvents] = useState<readonly SessionWorkEvent[]>(session.events);
-  const [surface, setSurface] = useState<"work_stream" | "terminal">("work_stream");
+  const [surface, setSurface] = useState<"work_stream" | "terminal">(mode === "workbench" ? "terminal" : "work_stream");
   const [draft, setDraft] = useState("");
   const [sequence, setSequence] = useState(1);
   const availability = composerAvailability(session);
@@ -111,7 +113,7 @@ export function SessionSurface({
       data-primary={focused ? "true" : "false"}
       data-runtime-proof={session.runtime.proofState}
       data-composer-mode={session.composerMode}
-      aria-label={`${session.displayName} Session work surface. ${session.runtime.label}. ${session.runtime.proof}. ${session.lifecycle}.`}
+      aria-label={`${session.displayName} ${mode === "workbench" ? "Workbench" : "Session work surface"}. ${session.runtime.label}. ${session.runtime.proof}. ${session.lifecycle}.`}
     >
       <header className="session-header">
         <div className="session-identity">
@@ -144,7 +146,7 @@ export function SessionSurface({
               }
             }}
           >
-            Work Stream
+            {mode === "workbench" ? "Activity" : "Work Stream"}
           </button>
           <button
             type="button"
@@ -183,7 +185,7 @@ export function SessionSurface({
 
       <TerminalSurface canonicalSessionId={session.canonicalSessionId} visible={surface === "terminal"} />
 
-      <form className="composer" hidden={surface !== "work_stream"} aria-label={`${session.displayName} composer`} onSubmit={handleSubmit}>
+      <form className="composer" hidden={surface !== "work_stream" || mode === "workbench"} aria-label={`${session.displayName} composer`} onSubmit={handleSubmit}>
         <div className="composer-context">
           <span className="context-pill">Target · {session.displayName}</span>
           <span className="context-pill">Session · {session.canonicalSessionId}</span>

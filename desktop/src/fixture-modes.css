@@ -11,7 +11,7 @@
 }
 
 :root[data-scale="125"] .workspace-grid {
-  grid-template-columns: var(--left-dock-width) minmax(0, 1fr);
+  grid-template-columns: var(--activity-rail-width) var(--left-dock-width) minmax(0, 1fr);
 }
 
 :root[data-scale="125"] .right-dock {
@@ -31,7 +31,7 @@
 }
 
 :root[data-scale="200"] .workspace-grid {
-  grid-template-columns: minmax(176px, var(--left-dock-width)) minmax(0, 1fr);
+  grid-template-columns: var(--activity-rail-width) minmax(176px, var(--left-dock-width)) minmax(0, 1fr);
 }
 
 :root[data-scale="200"] .right-dock,
@@ -68,7 +68,7 @@
 }
 
 :root[data-layout="narrow"] .workspace-grid {
-  grid-template-columns: var(--left-dock-width) minmax(0, 1fr);
+  grid-template-columns: var(--activity-rail-width) var(--left-dock-width) minmax(0, 1fr);
 }
 
 :root[data-layout="narrow"] .right-dock,

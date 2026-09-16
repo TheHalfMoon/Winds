@@ -241,6 +241,7 @@ export function DualSessionWorkspace({
       <SessionSurface
         session={sessionForSlot(project, session.canonicalSessionId, templateIndex) ?? session}
         focused={focusedSlot === slot}
+        mode="workbench"
         onDockIntent={(surface, workspaceId, sessionId) => onDockIntent?.({ surface, workspaceId, sessionId })}
       />
     </section>
@@ -269,10 +270,10 @@ export function DualSessionWorkspace({
   if (right) children.push(renderSlot("right", right, 1));
 
   return (
-    <section className="dual-session-workspace" aria-label="Dual Session view">
+    <section className="dual-session-workspace" aria-label="Dual Session view" data-surface="workbench">
       <header className="dual-session-toolbar">
         <div>
-          <strong>{dual ? "Dual Session" : "Single Session"}</strong>
+          <strong>{dual ? "Dual Session Workbench" : "Single Session Workbench"}</strong>
           <span>{status}</span>
         </div>
         <div className="dual-session-actions">
