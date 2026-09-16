@@ -73,7 +73,7 @@ test('T143 native harness directly enforces cold-launch and idle CPU RSS ceiling
 });
 
 
-test('T143 Linux reference runtime carries the measured JIT and bounded JSC heap-growth profile', () => {
+test('T143 Linux reference runtime carries the measured JIT and default-growth JSC profile', () => {
   const runLinux = readFileSync(join(desktopRoot, 'tests/performance/t143_run_linux.sh'), 'utf8');
   assert.match(host, /configure_linux_webkit_memory_profile/);
   assert.match(host, /var_os\("JSC_useJIT"\)\.is_none\(\)/);
@@ -84,9 +84,11 @@ test('T143 Linux reference runtime carries the measured JIT and bounded JSC heap
   assert.match(runLinux, /export Malloc=1/);
   assert.match(host, /set_var\("MALLOC_ARENA_MAX", "1"\)/);
   assert.match(runLinux, /export MALLOC_ARENA_MAX=1/);
-  assert.match(host, /var_os\("JSC_forceRAMSize"\)\.is_none\(\)/);
-  assert.match(host, /set_var\("JSC_forceRAMSize", "8589934592"\)/);
-  assert.match(runLinux, /export JSC_forceRAMSize=8589934592/);
+  assert.match(host, /var_os\("JSC_aggressiveHeapThresholdInMB"\)\.is_none\(\)/);
+  assert.match(host, /set_var\("JSC_aggressiveHeapThresholdInMB", "1048576"\)/);
+  assert.match(runLinux, /export JSC_aggressiveHeapThresholdInMB=1048576/);
+  assert.doesNotMatch(host, /JSC_forceRAMSize/);
+  assert.doesNotMatch(runLinux, /JSC_forceRAMSize/);
   assert.doesNotMatch(host, /MALLOC_TRIM_THRESHOLD_/);
   assert.doesNotMatch(runLinux, /MALLOC_TRIM_THRESHOLD_/);
   assert.doesNotMatch(host, /JSC_libpasScavengeContinuously/);

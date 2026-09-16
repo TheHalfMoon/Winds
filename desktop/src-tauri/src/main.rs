@@ -347,8 +347,8 @@ fn configure_linux_webkit_memory_profile() {
         if std::env::var_os("MALLOC_ARENA_MAX").is_none() {
             std::env::set_var("MALLOC_ARENA_MAX", "1");
         }
-        if std::env::var_os("JSC_forceRAMSize").is_none() {
-            std::env::set_var("JSC_forceRAMSize", "8589934592");
+        if std::env::var_os("JSC_aggressiveHeapThresholdInMB").is_none() {
+            std::env::set_var("JSC_aggressiveHeapThresholdInMB", "1048576");
         }
     }
 }
