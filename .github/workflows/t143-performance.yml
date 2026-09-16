@@ -30,6 +30,7 @@ permissions:
 env:
   CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
   BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+  T143_RSS_AMENDMENT_SHA: 55c29ebb5833a1f2856e6f3a820cc5484940b705
 
 jobs:
   qualify:
@@ -99,6 +100,8 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$BASE_SHA"
+          git cat-file -e "$T143_RSS_AMENDMENT_SHA^{commit}"
+          git merge-base --is-ancestor "$T143_RSS_AMENDMENT_SHA" "$CANDIDATE_SHA"
           git diff --exit-code "$BASE_SHA" "$CANDIDATE_SHA" -- \
             Cargo.toml Cargo.lock desktop/package.json desktop/package-lock.json \
             desktop/src-tauri/Cargo.toml desktop/src-tauri/Cargo.lock

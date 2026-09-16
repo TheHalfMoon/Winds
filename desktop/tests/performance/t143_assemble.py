@@ -12,6 +12,9 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+T143_RSS_AMENDMENT_SHA = "55c29ebb5833a1f2856e6f3a820cc5484940b705"
+T143_RENDERER_HOST_IDLE_RSS_BUDGET_MIB = 320
+
 
 def command(*args: str) -> str:
     return subprocess.check_output(args, text=True).strip()
@@ -75,6 +78,11 @@ def main() -> int:
         "candidate_commit": candidate,
         "candidate_tree": tree,
         "base_commit": os.environ.get("BASE_SHA", "UNAVAILABLE"),
+        "governance": {
+            "rss_budget_amendment": T143_RSS_AMENDMENT_SHA,
+            "renderer_host_idle_rss_budget_mib": T143_RENDERER_HOST_IDLE_RSS_BUDGET_MIB,
+            "measurement_semantics": "unchanged from the pre-amendment T143 host+renderer RSS boundary",
+        },
         "environment": {
             "runner_os": os.environ.get("RUNNER_OS", platform.system()),
             "runner_arch": os.environ.get("RUNNER_ARCH", platform.machine()),
@@ -145,6 +153,10 @@ def main() -> int:
         "backend::resize_1000": backend["fr052_resize"]["sample_count"] >= 1000,
         "backend::final_size_correct": bool(backend["fr052_resize"]["final_size_correct"]),
         "provenance::candidate_exact": candidate == expected,
+        "governance::rss_budget_amendment_ancestor": subprocess.run(
+            ["git", "merge-base", "--is-ancestor", T143_RSS_AMENDMENT_SHA, candidate],
+            check=False,
+        ).returncode == 0,
         "provenance::tree_present": bool(re.fullmatch(r"[0-9a-f]{40}", tree)),
     })
     evidence["checks"] = checks

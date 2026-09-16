@@ -22,6 +22,7 @@ const platformBaselineHtml = readFileSync(join(desktopRoot, 'tests/performance/t
 const reactBaselineHtml = readFileSync(join(desktopRoot, 'tests/performance/t143_react_baseline/index.html'), 'utf8');
 const reactBaselineMain = readFileSync(join(desktopRoot, 'tests/performance/t143_react_baseline/main.tsx'), 'utf8');
 const webkitHarness = readFileSync(join(desktopRoot, 'tests/performance/t143_webkit.py'), 'utf8');
+const assembleHarness = readFileSync(join(desktopRoot, 'tests/performance/t143_assemble.py'), 'utf8');
 
 test('T143 native readiness uses a qualification-only window-title capability and no production command', () => {
   assert.doesNotMatch(hostManifest, /t143-benchmark/);
@@ -56,7 +57,9 @@ test('T143 native harness directly enforces cold-launch and idle CPU RSS ceiling
   assert.match(nativeHarness, /--idle-seconds.*default=60\.0/);
   assert.match(nativeHarness, /cold_launch_p95_le_1500_ms/);
   assert.match(nativeHarness, /idle_cpu_le_2_percent_one_core/);
-  assert.match(nativeHarness, /renderer_host_idle_rss_le_300_mib/);
+  assert.match(nativeHarness, /renderer_host_idle_rss_le_320_mib/);
+  assert.match(nativeHarness, /320 \* 1024 \* 1024/);
+  assert.doesNotMatch(nativeHarness, /renderer_host_idle_rss_le_300_mib/);
   assert.match(nativeHarness, /rss_max_by_role_mib/);
   assert.match(nativeHarness, /process_tree_rss_max_mib/);
   assert.match(nativeHarness, /renderer_host_rss_bytes/);
@@ -163,6 +166,8 @@ test('T143 WebKitGTK harness retains raw samples for every frozen local interact
 test('T143 workflow separates native qualification bytes from benchmark renderer bytes without new package dependency', () => {
   assert.match(workflow, /runs-on: ubuntu-24\.04/);
   assert.match(workflow, /CANDIDATE_SHA/);
+  assert.match(workflow, /T143_RSS_AMENDMENT_SHA: 55c29ebb5833a1f2856e6f3a820cc5484940b705/);
+  assert.match(workflow, /git merge-base --is-ancestor \"\$T143_RSS_AMENDMENT_SHA\" \"\$CANDIDATE_SHA\"/);
   assert.match(workflow, /git rev-parse HEAD/);
   assert.match(workflow, /webkit2gtk-driver epiphany-browser xvfb dbus-x11 xdotool/);
   assert.match(workflow, /VITE_WINDS_T143_NATIVE_READY=1 npm run frontend:build/);
@@ -174,6 +179,9 @@ test('T143 workflow separates native qualification bytes from benchmark renderer
   assert.match(workflow, /benchmark-renderer-dist/);
   assert.match(workflow, /t097_release_benchmark_campaign/);
   assert.match(workflow, /t143_assemble\.py/);
+  assert.match(assembleHarness, /rss_budget_amendment/);
+  assert.match(assembleHarness, /renderer_host_idle_rss_budget_mib/);
+  assert.match(assembleHarness, /320/);
   assert.match(workflow, /actions\/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a/);
   assert.match(workflow, /desktop\/src-tauri\/Cargo\.toml desktop\/src-tauri\/Cargo\.lock/);
   assert.doesNotMatch(workflow, /unexpected T143 Linux dependency set/);

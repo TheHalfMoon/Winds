@@ -310,7 +310,7 @@ def main() -> int:
         "cold_launch_p95_le_1500_ms": result["launch"]["external_process_to_useful_shell"]["p95_ms"] <= 1500.0,
         "launch_samples_ge_20": args.launches >= 20,
         "idle_cpu_le_2_percent_one_core": idle["cpu_percent_one_logical_core"] <= 2.0,
-        "renderer_host_idle_rss_le_300_mib": idle["rss_max_bytes"] <= 300 * 1024 * 1024,
+        "renderer_host_idle_rss_le_320_mib": idle["rss_max_bytes"] <= 320 * 1024 * 1024,
         "renderer_present_every_idle_sample": bool(idle["renderer_present_every_sample"]),
         "renderer_host_process_count_ge_2_every_idle_sample": idle["min_process_count"] >= 2,
     }
