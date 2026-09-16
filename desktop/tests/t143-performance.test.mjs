@@ -169,6 +169,19 @@ test('T143 WebKitGTK harness retains raw samples for every frozen local interact
   assert.match(webkitHarness, /"script": WEBDRIVER_SCRIPT_TIMEOUT_MS/);
   assert.match(webkitHarness, /timeout=WEBDRIVER_CAMPAIGN_HTTP_TIMEOUT_SECONDS/);
   assert.match(webkitHarness, /urlopen\(request, timeout=timeout\)/);
+  assert.match(webkitHarness, /renderer-preflight\.json/);
+  assert.match(webkitHarness, /renderer-failure\.json/);
+  assert.match(webkitHarness, /winds-t143-renderer-preflight-v1/);
+  assert.match(webkitHarness, /winds-t143-renderer-failure-v1/);
+  assert.match(webkitHarness, /browser_phase/);
+  assert.match(webkitHarness, /normal:selection/);
+  assert.match(webkitHarness, /normal:composer/);
+  assert.match(webkitHarness, /normal:layout/);
+  assert.match(webkitHarness, /normal:right-dock/);
+  assert.match(webkitHarness, /normal:resize/);
+  assert.match(webkitHarness, /large:search/);
+  assert.match(webkitHarness, /large:scroll/);
+  assert.match(webkitHarness, /large:focus/);
 });
 
 test('T143 workflow separates native qualification bytes from benchmark renderer bytes without new package dependency', () => {

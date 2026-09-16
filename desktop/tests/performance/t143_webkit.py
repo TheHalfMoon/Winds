@@ -42,6 +42,48 @@ def request_json(
     return body.get("value") if isinstance(body, dict) else body
 
 
+def write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def renderer_preflight(base: str, session: str) -> dict[str, Any]:
+    value = execute(
+        base,
+        session,
+        r"""
+return {
+  href: location.href,
+  readyState: document.readyState,
+  windsApp: Boolean(document.querySelector('.winds-app')),
+  chatSelector: Boolean(document.querySelector('#chat-session-target')),
+  chatOptionCount: document.querySelector('#chat-session-target')?.querySelectorAll('option').length ?? 0,
+  chatOptionValues: Array.from(document.querySelectorAll('#chat-session-target option')).map((option) => option.value),
+  chatComposerCount: document.querySelectorAll('.chat-composer textarea').length,
+  dualMode: document.querySelector('.dual-session-layout')?.dataset.mode ?? null,
+  sessionSlotCount: document.querySelectorAll('.session-slot').length,
+  activityButtonCount: Array.from(document.querySelectorAll('.session-slot button')).filter((button) => button.textContent?.trim() === 'Activity').length,
+  rightDockPresent: Boolean(document.querySelector('.right-dock')),
+  benchmarkPhase: document.documentElement.dataset.t143Phase ?? null,
+  userAgent: navigator.userAgent,
+  viewport: { width: innerWidth, height: innerHeight, devicePixelRatio },
+};
+""",
+    )
+    if not isinstance(value, dict):
+        raise RuntimeError(f"renderer preflight returned non-object: {value!r}")
+    return value
+
+
+def best_effort_browser_phase(base: str, session: str | None) -> str | None:
+    if not session:
+        return None
+    try:
+        phase = execute(base, session, "return document.documentElement.dataset.t143Phase ?? null;")
+        return phase if isinstance(phase, str) else None
+    except Exception:
+        return None
+
+
 def percentile(values: list[float], percent: int) -> float:
     ordered = sorted(values)
     if not ordered:
@@ -115,10 +157,12 @@ const done = arguments[arguments.length - 1];
     return painted - started;
   };
 
+  document.documentElement.dataset.t143Phase = 'normal:selector-precondition';
   await waitFor(() => document.querySelector('#chat-session-target')?.querySelectorAll('option').length >= 3, 'Chat Session selector');
   const selector = document.querySelector('#chat-session-target');
   const sessionA = 'fixture-winds\u0000fixture-session-a';
   const sessionB = 'fixture-winds\u0000fixture-session-b';
+  document.documentElement.dataset.t143Phase = 'normal:selection';
   const selection = [];
   for (let index = 0; index < 1000; index += 1) {
     const target = index % 2 === 0 ? sessionB : sessionA;
@@ -128,6 +172,7 @@ const done = arguments[arguments.length - 1];
     }, () => selector.value === target));
   }
 
+  document.documentElement.dataset.t143Phase = 'normal:composer';
   const composer = document.querySelector('.chat-composer textarea');
   if (!composer) throw new Error('Chat composer textarea missing');
   const wasDisabled = composer.disabled;
@@ -143,11 +188,13 @@ const done = arguments[arguments.length - 1];
   composer.value = '';
   composer.disabled = wasDisabled;
 
+  document.documentElement.dataset.t143Phase = 'normal:activity-precondition';
   // Put both visible Workbench Slots on representative Activity output before focus/layout stress.
   const activityButtons = Array.from(document.querySelectorAll('.session-slot button')).filter((button) => button.textContent?.trim() === 'Activity');
   for (const button of activityButtons) button.click();
   await waitFor(() => document.querySelectorAll('.session-slot .session-work-event:not([hidden])').length >= 2, 'two visible Session work events');
 
+  document.documentElement.dataset.t143Phase = 'normal:layout';
   const layoutSamples = [];
   for (let cycle = 0; cycle < 500; cycle += 1) {
     const rightClose = Array.from(document.querySelectorAll('.session-slot[data-slot="right"] .session-slot-controls button')).find((button) => button.textContent?.trim() === 'Close');
@@ -160,6 +207,7 @@ const done = arguments[arguments.length - 1];
     for (const button of Array.from(document.querySelectorAll('.session-slot button')).filter((candidate) => candidate.textContent?.trim() === 'Activity')) button.click();
   }
 
+  document.documentElement.dataset.t143Phase = 'normal:right-dock';
   // Ensure an exact target is selected so the right dock remains bound.
   selector.value = sessionA;
   selector.dispatchEvent(new Event('change', { bubbles: true }));
@@ -176,6 +224,7 @@ const done = arguments[arguments.length - 1];
     }));
   }
 
+  document.documentElement.dataset.t143Phase = 'normal:resize';
   const divider = document.querySelector('input[aria-label="Resize Session divider"]');
   const resizeSamples = [];
   if (!divider) throw new Error('Session divider missing');
@@ -187,6 +236,7 @@ const done = arguments[arguments.length - 1];
     }, () => divider.value === value));
   }
 
+  document.documentElement.dataset.t143Phase = 'normal:complete';
   return {
     userAgent: navigator.userAgent,
     viewport: { width: innerWidth, height: innerHeight, devicePixelRatio },
@@ -198,7 +248,7 @@ const done = arguments[arguments.length - 1];
     resizeSamples,
     composerMeasurementBoundary: 'measurement-only DOM enablement; no submit or runtime dispatch; canonical T139 composer availability remains unchanged',
   };
-})().then((value) => done({ ok: true, value })).catch((error) => done({ ok: false, error: String(error?.stack ?? error) }));
+})().then((value) => done({ ok: true, value })).catch((error) => done({ ok: false, phase: document.documentElement.dataset.t143Phase ?? null, error: String(error?.stack ?? error) }));
 """
 
 LARGE_CAMPAIGN = r"""
@@ -225,6 +275,7 @@ const done = arguments[arguments.length - 1];
     return painted - started;
   };
 
+  document.documentElement.dataset.t143Phase = 'large:fixture-precondition';
   await waitFor(() => document.querySelectorAll('.project-group').length >= 101, '101 Projects');
   await waitFor(() => document.querySelectorAll('.session-row').length >= 1003, '1003 Sessions');
   const projectCount = document.querySelectorAll('.project-group').length;
@@ -240,6 +291,7 @@ const done = arguments[arguments.length - 1];
   projectsRail?.click();
   await waitFor(() => document.querySelector('.left-dock'), 'Projects tool window after exact selection');
 
+  document.documentElement.dataset.t143Phase = 'large:search';
   const searchSamples = [];
   for (let index = 0; index < 200; index += 1) {
     const query = index % 2 === 0 ? `t143-project-${String(index % 100).padStart(3, '0')}-session-09` : '';
@@ -254,6 +306,7 @@ const done = arguments[arguments.length - 1];
     await waitFor(() => document.querySelectorAll('.session-row').length >= 1003, 'large fixture restored after search');
   }
 
+  document.documentElement.dataset.t143Phase = 'large:scroll';
   const scrollSamples = [];
   for (let index = 0; index < 1000; index += 1) {
     await frame();
@@ -264,6 +317,7 @@ const done = arguments[arguments.length - 1];
     scrollSamples.push(painted - started);
   }
 
+  document.documentElement.dataset.t143Phase = 'large:focus';
   const focusRows = Array.from(document.querySelectorAll('.session-row'));
   const focusSamples = [];
   for (let index = 0; index < 1000; index += 1) {
@@ -271,6 +325,7 @@ const done = arguments[arguments.length - 1];
     focusSamples.push(await sample(index, () => row.focus(), () => document.activeElement === row));
   }
 
+  document.documentElement.dataset.t143Phase = 'large:complete';
   return {
     userAgent: navigator.userAgent,
     projectCount,
@@ -280,7 +335,7 @@ const done = arguments[arguments.length - 1];
     focusSamples,
     selectedBaseSessionPreserved: Boolean(document.querySelector('.session-row-shell[data-selected="true"] .session-row[data-session-id="fixture-session-a"]')),
   };
-})().then((value) => done({ ok: true, value })).catch((error) => done({ ok: false, error: String(error?.stack ?? error) }));
+})().then((value) => done({ ok: true, value })).catch((error) => done({ ok: false, phase: document.documentElement.dataset.t143Phase ?? null, error: String(error?.stack ?? error) }));
 """
 
 
@@ -291,6 +346,9 @@ def main() -> int:
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
+    output_path = Path(args.output)
+    preflight_path = output_path.with_name("renderer-preflight.json")
+    failure_path = output_path.with_name("renderer-failure.json")
     binary = os.environ.get("WINDS_T143_WEBKIT_BINARY", "/usr/lib/x86_64-linux-gnu/webkit2gtk-4.1/MiniBrowser")
     browser_name = os.environ.get("WINDS_T143_WEBKIT_BROWSER_NAME", "MiniBrowser")
     browser_arg = os.environ.get("WINDS_T143_WEBKIT_ARGUMENT", "--automation")
@@ -302,16 +360,37 @@ def main() -> int:
             }
         }
     }
-    session_value = request_json(args.webdriver, "POST", "/session", capabilities)
-    if not isinstance(session_value, dict) or not session_value.get("sessionId"):
-        raise RuntimeError(f"WebDriver did not return a session id: {session_value!r}")
-    session = session_value["sessionId"]
-    resolved_capabilities = session_value.get("capabilities", {})
+
+    session: str | None = None
+    resolved_capabilities: dict[str, Any] = {}
+    phase = "session:create"
     try:
+        session_value = request_json(args.webdriver, "POST", "/session", capabilities)
+        if not isinstance(session_value, dict) or not session_value.get("sessionId"):
+            raise RuntimeError(f"WebDriver did not return a session id: {session_value!r}")
+        session = session_value["sessionId"]
+        resolved_capabilities = session_value.get("capabilities", {})
+
+        phase = "session:timeouts"
         request_json(args.webdriver, "POST", f"/session/{session}/timeouts", {"script": WEBDRIVER_SCRIPT_TIMEOUT_MS, "pageLoad": 30_000})
+
+        phase = "normal:navigate"
         normal_url = f"{args.base_url}?tool=chat&theme=dark"
         request_json(args.webdriver, "POST", f"/session/{session}/url", {"url": normal_url})
+        phase = "normal:shell-ready"
         wait_for_shell(args.webdriver, session)
+        phase = "normal:preflight"
+        preflight = renderer_preflight(args.webdriver, session)
+        write_json(preflight_path, {
+            "schema": "winds-t143-renderer-preflight-v1",
+            "browser_name": browser_name,
+            "browser_binary": binary,
+            "browser_argument": browser_arg,
+            "webdriver_capabilities": resolved_capabilities,
+            "normal": preflight,
+        })
+
+        phase = "normal:campaign"
         normal = execute(
             args.webdriver,
             session,
@@ -320,11 +399,21 @@ def main() -> int:
             timeout=WEBDRIVER_CAMPAIGN_HTTP_TIMEOUT_SECONDS,
         )
         if not isinstance(normal, dict) or not normal.get("ok"):
-            raise RuntimeError(f"normal renderer campaign failed: {normal}")
+            detail = normal if isinstance(normal, dict) else {"value": normal}
+            raise RuntimeError(f"normal renderer campaign failed: {detail}")
 
+        phase = "large:navigate"
         large_url = f"{args.base_url}?tool=projects&theme=dark&perf=t143-large"
         request_json(args.webdriver, "POST", f"/session/{session}/url", {"url": large_url})
+        phase = "large:shell-ready"
         wait_for_shell(args.webdriver, session)
+        phase = "large:preflight"
+        large_preflight = renderer_preflight(args.webdriver, session)
+        prior_preflight = json.loads(preflight_path.read_text(encoding="utf-8"))
+        prior_preflight["large"] = large_preflight
+        write_json(preflight_path, prior_preflight)
+
+        phase = "large:campaign"
         large = execute(
             args.webdriver,
             session,
@@ -333,12 +422,28 @@ def main() -> int:
             timeout=WEBDRIVER_CAMPAIGN_HTTP_TIMEOUT_SECONDS,
         )
         if not isinstance(large, dict) or not large.get("ok"):
-            raise RuntimeError(f"large renderer campaign failed: {large}")
+            detail = large if isinstance(large, dict) else {"value": large}
+            raise RuntimeError(f"large renderer campaign failed: {detail}")
+    except Exception as error:
+        write_json(failure_path, {
+            "schema": "winds-t143-renderer-failure-v1",
+            "python_phase": phase,
+            "browser_phase": best_effort_browser_phase(args.webdriver, session),
+            "error_type": type(error).__name__,
+            "error": str(error),
+            "browser_name": browser_name,
+            "browser_binary": binary,
+            "browser_argument": browser_arg,
+            "webdriver_capabilities": resolved_capabilities,
+            "preflight_path": str(preflight_path),
+        })
+        raise
     finally:
-        try:
-            request_json(args.webdriver, "DELETE", f"/session/{session}")
-        except Exception as error:  # best-effort cleanup after evidence is already captured
-            print(f"WebDriver cleanup warning: {error}", file=sys.stderr)
+        if session:
+            try:
+                request_json(args.webdriver, "DELETE", f"/session/{session}")
+            except Exception as error:
+                print(f"WebDriver cleanup warning: {error}", file=sys.stderr)
 
     normal_value = normal["value"]
     large_value = large["value"]
@@ -385,7 +490,8 @@ def main() -> int:
         "large_fixture_selection_stable": result["large_fixture"]["selected_base_session_preserved"],
     }
     result["checks"] = checks
-    Path(args.output).write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json(output_path, result)
+    failure_path.unlink(missing_ok=True)
     print(f"T143_RENDERER_JSON={json.dumps(result, sort_keys=True)}")
     failed = [name for name, passed in checks.items() if not passed]
     if failed:
