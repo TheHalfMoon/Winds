@@ -84,6 +84,9 @@ test('T143 Linux reference runtime carries the measured JIT profile and current 
   assert.match(runLinux, /export Malloc=1/);
   assert.match(host, /set_var\("MALLOC_ARENA_MAX", "1"\)/);
   assert.match(runLinux, /export MALLOC_ARENA_MAX=1/);
+  assert.match(host, /var_os\("MALLOC_TRIM_THRESHOLD_"\)\.is_none\(\)/);
+  assert.match(host, /set_var\("MALLOC_TRIM_THRESHOLD_", "0"\)/);
+  assert.match(runLinux, /export MALLOC_TRIM_THRESHOLD_=0/);
   assert.doesNotMatch(host, /JSC_libpasScavengeContinuously/);
   assert.doesNotMatch(runLinux, /JSC_libpasScavengeContinuously/);
 });
