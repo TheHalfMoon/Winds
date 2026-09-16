@@ -1,0 +1,23 @@
+{
+  "head": "5c8794434c933a4c5b47ef7bb51e8ed8da954bf5",
+  "tree": "71ce3329b637745f34c9d40eda916f20b013c4c0",
+  "capturedAt": "2026-09-16T04:53:15.885Z",
+  "browser": "Vivaldi Chromium via CDP",
+  "captures": [
+    "activity-longrun-dual-1440x900.png",
+    "contrast-1440x900.png",
+    "dark-dual-1280x800.png",
+    "dark-dual-1440x900.png",
+    "dark-dual-1920x1080.png",
+    "dark-projects-1440x900.png",
+    "keyboard-focus-1440x900.png",
+    "light-chat-1440x900.png",
+    "light-projects-1440x900.png",
+    "reduced-motion-1440x900.png",
+    "right-changes-1440x900.png",
+    "right-evidence-1440x900.png",
+    "right-files-1440x900.png",
+    "right-needs-you-1440x900.png",
+    "single-session-1440x900.png"
+  ]
+}
