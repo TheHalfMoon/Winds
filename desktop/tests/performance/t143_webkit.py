@@ -171,7 +171,10 @@ const done = arguments[arguments.length - 1];
   const exactSessionCommitted = (target, sessionId) => {
     const currentSelector = document.querySelector('#chat-session-target');
     const identity = document.querySelector('.chat-session-identity');
-    return currentSelector?.value === target && identity?.textContent?.includes(sessionId);
+    const focusedIdentity = document.querySelector('.session-slot[data-focused="true"] .session-identity');
+    return currentSelector?.value === target
+      && identity?.textContent?.includes(sessionId)
+      && focusedIdentity?.textContent?.includes(sessionId);
   };
   document.documentElement.dataset.t143Phase = 'normal:selection';
   const selection = [];

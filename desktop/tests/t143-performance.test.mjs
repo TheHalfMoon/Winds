@@ -183,6 +183,8 @@ test('T143 WebKitGTK harness retains raw samples for every frozen local interact
   assert.match(webkitHarness, /selectExactSession/);
   assert.match(webkitHarness, /exactSessionCommitted/);
   assert.match(webkitHarness, /chat-session-identity/);
+  assert.match(webkitHarness, /session-slot\[data-focused=\"true\"\] \.session-identity/);
+  assert.match(webkitHarness, /focusedIdentity/);
   assert.match(webkitHarness, /sampleIndex/);
   assert.match(webkitHarness, /errorMessage/);
   assert.match(webkitHarness, /errorStack/);
