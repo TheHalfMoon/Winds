@@ -139,6 +139,11 @@ test('T134 renderer has explicit narrow fallback and no new direct host or runti
   assert.match(workspace, /never broadcasts/);
   assert.match(app, /onSelectSession/);
   assert.match(app, /selection=\{selection\}/);
+  assert.match(app, /import \{ useCallback, useEffect, useState \} from \"react\"/);
+  assert.match(app, /const focusDock = useCallback\([\s\S]*?\}, \[\]\);/);
+  assert.match(app, /const openDockIntent = useCallback\([\s\S]*?\}, \[focusDock\]\);/);
+  assert.match(app, /const selectSession = useCallback\([\s\S]*?\}, \[focusDock\]\);/);
+  assert.match(app, /const selectProjectSession = useCallback\([\s\S]*?\}, \[selectSession\]\);/);
   assert.match(dock, /onSelectSession\?\.\(current\.canonicalWorkspaceId, session\.canonicalSessionId\)/);
 });
 
