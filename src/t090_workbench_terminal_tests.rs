@@ -120,7 +120,7 @@ fn lingering_profile(root: &TestRoot) -> ShellProfile {
 }
 
 #[cfg(unix)]
-fn assert_bounded_cleanup_truth<T>(
+fn assert_t090_bounded_close_truth<T>(
     state: &WorkbenchState,
     terminals: &WorkbenchTerminals,
     pane: super::PaneId,
@@ -172,7 +172,7 @@ fn t090_start_and_close_bind_a_pane_to_the_exact_owned_terminal_session() {
     assert_eq!(state.pane(pane).unwrap().lifecycle, PaneLifecycleView::Live);
 
     let close_result = terminals.close(&mut state, pane);
-    let _ = assert_bounded_cleanup_truth(&state, &terminals, pane, close_result);
+    let _ = assert_t090_bounded_close_truth(&state, &terminals, pane, close_result);
 }
 
 #[cfg(unix)]
@@ -198,7 +198,7 @@ fn t090_resize_changes_presentation_size_only_after_the_owned_session_accepts_it
     );
     assert_eq!(state.pane(pane).unwrap().size, accepted);
     let close_result = terminals.close(&mut state, pane);
-    let _ = assert_bounded_cleanup_truth(&state, &terminals, pane, close_result);
+    let _ = assert_t090_bounded_close_truth(&state, &terminals, pane, close_result);
 }
 
 #[cfg(unix)]
@@ -304,7 +304,7 @@ fn t090_output_reader_eof_while_child_is_live_fails_closed_but_retains_owned_cle
     assert!(terminals.has_owned_terminal(pane));
 
     let close_result = terminals.close(&mut state, pane);
-    let _ = assert_bounded_cleanup_truth(&state, &terminals, pane, close_result);
+    let _ = assert_t090_bounded_close_truth(&state, &terminals, pane, close_result);
 }
 
 #[cfg(unix)]
@@ -332,7 +332,7 @@ fn t090_output_reader_error_while_child_is_live_fails_closed_but_retains_owned_c
     assert!(terminals.has_owned_terminal(pane));
 
     let close_result = terminals.close(&mut state, pane);
-    let _ = assert_bounded_cleanup_truth(&state, &terminals, pane, close_result);
+    let _ = assert_t090_bounded_close_truth(&state, &terminals, pane, close_result);
 }
 
 #[cfg(unix)]
@@ -404,7 +404,7 @@ fn t090_interrupt_and_terminate_reuse_the_accepted_owned_session_lifecycle() {
         PaneLifecycleView::OwnershipLost
     );
     let terminate_result = terminals.terminate(&mut state, pane);
-    let _ = assert_bounded_cleanup_truth(&state, &terminals, pane, terminate_result);
+    let _ = assert_t090_bounded_close_truth(&state, &terminals, pane, terminate_result);
 }
 
 #[cfg(unix)]
@@ -502,5 +502,5 @@ fn t090_duplicate_start_never_replaces_the_existing_owned_terminal() {
     assert!(terminals.has_owned_terminal(pane));
     assert_eq!(state.pane(pane).unwrap().lifecycle, PaneLifecycleView::Live);
     let close_result = terminals.close(&mut state, pane);
-    let _ = assert_bounded_cleanup_truth(&state, &terminals, pane, close_result);
+    let _ = assert_t090_bounded_close_truth(&state, &terminals, pane, close_result);
 }
