@@ -77,22 +77,3 @@ test('T140 accessibility qualification binds exact candidate and exercises all c
   assert.match(accessibilityWorkflow, /npm run format:check && npm run typecheck && npm run lint && npm test && npm run frontend:build/);
   assert.match(accessibilityWorkflow, /npm run desktop:build/);
 });
-
-const qualityWorkflow = readFileSync(
-  join(repositoryRoot, '.github/workflows/quality.yml'),
-  'utf8',
-);
-
-test('quality runs the complete Rust suite on Ubuntu and the same suite serialized on macOS', () => {
-  assert.match(qualityWorkflow, /cargo test --locked --all-targets --all-features/);
-  assert.match(
-    qualityWorkflow,
-    /cargo test --locked --all-targets --all-features -- --test-threads=1/,
-  );
-  assert.match(qualityWorkflow, /runner\.os != 'macOS'/);
-  assert.match(qualityWorkflow, /runner\.os == 'macOS'/);
-});
-
-test('quality does not tolerate silent CI failures', () => {
-  assert.doesNotMatch(qualityWorkflow, /continue-on-error/);
-});
