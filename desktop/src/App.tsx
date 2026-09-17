@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ActivityRail, type LeftToolSurface } from "./activityRail/ActivityRail";
 import { CommandPalette } from "./commandPalette/CommandPalette";
 import { CurrentMark } from "./components/CurrentMark";
@@ -30,24 +30,24 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  const focusDock = (target: DualSessionSelection) => {
+  const focusDock = useCallback((target: DualSessionSelection) => {
     setSelection((current) => current?.workspaceId === target.workspaceId && current.sessionId === target.sessionId ? current : target);
     setDockTarget((current) => current?.workspaceId === target.workspaceId && current.sessionId === target.sessionId ? current : target);
-  };
+  }, []);
 
-  const openDockIntent = (intent: DualSessionDockIntent) => {
+  const openDockIntent = useCallback((intent: DualSessionDockIntent) => {
     focusDock(intent);
     setDockSurface(intent.surface);
-  };
+  }, [focusDock]);
 
-  const selectSession = (workspaceId: string, sessionId: string) => {
+  const selectSession = useCallback((workspaceId: string, sessionId: string) => {
     focusDock({ workspaceId, sessionId });
-  };
+  }, [focusDock]);
 
-  const selectProjectSession = (workspaceId: string, sessionId: string) => {
+  const selectProjectSession = useCallback((workspaceId: string, sessionId: string) => {
     selectSession(workspaceId, sessionId);
     setLeftTool("chat");
-  };
+  }, [selectSession]);
 
   return (
     <div className="winds-app" aria-label="Winds Desktop workspace">

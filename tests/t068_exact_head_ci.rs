@@ -47,3 +47,28 @@ fn t068_ci_workflows_bind_evidence_to_exact_candidate_head() {
         assert_exact_head_contract(path, &contents);
     }
 }
+
+#[test]
+fn t068_quality_runs_complete_rust_suite_with_macos_only_serialization() {
+    let contents = workflow(".github/workflows/quality.yml");
+    assert!(
+        contents.contains("cargo test --locked --all-targets --all-features"),
+        "quality must retain the complete locked Rust test surface"
+    );
+    assert!(
+        contents.contains("cargo test --locked --all-targets --all-features -- --test-threads=1"),
+        "quality must serialize the complete Rust suite on macOS"
+    );
+    assert!(
+        contents.contains("runner.os != 'macOS'"),
+        "quality must retain ordinary Ubuntu execution"
+    );
+    assert!(
+        contents.contains("runner.os == 'macOS'"),
+        "quality must scope serialization to macOS only"
+    );
+    assert!(
+        !contents.contains("continue-on-error"),
+        "quality must not tolerate silent CI failures"
+    );
+}
