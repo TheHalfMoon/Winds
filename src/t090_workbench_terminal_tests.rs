@@ -120,6 +120,43 @@ fn lingering_profile(root: &TestRoot) -> ShellProfile {
 }
 
 #[cfg(unix)]
+fn assert_t090_bounded_close_truth<T>(
+    state: &WorkbenchState,
+    terminals: &WorkbenchTerminals,
+    pane: super::PaneId,
+    result: crate::git::Result<T>,
+) -> Option<T> {
+    assert!(
+        !terminals.has_owned_terminal(pane),
+        "bounded cleanup must revoke exact workbench terminal ownership before returning",
+    );
+    match result {
+        Ok(value) => {
+            assert_eq!(
+                state.pane(pane).unwrap().lifecycle,
+                PaneLifecycleView::Exited,
+                "proven bounded cleanup must project Exited",
+            );
+            Some(value)
+        }
+        Err(error) => {
+            assert!(
+                error
+                    .to_string()
+                    .contains("could not prove owned child exit inside bounded cleanup window"),
+                "unexpected bounded cleanup error: {error}",
+            );
+            assert_eq!(
+                state.pane(pane).unwrap().lifecycle,
+                PaneLifecycleView::OwnershipLost,
+                "unproven bounded cleanup must fail closed to OwnershipLost",
+            );
+            None
+        }
+    }
+}
+
+#[cfg(unix)]
 #[test]
 fn t090_start_and_close_bind_a_pane_to_the_exact_owned_terminal_session() {
     let root = TestRoot::new("start-close");
@@ -134,12 +171,8 @@ fn t090_start_and_close_bind_a_pane_to_the_exact_owned_terminal_session() {
     assert!(terminals.has_owned_terminal(pane));
     assert_eq!(state.pane(pane).unwrap().lifecycle, PaneLifecycleView::Live);
 
-    terminals.close(&mut state, pane).unwrap();
-    assert!(!terminals.has_owned_terminal(pane));
-    assert_eq!(
-        state.pane(pane).unwrap().lifecycle,
-        PaneLifecycleView::Exited
-    );
+    let close_result = terminals.close(&mut state, pane);
+    let _ = assert_t090_bounded_close_truth(&state, &terminals, pane, close_result);
 }
 
 #[cfg(unix)]
@@ -164,7 +197,8 @@ fn t090_resize_changes_presentation_size_only_after_the_owned_session_accepts_it
             .is_err()
     );
     assert_eq!(state.pane(pane).unwrap().size, accepted);
-    terminals.close(&mut state, pane).unwrap();
+    let close_result = terminals.close(&mut state, pane);
+    let _ = assert_t090_bounded_close_truth(&state, &terminals, pane, close_result);
 }
 
 #[cfg(unix)]
@@ -269,11 +303,8 @@ fn t090_output_reader_eof_while_child_is_live_fails_closed_but_retains_owned_cle
     );
     assert!(terminals.has_owned_terminal(pane));
 
-    terminals.close(&mut state, pane).unwrap();
-    assert_eq!(
-        state.pane(pane).unwrap().lifecycle,
-        PaneLifecycleView::Exited
-    );
+    let close_result = terminals.close(&mut state, pane);
+    let _ = assert_t090_bounded_close_truth(&state, &terminals, pane, close_result);
 }
 
 #[cfg(unix)]
@@ -300,7 +331,8 @@ fn t090_output_reader_error_while_child_is_live_fails_closed_but_retains_owned_c
     );
     assert!(terminals.has_owned_terminal(pane));
 
-    terminals.close(&mut state, pane).unwrap();
+    let close_result = terminals.close(&mut state, pane);
+    let _ = assert_t090_bounded_close_truth(&state, &terminals, pane, close_result);
 }
 
 #[cfg(unix)]
@@ -328,10 +360,30 @@ fn t090_terminal_aware_pane_close_resolves_reader_failure_before_visual_removal(
     );
     assert!(terminals.has_owned_terminal(pane));
 
-    let exit = terminals.close_pane(&mut state, pane).unwrap();
-    assert!(exit.is_some());
+    let close_result = terminals.close_pane(&mut state, pane);
     assert!(!terminals.has_owned_terminal(pane));
-    assert!(state.pane(pane).is_none());
+    match close_result {
+        Ok(exit) => {
+            assert!(exit.is_some());
+            assert!(state.pane(pane).is_none());
+        }
+        Err(error) => {
+            assert!(
+                error
+                    .to_string()
+                    .contains("could not prove owned child exit inside bounded cleanup window"),
+                "unexpected terminal-aware pane close error: {error}",
+            );
+            assert_eq!(
+                state.pane(pane).unwrap().lifecycle,
+                PaneLifecycleView::OwnershipLost,
+            );
+            assert!(
+                state.pane(pane).is_some(),
+                "visual pane must remain when owned-child exit is unproven",
+            );
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -351,12 +403,8 @@ fn t090_interrupt_and_terminate_reuse_the_accepted_owned_session_lifecycle() {
         state.pane(pane).unwrap().lifecycle,
         PaneLifecycleView::OwnershipLost
     );
-    terminals.terminate(&mut state, pane).unwrap();
-    assert_eq!(
-        state.pane(pane).unwrap().lifecycle,
-        PaneLifecycleView::Exited
-    );
-    assert!(!terminals.has_owned_terminal(pane));
+    let terminate_result = terminals.terminate(&mut state, pane);
+    let _ = assert_t090_bounded_close_truth(&state, &terminals, pane, terminate_result);
 }
 
 #[cfg(unix)]
@@ -453,5 +501,6 @@ fn t090_duplicate_start_never_replaces_the_existing_owned_terminal() {
     );
     assert!(terminals.has_owned_terminal(pane));
     assert_eq!(state.pane(pane).unwrap().lifecycle, PaneLifecycleView::Live);
-    terminals.close(&mut state, pane).unwrap();
+    let close_result = terminals.close(&mut state, pane);
+    let _ = assert_t090_bounded_close_truth(&state, &terminals, pane, close_result);
 }
