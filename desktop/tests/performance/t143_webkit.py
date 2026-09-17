@@ -311,6 +311,13 @@ const done = arguments[arguments.length - 1];
   const list = document.querySelector('.project-list');
   if (!search || !list) throw new Error('large fixture search/list missing');
 
+  const inputValueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  if (!inputValueSetter) throw new Error('native HTMLInputElement value setter unavailable');
+  const setSearchValue = (value) => {
+    inputValueSetter.call(search, value);
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+
   const base = document.querySelector('.session-row[data-session-id="fixture-session-a"]');
   base?.click();
   // Selecting from Projects intentionally returns presentation focus to Chat; reopen Projects via the activity rail.
@@ -323,13 +330,11 @@ const done = arguments[arguments.length - 1];
   for (let index = 0; index < 200; index += 1) {
     const query = index % 2 === 0 ? `t143-project-${String(index % 100).padStart(3, '0')}-session-09` : '';
     searchSamples.push(await sample(index, () => {
-      search.value = query;
-      search.dispatchEvent(new Event('input', { bubbles: true }));
+      setSearchValue(query);
     }, () => query ? document.querySelectorAll('.session-row').length === 1 : document.querySelectorAll('.session-row').length >= 1003));
   }
   if (search.value !== '') {
-    search.value = '';
-    search.dispatchEvent(new Event('input', { bubbles: true }));
+    setSearchValue('');
     await waitFor(() => document.querySelectorAll('.session-row').length >= 1003, 'large fixture restored after search');
   }
 

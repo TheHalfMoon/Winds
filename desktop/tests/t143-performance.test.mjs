@@ -193,6 +193,12 @@ test('T143 WebKitGTK harness retains raw samples for every frozen local interact
   assert.match(webkitHarness, /normal:right-dock/);
   assert.match(webkitHarness, /normal:resize/);
   assert.match(webkitHarness, /large:search/);
+  assert.match(webkitHarness, /Object\.getOwnPropertyDescriptor\(HTMLInputElement\.prototype, 'value'\)/);
+  assert.match(webkitHarness, /inputValueSetter\.call\(search, value\)/);
+  assert.match(webkitHarness, /setSearchValue\(query\)/);
+  assert.match(webkitHarness, /setSearchValue\(''\)/);
+  assert.doesNotMatch(webkitHarness, /search\.value = query/);
+  assert.doesNotMatch(webkitHarness, /search\.value = ''/);
   assert.match(webkitHarness, /large:scroll/);
   assert.match(webkitHarness, /large:focus/);
 });
