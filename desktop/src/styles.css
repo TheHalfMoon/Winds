@@ -271,6 +271,11 @@ button[aria-disabled="true"] {
   scrollbar-color: var(--border-strong) transparent;
 }
 
+[data-project-browse] .project-group {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 445px;
+}
+
 .project-group + .project-group {
   margin-top: var(--space-2);
 }
