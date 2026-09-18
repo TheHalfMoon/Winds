@@ -150,7 +150,6 @@ export function LeftDock({
   const [createName, setCreateName] = useState("");
   const [createWorkstreamId, setCreateWorkstreamId] = useState("");
   const dockRef = useRef<HTMLElement>(null);
-  const navRef = useRef<HTMLElement>(null);
   const busyRef = useRef(false);
 
   const rememberFocusKey = useCallback((key: string | null) => {
@@ -292,7 +291,7 @@ export function LeftDock({
 
   const onNavKeyDown = useCallback((event: React.KeyboardEvent<HTMLElement>) => {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-    const rows = Array.from(navRef.current?.querySelectorAll<HTMLButtonElement>("button.session-row") ?? [])
+    const rows = Array.from(dockRef.current?.querySelectorAll<HTMLButtonElement>("button.session-row") ?? [])
       .filter((row) => !row.closest("[hidden], [inert]"));
     if (rows.length === 0) return;
     const activeIndex = rows.findIndex((row) => row === document.activeElement);
@@ -374,15 +373,20 @@ export function LeftDock({
         <span aria-hidden="true">⌕</span>
         <input type="search" value={query} onChange={(event) => setQuery(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === "Enter") resolveSearch(); }} aria-label="Search Projects and Sessions" placeholder="Search Projects and Sessions" />
       </div>
-      <nav ref={navRef} className="project-list" aria-label="Project navigation" onKeyDown={onNavKeyDown}>
-        <div data-project-browse data-search-hidden={searching ? "true" : "false"} aria-hidden={searching} inert={searching ? true : undefined}>
-          {browseProjectGroups}
-        </div>
-        {searching && <div data-project-search-results>
-          {searchProjectGroups}
-        </div>}
-        {(searching ? visibleProjects.length === 0 : snapshot.projects.length === 0) && <p className="session-empty">No matching Projects or Sessions</p>}
-      </nav>
+      <div className="project-list-frame">
+        <nav className="project-list" aria-label="Project navigation" onKeyDown={onNavKeyDown}>
+          <div data-project-browse data-search-hidden={searching ? "true" : "false"} aria-hidden={searching} inert={searching ? true : undefined}>
+            {browseProjectGroups}
+          </div>
+          {!searching && snapshot.projects.length === 0 && <p className="session-empty">No Projects or Sessions</p>}
+        </nav>
+        {searching && (
+          <nav className="project-search-results" data-project-search-results aria-label="Search result navigation" onKeyDown={onNavKeyDown}>
+            {searchProjectGroups}
+            {visibleProjects.length === 0 && <p className="session-empty">No matching Projects or Sessions</p>}
+          </nav>
+        )}
+      </div>
       <div className="dock-foot">
         <div className="projection-status" role="status" aria-live="polite">{status}</div>
         <button type="button" className="quiet-action" data-focus-key="dock:refresh" onClick={() => {

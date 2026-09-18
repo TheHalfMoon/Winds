@@ -263,7 +263,15 @@ button[aria-disabled="true"] {
   font-weight: 760;
 }
 
-.project-list {
+.project-list-frame {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.project-list,
+.project-search-results {
+  height: 100%;
   min-height: 0;
   overflow: auto;
   padding: 0 var(--space-2) var(--space-4);
@@ -271,9 +279,11 @@ button[aria-disabled="true"] {
   scrollbar-color: var(--border-strong) transparent;
 }
 
-[data-project-browse][data-search-hidden="true"] {
-  content-visibility: hidden;
-  contain-intrinsic-block-size: 0px;
+.project-search-results {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: var(--surface-1);
 }
 
 [data-project-browse] .project-group {

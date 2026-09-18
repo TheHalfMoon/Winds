@@ -61,9 +61,15 @@ test('T143 large performance fixture is benchmark-only and exceeds the frozen sc
   assert.match(leftDock, /data-project-search-results/);
   assert.match(leftDock, /focusedControlKeyRef/);
   assert.doesNotMatch(leftDock, /\[focusedControlKey, setFocusedControlKey\]/);
-  assert.ok(styles.includes('[data-project-browse][data-search-hidden="true"]'));
-  assert.ok(styles.includes('content-visibility: hidden'));
-  assert.ok(styles.includes('contain-intrinsic-block-size: 0px'));
+  assert.match(leftDock, /className="project-list-frame"/);
+  assert.match(leftDock, /className="project-search-results" data-project-search-results/);
+  assert.match(leftDock, /visibleProjects\.length === 0[\s\S]*No matching Projects or Sessions/);
+  assert.match(styles, /\.project-list-frame \{[\s\S]*position: relative/);
+  assert.match(styles, /\.project-list-frame \{[\s\S]*overflow: hidden/);
+  assert.match(styles, /\.project-search-results \{[\s\S]*position: absolute/);
+  assert.match(styles, /\.project-search-results \{[\s\S]*inset: 0/);
+  assert.match(styles, /\.project-list,[\s\S]*\.project-search-results \{[\s\S]*overflow: auto/);
+  assert.doesNotMatch(styles, /\[data-project-browse\]\[data-search-hidden="true"\][\s\S]*content-visibility: hidden/);
   assert.match(styles, /\[data-project-browse\] \.project-group[\s\S]*content-visibility: auto/);
   assert.match(styles, /contain-intrinsic-block-size: auto 445px/);
 });
