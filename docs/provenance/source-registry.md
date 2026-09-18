@@ -87,9 +87,30 @@ Detailed roadmap reconciliation: `docs/research/014-loopforge-skillhone-roadmap-
 
 Founder supplied `https://herdr.dev`. The associated canonical repository resolved during research is:
 
-- https://github.com/herdrdev/herdr — **DERIVED_CANONICAL / UNADMITTED**.
+- https://github.com/herdrdev/herdr — **DERIVED_CANONICAL / FOUNDER-DIRECTED FUTURE DONOR / NOT YET IMPLEMENTATION-ADMITTED**.
 
-Observed research facts at registry creation: Rust project; package metadata identifies Herdr as a terminal workspace manager for AI coding agents; inspected package metadata reported Apache-2.0 and `portable-pty = 0.9.0`. Its server/socket/API/plugin/persistent-session design is useful future donor evidence but is intentionally **not** imported into Spec 003.
+Fresh audit on 2026-09-18:
+
+- exact commit: `da6bcd5969779bfe0396bcf89a8025d4375d611e`;
+- exact tree: `aece03633c003ba0fce01bc2564ad14e0fe9cac9`;
+- default branch observed: `master`;
+- package version observed: `0.9.1`;
+- root repository license: Apache-2.0;
+- immediately previous Winds audit pin: `18061191fdc019498610aee81f0df93f6c2ebd31`;
+- commits since that previous audit pin: 21;
+- Founder direction: Winds should reach full Herdr feature parity;
+- Founder permission statement: Founder states they have permission to copy/use Herdr source code (`FOUNDER_PERMISSION_ASSERTION`);
+- agent detection families: 24;
+- serialized public API methods: 104;
+- frozen serialized integration targets: 17;
+- additional experimental CLI-only installable target: `letta`;
+- current source audit: `docs/research/020-herdr-current-source-audit.md`;
+- full parity program: `docs/research/020-herdr-full-parity-program.md`;
+- exhaustive omission-prevention ledger: `docs/research/021-herdr-exhaustive-capability-ledger.md` (218 baseline rows: 24 agent families, 18 integration rows including experimental Letta, 104 public API methods, 72 additional runtime/UI/transport/config/plugin/packaging capabilities).
+
+Draft PR #212 is preserved closed/unmerged as superseded historical research. It used the 2026-09-16 Herdr pin and a Winds base that became 67 commits behind the Spec 010 closeout. Its old 17-target summary referred to the frozen enum and did not separately enumerate the experimental Letta CLI-only integration surface.
+
+Admission boundary: Spec 010 is closed canonically, but no persistent owner, private IPC, remote execution, plugin runtime/marketplace, updater, or Herdr code slice is implementation-authorized by this registry or by the research program. A separate successor entry gate may authorize **Spec 011 specification creation only**. Each direct/adapted copy later admitted by canonical Tasks must bind exact source paths, exact Herdr revision, license/notice obligations, third-party/vendor provenance, reuse mode, security/authority delta, tests, and removal/update path. Root Apache-2.0 status does not create blanket admission for vendored or third-party material.
 
 ## nicobailon Pi ecosystem snapshot
 
