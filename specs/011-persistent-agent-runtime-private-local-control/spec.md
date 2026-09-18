@@ -1,8 +1,8 @@
 # Feature Specification: Persistent Agent Runtime & Private Local Control
 
-**Feature Branch**: `spec/011-persistent-agent-runtime-private-local-control`  
-**Created**: 2026-09-18  
-**Status**: Specification candidate only. Plan, Tasks, dependencies, migrations, persistent-owner implementation, private local-control implementation, service installation, remote execution, plugin runtime, marketplace, live owner handoff, and product-source changes are NOT authorized by this file alone.  
+**Feature Branch**: `spec/011-persistent-agent-runtime-private-local-control`
+**Created**: 2026-09-18
+**Status**: Specification candidate only. Plan, Tasks, dependencies, migrations, persistent-owner implementation, private local-control implementation, service installation, remote execution, plugin runtime, marketplace, live owner handoff, and product-source changes are NOT authorized by this file alone.
 **Input**: Canonical Spec 011 Entry Gate for the Founder-directed Herdr parity program. The immediate product problem is truthful local continuity: Winds-owned terminal/agent processes may outlive an individual client only when a narrow Winds-owned runtime authority actually retains ownership, and local clients must reattach through an authenticated, versioned, least-authority private control surface without converting persisted metadata, PIDs, terminal text, or native provider session IDs into process authority.
 
 ## Product Thesis
