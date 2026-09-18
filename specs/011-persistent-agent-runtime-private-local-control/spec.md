@@ -204,6 +204,13 @@ The owner can remain idle without becoming a resource-heavy orchestration servic
 
 **Independent Test**: Measure idle owner resource use, many idle runtimes/observers, high-output sessions, reconnect churn, and bounded-history storage under Plan-defined ceilings.
 
+**Acceptance Scenarios**:
+
+1. **Given** no active runtimes and no connected clients, **When** the persistent owner remains idle for the Plan-defined observation window, **Then** CPU, memory, handles/file descriptors, and storage growth remain within accepted ceilings.
+2. **Given** many idle runtimes and observers, **When** no work is produced, **Then** per-runtime/client resource growth remains bounded and attributable.
+3. **Given** sustained high output with one slow observer, **When** that observer exceeds its accepted queue budget, **Then** owner memory remains bounded and the specified backpressure/truncation/disconnect behavior occurs without affecting the controller or peer observers.
+4. **Given** repeated attach/detach/reconnect churn, **When** the campaign completes, **Then** runtime/client/controller records and OS resources return to the accepted steady-state bounds with no ambiguous owner generations.
+
 ---
 
 # Threat Model
@@ -237,8 +244,8 @@ Explicit nonclaim:
 
 - **FR-001**: Every persistent runtime namespace MUST have an immutable Winds-generated identity independent of aliases, OS PID, terminal ID, provider-native session ID, Project, Session display name, or workstream name.
 - **FR-002**: Persisted runtime metadata MUST NOT by itself prove a live owner or live child process.
-- **FR-003**: A live-process claim MUST derive from an accepted owner-held ownership primitive or another Plan-defined proof with equivalent strength; PID equality alone is insufficient.
-- **FR-004**: When continuing ownership cannot be proven, the runtime MUST fail closed to `OWNERSHIP_LOST`, `UNAVAILABLE`, or another explicitly specified non-live-owned state rather than remain `RUNNING`.
+- **FR-003**: A live-process claim MUST derive from an accepted owner-held ownership primitive or a Plan-defined proof that is explicitly specified, independently testable, and demonstrated to provide equivalent identity/ownership strength; PID equality alone is insufficient.
+- **FR-004**: When continuing ownership cannot be proven, ownership state MUST become `OWNERSHIP_LOST`; process liveness/endpoint availability MAY be represented separately as known/unknown/unavailable, but no alternate state may preserve or imply live Winds ownership.
 - **FR-005**: Process liveness and Winds ownership MUST be representable separately when one is known and the other is not.
 - **FR-006**: Client detach MUST NOT terminate an owned child solely because the presentation connection ended unless explicit lifecycle policy for that runtime says otherwise.
 - **FR-007**: Reattach MUST bind to exact runtime namespace and owner generation; aliases and stale endpoint markers MUST NOT redirect control.
@@ -296,7 +303,7 @@ Explicit nonclaim:
 - **FR-059**: Idle persistent-owner CPU, memory, handle/file-descriptor, and storage use MUST have Plan-defined measurable ceilings.
 - **FR-060**: High-output and multi-client stress MUST preserve exact target/controller ownership and bounded memory/queue behavior.
 - **FR-061**: Reconnect churn MUST not leak runtime/controller/client records or create ambiguous ownership generations.
-- **FR-062**: Owner/client lifecycle events MUST expose enough source/identity information for presentation surfaces to remain truthful without leaking secret material.
+- **FR-062**: Owner/client lifecycle events MUST expose, when applicable, the exact runtime namespace, owner generation, event kind, monotonic/event ordering identity, lifecycle source/proof class, and controller/client identity needed for attribution; secret material, raw credentials, and full process environments MUST be excluded.
 - **FR-063**: Aliases MAY be user-friendly but MUST never replace immutable runtime identity for consequential actions.
 - **FR-064**: Runtime lookup/search MUST fail or require explicit disambiguation when user-facing names are ambiguous.
 - **FR-065**: Spec 011 MUST NOT require a cloud account/control plane for ordinary local continuity.
