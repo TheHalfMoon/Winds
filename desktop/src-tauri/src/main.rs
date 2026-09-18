@@ -333,7 +333,28 @@ fn terminal_close(
         .map_err(|error| host_error("terminal close", error))
 }
 
+#[cfg(target_os = "linux")]
+fn configure_linux_webkit_memory_profile() {
+    // These Linux WebKit process-memory settings are product defaults, not benchmark-only overrides.
+    // SAFETY: main calls this before Tauri creates WebKitGTK child processes or worker threads;
+    // process-start-only glibc tunables affect descendants, not the already-running Tauri host.
+    unsafe {
+        if std::env::var_os("JSC_useJIT").is_none() {
+            std::env::set_var("JSC_useJIT", "false");
+        }
+        if std::env::var_os("Malloc").is_none() {
+            std::env::set_var("Malloc", "1");
+        }
+        if std::env::var_os("MALLOC_ARENA_MAX").is_none() {
+            std::env::set_var("MALLOC_ARENA_MAX", "1");
+        }
+    }
+}
+
 fn main() {
+    #[cfg(target_os = "linux")]
+    configure_linux_webkit_memory_profile();
+
     tauri::Builder::default()
         .manage(Arc::new(TerminalHostState::default()))
         .invoke_handler(tauri::generate_handler![

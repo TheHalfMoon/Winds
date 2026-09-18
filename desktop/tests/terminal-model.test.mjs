@@ -6,6 +6,7 @@ import {
   drainTerminalOutput,
   findLiteralMatch,
   reconcileTerminalStatus,
+  terminalOutputFlushDelay,
   validatedHttpLink,
 } from '../src/terminal/model.ts';
 import { fileURLToPath } from 'node:url';
@@ -95,5 +96,32 @@ test('T135 terminal readiness and stream callbacks are stateful and generation b
   assert.match(surface, /const \[ready, setReady\] = useState\(false\)/);
   assert.match(surface, /setReady\(true\)/);
   assert.match(surface, /streamGenerationRef\.current !== streamGeneration/);
-  assert.match(surface, /const canStart = bridge\.source === "canonical" && !live && !busy && ready/);
+  assert.match(surface, /const canStart = bridge\.source === "canonical" && !live && !busy/);
+});
+
+test('T143 idle terminal surfaces defer xterm allocation until explicit terminal start', () => {
+  const surface = readFileSync(join(root, 'src/terminal/TerminalSurface.tsx'), 'utf8');
+  assert.match(surface, /const initializeTerminal = async/);
+  assert.match(surface, /const terminal = await initializeTerminal\(\);/);
+  assert.match(surface, /disabled=\{!ready\}/);
+  assert.doesNotMatch(surface, /useEffect\(\(\) => \{\n    if \(!visible \|\| terminalRef\.current \|\| initializingRef\.current\) return;/);
+});
+
+
+test('T143 hidden output batches multiple sessions instead of scheduling full-frame work per byte', () => {
+  assert.equal(terminalOutputFlushDelay(true), 16);
+  assert.equal(terminalOutputFlushDelay(false), 60);
+  for (let session = 0; session < 8; session += 1) {
+    const generation = session + 1;
+    const queued = Array.from({ length: 1000 }, (_, index) => ({
+      streamGeneration: generation,
+      bytes: new Uint8Array([index % 251]),
+    }));
+    const drained = drainTerminalOutput(queued, generation, generation);
+    assert.equal(drained.chunks.length, 1000);
+    assert.deepEqual(drained.remaining, []);
+  }
+  const surface = readFileSync(join(root, 'src/terminal/TerminalSurface.tsx'), 'utf8');
+  assert.match(surface, /scheduleOutputFlush\(streamGeneration, terminalOutputFlushDelay\(visibleRef\.current\)\)/);
+  assert.doesNotMatch(surface, /terminalRef\.current\?\.write\(bytes\)/);
 });

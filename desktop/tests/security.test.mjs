@@ -64,7 +64,13 @@ test('T132 sends reorder plans as one bounded host batch', () => {
 
 test('T132 restores inline-form trigger focus only after explicit successful exits', () => {
   const dock = readFileSync(join(root, 'src/leftDock/LeftDock.tsx'), 'utf8');
-  assert.match(dock, /function closeRenameEditor\(\)[\s\S]*onFocusKey\(renameTriggerKey\)[\s\S]*setEditing\(false\)/);
+  assert.match(dock, /function closeRenameEditor\(\)[\s\S]*onRestoreFocusKey\(renameTriggerKey\)[\s\S]*setEditing\(false\)/);
+  assert.match(dock, /focusedControlKeyRef\.current = key/);
+  assert.match(dock, /setFocusRestoreRevision\(\(revision\) => revision \+ 1\)/);
+  assert.doesNotMatch(dock, /\[focusedControlKey, setFocusedControlKey\]/);
+  assert.doesNotMatch(dock, /<div data-project-browse[^>]*\sinert=/);
+  assert.doesNotMatch(dock, /<div data-project-browse[^>]*aria-hidden=/);
+  assert.ok(dock.includes('closest(\'[hidden], [inert], [data-search-hidden="true"]\')'));
   assert.match(dock, /if \(await onRename\(displayName\)\) closeRenameEditor\(\)/);
   assert.match(dock, /closeCreateSession\(project\.project\.canonicalWorkspaceId\)/);
   assert.match(dock, /onClick=\{\(\) => closeCreateSession\(current\.canonicalWorkspaceId\)\}/);

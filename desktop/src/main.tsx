@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { markT143NativeReadyWindow } from "./leftDock/bridge";
 import "./styles.css";
 import "./fixture-modes.css";
 
@@ -53,3 +54,35 @@ createRoot(root).render(
     <App />
   </StrictMode>,
 );
+
+
+if (import.meta.env.VITE_WINDS_T143_NATIVE_READY === "1") {
+  let reported = false;
+  const markReady = () => {
+    const status = document.querySelector<HTMLElement>(".chat-tool-status");
+    const sessionOptions = document.querySelectorAll("#chat-session-target option");
+    const visibleSlots = document.querySelectorAll(".session-slot");
+    if (
+      !document.querySelector(".winds-app")
+      || !status
+      || /Loading|Binding/.test(status.textContent ?? "")
+      || sessionOptions.length < 3
+      || visibleSlots.length < 2
+    ) return false;
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        if (reported) return;
+        reported = true;
+        void markT143NativeReadyWindow().catch((error: unknown) => {
+          console.error("T143 native ready title failed", error);
+        });
+      });
+    });
+    return true;
+  };
+  const observer = new MutationObserver(() => {
+    if (markReady()) observer.disconnect();
+  });
+  observer.observe(root, { childList: true, subtree: true, characterData: true });
+  if (markReady()) observer.disconnect();
+}

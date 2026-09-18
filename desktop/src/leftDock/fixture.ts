@@ -70,6 +70,66 @@ const fixture: BridgeSnapshot = {
   ],
 };
 
+const T143_PROJECT_COUNT = 100;
+const T143_SESSIONS_PER_PROJECT = 10;
+let t143PerformanceFixture: BridgeSnapshot | null = null;
+
+function buildT143PerformanceFixture(): BridgeSnapshot {
+  if (t143PerformanceFixture) return t143PerformanceFixture;
+  const projects = Array.from({ length: T143_PROJECT_COUNT }, (_, projectIndex) => {
+    const projectId = `t143-project-${String(projectIndex).padStart(3, "0")}`;
+    const sessions = Array.from({ length: T143_SESSIONS_PER_PROJECT }, (_, sessionIndex) => {
+      const sessionId = `${projectId}-session-${String(sessionIndex).padStart(2, "0")}`;
+      const runtime = sessionIndex % 2 === 0
+        ? { state: "observed" as const, requested: ["codex" as const], observed: ["codex" as const] }
+        : { state: "requested" as const, requested: ["claude" as const], observed: [] };
+      return {
+        canonicalSessionId: sessionId,
+        canonicalWorkstreamId: `${projectId}-workstream`,
+        canonicalWorkspaceId: projectId,
+        displayName: `Performance Session ${projectIndex}-${sessionIndex}`,
+        displayAlias: null,
+        canonicalDisplayName: `Performance Session ${projectIndex}-${sessionIndex}`,
+        pinned: sessionIndex === 0,
+        presentationOrder: sessionIndex * 10,
+        archived: false,
+        presentationRevision: null,
+        runtime,
+        attention: "none" as const,
+        searchInput: `performance session ${projectIndex} ${sessionIndex}\n${sessionId}\n${projectId}`,
+      };
+    });
+    return {
+      project: {
+        projectViewId: projectId,
+        displayName: `Performance Project ${projectIndex}`,
+        canonicalWorkspaceId: projectId,
+        canonicalRepoRoot: `/fixture/performance/${projectId}`,
+        canonicalGitCommonDir: `/fixture/performance/${projectId}/.git`,
+        pinned: projectIndex === 0,
+        presentationOrder: (projectIndex + 1) * 10,
+        collapsed: false,
+        presentationRevision: null,
+        sessionCount: sessions.length,
+        attentionCount: 0,
+        attention: "none" as const,
+        searchInput: `performance project ${projectIndex}\n${projectId}`,
+      },
+      availableWorkstreams: [{ workstreamId: `${projectId}-workstream`, displayName: "Performance" }],
+      sessions,
+    };
+  });
+  t143PerformanceFixture = { projects: [...fixture.projects, ...projects] };
+  return t143PerformanceFixture;
+}
+
+function activeFixture(): BridgeSnapshot {
+  if (typeof window === "undefined" || import.meta.env.VITE_WINDS_T143_BENCHMARK !== "1") return fixture;
+  return new URLSearchParams(window.location.search).get("perf") === "t143-large"
+    ? buildT143PerformanceFixture()
+    : fixture;
+}
+
 let fixtureLayout: BridgeLayoutPresentation = {
   workspaceId: "fixture-winds",
   layoutMode: "DUAL",
@@ -85,7 +145,7 @@ function readOnly(): Promise<never> {
 
 export const fixtureLeftDockBridge: LeftDockBridge = {
   source: "fixture",
-  async snapshot() { return fixture; },
+  async snapshot() { return activeFixture(); },
   async attentionSnapshot() {
     return {
       items: [{

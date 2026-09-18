@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { RuntimeMark } from "../components/RuntimeMark";
 import { leftDockBridge } from "./bridge";
 import {
@@ -19,6 +20,17 @@ import {
 import type { BridgeProject, BridgeSessionSummary, BridgeSnapshot, LeftDockBridge } from "./types";
 
 const emptySnapshot: BridgeSnapshot = { projects: [] };
+
+const PROJECT_PAGE_THRESHOLD = 40;
+const PROJECT_PAGE_SIZE = 14;
+
+function projectPageStart(projectIndex: number): number {
+  return Math.floor(projectIndex / PROJECT_PAGE_SIZE) * PROJECT_PAGE_SIZE;
+}
+
+function lastProjectPageStart(projectCount: number): number {
+  return projectCount <= 0 ? 0 : projectPageStart(projectCount - 1);
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -44,6 +56,7 @@ function SessionRow({
   onPin,
   onMove,
   onFocusKey,
+  onRestoreFocusKey,
 }: {
   readonly session: BridgeSessionSummary;
   readonly selected: boolean;
@@ -56,6 +69,7 @@ function SessionRow({
   readonly onPin: () => void;
   readonly onMove: (direction: 1 | -1) => void;
   readonly onFocusKey: (key: string) => void;
+  readonly onRestoreFocusKey: (key: string) => void;
 }) {
   const runtime = runtimeView(session);
   const attention = attentionView(session.attention);
@@ -70,7 +84,7 @@ function SessionRow({
   const renameTriggerKey = sessionFocusKey(session.canonicalSessionId, "rename");
 
   function closeRenameEditor() {
-    onFocusKey(renameTriggerKey);
+    onRestoreFocusKey(renameTriggerKey);
     setEditing(false);
   }
 
@@ -140,15 +154,26 @@ export function LeftDock({
   const [snapshot, setSnapshot] = useState<BridgeSnapshot>(emptySnapshot);
   const [query, setQuery] = useState("");
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const [focusedControlKey, setFocusedControlKey] = useState<string | null>(null);
+  const focusedControlKeyRef = useRef<string | null>(null);
+  const [focusRestoreRevision, setFocusRestoreRevision] = useState(0);
   const [status, setStatus] = useState("Loading Projects and Sessions…");
   const [busy, setBusy] = useState(false);
   const [creatingWorkspaceId, setCreatingWorkspaceId] = useState<string | null>(null);
   const [createName, setCreateName] = useState("");
   const [createWorkstreamId, setCreateWorkstreamId] = useState("");
+  const [browsePageStart, setBrowsePageStart] = useState(0);
   const dockRef = useRef<HTMLElement>(null);
-  const navRef = useRef<HTMLElement>(null);
+  const browseListRef = useRef<HTMLElement>(null);
   const busyRef = useRef(false);
+
+  const rememberFocusKey = useCallback((key: string | null) => {
+    focusedControlKeyRef.current = key;
+  }, []);
+
+  const restoreFocusKey = useCallback((key: string) => {
+    focusedControlKeyRef.current = key;
+    setFocusRestoreRevision((revision) => revision + 1);
+  }, []);
 
   const refresh = useCallback(async () => {
     const next = await bridge.snapshot();
@@ -166,11 +191,14 @@ export function LeftDock({
   }, [requestedSessionId]);
 
   useEffect(() => {
+    const focusedControlKey = focusedControlKeyRef.current;
     if (!focusedControlKey || busy) return;
+    const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    if (active?.dataset.focusKey === focusedControlKey) return;
     const target = Array.from(dockRef.current?.querySelectorAll<HTMLElement>("[data-focus-key]") ?? [])
-      .find((element) => element.dataset.focusKey === focusedControlKey);
-    if (target && target !== document.activeElement) target.focus();
-  }, [busy, focusedControlKey, snapshot]);
+      .find((element) => !element.closest('[hidden], [inert], [data-search-hidden="true"]') && element.dataset.focusKey === focusedControlKey);
+    if (target) target.focus();
+  }, [busy, focusRestoreRevision, snapshot]);
 
   const mutate = useCallback(async (operation: () => Promise<unknown>): Promise<boolean> => {
     if (!writable) {
@@ -202,7 +230,56 @@ export function LeftDock({
     }
   }, [refresh, writable]);
 
+  const searching = query.trim().length > 0;
   const visibleProjects = useMemo(() => filterProjects(snapshot, query), [snapshot, query]);
+  const totalSessionCount = useMemo(
+    () => snapshot.projects.reduce((count, project) => count + project.sessions.length, 0),
+    [snapshot.projects],
+  );
+  const browsePaged = snapshot.projects.length > PROJECT_PAGE_THRESHOLD;
+  const maxBrowsePageStart = lastProjectPageStart(snapshot.projects.length);
+  const effectiveBrowsePageStart = browsePaged
+    ? Math.min(browsePageStart, maxBrowsePageStart)
+    : 0;
+  const browsePageEnd = browsePaged
+    ? Math.min(snapshot.projects.length, effectiveBrowsePageStart + PROJECT_PAGE_SIZE)
+    : snapshot.projects.length;
+  const browseProjects = useMemo(
+    () => browsePaged
+      ? snapshot.projects.slice(effectiveBrowsePageStart, browsePageEnd)
+      : snapshot.projects,
+    [browsePageEnd, browsePaged, effectiveBrowsePageStart, snapshot.projects],
+  );
+  const browseSessionOrder = useMemo(
+    () => snapshot.projects.flatMap((project, projectIndex) => (
+      projectRenderedExpanded(project, "")
+        ? project.sessions.map((session) => ({
+          sessionId: session.canonicalSessionId,
+          projectIndex,
+        }))
+        : []
+    )),
+    [snapshot.projects],
+  );
+  const browsePageLabel = snapshot.projects.length === 0
+    ? "No Projects"
+    : `Projects ${effectiveBrowsePageStart + 1}–${browsePageEnd} of ${snapshot.projects.length}`;
+
+  useEffect(() => {
+    setBrowsePageStart((current) => Math.min(
+      projectPageStart(current),
+      lastProjectPageStart(snapshot.projects.length),
+    ));
+  }, [snapshot.projects.length]);
+
+  const setBrowsePage = useCallback((requestedStart: number) => {
+    const nextStart = Math.max(
+      0,
+      Math.min(projectPageStart(requestedStart), lastProjectPageStart(snapshot.projects.length)),
+    );
+    flushSync(() => setBrowsePageStart(nextStart));
+    browseListRef.current?.scrollTo({ top: 0 });
+  }, [snapshot.projects.length]);
 
   const updateProject = useCallback((project: BridgeProject, changes: Parameters<typeof projectUpdatePlan>[1]) => {
     void mutate(() => bridge.updateProject([projectUpdatePlan(project.project, changes)]));
@@ -239,9 +316,9 @@ export function LeftDock({
   }, [writable]);
 
   const closeCreateSession = useCallback((workspaceId: string) => {
-    setFocusedControlKey(projectFocusKey(workspaceId, "create-session"));
+    restoreFocusKey(projectFocusKey(workspaceId, "create-session"));
     setCreatingWorkspaceId(null);
-  }, []);
+  }, [restoreFocusKey]);
 
   const submitCreateSession = useCallback(async (project: BridgeProject) => {
     const displayName = createName.trim();
@@ -277,19 +354,128 @@ export function LeftDock({
 
   const onNavKeyDown = useCallback((event: React.KeyboardEvent<HTMLElement>) => {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-    const rows = Array.from(navRef.current?.querySelectorAll<HTMLButtonElement>("button.session-row") ?? []);
-    if (rows.length === 0) return;
-    const activeIndex = rows.findIndex((row) => row === document.activeElement);
-    const nextIndex = nextSessionFocusIndex(rows.length, activeIndex, event.key === "ArrowDown" ? 1 : -1);
+    const direction = event.key === "ArrowDown" ? 1 : -1;
+    const rows = Array.from(dockRef.current?.querySelectorAll<HTMLButtonElement>("button.session-row") ?? [])
+      .filter((row) => !row.closest('[hidden], [inert], [data-search-hidden="true"]'));
+
+    if (searching || !browsePaged) {
+      if (rows.length === 0) return;
+      const activeIndex = rows.findIndex((row) => row === document.activeElement);
+      const nextIndex = nextSessionFocusIndex(rows.length, activeIndex, direction);
+      if (nextIndex === null) return;
+      event.preventDefault();
+      rows[nextIndex].focus();
+      return;
+    }
+
+    if (browseSessionOrder.length === 0) return;
+    const activeSessionId = document.activeElement instanceof HTMLElement
+      ? document.activeElement.dataset.sessionId ?? null
+      : null;
+    const activeIndex = activeSessionId
+      ? browseSessionOrder.findIndex((entry) => entry.sessionId === activeSessionId)
+      : -1;
+    const nextIndex = nextSessionFocusIndex(browseSessionOrder.length, activeIndex, direction);
     if (nextIndex === null) return;
+
+    const target = browseSessionOrder[nextIndex];
+    const targetPageStart = projectPageStart(target.projectIndex);
     event.preventDefault();
-    rows[nextIndex].focus();
-  }, []);
+    if (targetPageStart !== effectiveBrowsePageStart) setBrowsePage(targetPageStart);
+
+    const targetRow = Array.from(
+      dockRef.current?.querySelectorAll<HTMLButtonElement>("button.session-row") ?? [],
+    ).find((row) => (
+      !row.closest('[hidden], [inert], [data-search-hidden="true"]')
+      && row.dataset.sessionId === target.sessionId
+    ));
+    if (targetRow) targetRow.focus();
+    else restoreFocusKey(sessionFocusKey(target.sessionId, "select"));
+  }, [
+    browsePaged, browseSessionOrder, effectiveBrowsePageStart, restoreFocusKey, searching, setBrowsePage,
+  ]);
+
+  const renderProjectGroups = useCallback((
+    projects: readonly BridgeProject[],
+    renderQuery: string,
+    projectIndexOffset: number,
+    projectSetSize: number,
+  ) => (
+    <>
+      {projects.map((project, projectIndex) => {
+        const current = project.project;
+        const mutationDisabled = busy || !writable;
+        const creating = creatingWorkspaceId === current.canonicalWorkspaceId;
+        const projectAttention = attentionView(current.attention);
+        const renderedExpanded = projectRenderedExpanded(project, renderQuery);
+        const upPlan = projectReorderPlan(snapshot.projects, current.canonicalWorkspaceId, -1);
+        const downPlan = projectReorderPlan(snapshot.projects, current.canonicalWorkspaceId, 1);
+        return (
+          <section
+            className="project-group"
+            key={current.canonicalWorkspaceId}
+            role="listitem"
+            aria-posinset={projectIndexOffset + projectIndex + 1}
+            aria-setsize={projectSetSize}
+            data-open={renderedExpanded ? "true" : "false"}
+          >
+            <div className="project-row-shell">
+              <button type="button" className="project-row" data-focus-key={projectFocusKey(current.canonicalWorkspaceId, "toggle")} aria-expanded={renderedExpanded} aria-label={`${current.displayName} Project. ${current.sessionCount} Sessions. ${current.attentionCount} need attention.`} disabled={mutationDisabled} onClick={() => updateProject(project, { collapsed: !current.collapsed })}>
+                <span className="disclosure" aria-hidden="true">{renderedExpanded ? "⌄" : "›"}</span>
+                <span className="project-copy"><span className="project-name">{current.displayName}</span><span className="project-meta">{current.canonicalWorkspaceId}</span></span>
+                <span className="project-count">{current.sessionCount}</span>
+                {!renderedExpanded && current.attentionCount > 0 && <span className="project-attention-summary">{current.attentionCount} need attention · {projectAttention.label}</span>}
+              </button>
+              <div className="row-actions" aria-label={`Presentation actions for canonical Project ${current.canonicalWorkspaceId}`}>
+                <button type="button" className="mini-action" data-focus-key={projectFocusKey(current.canonicalWorkspaceId, "pin")} disabled={mutationDisabled} onClick={() => updateProject(project, { pinned: !current.pinned })} aria-label={`${current.pinned ? "Unpin" : "Pin"} canonical Project ${current.canonicalWorkspaceId}`}>{current.pinned ? "★" : "☆"}</button>
+                <button type="button" className="mini-action" data-focus-key={projectFocusKey(current.canonicalWorkspaceId, "move-up")} disabled={mutationDisabled || !upPlan} onClick={() => moveProject(current.canonicalWorkspaceId, -1)} aria-label={`Move canonical Project ${current.canonicalWorkspaceId} up`}>↑</button>
+                <button type="button" className="mini-action" data-focus-key={projectFocusKey(current.canonicalWorkspaceId, "move-down")} disabled={mutationDisabled || !downPlan} onClick={() => moveProject(current.canonicalWorkspaceId, 1)} aria-label={`Move canonical Project ${current.canonicalWorkspaceId} down`}>↓</button>
+                <button type="button" className="mini-action" data-focus-key={projectFocusKey(current.canonicalWorkspaceId, "create-session")} disabled={mutationDisabled} onClick={() => beginCreateSession(project)} aria-label={`Create Session in canonical Project ${current.canonicalWorkspaceId}`}>＋</button>
+              </div>
+            </div>
+            {creating && writable && (
+              <form className="inline-session-form create-session-form" onSubmit={(event) => { event.preventDefault(); void submitCreateSession(project); }}>
+                <label><span>Session name</span><input data-focus-key={projectFocusKey(current.canonicalWorkspaceId, "create-name")} value={createName} disabled={busy} onChange={(event) => setCreateName(event.currentTarget.value)} aria-label={`Session name for canonical Project ${current.canonicalWorkspaceId}`} /></label>
+                <label><span>Canonical Workstream</span><select data-focus-key={projectFocusKey(current.canonicalWorkspaceId, "create-workstream")} value={createWorkstreamId} disabled={busy} onChange={(event) => setCreateWorkstreamId(event.currentTarget.value)} aria-label={`Canonical Workstream for Project ${current.canonicalWorkspaceId}`}>
+                  {project.availableWorkstreams.length > 1 && <option value="" disabled>Select one Workstream explicitly</option>}
+                  {project.availableWorkstreams.map((workstream) => <option key={workstream.workstreamId} value={workstream.workstreamId}>{workstream.displayName} · {workstream.workstreamId}</option>)}
+                </select></label>
+                <div className="inline-form-actions"><button type="submit" className="quiet-action" disabled={busy || !createName.trim() || !createWorkstreamId}>Create Session</button><button type="button" className="quiet-action" disabled={busy} onClick={() => closeCreateSession(current.canonicalWorkspaceId)}>Cancel</button></div>
+              </form>
+            )}
+            {renderedExpanded && <div className="session-list" aria-label={`${current.displayName} Sessions`}>
+              {project.sessions.map((session) => <SessionRow key={session.canonicalSessionId} session={session} selected={selectedSessionId === session.canonicalSessionId} busy={busy} writable={writable} canMoveUp={sessionReorderPlan(project.sessions, session.canonicalSessionId, -1) !== null} canMoveDown={sessionReorderPlan(project.sessions, session.canonicalSessionId, 1) !== null} onSelect={() => { if (session.archived) { setStatus(`Archived Session is not an active workspace target · ${session.canonicalSessionId}`); return; } setSelectedSessionId(session.canonicalSessionId); onSelectSession?.(current.canonicalWorkspaceId, session.canonicalSessionId); }} onRename={(displayName) => renameSession(session, displayName)} onPin={() => updateSession(session, { pinned: !session.pinned })} onMove={(direction) => moveSession(project, session.canonicalSessionId, direction)} onFocusKey={rememberFocusKey} onRestoreFocusKey={restoreFocusKey} />)}
+              {project.sessions.length === 0 && <p className="session-empty">No Sessions in this Project</p>}
+            </div>}
+          </section>
+        );
+      })}
+    </>
+  ), [
+    beginCreateSession, busy, closeCreateSession, createName, createWorkstreamId, creatingWorkspaceId, moveProject,
+    moveSession, onSelectSession, rememberFocusKey, renameSession, restoreFocusKey,
+    selectedSessionId, snapshot.projects, submitCreateSession, updateProject, updateSession, writable,
+  ]);
+  const browseProjectGroups = useMemo(
+    () => renderProjectGroups(
+      browseProjects,
+      "",
+      effectiveBrowsePageStart,
+      snapshot.projects.length,
+    ),
+    [browseProjects, effectiveBrowsePageStart, renderProjectGroups, snapshot.projects.length],
+  );
+  const searchProjectGroups = useMemo(
+    () => searching
+      ? renderProjectGroups(visibleProjects, query, 0, visibleProjects.length)
+      : null,
+    [query, renderProjectGroups, searching, visibleProjects],
+  );
 
   return (
     <aside ref={dockRef} className="left-dock" aria-label="Projects and Sessions" data-source={bridge.source} onFocusCapture={(event) => {
       const target = (event.target as HTMLElement).closest<HTMLElement>("[data-focus-key]");
-      setFocusedControlKey(target?.dataset.focusKey ?? null);
+      rememberFocusKey(target?.dataset.focusKey ?? null);
     }}>
       <div className="dock-heading-row">
         <div><p className="section-kicker">Workspace</p><h2>Projects</h2></div>
@@ -299,50 +485,48 @@ export function LeftDock({
         <span aria-hidden="true">⌕</span>
         <input type="search" value={query} onChange={(event) => setQuery(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === "Enter") resolveSearch(); }} aria-label="Search Projects and Sessions" placeholder="Search Projects and Sessions" />
       </div>
-      <nav ref={navRef} className="project-list" aria-label="Project navigation" onKeyDown={onNavKeyDown}>
-        {visibleProjects.map((project) => {
-          const current = project.project;
-          const mutationDisabled = busy || !writable;
-          const creating = creatingWorkspaceId === current.canonicalWorkspaceId;
-          const projectAttention = attentionView(current.attention);
-          const renderedExpanded = projectRenderedExpanded(project, query);
-          const upPlan = projectReorderPlan(snapshot.projects, current.canonicalWorkspaceId, -1);
-          const downPlan = projectReorderPlan(snapshot.projects, current.canonicalWorkspaceId, 1);
-          return (
-            <section className="project-group" key={current.canonicalWorkspaceId} data-open={renderedExpanded ? "true" : "false"}>
-              <div className="project-row-shell">
-                <button type="button" className="project-row" data-focus-key={projectFocusKey(current.canonicalWorkspaceId, "toggle")} aria-expanded={renderedExpanded} aria-label={`${current.displayName} Project. ${current.sessionCount} Sessions. ${current.attentionCount} need attention.`} disabled={mutationDisabled} onClick={() => updateProject(project, { collapsed: !current.collapsed })}>
-                  <span className="disclosure" aria-hidden="true">{renderedExpanded ? "⌄" : "›"}</span>
-                  <span className="project-copy"><span className="project-name">{current.displayName}</span><span className="project-meta">{current.canonicalWorkspaceId}</span></span>
-                  <span className="project-count">{current.sessionCount}</span>
-                  {!renderedExpanded && current.attentionCount > 0 && <span className="project-attention-summary">{current.attentionCount} need attention · {projectAttention.label}</span>}
-                </button>
-                <div className="row-actions" aria-label={`Presentation actions for canonical Project ${current.canonicalWorkspaceId}`}>
-                  <button type="button" className="mini-action" data-focus-key={projectFocusKey(current.canonicalWorkspaceId, "pin")} disabled={mutationDisabled} onClick={() => updateProject(project, { pinned: !current.pinned })} aria-label={`${current.pinned ? "Unpin" : "Pin"} canonical Project ${current.canonicalWorkspaceId}`}>{current.pinned ? "★" : "☆"}</button>
-                  <button type="button" className="mini-action" data-focus-key={projectFocusKey(current.canonicalWorkspaceId, "move-up")} disabled={mutationDisabled || !upPlan} onClick={() => moveProject(current.canonicalWorkspaceId, -1)} aria-label={`Move canonical Project ${current.canonicalWorkspaceId} up`}>↑</button>
-                  <button type="button" className="mini-action" data-focus-key={projectFocusKey(current.canonicalWorkspaceId, "move-down")} disabled={mutationDisabled || !downPlan} onClick={() => moveProject(current.canonicalWorkspaceId, 1)} aria-label={`Move canonical Project ${current.canonicalWorkspaceId} down`}>↓</button>
-                  <button type="button" className="mini-action" data-focus-key={projectFocusKey(current.canonicalWorkspaceId, "create-session")} disabled={mutationDisabled} onClick={() => beginCreateSession(project)} aria-label={`Create Session in canonical Project ${current.canonicalWorkspaceId}`}>＋</button>
-                </div>
+      <div className="project-list-frame">
+        <nav ref={browseListRef} className="project-list" aria-label="Project navigation" onKeyDown={onNavKeyDown}>
+          <div
+            data-project-browse
+            data-search-hidden={searching ? "true" : "false"}
+            data-project-count={snapshot.projects.length}
+            data-session-count={totalSessionCount}
+            data-project-page-start={effectiveBrowsePageStart}
+            data-project-page-end={browsePageEnd}
+          >
+            {browsePaged && (
+              <div className="project-page-controls" aria-label="Project pages">
+                <button
+                  type="button"
+                  className="quiet-action"
+                  aria-label="Previous Projects page"
+                  disabled={effectiveBrowsePageStart === 0}
+                  onClick={() => setBrowsePage(effectiveBrowsePageStart - PROJECT_PAGE_SIZE)}
+                >←</button>
+                <span className="project-page-status" role="status" aria-live="polite">{browsePageLabel}</span>
+                <button
+                  type="button"
+                  className="quiet-action"
+                  aria-label="Next Projects page"
+                  disabled={browsePageEnd >= snapshot.projects.length}
+                  onClick={() => setBrowsePage(effectiveBrowsePageStart + PROJECT_PAGE_SIZE)}
+                >→</button>
               </div>
-              {creating && writable && (
-                <form className="inline-session-form create-session-form" onSubmit={(event) => { event.preventDefault(); void submitCreateSession(project); }}>
-                  <label><span>Session name</span><input data-focus-key={projectFocusKey(current.canonicalWorkspaceId, "create-name")} value={createName} disabled={busy} onChange={(event) => setCreateName(event.currentTarget.value)} aria-label={`Session name for canonical Project ${current.canonicalWorkspaceId}`} /></label>
-                  <label><span>Canonical Workstream</span><select data-focus-key={projectFocusKey(current.canonicalWorkspaceId, "create-workstream")} value={createWorkstreamId} disabled={busy} onChange={(event) => setCreateWorkstreamId(event.currentTarget.value)} aria-label={`Canonical Workstream for Project ${current.canonicalWorkspaceId}`}>
-                    {project.availableWorkstreams.length > 1 && <option value="" disabled>Select one Workstream explicitly</option>}
-                    {project.availableWorkstreams.map((workstream) => <option key={workstream.workstreamId} value={workstream.workstreamId}>{workstream.displayName} · {workstream.workstreamId}</option>)}
-                  </select></label>
-                  <div className="inline-form-actions"><button type="submit" className="quiet-action" disabled={busy || !createName.trim() || !createWorkstreamId}>Create Session</button><button type="button" className="quiet-action" disabled={busy} onClick={() => closeCreateSession(current.canonicalWorkspaceId)}>Cancel</button></div>
-                </form>
-              )}
-              {renderedExpanded && <div className="session-list" aria-label={`${current.displayName} Sessions`}>
-                {project.sessions.map((session) => <SessionRow key={session.canonicalSessionId} session={session} selected={selectedSessionId === session.canonicalSessionId} busy={busy} writable={writable} canMoveUp={sessionReorderPlan(project.sessions, session.canonicalSessionId, -1) !== null} canMoveDown={sessionReorderPlan(project.sessions, session.canonicalSessionId, 1) !== null} onSelect={() => { if (session.archived) { setStatus(`Archived Session is not an active workspace target · ${session.canonicalSessionId}`); return; } setSelectedSessionId(session.canonicalSessionId); onSelectSession?.(current.canonicalWorkspaceId, session.canonicalSessionId); }} onRename={(displayName) => renameSession(session, displayName)} onPin={() => updateSession(session, { pinned: !session.pinned })} onMove={(direction) => moveSession(project, session.canonicalSessionId, direction)} onFocusKey={setFocusedControlKey} />)}
-                {project.sessions.length === 0 && <p className="session-empty">No Sessions in this Project</p>}
-              </div>}
-            </section>
-          );
-        })}
-        {visibleProjects.length === 0 && <p className="session-empty">No matching Projects or Sessions</p>}
-      </nav>
+            )}
+            <div role="list" aria-label={browsePaged ? `${browsePageLabel}. Project list` : "Project list"}>
+              {browseProjectGroups}
+            </div>
+          </div>
+          {!searching && snapshot.projects.length === 0 && <p className="session-empty">No Projects or Sessions</p>}
+        </nav>
+        {searching && (
+          <nav className="project-search-results" data-project-search-results aria-label="Search result navigation" onKeyDown={onNavKeyDown}>
+            <div role="list" aria-label="Matching Projects">{searchProjectGroups}</div>
+            {visibleProjects.length === 0 && <p className="session-empty">No matching Projects or Sessions</p>}
+          </nav>
+        )}
+      </div>
       <div className="dock-foot">
         <div className="projection-status" role="status" aria-live="polite">{status}</div>
         <button type="button" className="quiet-action" data-focus-key="dock:refresh" onClick={() => {
