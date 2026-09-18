@@ -1,7 +1,7 @@
 # Implementation Plan: Persistent Agent Runtime & Private Local Control
 
-**Branch**: `plan/011-persistent-agent-runtime-private-local-control`  
-**Created**: 2026-09-18  
+**Branch**: `plan/011-persistent-agent-runtime-private-local-control`
+**Created**: 2026-09-18
 **Status**: Plan candidate only. Tasks, implementation, dependency adoption, lockfile mutation, migrations, owner-process creation, private endpoint creation, service installation, donor-code reuse, remote execution, plugins, marketplace, live owner handoff, and product-source changes are NOT authorized by this file alone.
 
 ## Canonical Baseline
