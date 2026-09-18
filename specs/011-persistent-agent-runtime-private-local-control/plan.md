@@ -95,7 +95,7 @@ On owner-generation loss:
 - process liveness MAY remain unknown independently;
 - stale generation state cannot be promoted by endpoint-file existence or PID reuse.
 
-Owner-generation identifiers and runtime-namespace identifiers MUST both be collision-resistant and MUST use the same Tasks-qualified OS-appropriate entropy seam. Human-readable aliases, timestamps, counters, and OS PIDs are insufficient as the sole identity source. This Plan does not authorize a random/UUID dependency by itself.
+Owner-generation identifiers and runtime-namespace identifiers MUST both be collision-resistant and MUST use the same Tasks-qualified OS-appropriate entropy seam. Human-readable aliases, timestamps, counters, and OS PIDs are insufficient as the sole identity source. The owning Tasks slice MUST name the exact entropy primitive used on Linux, macOS, and native Windows, prove failure semantics, and record any direct dependency/version/license/MSRV impact rather than re-deriving entropy ad hoc in later slices. This Plan does not authorize a random/UUID dependency by itself.
 
 ## AD-011-03 — Reuse current PTY/ConPTY ownership instead of replacing it
 
@@ -464,6 +464,7 @@ This list is a planning ceiling, not automatic Tasks authority. Tasks may reduce
 Authority classes are frozen at Plan stage:
 
 - `HELLO`, `PING/PONG`, `LIST_RUNTIMES`, `RUNTIME_SNAPSHOT`, `ATTACH_OBSERVER`, `DETACH`, `RUNTIME_EVENT`, `OUTPUT_EVENT`, `HISTORY_GAP`, and `OWNER_STATUS` are connection/observer-safe and MUST NOT mutate runtime/process authority;
+- `HELLO_ACK`, `ERROR`, and `CONTROL_STATE` are owner-to-client response/state messages only; receiving or rendering them MUST NOT grant, transition, or imply controller/process authority;
 - `REQUEST_CONTROL` is a bounded authority-transition request available only to an authenticated eligible local client after explicit accepted user/client action; it is not ordinary observer mutation;
 - `RELEASE_CONTROL` is valid only for the active controller or an exact owner-defined revocation path;
 - `INPUT`, `RESIZE`, `INTERRUPT`, and `STOP` are controller-only;
