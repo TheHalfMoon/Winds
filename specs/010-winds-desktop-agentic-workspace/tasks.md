@@ -82,7 +82,7 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 
 ## Phase 1 — Shared Rust Product Seam
 
-### [ ] T127 — Convert the current package into a reusable Rust library plus thin CLI entry
+### [x] T127 — Convert the current package into a reusable Rust library plus thin CLI entry
 
 **Purpose**: allow CLI/TUI/Desktop to share the exact same Rust authority implementation without subprocess duplication or a second domain model.
 
@@ -113,7 +113,7 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 
 ## Phase 2 — Exact Desktop Dependency Qualification and Inert Shell
 
-### [ ] T128 — Qualify the selected desktop dependency graph and land an inert Tauri/React shell
+### [x] T128 — Qualify the selected desktop dependency graph and land an inert Tauri/React shell
 
 **Purpose**: establish deterministic desktop build tooling and the smallest privileged shell before product behavior.
 
@@ -164,7 +164,7 @@ lucide-react=1.45.0
 
 ## Phase 3 — Winds Visual System and Static Product Shell
 
-### [ ] T129 — Establish Winds `Quiet Current` design system and static desktop anatomy
+### [x] T129 — Establish Winds `Quiet Current` design system and static desktop anatomy
 
 **Purpose**: make visual quality a governed product artifact before data binding spreads styling decisions across the codebase.
 
@@ -202,7 +202,7 @@ lucide-react=1.45.0
 
 ## Phase 4 — Presentation Persistence
 
-### [ ] T130 — Add removable desktop presentation persistence
+### [x] T130 — Add removable desktop presentation persistence
 
 **Purpose**: persist organization/layout without converting UI metadata into canonical work/evidence truth.
 
@@ -236,7 +236,7 @@ lucide-react=1.45.0
 
 ## Phase 5 — Desktop Rust Projection Facade
 
-### [ ] T131 — Implement bounded Project/Session/runtime/attention desktop projections
+### [x] T131 — Implement bounded Project/Session/runtime/attention desktop projections
 
 **Purpose**: expose a single Rust-owned read/write facade for UI organization without generic Store/Git access.
 
@@ -274,7 +274,7 @@ lucide-react=1.45.0
 
 ## Phase 6 — Left Dock Projects and Sessions
 
-### [ ] T132 — Bind the left dock to canonical desktop projections
+### [x] T132 — Bind the left dock to canonical desktop projections
 
 **Purpose**: deliver the primary Project -> Sessions organization experience requested by the Founder.
 
@@ -305,7 +305,7 @@ lucide-react=1.45.0
 
 ## Phase 7 — Single Agent Session Surface
 
-### [ ] T133 — Implement one Codex-direct, Winds-native Session work surface
+### [x] T133 — Implement one Codex-direct, Winds-native Session work surface
 
 **Purpose**: make one session feel like an agent workspace rather than a terminal or chat clone.
 
@@ -337,7 +337,7 @@ lucide-react=1.45.0
 
 ## Phase 8 — First-Class Dual Session Mode
 
-### [ ] T134 — Implement exactly two independent visible Session Slots
+### [x] T134 — Implement exactly two independent visible Session Slots
 
 **Purpose**: allow real parallel work in one page without accidental multi-target authority.
 
@@ -368,7 +368,7 @@ lucide-react=1.45.0
 
 ## Phase 9 — Terminal Renderer Bridge
 
-### [ ] T135 — Attach xterm.js presentation to existing Rust PTY/ConPTY ownership
+### [x] T135 — Attach xterm.js presentation to existing Rust PTY/ConPTY ownership
 
 **Purpose**: provide best-in-class terminal interaction where terminal is the correct Session sub-surface without a second terminal authority.
 
@@ -401,7 +401,7 @@ lucide-react=1.45.0
 
 ## Phase 10 — Files and Changes Right Dock
 
-### [ ] T136 — Implement Files and Changes with immutable binding snapshots
+### [x] T136 — Implement Files and Changes with immutable binding snapshots
 
 **Purpose**: keep both Sessions visible while safely inspecting the exact worktree/candidate context.
 
@@ -432,7 +432,7 @@ lucide-react=1.45.0
 
 ## Phase 11 — Evidence, Context, and Artifacts Right Dock
 
-### [ ] T137 — Add verification-native Evidence/Context/Artifacts surfaces
+### [x] T137 — Add verification-native Evidence/Context/Artifacts surfaces
 
 **Purpose**: make Winds truth available beside active agent work without creating UI-local authority.
 
@@ -460,7 +460,7 @@ lucide-react=1.45.0
 
 ## Phase 12 — Needs You and Universal Command Surface
 
-### [ ] T138 — Implement deterministic human-attention rollups and command/navigation palette
+### [x] T138 — Implement deterministic human-attention rollups and command/navigation palette
 
 **Purpose**: supervise parallel agent work without transcript polling.
 
@@ -490,7 +490,7 @@ lucide-react=1.45.0
 
 ## Phase 13 — Real Runtime Launch Authority Gate
 
-### [ ] T139 — Qualify direct desktop Codex/Claude launch authority or close truthfully unavailable
+### [x] T139 — Qualify direct desktop Codex/Claude launch authority or close truthfully unavailable
 
 **Purpose**: satisfy the Founder goal of launching Codex/Claude from a Session without promoting old Spec 006 nonclaims or smuggling execution through UI convenience.
 
@@ -522,7 +522,7 @@ lucide-react=1.45.0
 
 ## Phase 14 — Accessibility, Themes, Density, Responsive Desktop
 
-### [ ] T140 — Complete dark/light/high-contrast/reduced-motion/compact and accessibility acceptance
+### [x] T140 — Complete dark/light/high-contrast/reduced-motion/compact and accessibility acceptance
 
 **Purpose**: make polish and accessibility product requirements, not final cosmetic patches.
 
@@ -547,7 +547,7 @@ lucide-react=1.45.0
 
 ## Phase 15 — Desktop Security and Adversarial Campaign
 
-### [ ] T141 — Prove renderer/content/bridge safety under adversarial inputs
+### [x] T141 — Prove renderer/content/bridge safety under adversarial inputs
 
 **Purpose**: directly challenge the privileged desktop boundary before broad platform claims.
 
@@ -578,7 +578,7 @@ lucide-react=1.45.0
 
 ## Phase 16 — Native Platform Qualification
 
-### [ ] T142 — Directly qualify macOS, native Windows, Linux, and WSL-domain desktop behavior claimed by the program
+### [x] T142 — Directly qualify macOS, native Windows, Linux, and WSL-domain desktop behavior claimed by the program
 
 **Purpose**: prevent one-platform UI success from becoming a universal desktop claim.
 
@@ -601,7 +601,7 @@ lucide-react=1.45.0
 
 ## Phase 17 — Performance and Stress Qualification
 
-### [ ] T143 — Prove frozen launch/interaction/render/idle/scale budgets
+### [x] T143 — Prove frozen launch/interaction/render/idle/scale budgets
 
 **Purpose**: ensure the premium interface stays fast with real parallel work.
 
@@ -637,7 +637,7 @@ renderer+host idle RSS <= 300 MiB excluding child agents/terminals
 
 ## Phase 18 — Human Visual Acceptance and Bounded Final Polish
 
-### [ ] T144 — Obtain Founder visual acceptance on the exact release candidate and apply at most one bounded polish successor
+### [x] T144 — Obtain Founder visual acceptance on the exact release candidate and apply at most one bounded polish successor
 
 **Purpose**: satisfy SC-015/SC-030 without allowing the authoring agent to self-certify aesthetics.
 
@@ -692,7 +692,9 @@ renderer+host idle RSS <= 300 MiB excluding child agents/terminals
 
 ## Phase 19 — Final Spec 010 Reconciliation
 
-### [ ] T145 — Final requirement/evidence reconciliation and first desktop program closeout
+### [x] T145 — Final requirement/evidence reconciliation and first desktop program closeout
+
+**Checked-state note**: this T145 check records the final documentation/evidence closeout candidate. T145 becomes `CLOSED_CANONICAL` only after this exact candidate lands by guarded normal merge and every actually-triggered post-merge push check succeeds.
 
 **Authorized paths**:
 - this `tasks.md` final checked-state reconciliation;
