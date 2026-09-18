@@ -260,7 +260,7 @@ Explicit nonclaim:
 - **FR-016**: Controller acquisition/takeover MUST have deterministic conflict resolution and prior-controller disposition.
 - **FR-017**: Controller disconnect, timeout, owner restart, and lease expiration MUST have explicit deterministic behavior.
 - **FR-018**: Simultaneous takeover/input/resize/interrupt/terminate races MUST NOT produce multiple implicit controllers or cross-runtime action.
-- **FR-019**: Input and control actions MUST target exactly one runtime by default; no connection, Project membership, or visual grouping may create implicit broadcast.
+- **FR-019**: Input and control actions MUST target exactly one runtime. Multi-runtime input/control broadcast is prohibited in Spec 011; any future multi-target action requires a separately governed specification.
 - **FR-020**: Every mutating request MUST carry an exact target identity and request identity sufficient for deterministic correlation and replay handling.
 - **FR-021**: The private local-control protocol MUST be explicitly versioned.
 - **FR-022**: Incompatible versions MUST fail closed with an explicit error; silent unsafe downgrade or unversioned fallback is prohibited.
@@ -270,7 +270,7 @@ Explicit nonclaim:
 - **FR-026**: Malformed or oversized control data MUST fail within bounded resource use and MUST NOT crash the owner or expand authority.
 - **FR-027**: Slow or non-reading clients MUST have explicit backpressure, drop, truncation, or disconnect semantics that keep owner resource use bounded.
 - **FR-028**: Terminal/agent output MUST remain untrusted data and MUST NOT be interpreted as control protocol, trusted lifecycle truth, approval, evidence, or host action.
-- **FR-029**: The private control surface MUST remain local-only in Spec 011; public TCP/HTTP/WebSocket/LAN/cloud/remote-origin command paths are prohibited.
+- **FR-029**: The private control surface MUST remain local-only in Spec 011; TCP listeners (including loopback TCP), HTTP/WebSocket listeners, LAN listeners, cloud relays, and remote-origin command paths are prohibited.
 - **FR-030**: Each claimed platform MUST enforce an explicit local-principal endpoint-access policy using platform-appropriate primitives directly proven on that platform.
 - **FR-031**: Endpoint parent/path/namespace creation MUST resist stale-state replacement and path/symlink/reparse ambiguity under the accepted threat model.
 - **FR-032**: An endpoint MUST NOT be removed or replaced merely because a path exists; Winds MUST distinguish a live owner from stale state before destructive replacement.
@@ -350,7 +350,7 @@ Explicit nonclaim:
 Spec 011 does NOT by itself authorize or require:
 
 - SSH transport, remote machines, remote execution, mobile/thin clients, cloud relay, or team control plane;
-- public TCP/HTTP/WebSocket/RPC server or a promised third-party SDK/API;
+- any TCP listener (including loopback TCP), HTTP/WebSocket/RPC server, or promised third-party SDK/API;
 - complete Herdr 104-method API parity;
 - full workspace/tab/recursive-pane multiplexer parity;
 - all 24 agent detections/integrations or the broader Agent Plane assigned to Spec 012;
