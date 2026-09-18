@@ -72,7 +72,7 @@ The owner may manage multiple runtime namespaces, but it is not a machine-wide s
 
 The owner is launched on demand by an accepted Winds client using the same shipped `winds` executable in an internal owner mode. The first program does **not** install launchd, systemd, Windows Service Control Manager entries, login agents, scheduled tasks, or boot-time services.
 
-When there are no connected clients and no live persistent runtimes, the owner SHOULD exit after a bounded idle grace period selected by Tasks. There is no requirement for an always-running background process merely because Winds is installed.
+When there are no connected clients and no live persistent runtimes, the owner MUST exit after a 300-second idle grace period. Tasks may tighten that grace period but MUST NOT make the first-program owner permanently resident without a separately accepted Plan amendment. There is no requirement for an always-running background process merely because Winds is installed.
 
 Why:
 
@@ -95,7 +95,7 @@ On owner-generation loss:
 - process liveness MAY remain unknown independently;
 - stale generation state cannot be promoted by endpoint-file existence or PID reuse.
 
-Generation identifiers MUST be collision-resistant. Tasks must qualify the smallest OS-appropriate entropy mechanism; this Plan does not authorize a random/UUID dependency by itself.
+Owner-generation identifiers and runtime-namespace identifiers MUST both be collision-resistant and MUST use the same Tasks-qualified OS-appropriate entropy seam. Human-readable aliases, timestamps, counters, and OS PIDs are insufficient as the sole identity source. This Plan does not authorize a random/UUID dependency by itself.
 
 ## AD-011-03 — Reuse current PTY/ConPTY ownership instead of replacing it
 
@@ -251,8 +251,9 @@ Every connection receives an owner-assigned connection identity and monotonicall
 
 Within one connection:
 
-- repeated sequence numbers are rejected or return the already-recorded deterministic disposition where Tasks choose bounded idempotency caching;
-- out-of-order mutation is rejected if it violates the protocol contract.
+- every request sequence MUST be strictly increasing;
+- a repeated or lower sequence number is rejected with a typed duplicate/out-of-order error and MUST NOT re-execute or replay a cached consequential result;
+- no response-result cache is required for mutation idempotency in the first program.
 
 Across connection loss:
 
@@ -456,10 +457,18 @@ REQUEST_CONTROL / RELEASE_CONTROL / CONTROL_STATE
 INPUT / RESIZE / INTERRUPT / STOP
 RUNTIME_EVENT / OUTPUT_EVENT / HISTORY_GAP
 PING / PONG
-OWNER_STATUS / SHUTDOWN_IF_IDLE
+OWNER_STATUS
 ```
 
 This list is a planning ceiling, not automatic Tasks authority. Tasks may reduce it.
+Authority classes are frozen at Plan stage:
+
+- `HELLO`, `PING/PONG`, `LIST_RUNTIMES`, `RUNTIME_SNAPSHOT`, `ATTACH_OBSERVER`, `DETACH`, `RUNTIME_EVENT`, `OUTPUT_EVENT`, `HISTORY_GAP`, and `OWNER_STATUS` are connection/observer-safe and MUST NOT mutate runtime/process authority;
+- `REQUEST_CONTROL` is a bounded authority-transition request available only to an authenticated eligible local client after explicit accepted user/client action; it is not ordinary observer mutation;
+- `RELEASE_CONTROL` is valid only for the active controller or an exact owner-defined revocation path;
+- `INPUT`, `RESIZE`, `INTERRUPT`, and `STOP` are controller-only;
+- owner idle shutdown is internal owner lifecycle policy, not a wire method. No observer/controller request named `SHUTDOWN_IF_IDLE` exists in protocol v1.
+
 
 Do not expose arbitrary shell execution, generic filesystem operations, generic Git commands, raw SQL, environment dump, plugin calls, remote calls, or a generic method dispatcher.
 
