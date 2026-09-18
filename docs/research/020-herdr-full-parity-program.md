@@ -127,7 +127,7 @@ Winds parity requires CLI and private local-control semantics over the same cano
 - worktree-aware navigation and actions;
 - race/error handling around concurrent create/remove and dirty state.
 
-### Integrations, plugins, and marketplace
+### Integrations and plugins; parity-plus marketplace target
 
 - integration install/uninstall/status lifecycle;
 - plugin manifests;
@@ -138,7 +138,7 @@ Winds parity requires CLI and private local-control semantics over the same cano
 - managed plugin panes/popups/splits/tabs;
 - link handlers;
 - per-plugin runtime/config/path handling;
-- marketplace/discovery semantics and source revision/provenance requirements.
+- GitHub-backed plugin installation/discovery using explicit source revision/provenance, plus local linking/registry semantics. The pinned Herdr source does **not** establish a distinct curated marketplace or catalog service; a broader Winds marketplace remains a Spec 014 parity-plus target rather than Herdr capability-floor evidence.
 
 ### Installation, update, handoff, and performance
 
