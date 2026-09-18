@@ -15,6 +15,7 @@ const tauriConfig = readFileSync(join(desktopRoot, 'src-tauri/tauri.conf.json'),
 const main = readFileSync(join(desktopRoot, 'src/main.tsx'), 'utf8');
 const fixture = readFileSync(join(desktopRoot, 'src/leftDock/fixture.ts'), 'utf8');
 const bridge = readFileSync(join(desktopRoot, 'src/leftDock/bridge.ts'), 'utf8');
+const leftDock = readFileSync(join(desktopRoot, 'src/leftDock/LeftDock.tsx'), 'utf8');
 const rightDockBridge = readFileSync(join(desktopRoot, 'src/rightDock/bridge.ts'), 'utf8');
 const nativeHarness = readFileSync(join(desktopRoot, 'tests/performance/t143_native.py'), 'utf8');
 const platformBaselineHarness = readFileSync(join(desktopRoot, 'tests/performance/t143_platform_baseline.py'), 'utf8');
@@ -51,6 +52,11 @@ test('T143 large performance fixture is benchmark-only and exceeds the frozen sc
   assert.match(fixture, /VITE_WINDS_T143_BENCHMARK !== "1"/);
   assert.match(bridge, /VITE_WINDS_T143_BENCHMARK === "1"/);
   assert.match(fixture, /t143-large/);
+  assert.match(leftDock, /data-project-browse/);
+  assert.match(leftDock, /hidden=\{searching\}/);
+  assert.match(leftDock, /data-project-search-results/);
+  assert.match(leftDock, /focusedControlKeyRef/);
+  assert.doesNotMatch(leftDock, /\[focusedControlKey, setFocusedControlKey\]/);
 });
 
 test('T143 native harness directly enforces cold-launch and idle CPU RSS ceilings', () => {
@@ -199,6 +205,8 @@ test('T143 WebKitGTK harness retains raw samples for every frozen local interact
   assert.match(webkitHarness, /setSearchValue\(''\)/);
   assert.doesNotMatch(webkitHarness, /search\.value = query/);
   assert.doesNotMatch(webkitHarness, /search\.value = ''/);
+  assert.match(webkitHarness, /visibleSessionRows/);
+  assert.match(webkitHarness, /closest\('\[hidden\]'\)/);
   assert.match(webkitHarness, /large:scroll/);
   assert.match(webkitHarness, /large:focus/);
 });

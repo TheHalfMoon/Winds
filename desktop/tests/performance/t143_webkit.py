@@ -317,6 +317,8 @@ const done = arguments[arguments.length - 1];
     inputValueSetter.call(search, value);
     search.dispatchEvent(new Event('input', { bubbles: true }));
   };
+  const visibleSessionRows = () => Array.from(document.querySelectorAll('.session-row'))
+    .filter((row) => !row.closest('[hidden]'));
 
   const base = document.querySelector('.session-row[data-session-id="fixture-session-a"]');
   base?.click();
@@ -331,11 +333,11 @@ const done = arguments[arguments.length - 1];
     const query = index % 2 === 0 ? `t143-project-${String(index % 100).padStart(3, '0')}-session-09` : '';
     searchSamples.push(await sample(index, () => {
       setSearchValue(query);
-    }, () => query ? document.querySelectorAll('.session-row').length === 1 : document.querySelectorAll('.session-row').length >= 1003));
+    }, () => query ? visibleSessionRows().length === 1 : visibleSessionRows().length >= 1003));
   }
   if (search.value !== '') {
     setSearchValue('');
-    await waitFor(() => document.querySelectorAll('.session-row').length >= 1003, 'large fixture restored after search');
+    await waitFor(() => visibleSessionRows().length >= 1003, 'large fixture restored after search');
   }
 
   document.documentElement.dataset.t143Phase = 'large:scroll';
@@ -350,7 +352,7 @@ const done = arguments[arguments.length - 1];
   }
 
   document.documentElement.dataset.t143Phase = 'large:focus';
-  const focusRows = Array.from(document.querySelectorAll('.session-row'));
+  const focusRows = visibleSessionRows();
   const focusSamples = [];
   for (let index = 0; index < 1000; index += 1) {
     const row = focusRows[(index * 37) % focusRows.length];
