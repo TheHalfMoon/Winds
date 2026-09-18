@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { RuntimeMark } from "../components/RuntimeMark";
 import { leftDockBridge } from "./bridge";
 import {
@@ -19,6 +20,17 @@ import {
 import type { BridgeProject, BridgeSessionSummary, BridgeSnapshot, LeftDockBridge } from "./types";
 
 const emptySnapshot: BridgeSnapshot = { projects: [] };
+
+const PROJECT_PAGE_THRESHOLD = 40;
+const PROJECT_PAGE_SIZE = 14;
+
+function projectPageStart(projectIndex: number): number {
+  return Math.floor(projectIndex / PROJECT_PAGE_SIZE) * PROJECT_PAGE_SIZE;
+}
+
+function lastProjectPageStart(projectCount: number): number {
+  return projectCount <= 0 ? 0 : projectPageStart(projectCount - 1);
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -149,7 +161,9 @@ export function LeftDock({
   const [creatingWorkspaceId, setCreatingWorkspaceId] = useState<string | null>(null);
   const [createName, setCreateName] = useState("");
   const [createWorkstreamId, setCreateWorkstreamId] = useState("");
+  const [browsePageStart, setBrowsePageStart] = useState(0);
   const dockRef = useRef<HTMLElement>(null);
+  const browseListRef = useRef<HTMLElement>(null);
   const busyRef = useRef(false);
 
   const rememberFocusKey = useCallback((key: string | null) => {
@@ -216,7 +230,56 @@ export function LeftDock({
     }
   }, [refresh, writable]);
 
+  const searching = query.trim().length > 0;
   const visibleProjects = useMemo(() => filterProjects(snapshot, query), [snapshot, query]);
+  const totalSessionCount = useMemo(
+    () => snapshot.projects.reduce((count, project) => count + project.sessions.length, 0),
+    [snapshot.projects],
+  );
+  const browsePaged = snapshot.projects.length > PROJECT_PAGE_THRESHOLD;
+  const maxBrowsePageStart = lastProjectPageStart(snapshot.projects.length);
+  const effectiveBrowsePageStart = browsePaged
+    ? Math.min(browsePageStart, maxBrowsePageStart)
+    : 0;
+  const browsePageEnd = browsePaged
+    ? Math.min(snapshot.projects.length, effectiveBrowsePageStart + PROJECT_PAGE_SIZE)
+    : snapshot.projects.length;
+  const browseProjects = useMemo(
+    () => browsePaged
+      ? snapshot.projects.slice(effectiveBrowsePageStart, browsePageEnd)
+      : snapshot.projects,
+    [browsePageEnd, browsePaged, effectiveBrowsePageStart, snapshot.projects],
+  );
+  const browseSessionOrder = useMemo(
+    () => snapshot.projects.flatMap((project, projectIndex) => (
+      projectRenderedExpanded(project, "")
+        ? project.sessions.map((session) => ({
+          sessionId: session.canonicalSessionId,
+          projectIndex,
+        }))
+        : []
+    )),
+    [snapshot.projects],
+  );
+  const browsePageLabel = snapshot.projects.length === 0
+    ? "No Projects"
+    : `Projects ${effectiveBrowsePageStart + 1}–${browsePageEnd} of ${snapshot.projects.length}`;
+
+  useEffect(() => {
+    setBrowsePageStart((current) => Math.min(
+      projectPageStart(current),
+      lastProjectPageStart(snapshot.projects.length),
+    ));
+  }, [snapshot.projects.length]);
+
+  const setBrowsePage = useCallback((requestedStart: number) => {
+    const nextStart = Math.max(
+      0,
+      Math.min(projectPageStart(requestedStart), lastProjectPageStart(snapshot.projects.length)),
+    );
+    flushSync(() => setBrowsePageStart(nextStart));
+    browseListRef.current?.scrollTo({ top: 0 });
+  }, [snapshot.projects.length]);
 
   const updateProject = useCallback((project: BridgeProject, changes: Parameters<typeof projectUpdatePlan>[1]) => {
     void mutate(() => bridge.updateProject([projectUpdatePlan(project.project, changes)]));
@@ -291,20 +354,55 @@ export function LeftDock({
 
   const onNavKeyDown = useCallback((event: React.KeyboardEvent<HTMLElement>) => {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    const direction = event.key === "ArrowDown" ? 1 : -1;
     const rows = Array.from(dockRef.current?.querySelectorAll<HTMLButtonElement>("button.session-row") ?? [])
       .filter((row) => !row.closest('[hidden], [inert], [data-search-hidden="true"]'));
-    if (rows.length === 0) return;
-    const activeIndex = rows.findIndex((row) => row === document.activeElement);
-    const nextIndex = nextSessionFocusIndex(rows.length, activeIndex, event.key === "ArrowDown" ? 1 : -1);
-    if (nextIndex === null) return;
-    event.preventDefault();
-    rows[nextIndex].focus();
-  }, []);
 
-  const searching = query.trim().length > 0;
-  const renderProjectGroups = useCallback((projects: readonly BridgeProject[], renderQuery: string) => (
+    if (searching || !browsePaged) {
+      if (rows.length === 0) return;
+      const activeIndex = rows.findIndex((row) => row === document.activeElement);
+      const nextIndex = nextSessionFocusIndex(rows.length, activeIndex, direction);
+      if (nextIndex === null) return;
+      event.preventDefault();
+      rows[nextIndex].focus();
+      return;
+    }
+
+    if (browseSessionOrder.length === 0) return;
+    const activeSessionId = document.activeElement instanceof HTMLElement
+      ? document.activeElement.dataset.sessionId ?? null
+      : null;
+    const activeIndex = activeSessionId
+      ? browseSessionOrder.findIndex((entry) => entry.sessionId === activeSessionId)
+      : -1;
+    const nextIndex = nextSessionFocusIndex(browseSessionOrder.length, activeIndex, direction);
+    if (nextIndex === null) return;
+
+    const target = browseSessionOrder[nextIndex];
+    const targetPageStart = projectPageStart(target.projectIndex);
+    event.preventDefault();
+    if (targetPageStart !== effectiveBrowsePageStart) setBrowsePage(targetPageStart);
+
+    const targetRow = Array.from(
+      dockRef.current?.querySelectorAll<HTMLButtonElement>("button.session-row") ?? [],
+    ).find((row) => (
+      !row.closest('[hidden], [inert], [data-search-hidden="true"]')
+      && row.dataset.sessionId === target.sessionId
+    ));
+    if (targetRow) targetRow.focus();
+    else restoreFocusKey(sessionFocusKey(target.sessionId, "select"));
+  }, [
+    browsePaged, browseSessionOrder, effectiveBrowsePageStart, restoreFocusKey, searching, setBrowsePage,
+  ]);
+
+  const renderProjectGroups = useCallback((
+    projects: readonly BridgeProject[],
+    renderQuery: string,
+    projectIndexOffset: number,
+    projectSetSize: number,
+  ) => (
     <>
-      {projects.map((project) => {
+      {projects.map((project, projectIndex) => {
         const current = project.project;
         const mutationDisabled = busy || !writable;
         const creating = creatingWorkspaceId === current.canonicalWorkspaceId;
@@ -313,7 +411,14 @@ export function LeftDock({
         const upPlan = projectReorderPlan(snapshot.projects, current.canonicalWorkspaceId, -1);
         const downPlan = projectReorderPlan(snapshot.projects, current.canonicalWorkspaceId, 1);
         return (
-          <section className="project-group" key={current.canonicalWorkspaceId} data-open={renderedExpanded ? "true" : "false"}>
+          <section
+            className="project-group"
+            key={current.canonicalWorkspaceId}
+            role="listitem"
+            aria-posinset={projectIndexOffset + projectIndex + 1}
+            aria-setsize={projectSetSize}
+            data-open={renderedExpanded ? "true" : "false"}
+          >
             <div className="project-row-shell">
               <button type="button" className="project-row" data-focus-key={projectFocusKey(current.canonicalWorkspaceId, "toggle")} aria-expanded={renderedExpanded} aria-label={`${current.displayName} Project. ${current.sessionCount} Sessions. ${current.attentionCount} need attention.`} disabled={mutationDisabled} onClick={() => updateProject(project, { collapsed: !current.collapsed })}>
                 <span className="disclosure" aria-hidden="true">{renderedExpanded ? "⌄" : "›"}</span>
@@ -352,11 +457,18 @@ export function LeftDock({
     selectedSessionId, snapshot.projects, submitCreateSession, updateProject, updateSession, writable,
   ]);
   const browseProjectGroups = useMemo(
-    () => renderProjectGroups(snapshot.projects, ""),
-    [renderProjectGroups, snapshot.projects],
+    () => renderProjectGroups(
+      browseProjects,
+      "",
+      effectiveBrowsePageStart,
+      snapshot.projects.length,
+    ),
+    [browseProjects, effectiveBrowsePageStart, renderProjectGroups, snapshot.projects.length],
   );
   const searchProjectGroups = useMemo(
-    () => searching ? renderProjectGroups(visibleProjects, query) : null,
+    () => searching
+      ? renderProjectGroups(visibleProjects, query, 0, visibleProjects.length)
+      : null,
     [query, renderProjectGroups, searching, visibleProjects],
   );
 
@@ -374,15 +486,43 @@ export function LeftDock({
         <input type="search" value={query} onChange={(event) => setQuery(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === "Enter") resolveSearch(); }} aria-label="Search Projects and Sessions" placeholder="Search Projects and Sessions" />
       </div>
       <div className="project-list-frame">
-        <nav className="project-list" aria-label="Project navigation" onKeyDown={onNavKeyDown}>
-          <div data-project-browse data-search-hidden={searching ? "true" : "false"}>
-            {browseProjectGroups}
+        <nav ref={browseListRef} className="project-list" aria-label="Project navigation" onKeyDown={onNavKeyDown}>
+          <div
+            data-project-browse
+            data-search-hidden={searching ? "true" : "false"}
+            data-project-count={snapshot.projects.length}
+            data-session-count={totalSessionCount}
+            data-project-page-start={effectiveBrowsePageStart}
+            data-project-page-end={browsePageEnd}
+          >
+            {browsePaged && (
+              <div className="project-page-controls" aria-label="Project pages">
+                <button
+                  type="button"
+                  className="quiet-action"
+                  aria-label="Previous Projects page"
+                  disabled={effectiveBrowsePageStart === 0}
+                  onClick={() => setBrowsePage(effectiveBrowsePageStart - PROJECT_PAGE_SIZE)}
+                >←</button>
+                <span className="project-page-status" role="status" aria-live="polite">{browsePageLabel}</span>
+                <button
+                  type="button"
+                  className="quiet-action"
+                  aria-label="Next Projects page"
+                  disabled={browsePageEnd >= snapshot.projects.length}
+                  onClick={() => setBrowsePage(effectiveBrowsePageStart + PROJECT_PAGE_SIZE)}
+                >→</button>
+              </div>
+            )}
+            <div role="list" aria-label={browsePaged ? `${browsePageLabel}. Project list` : "Project list"}>
+              {browseProjectGroups}
+            </div>
           </div>
           {!searching && snapshot.projects.length === 0 && <p className="session-empty">No Projects or Sessions</p>}
         </nav>
         {searching && (
           <nav className="project-search-results" data-project-search-results aria-label="Search result navigation" onKeyDown={onNavKeyDown}>
-            {searchProjectGroups}
+            <div role="list" aria-label="Matching Projects">{searchProjectGroups}</div>
             {visibleProjects.length === 0 && <p className="session-empty">No matching Projects or Sessions</p>}
           </nav>
         )}

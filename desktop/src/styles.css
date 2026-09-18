@@ -290,6 +290,25 @@ button[aria-disabled="true"] {
   visibility: hidden;
 }
 
+.project-page-controls {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 0 var(--space-2);
+  background: var(--surface-1);
+}
+
+.project-page-status {
+  min-width: 0;
+  color: var(--text-faint);
+  font-size: 9px;
+  text-align: center;
+}
+
 [data-project-browse] .project-group {
   content-visibility: auto;
   contain-intrinsic-block-size: auto 445px;

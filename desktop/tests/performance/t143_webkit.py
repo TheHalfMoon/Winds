@@ -303,13 +303,20 @@ const done = arguments[arguments.length - 1];
   };
 
   document.documentElement.dataset.t143Phase = 'large:fixture-precondition';
-  await waitFor(() => document.querySelectorAll('.project-group').length >= 101, '101 Projects');
-  await waitFor(() => document.querySelectorAll('.session-row').length >= 1003, '1003 Sessions');
-  const projectCount = document.querySelectorAll('.project-group').length;
-  const sessionCount = document.querySelectorAll('.session-row').length;
+  const browse = document.querySelector('[data-project-browse]');
   const search = document.querySelector('input[aria-label="Search Projects and Sessions"]');
   const list = document.querySelector('.project-list');
-  if (!search || !list) throw new Error('large fixture search/list missing');
+  if (!browse || !search || !list) throw new Error('large fixture browse/search/list missing');
+  await waitFor(() => Number(browse.dataset.projectCount ?? 0) >= 101, '101 Projects in canonical snapshot');
+  await waitFor(() => Number(browse.dataset.sessionCount ?? 0) >= 1003, '1003 Sessions in canonical snapshot');
+  await waitFor(() => Number(browse.dataset.projectPageStart ?? -1) === 0, 'first Project page');
+  await waitFor(() => document.querySelectorAll('[data-project-browse] .project-group').length === 14, '14 Projects on first page');
+  await waitFor(() => document.querySelectorAll('[data-project-browse] .session-row').length === 133, '133 Sessions on first page');
+  const projectCount = Number(browse.dataset.projectCount);
+  const sessionCount = Number(browse.dataset.sessionCount);
+  const renderedPageProjectCount = document.querySelectorAll('[data-project-browse] .project-group').length;
+  const renderedPageSessionCount = document.querySelectorAll('[data-project-browse] .session-row').length;
+  const pageStart = () => Number(browse.dataset.projectPageStart ?? -1);
 
   const inputValueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
   if (!inputValueSetter) throw new Error('native HTMLInputElement value setter unavailable');
@@ -329,20 +336,47 @@ const done = arguments[arguments.length - 1];
 
   document.documentElement.dataset.t143Phase = 'large:search';
   const searchSamples = [];
+  const searchCoveredSessionIds = new Set();
   for (let index = 0; index < 200; index += 1) {
-    const query = index % 2 === 0 ? `t143-project-${String(index % 100).padStart(3, '0')}-session-09` : '';
+    const targetIndex = Math.floor(index / 2) % 100;
+    const query = index % 2 === 0
+      ? `t143-project-${String(targetIndex).padStart(3, '0')}-session-09`
+      : '';
     searchSamples.push(await sample(index, () => {
       setSearchValue(query);
-    }, () => query ? visibleSessionRows().length === 1 : visibleSessionRows().length >= 1003));
+    }, () => {
+      if (!query) {
+        return !document.querySelector('[data-project-search-results]')
+          && pageStart() === 0
+          && visibleSessionRows().length === 133;
+      }
+      const rows = visibleSessionRows();
+      return rows.length === 1 && rows[0].dataset.sessionId === query;
+    }));
+    if (query) searchCoveredSessionIds.add(query);
   }
   if (search.value !== '') {
     setSearchValue('');
-    await waitFor(() => visibleSessionRows().length >= 1003, 'large fixture restored after search');
+    await waitFor(
+      () => !document.querySelector('[data-project-search-results]')
+        && pageStart() === 0
+        && visibleSessionRows().length === 133,
+      'large fixture restored after search',
+    );
   }
 
   document.documentElement.dataset.t143Phase = 'large:scroll';
   const scrollSamples = [];
+  const pageStarts = new Set([pageStart()]);
   for (let index = 0; index < 1000; index += 1) {
+    if (index > 0 && index % 125 === 0) {
+      const nextPage = document.querySelector('button[aria-label="Next Projects page"]');
+      if (!nextPage || nextPage.disabled) throw new Error('next Projects page unavailable during traversal');
+      const priorPageStart = pageStart();
+      nextPage.click();
+      await waitFor(() => pageStart() > priorPageStart, 'next Project page');
+      pageStarts.add(pageStart());
+    }
     await frame();
     const started = performance.now();
     const maxScroll = Math.max(1, list.scrollHeight - list.clientHeight);
@@ -350,6 +384,36 @@ const done = arguments[arguments.length - 1];
     const painted = await frame();
     scrollSamples.push(painted - started);
   }
+
+  while (pageStart() > 0) {
+    const previousPage = document.querySelector('button[aria-label="Previous Projects page"]');
+    if (!previousPage || previousPage.disabled) throw new Error('previous Projects page unavailable during restore');
+    const priorPageStart = pageStart();
+    previousPage.click();
+    await waitFor(() => pageStart() < priorPageStart, 'previous Project page');
+  }
+  await waitFor(() => visibleSessionRows().length === 133, 'first Project page restored');
+  list.scrollTop = 0;
+  await frame();
+
+  document.documentElement.dataset.t143Phase = 'large:keyboard-boundary';
+  const backwardTargetId = 't143-project-012-session-09';
+  const forwardTargetId = 't143-project-013-session-00';
+  const backwardTarget = document.querySelector(`.session-row[data-session-id="${backwardTargetId}"]`);
+  if (!backwardTarget) throw new Error('page-boundary source Session missing');
+  backwardTarget.focus();
+  backwardTarget.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+  await waitFor(
+    () => pageStart() === 14 && document.activeElement?.dataset.sessionId === forwardTargetId,
+    'ArrowDown Project page boundary focus',
+  );
+  const forwardBoundaryPassed = true;
+  document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }));
+  await waitFor(
+    () => pageStart() === 0 && document.activeElement?.dataset.sessionId === backwardTargetId,
+    'ArrowUp Project page boundary focus',
+  );
+  const backwardBoundaryPassed = true;
 
   document.documentElement.dataset.t143Phase = 'large:focus';
   const focusRows = visibleSessionRows();
@@ -367,6 +431,13 @@ const done = arguments[arguments.length - 1];
     searchSamples,
     scrollSamples,
     focusSamples,
+    renderedPageProjectCount,
+    renderedPageSessionCount,
+    searchCoveredSessionCount: searchCoveredSessionIds.size,
+    pageStartCount: pageStarts.size,
+    pageMaxStart: Math.max(...pageStarts),
+    forwardBoundaryPassed,
+    backwardBoundaryPassed,
     selectedBaseSessionPreserved: Boolean(document.querySelector('.session-row-shell[data-selected="true"] .session-row[data-session-id="fixture-session-a"]')),
   };
 })().then((value) => done({ ok: true, value })).catch((error) => done({
@@ -513,6 +584,13 @@ def main() -> int:
             "search": summary(large_value["searchSamples"]),
             "scroll": summary(large_value["scrollSamples"]),
             "focus": summary(large_value["focusSamples"]),
+            "rendered_page_project_count": large_value["renderedPageProjectCount"],
+            "rendered_page_session_count": large_value["renderedPageSessionCount"],
+            "search_covered_session_count": large_value["searchCoveredSessionCount"],
+            "page_start_count": large_value["pageStartCount"],
+            "page_max_start": large_value["pageMaxStart"],
+            "keyboard_boundary_forward": large_value["forwardBoundaryPassed"],
+            "keyboard_boundary_backward": large_value["backwardBoundaryPassed"],
             "selected_base_session_preserved": large_value["selectedBaseSessionPreserved"],
         },
     }
@@ -529,6 +607,13 @@ def main() -> int:
         "large_search_p95_le_50_ms": result["large_fixture"]["search"]["p95_ms"] <= 50.0,
         "large_scroll_p95_le_50_ms": result["large_fixture"]["scroll"]["p95_ms"] <= 50.0,
         "large_focus_p95_le_50_ms": result["large_fixture"]["focus"]["p95_ms"] <= 50.0,
+        "large_fixture_first_page_projects_eq_14": result["large_fixture"]["rendered_page_project_count"] == 14,
+        "large_fixture_first_page_sessions_eq_133": result["large_fixture"]["rendered_page_session_count"] == 133,
+        "large_fixture_search_covers_100_exact_targets": result["large_fixture"]["search_covered_session_count"] >= 100,
+        "large_fixture_all_pages_traversed": result["large_fixture"]["page_start_count"] >= 8
+            and result["large_fixture"]["page_max_start"] >= 98,
+        "large_fixture_keyboard_boundary_forward": result["large_fixture"]["keyboard_boundary_forward"],
+        "large_fixture_keyboard_boundary_backward": result["large_fixture"]["keyboard_boundary_backward"],
         "large_fixture_selection_stable": result["large_fixture"]["selected_base_session_preserved"],
     }
     result["checks"] = checks

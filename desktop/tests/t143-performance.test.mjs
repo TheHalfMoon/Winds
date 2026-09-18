@@ -54,6 +54,19 @@ test('T143 large performance fixture is benchmark-only and exceeds the frozen sc
   assert.match(bridge, /VITE_WINDS_T143_BENCHMARK === "1"/);
   assert.match(fixture, /t143-large/);
   assert.match(leftDock, /data-project-browse/);
+  assert.match(leftDock, /PROJECT_PAGE_THRESHOLD = 40/);
+  assert.match(leftDock, /PROJECT_PAGE_SIZE = 14/);
+  assert.match(leftDock, /flushSync/);
+  assert.match(leftDock, /data-project-count=\{snapshot\.projects\.length\}/);
+  assert.match(leftDock, /data-session-count=\{totalSessionCount\}/);
+  assert.match(leftDock, /data-project-page-start=\{effectiveBrowsePageStart\}/);
+  assert.match(leftDock, /data-project-page-end=\{browsePageEnd\}/);
+  assert.match(leftDock, /aria-label="Previous Projects page"/);
+  assert.match(leftDock, /aria-label="Next Projects page"/);
+  assert.match(leftDock, /aria-posinset=\{projectIndexOffset \+ projectIndex \+ 1\}/);
+  assert.match(leftDock, /aria-setsize=\{projectSetSize\}/);
+  assert.match(leftDock, /browseSessionOrder/);
+  assert.doesNotMatch(leftDock, /PROJECT_ESTIMATED_BLOCK_PX|project-window-spacer/);
   assert.doesNotMatch(leftDock, /\shidden=\{searching\}/);
   assert.ok(leftDock.includes('data-search-hidden={searching ? "true" : "false"}'));
   assert.doesNotMatch(leftDock, /<div data-project-browse[^>]*\sinert=/);
@@ -72,6 +85,8 @@ test('T143 large performance fixture is benchmark-only and exceeds the frozen sc
   assert.match(styles, /\[data-project-browse\]\[data-search-hidden="true"\][\s\S]*visibility: hidden/);
   assert.doesNotMatch(styles, /\[data-project-browse\]\[data-search-hidden="true"\][\s\S]*content-visibility: hidden/);
   assert.match(styles, /\[data-project-browse\] \.project-group[\s\S]*content-visibility: auto/);
+  assert.match(styles, /\.project-page-controls \{[\s\S]*position: sticky/);
+  assert.match(styles, /\.project-page-status \{[\s\S]*text-align: center/);
   assert.match(styles, /contain-intrinsic-block-size: auto 445px/);
 });
 
@@ -180,6 +195,12 @@ test('T143 WebKitGTK harness retains raw samples for every frozen local interact
     'large_search_p95_le_50_ms',
     'large_scroll_p95_le_50_ms',
     'large_focus_p95_le_50_ms',
+    'large_fixture_first_page_projects_eq_14',
+    'large_fixture_first_page_sessions_eq_133',
+    'large_fixture_search_covers_100_exact_targets',
+    'large_fixture_all_pages_traversed',
+    'large_fixture_keyboard_boundary_forward',
+    'large_fixture_keyboard_boundary_backward',
   ]) assert.equal(webkitHarness.includes(needle), true, needle);
   assert.match(webkitHarness, /"raw_ms"/);
   assert.match(webkitHarness, /visibleSessionWorkEvents/);
@@ -215,6 +236,18 @@ test('T143 WebKitGTK harness retains raw samples for every frozen local interact
   assert.match(webkitHarness, /normal:right-dock/);
   assert.match(webkitHarness, /normal:resize/);
   assert.match(webkitHarness, /large:search/);
+  assert.match(webkitHarness, /browse\.dataset\.projectCount/);
+  assert.match(webkitHarness, /browse\.dataset\.sessionCount/);
+  assert.match(webkitHarness, /14 Projects on first page/);
+  assert.match(webkitHarness, /133 Sessions on first page/);
+  assert.match(webkitHarness, /Math\.floor\(index \/ 2\) % 100/);
+  assert.match(webkitHarness, /searchCoveredSessionIds/);
+  assert.match(webkitHarness, /Next Projects page/);
+  assert.match(webkitHarness, /pageStarts/);
+  assert.match(webkitHarness, /ArrowDown Project page boundary focus/);
+  assert.match(webkitHarness, /ArrowUp Project page boundary focus/);
+  assert.doesNotMatch(webkitHarness, /querySelectorAll\('\.project-group'\)\.length >= 101/);
+  assert.doesNotMatch(webkitHarness, /querySelectorAll\('\.session-row'\)\.length >= 1003/);
   assert.match(webkitHarness, /Object\.getOwnPropertyDescriptor\(HTMLInputElement\.prototype, 'value'\)/);
   assert.match(webkitHarness, /inputValueSetter\.call\(search, value\)/);
   assert.match(webkitHarness, /setSearchValue\(query\)/);
