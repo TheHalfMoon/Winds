@@ -68,9 +68,9 @@ test('T132 restores inline-form trigger focus only after explicit successful exi
   assert.match(dock, /focusedControlKeyRef\.current = key/);
   assert.match(dock, /setFocusRestoreRevision\(\(revision\) => revision \+ 1\)/);
   assert.doesNotMatch(dock, /\[focusedControlKey, setFocusedControlKey\]/);
-  assert.ok(dock.includes('inert={searching ? true : undefined}'));
-  assert.ok(dock.includes('aria-hidden={searching}'));
-  assert.ok(dock.includes('closest("[hidden], [inert]")'));
+  assert.doesNotMatch(dock, /<div data-project-browse[^>]*\sinert=/);
+  assert.doesNotMatch(dock, /<div data-project-browse[^>]*aria-hidden=/);
+  assert.ok(dock.includes('closest(\'[hidden], [inert], [data-search-hidden="true"]\')'));
   assert.match(dock, /if \(await onRename\(displayName\)\) closeRenameEditor\(\)/);
   assert.match(dock, /closeCreateSession\(project\.project\.canonicalWorkspaceId\)/);
   assert.match(dock, /onClick=\{\(\) => closeCreateSession\(current\.canonicalWorkspaceId\)\}/);

@@ -286,6 +286,10 @@ button[aria-disabled="true"] {
   background: var(--surface-1);
 }
 
+[data-project-browse][data-search-hidden="true"] {
+  visibility: hidden;
+}
+
 [data-project-browse] .project-group {
   content-visibility: auto;
   contain-intrinsic-block-size: auto 445px;

@@ -56,8 +56,8 @@ test('T143 large performance fixture is benchmark-only and exceeds the frozen sc
   assert.match(leftDock, /data-project-browse/);
   assert.doesNotMatch(leftDock, /\shidden=\{searching\}/);
   assert.ok(leftDock.includes('data-search-hidden={searching ? "true" : "false"}'));
-  assert.ok(leftDock.includes('aria-hidden={searching}'));
-  assert.ok(leftDock.includes('inert={searching ? true : undefined}'));
+  assert.doesNotMatch(leftDock, /<div data-project-browse[^>]*\sinert=/);
+  assert.doesNotMatch(leftDock, /<div data-project-browse[^>]*aria-hidden=/);
   assert.match(leftDock, /data-project-search-results/);
   assert.match(leftDock, /focusedControlKeyRef/);
   assert.doesNotMatch(leftDock, /\[focusedControlKey, setFocusedControlKey\]/);
@@ -69,6 +69,7 @@ test('T143 large performance fixture is benchmark-only and exceeds the frozen sc
   assert.match(styles, /\.project-search-results \{[\s\S]*position: absolute/);
   assert.match(styles, /\.project-search-results \{[\s\S]*inset: 0/);
   assert.match(styles, /\.project-list,[\s\S]*\.project-search-results \{[\s\S]*overflow: auto/);
+  assert.match(styles, /\[data-project-browse\]\[data-search-hidden="true"\][\s\S]*visibility: hidden/);
   assert.doesNotMatch(styles, /\[data-project-browse\]\[data-search-hidden="true"\][\s\S]*content-visibility: hidden/);
   assert.match(styles, /\[data-project-browse\] \.project-group[\s\S]*content-visibility: auto/);
   assert.match(styles, /contain-intrinsic-block-size: auto 445px/);
@@ -221,7 +222,7 @@ test('T143 WebKitGTK harness retains raw samples for every frozen local interact
   assert.doesNotMatch(webkitHarness, /search\.value = query/);
   assert.doesNotMatch(webkitHarness, /search\.value = ''/);
   assert.match(webkitHarness, /visibleSessionRows/);
-  assert.ok(webkitHarness.includes("closest('[hidden], [inert]')"));
+  assert.ok(webkitHarness.includes("closest('[hidden], [inert], [data-search-hidden=\"true\"]')"));
   assert.match(webkitHarness, /large:scroll/);
   assert.match(webkitHarness, /large:focus/);
 });

@@ -182,7 +182,7 @@ export function LeftDock({
     const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     if (active?.dataset.focusKey === focusedControlKey) return;
     const target = Array.from(dockRef.current?.querySelectorAll<HTMLElement>("[data-focus-key]") ?? [])
-      .find((element) => !element.closest("[hidden], [inert]") && element.dataset.focusKey === focusedControlKey);
+      .find((element) => !element.closest('[hidden], [inert], [data-search-hidden="true"]') && element.dataset.focusKey === focusedControlKey);
     if (target) target.focus();
   }, [busy, focusRestoreRevision, snapshot]);
 
@@ -292,7 +292,7 @@ export function LeftDock({
   const onNavKeyDown = useCallback((event: React.KeyboardEvent<HTMLElement>) => {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     const rows = Array.from(dockRef.current?.querySelectorAll<HTMLButtonElement>("button.session-row") ?? [])
-      .filter((row) => !row.closest("[hidden], [inert]"));
+      .filter((row) => !row.closest('[hidden], [inert], [data-search-hidden="true"]'));
     if (rows.length === 0) return;
     const activeIndex = rows.findIndex((row) => row === document.activeElement);
     const nextIndex = nextSessionFocusIndex(rows.length, activeIndex, event.key === "ArrowDown" ? 1 : -1);
@@ -375,7 +375,7 @@ export function LeftDock({
       </div>
       <div className="project-list-frame">
         <nav className="project-list" aria-label="Project navigation" onKeyDown={onNavKeyDown}>
-          <div data-project-browse data-search-hidden={searching ? "true" : "false"} aria-hidden={searching} inert={searching ? true : undefined}>
+          <div data-project-browse data-search-hidden={searching ? "true" : "false"}>
             {browseProjectGroups}
           </div>
           {!searching && snapshot.projects.length === 0 && <p className="session-empty">No Projects or Sessions</p>}

@@ -318,7 +318,7 @@ const done = arguments[arguments.length - 1];
     search.dispatchEvent(new Event('input', { bubbles: true }));
   };
   const visibleSessionRows = () => Array.from(document.querySelectorAll('.session-row'))
-    .filter((row) => !row.closest('[hidden], [inert]'));
+    .filter((row) => !row.closest('[hidden], [inert], [data-search-hidden="true"]'));
 
   const base = document.querySelector('.session-row[data-session-id="fixture-session-a"]');
   base?.click();
