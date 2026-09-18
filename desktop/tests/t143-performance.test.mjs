@@ -161,7 +161,7 @@ test('T143 WebKitGTK harness retains raw samples for every frozen local interact
   ]) assert.equal(webkitHarness.includes(needle), true, needle);
   assert.match(webkitHarness, /"raw_ms"/);
   assert.match(webkitHarness, /visibleSessionWorkEvents/);
-  assert.match(webkitHarness, /WEBDRIVER_SCRIPT_TIMEOUT_MS = 300_000/);
+  assert.match(webkitHarness, /WEBDRIVER_SCRIPT_TIMEOUT_MS = 600_000/);
   assert.match(webkitHarness, /webkit2gtk-4\.1\/MiniBrowser/);
   assert.match(webkitHarness, /WINDS_T143_WEBKIT_BROWSER_NAME\", \"MiniBrowser/);
   assert.match(webkitHarness, /WINDS_T143_WEBKIT_ARGUMENT\", \"--automation/);
@@ -170,7 +170,7 @@ test('T143 WebKitGTK harness retains raw samples for every frozen local interact
   assert.match(selectionProbe, /session_key\("fixture-winds", "fixture-session-a"\)/);
   assert.match(selectionProbe, /session_key\("fixture-winds", "fixture-session-b"\)/);
   assert.match(selectionProbe, /Diagnostic only; never contributes to T143 qualification checks or sample floors/);
-  assert.match(webkitHarness, /WEBDRIVER_CAMPAIGN_HTTP_TIMEOUT_SECONDS = 330\.0/);
+  assert.match(webkitHarness, /WEBDRIVER_CAMPAIGN_HTTP_TIMEOUT_SECONDS = 660\.0/);
   assert.match(webkitHarness, /"script": WEBDRIVER_SCRIPT_TIMEOUT_MS/);
   assert.match(webkitHarness, /timeout=WEBDRIVER_CAMPAIGN_HTTP_TIMEOUT_SECONDS/);
   assert.match(webkitHarness, /urlopen\(request, timeout=timeout\)/);
