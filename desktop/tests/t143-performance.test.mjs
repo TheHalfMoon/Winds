@@ -54,10 +54,16 @@ test('T143 large performance fixture is benchmark-only and exceeds the frozen sc
   assert.match(bridge, /VITE_WINDS_T143_BENCHMARK === "1"/);
   assert.match(fixture, /t143-large/);
   assert.match(leftDock, /data-project-browse/);
-  assert.match(leftDock, /hidden=\{searching\}/);
+  assert.doesNotMatch(leftDock, /\shidden=\{searching\}/);
+  assert.ok(leftDock.includes('data-search-hidden={searching ? "true" : "false"}'));
+  assert.ok(leftDock.includes('aria-hidden={searching}'));
+  assert.ok(leftDock.includes('inert={searching ? true : undefined}'));
   assert.match(leftDock, /data-project-search-results/);
   assert.match(leftDock, /focusedControlKeyRef/);
   assert.doesNotMatch(leftDock, /\[focusedControlKey, setFocusedControlKey\]/);
+  assert.ok(styles.includes('[data-project-browse][data-search-hidden="true"]'));
+  assert.ok(styles.includes('content-visibility: hidden'));
+  assert.ok(styles.includes('contain-intrinsic-block-size: 0px'));
   assert.match(styles, /\[data-project-browse\] \.project-group[\s\S]*content-visibility: auto/);
   assert.match(styles, /contain-intrinsic-block-size: auto 445px/);
 });
@@ -209,7 +215,7 @@ test('T143 WebKitGTK harness retains raw samples for every frozen local interact
   assert.doesNotMatch(webkitHarness, /search\.value = query/);
   assert.doesNotMatch(webkitHarness, /search\.value = ''/);
   assert.match(webkitHarness, /visibleSessionRows/);
-  assert.match(webkitHarness, /closest\('\[hidden\]'\)/);
+  assert.ok(webkitHarness.includes("closest('[hidden], [inert]')"));
   assert.match(webkitHarness, /large:scroll/);
   assert.match(webkitHarness, /large:focus/);
 });

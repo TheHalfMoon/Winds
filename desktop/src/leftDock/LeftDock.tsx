@@ -183,7 +183,7 @@ export function LeftDock({
     const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     if (active?.dataset.focusKey === focusedControlKey) return;
     const target = Array.from(dockRef.current?.querySelectorAll<HTMLElement>("[data-focus-key]") ?? [])
-      .find((element) => !element.closest("[hidden]") && element.dataset.focusKey === focusedControlKey);
+      .find((element) => !element.closest("[hidden], [inert]") && element.dataset.focusKey === focusedControlKey);
     if (target) target.focus();
   }, [busy, focusRestoreRevision, snapshot]);
 
@@ -293,7 +293,7 @@ export function LeftDock({
   const onNavKeyDown = useCallback((event: React.KeyboardEvent<HTMLElement>) => {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     const rows = Array.from(navRef.current?.querySelectorAll<HTMLButtonElement>("button.session-row") ?? [])
-      .filter((row) => !row.closest("[hidden]"));
+      .filter((row) => !row.closest("[hidden], [inert]"));
     if (rows.length === 0) return;
     const activeIndex = rows.findIndex((row) => row === document.activeElement);
     const nextIndex = nextSessionFocusIndex(rows.length, activeIndex, event.key === "ArrowDown" ? 1 : -1);
@@ -375,7 +375,7 @@ export function LeftDock({
         <input type="search" value={query} onChange={(event) => setQuery(event.currentTarget.value)} onKeyDown={(event) => { if (event.key === "Enter") resolveSearch(); }} aria-label="Search Projects and Sessions" placeholder="Search Projects and Sessions" />
       </div>
       <nav ref={navRef} className="project-list" aria-label="Project navigation" onKeyDown={onNavKeyDown}>
-        <div data-project-browse hidden={searching}>
+        <div data-project-browse data-search-hidden={searching ? "true" : "false"} aria-hidden={searching} inert={searching ? true : undefined}>
           {browseProjectGroups}
         </div>
         {searching && <div data-project-search-results>
