@@ -332,6 +332,65 @@ fn t155_observer_attach_and_controller_transition_keep_exact_runtime_and_queue_i
 }
 
 #[test]
+fn t155_attach_accepts_exact_replay_event_before_correlated_attach_response() {
+    let owner_generation = generation(12);
+    let client_id = connection("attach-replay-client");
+    let runtime_id = runtime(12);
+    let early_output = event(
+        &client_id,
+        owner_generation,
+        Some(runtime_id),
+        102,
+        ProtocolPayload::OutputEvent {
+            chunk: b"early-replay".to_vec(),
+        },
+    );
+    let (wire, _) = ScriptedWire::new(vec![
+        Ok(hello_ack(owner_generation, &client_id)),
+        Ok(early_output),
+        Ok(snapshot_response(
+            owner_generation,
+            &client_id,
+            runtime_id,
+            2,
+            103,
+        )),
+    ]);
+    let mut client =
+        RustLocalControlClient::connect_with_wire_for_test(Box::new(wire), Some(owner_generation))
+            .unwrap();
+    let target = ResolvedRuntimeTarget::exact(runtime_id);
+
+    client.attach_observer(target).unwrap();
+    assert!(matches!(
+        client.pop_event().unwrap(),
+        Some(ClientEventProjection::Output {
+            runtime_namespace_id,
+            chunk,
+        }) if runtime_namespace_id == runtime_id && chunk == b"early-replay"
+    ));
+}
+
+#[test]
+fn t155_failed_attach_rolls_back_provisional_event_authority() {
+    let owner_generation = generation(13);
+    let client_id = connection("failed-attach-client");
+    let runtime_id = runtime(13);
+    let (wire, _) = ScriptedWire::new(vec![
+        Ok(hello_ack(owner_generation, &client_id)),
+        Err(WireError::Transport("attach connection lost".to_owned())),
+    ]);
+    let mut client =
+        RustLocalControlClient::connect_with_wire_for_test(Box::new(wire), Some(owner_generation))
+            .unwrap();
+
+    assert!(client
+        .attach_observer(ResolvedRuntimeTarget::exact(runtime_id))
+        .is_err());
+    assert!(!client.attached_runtimes.contains(&runtime_id));
+}
+
+#[test]
 fn t155_lost_mutation_response_becomes_outcome_unknown_until_same_generation_reconciliation() {
     let owner_generation = generation(6);
     let runtime_id = runtime(6);
