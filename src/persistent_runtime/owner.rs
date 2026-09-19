@@ -427,7 +427,7 @@ struct OwnerSingleton {
 #[cfg(windows)]
 impl OwnerSingleton {
     fn acquire(home: &Path) -> OwnerResult<Self> {
-        use crate::persistent_runtime::peer::windows::{
+        use crate::persistent_runtime::peer::{
             current_process_user_sid, validate_pipe_owner_and_dacl,
         };
         use std::ffi::c_void;
