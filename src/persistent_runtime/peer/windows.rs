@@ -106,8 +106,11 @@ impl WindowsUserSid {
     pub(crate) fn to_sddl_string(&self) -> Result<String, WindowsTransportError> {
         let mut raw: PWSTR = null_mut();
         // SAFETY: self contains a valid copied SID and raw is a writable output pointer.
-        if unsafe { ConvertSidToStringSidW(self.as_psid(), &mut raw) } == 0 || raw.is_null() {
-            return Err(WindowsTransportError::Win32(unsafe { GetLastError() }));
+        if unsafe { ConvertSidToStringSidW(self.as_psid(), &mut raw) } == 0 {
+            return Err(last_error());
+        }
+        if raw.is_null() {
+            return Err(WindowsTransportError::PrincipalProofUnavailable);
         }
         let allocation = LocalAllocation(raw.cast());
         let mut units = Vec::new();
@@ -125,9 +128,13 @@ impl WindowsUserSid {
     }
 }
 
-fn last_error() -> WindowsTransportError {
+fn last_error_code() -> u32 {
     // SAFETY: GetLastError has no preconditions and reads thread-local error state.
-    WindowsTransportError::Win32(unsafe { GetLastError() })
+    unsafe { GetLastError() }
+}
+
+fn last_error() -> WindowsTransportError {
+    WindowsTransportError::Win32(last_error_code())
 }
 
 fn token_user_sid(token: HANDLE) -> Result<WindowsUserSid, WindowsTransportError> {
@@ -135,7 +142,7 @@ fn token_user_sid(token: HANDLE) -> Result<WindowsUserSid, WindowsTransportError
     // SAFETY: null buffer with zero length is the documented sizing call.
     let first = unsafe { GetTokenInformation(token, TokenUser, null_mut(), 0, &mut required) };
     if first != 0
-        || unsafe { GetLastError() } != ERROR_INSUFFICIENT_BUFFER
+        || last_error_code() != ERROR_INSUFFICIENT_BUFFER
         || required < size_of::<TOKEN_USER>() as u32
         || required > MAX_TOKEN_USER_BYTES
     {
@@ -165,10 +172,11 @@ fn token_user_sid(token: HANDLE) -> Result<WindowsUserSid, WindowsTransportError
 pub(crate) fn current_process_user_sid() -> Result<WindowsUserSid, WindowsTransportError> {
     let mut token: HANDLE = null_mut();
     // SAFETY: GetCurrentProcess returns a pseudo-handle valid for OpenProcessToken.
-    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0
-        || token.is_null()
-    {
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
         return Err(last_error());
+    }
+    if token.is_null() {
+        return Err(WindowsTransportError::PrincipalProofUnavailable);
     }
     let token = OwnedHandle(token);
     token_user_sid(token.0)
@@ -177,10 +185,11 @@ pub(crate) fn current_process_user_sid() -> Result<WindowsUserSid, WindowsTransp
 fn current_thread_user_sid() -> Result<WindowsUserSid, WindowsTransportError> {
     let mut token: HANDLE = null_mut();
     // SAFETY: after named-pipe impersonation, the current thread has an impersonation token.
-    if unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &mut token) } == 0
-        || token.is_null()
-    {
+    if unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &mut token) } == 0 {
         return Err(last_error());
+    }
+    if token.is_null() {
+        return Err(WindowsTransportError::PrincipalProofUnavailable);
     }
     let token = OwnedHandle(token);
     token_user_sid(token.0)
@@ -228,8 +237,11 @@ pub(crate) fn validate_pipe_owner_and_dacl(
             &mut descriptor,
         )
     };
-    if status != ERROR_SUCCESS || descriptor.is_null() {
+    if status != ERROR_SUCCESS {
         return Err(WindowsTransportError::Win32(status));
+    }
+    if descriptor.is_null() {
+        return Err(WindowsTransportError::EffectiveSecurityMismatch);
     }
     let _allocation = LocalAllocation(descriptor);
     if !expected.matches(owner) || dacl.is_null() {
