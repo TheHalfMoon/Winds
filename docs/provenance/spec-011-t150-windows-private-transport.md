@@ -20,6 +20,7 @@ Direct dependency: `windows-sys = 0.61.2` under `cfg(windows)` only.
 - generated parent features (`Win32`, `Win32_Foundation`, `Win32_Security`, `Win32_Storage`, `Win32_System`) are implied by those child features; T150 does not name redundant parent/umbrella features directly;
 - pre-existing `serial2 -> portable-pty` feature unification already activates `Win32_Devices_Communication`, `Win32_System_Registry`, and `Win32_System_WindowsProgramming`; T150 does not introduce those features and does not use them;
 - no second Windows abstraction crate;
+- the existing Tauri host lockfile () records the root path package dependency edge and therefore receives exactly one derived  dependency reference; no desktop package entry, version, checksum, or feature package is added or changed;
 - removal path: remove the target-specific dependency and T150 Windows modules if the named-pipe seam is replaced by a separately accepted implementation.
 
 The feature set is derived from compiled calls only: named-pipe create/connect/disconnect, synchronous file I/O, current-process/thread token SID inspection, SDDL conversion/effective DACL inspection, anonymous/named-pipe impersonation, and `BCryptGenRandom`.
