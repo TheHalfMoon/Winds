@@ -51,18 +51,18 @@ impl fmt::Display for PersistentTerminalRuntimeError {
 
 impl Error for PersistentTerminalRuntimeError {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PersistentTerminalAttachment {
     runtime_namespace_id: RuntimeNamespaceId,
     owner_generation_id: OwnerGenerationId,
 }
 
 impl PersistentTerminalAttachment {
-    pub(crate) fn runtime_namespace_id(self) -> RuntimeNamespaceId {
+    pub(crate) fn runtime_namespace_id(&self) -> RuntimeNamespaceId {
         self.runtime_namespace_id
     }
 
-    pub(crate) fn owner_generation_id(self) -> OwnerGenerationId {
+    pub(crate) fn owner_generation_id(&self) -> OwnerGenerationId {
         self.owner_generation_id
     }
 }
