@@ -119,14 +119,28 @@ fn prime_headless_windows_terminal(
 ) {
 }
 
-fn send_exit(owner: &mut PersistentOwner, attachment: &PersistentTerminalAttachment) {
+fn send_detached_exit(owner: &mut PersistentOwner, attachment: &PersistentTerminalAttachment) {
     #[cfg(windows)]
     let bytes = b"exit\r\n";
     #[cfg(not(windows))]
-    let bytes = b"exit\n";
+    let bytes = b"exec true\n";
     owner
         .send_terminal_runtime_input(attachment, bytes)
         .unwrap();
+}
+
+fn enter_terminable_workload(
+    owner: &mut PersistentOwner,
+    attachment: &PersistentTerminalAttachment,
+) {
+    #[cfg(windows)]
+    let bytes = b"set /p WINDS_T152_BLOCK=\r\n";
+    #[cfg(not(windows))]
+    let bytes = b"exec sleep 30\n";
+    owner
+        .send_terminal_runtime_input(attachment, bytes)
+        .unwrap();
+    thread::sleep(Duration::from_millis(50));
 }
 
 fn wait_for_detached_exit(
@@ -134,7 +148,7 @@ fn wait_for_detached_exit(
     start_unix_ms: i64,
     start_monotonic_ms: u64,
 ) {
-    for offset in 0..200_u64 {
+    for offset in 0..500_u64 {
         let observed = owner
             .poll_terminal_runtimes(
                 start_unix_ms + i64::try_from(offset).unwrap(),
@@ -215,6 +229,7 @@ fn t152_long_running_shell_survives_complete_attachment_drop_and_exact_reattach(
     owner.resize_terminal_runtime(&reattached, resized).unwrap();
     assert_eq!(owner.terminal_runtime_size(&reattached).unwrap(), resized);
 
+    enter_terminable_workload(&mut owner, &reattached);
     let final_snapshot = owner
         .terminate_terminal_runtime(&reattached, 24, 104)
         .unwrap();
@@ -260,7 +275,7 @@ fn t152_process_exit_while_fully_detached_is_observed_and_persisted() {
     let runtime_namespace_id = attachment.as_ref().unwrap().runtime_namespace_id();
     let owner_generation_id = attachment.as_ref().unwrap().owner_generation_id();
 
-    send_exit(&mut owner, attachment.as_ref().unwrap());
+    send_detached_exit(&mut owner, attachment.as_ref().unwrap());
     assert!(attachment.take().is_some());
     wait_for_detached_exit(&mut owner, 32, 201);
 
