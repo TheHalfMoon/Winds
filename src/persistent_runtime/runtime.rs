@@ -149,7 +149,7 @@ pub(crate) struct PersistentTerminalRegistry {
 impl PersistentTerminalRegistry {
     pub(crate) fn new(owner_generation_id: OwnerGenerationId) -> Self {
         Self {
-            owner_generation_id: self.owner_generation_id,
+            owner_generation_id,
             runtimes: HashMap::new(),
         }
     }
