@@ -352,6 +352,21 @@ impl ControllerRegistry {
         })
     }
 
+    pub(crate) fn active_runtime_ids(
+        &self,
+        now_monotonic_ms: u64,
+    ) -> ControllerResult<Vec<RuntimeNamespaceId>> {
+        let mut runtime_ids = Vec::new();
+        for (runtime_namespace_id, state) in &self.runtimes {
+            if let Some(lease) = &state.lease
+                && !lease.is_expired(now_monotonic_ms)?
+            {
+                runtime_ids.push(*runtime_namespace_id);
+            }
+        }
+        Ok(runtime_ids)
+    }
+
     pub(crate) fn active_lease(
         &self,
         runtime_namespace_id: RuntimeNamespaceId,
