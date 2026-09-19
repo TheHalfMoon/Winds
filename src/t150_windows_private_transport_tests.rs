@@ -103,7 +103,7 @@ fn t150_same_generation_collision_and_wrong_generation_fail_closed() {
         WindowsTransportError::PipeNameCollision
     );
     assert_eq!(
-        WindowsNamedPipeClient::connect(generation(6))
+        WindowsNamedPipeClient::connect(generation(7))
             .err()
             .unwrap(),
         WindowsTransportError::ExpectedGenerationUnavailable
