@@ -150,6 +150,12 @@ fn run() -> Result<()> {
         return workbench::run_cli(raw_args);
     }
     let flags = parse_flags(raw_args)?;
+    if command == persistent_runtime::owner::INTERNAL_OWNER_COMMAND {
+        ensure_allowed_flags(&flags, &["home"])?;
+        let home = required(&flags, "home")?;
+        return persistent_runtime::owner::run_internal_owner(Path::new(home))
+            .map_err(|error| error.to_string().into());
+    }
     match command.as_str() {
         "verify" => verify(flags),
         "promote" => promote(flags),
