@@ -197,7 +197,7 @@ impl PlatformWire {
         _expected_owner_generation_id: Option<OwnerGenerationId>,
     ) -> ClientResult<Self> {
         let stream = crate::persistent_runtime::transport::unix::connect_default_same_user()
-            .map_err(|error| LocalControlClientError::Transport(error.to_string()))?;
+            .map_err(|error| LocalControlClientError::Transport(format!("{error:?}")))?;
         Ok(Self { stream })
     }
 
@@ -205,7 +205,7 @@ impl PlatformWire {
     fn connect_runtime_directory(runtime_directory: &std::path::Path) -> ClientResult<Self> {
         let stream =
             crate::persistent_runtime::transport::unix::connect_same_user(runtime_directory)
-                .map_err(|error| LocalControlClientError::Transport(error.to_string()))?;
+                .map_err(|error| LocalControlClientError::Transport(format!("{error:?}")))?;
         Ok(Self { stream })
     }
 }
@@ -260,7 +260,7 @@ impl PlatformWire {
             crate::persistent_runtime::transport::windows::WindowsNamedPipeClient::connect(
                 expected,
             )
-            .map_err(|error| LocalControlClientError::Transport(error.to_string()))?;
+            .map_err(|error| LocalControlClientError::Transport(format!("{error:?}")))?;
         Ok(Self { client })
     }
 }
