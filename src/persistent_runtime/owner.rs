@@ -1,6 +1,10 @@
 use crate::git::shell_profiles::ShellProfile;
 use crate::git::terminal::TerminalSize;
-use crate::persistent_runtime::domain::{OwnerGenerationId, RuntimeAlias, RuntimeNamespaceId};
+use crate::persistent_runtime::domain::{
+    ClientConnectionId, OwnerGenerationId, RuntimeAlias, RuntimeNamespaceId,
+};
+use crate::persistent_runtime::protocol::ProtocolMessage;
+use crate::persistent_runtime::replay::ObserverHandle;
 use crate::persistent_runtime::runtime::{
     PersistentTerminalAttachment, PersistentTerminalRegistry, PersistentTerminalSnapshot,
 };
@@ -420,6 +424,40 @@ impl PersistentOwner {
 
     pub(crate) fn live_terminal_runtime_count(&self) -> usize {
         self.runtime_registry.live_count()
+    }
+
+    pub(crate) fn attach_terminal_observer(
+        &mut self,
+        connection_id: ClientConnectionId,
+        runtime_namespace_id: RuntimeNamespaceId,
+    ) -> OwnerResult<ObserverHandle> {
+        self.runtime_registry
+            .attach_observer(connection_id, runtime_namespace_id)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))
+    }
+
+    pub(crate) fn fill_terminal_observer_queue(
+        &mut self,
+        handle: &ObserverHandle,
+    ) -> OwnerResult<usize> {
+        self.runtime_registry
+            .fill_observer_queue(handle)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))
+    }
+
+    pub(crate) fn drain_terminal_observer(
+        &mut self,
+        handle: &ObserverHandle,
+    ) -> OwnerResult<Vec<ProtocolMessage>> {
+        self.runtime_registry
+            .drain_observer(handle)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))
+    }
+
+    pub(crate) fn detach_terminal_observer(&mut self, handle: &ObserverHandle) -> OwnerResult<()> {
+        self.runtime_registry
+            .detach_observer(handle)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))
     }
 
     fn sync_runtime_activity(&mut self, now_monotonic_ms: u64) {
