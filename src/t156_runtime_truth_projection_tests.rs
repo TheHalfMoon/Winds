@@ -484,3 +484,37 @@ fn t156_desktop_projection_is_bounded_typed_data_without_generic_connected_or_au
     assert!(!text.contains("ACCEPTED"));
     assert!(text.len() < 4096);
 }
+
+#[test]
+fn t156_cli_workbench_and_desktop_host_adapters_share_exact_truth_projection() {
+    let runtime_id = runtime(19);
+    let projection = project_runtime_truth(&input(
+        runtime_id,
+        truth(
+            OwnershipState::LiveOwned,
+            ProcessLiveness::Running,
+            ContinuityClass::RetainedLiveProcess,
+        ),
+        RuntimeTruthSource::WindsObserved,
+    ));
+
+    let cli_value = crate::cli_workspace::persistent_runtime_truth_value(&projection).unwrap();
+    let workbench = crate::workbench::context::persistent_runtime_truth_projection(&projection);
+    let desktop = crate::desktop::desktop_bridge_persistent_runtime_truth(project_desktop_runtime(
+        &projection,
+    ));
+
+    let runtime_id_text = runtime_id.to_string();
+    assert_eq!(
+        cli_value["runtimeNamespaceId"].as_str(),
+        Some(runtime_id_text.as_str())
+    );
+    assert_eq!(cli_value["continuity"], "LIVE_RETAINED_PROCESS");
+    assert_eq!(cli_value["authority"], "OBSERVER");
+    assert_eq!(workbench.immutable_runtime_id, runtime_id.to_string());
+    assert_eq!(workbench.headline, "Live retained process");
+    assert_eq!(workbench.authority, "OBSERVER");
+    assert_eq!(desktop.runtime_namespace_id, runtime_id.to_string());
+    assert_eq!(desktop.continuity, "LIVE_RETAINED_PROCESS");
+    assert_eq!(desktop.authority, "OBSERVER");
+}

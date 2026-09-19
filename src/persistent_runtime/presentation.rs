@@ -331,7 +331,8 @@ pub(crate) fn project_runtime_truth(input: &RuntimePresentationInput) -> Runtime
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct CliRuntimeProjection {
     pub(crate) runtime_namespace_id: String,
     pub(crate) display_alias: Option<String>,

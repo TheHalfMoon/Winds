@@ -3,7 +3,17 @@ use crate::domain::{
     VerificationEvidenceReference,
 };
 use crate::git::Repo;
+use crate::persistent_runtime::presentation::{
+    RuntimeTruthProjection as PersistentRuntimeTruthProjection, WorkbenchRuntimeProjection,
+    project_workbench_runtime,
+};
 use crate::store::Store;
+
+pub(crate) fn persistent_runtime_truth_projection(
+    projection: &PersistentRuntimeTruthProjection,
+) -> WorkbenchRuntimeProjection {
+    project_workbench_runtime(projection)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AgentProgressProjection {
