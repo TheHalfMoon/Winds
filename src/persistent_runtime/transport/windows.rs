@@ -31,6 +31,7 @@ const MAX_PIPE_NAME_UTF16_UNITS: usize = 240;
 const MAX_SECURITY_DESCRIPTOR_UTF16_UNITS: usize = 1024;
 const PIPE_BUFFER_BYTES: u32 = 64 * 1024;
 const IDENTITY_ENTROPY_BYTES: usize = 16;
+const PEER_PROOF_MARKER: [u8; 4] = *b"WNP1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WindowsTransportError {
@@ -45,6 +46,7 @@ pub(crate) enum WindowsTransportError {
     EffectiveSecurityMismatch,
     SecurityDescriptorUnavailable,
     ImpersonationRevertFailed,
+    PeerProofMarkerMismatch,
     EntropyUnavailable,
     EntropyShortRead,
     EntropyInvalid,
@@ -238,6 +240,17 @@ impl WindowsNamedPipeServer {
                 return Err(WindowsTransportError::Win32(error));
             }
         }
+        let mut marker = [0_u8; PEER_PROOF_MARKER.len()];
+        if let Err(error) = read_exact_handle(self.handle.raw(), &mut marker) {
+            // SAFETY: a client is connected at this point; disconnect is best-effort on failure.
+            let _ = unsafe { DisconnectNamedPipe(self.handle.raw()) };
+            return Err(error);
+        }
+        if marker != PEER_PROOF_MARKER {
+            // SAFETY: a client is connected at this point; disconnect is best-effort on refusal.
+            let _ = unsafe { DisconnectNamedPipe(self.handle.raw()) };
+            return Err(WindowsTransportError::PeerProofMarkerMismatch);
+        }
         if let Err(error) = require_same_user_named_pipe_client(self.handle.raw(), &self.user_sid) {
             // SAFETY: a client is connected at this point; disconnect is best-effort on denial.
             let _ = unsafe { DisconnectNamedPipe(self.handle.raw()) };
@@ -276,31 +289,43 @@ pub(crate) struct WindowsNamedPipeClient {
     pipe_name: String,
 }
 
+fn open_exact_pipe_name(pipe_name: &str) -> Result<OwnedPipeHandle, WindowsTransportError> {
+    let pipe_name_wide = pipe_name_wide_nul(pipe_name)?;
+    // SAFETY: name is NUL-terminated; null security/template pointers are permitted for CreateFileW.
+    let handle = unsafe {
+        CreateFileW(
+            pipe_name_wide.as_ptr(),
+            GENERIC_READ | GENERIC_WRITE | READ_CONTROL,
+            0,
+            null(),
+            OPEN_EXISTING,
+            0,
+            null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE || handle.is_null() {
+        return Err(map_client_connect_error(last_error_code()));
+    }
+    OwnedPipeHandle::new(handle)
+}
+
+#[cfg(test)]
+pub(crate) fn test_connect_exact_pipe_name(pipe_name: &str) -> Result<(), WindowsTransportError> {
+    let _handle = open_exact_pipe_name(pipe_name)?;
+    Ok(())
+}
+
 impl WindowsNamedPipeClient {
     pub(crate) fn connect(
         expected_owner_generation_id: OwnerGenerationId,
     ) -> Result<Self, WindowsTransportError> {
         let user_sid = current_process_user_sid()?;
         let pipe_name = pipe_name_for_generation(&user_sid, expected_owner_generation_id)?;
-        let pipe_name_wide = pipe_name_wide_nul(&pipe_name)?;
-        // SAFETY: name is NUL-terminated; null security/template pointers are permitted for CreateFileW.
-        let handle = unsafe {
-            CreateFileW(
-                pipe_name_wide.as_ptr(),
-                GENERIC_READ | GENERIC_WRITE | READ_CONTROL,
-                0,
-                null(),
-                OPEN_EXISTING,
-                0,
-                null_mut(),
-            )
-        };
-        if handle == INVALID_HANDLE_VALUE || handle.is_null() {
-            return Err(map_client_connect_error(last_error_code()));
-        }
-        let handle = OwnedPipeHandle::new(handle)?;
+        let handle = open_exact_pipe_name(&pipe_name)?;
         validate_pipe_owner_and_dacl(handle.raw(), &user_sid)?;
-        Ok(Self { handle, pipe_name })
+        let client = Self { handle, pipe_name };
+        client.write_all(&PEER_PROOF_MARKER)?;
+        Ok(client)
     }
 
     pub(crate) fn pipe_name(&self) -> &str {

@@ -1,6 +1,7 @@
 use super::{
     WindowsNamedPipeClient, WindowsNamedPipeServer, WindowsTransportError, entropy_128_with,
     generate_owner_generation_id, generate_runtime_namespace_id, pipe_name_for_generation,
+    test_connect_exact_pipe_name,
 };
 use crate::persistent_runtime::domain::OwnerGenerationId;
 use crate::persistent_runtime::peer::current_process_user_sid;
@@ -72,10 +73,11 @@ fn t150_effective_dacl_same_user_round_trip_and_peer_sid_proof_succeed() {
 #[test]
 fn t150_anonymous_principal_is_denied_by_the_actual_pipe_dacl() {
     let generation = generation(4);
-    let _server = WindowsNamedPipeServer::bind(generation).unwrap();
+    let server = WindowsNamedPipeServer::bind(generation).unwrap();
+    let pipe_name = server.pipe_name().to_owned();
     let _anonymous = AnonymousImpersonation::begin();
     assert_eq!(
-        WindowsNamedPipeClient::connect(generation).err().unwrap(),
+        test_connect_exact_pipe_name(&pipe_name).unwrap_err(),
         WindowsTransportError::PrincipalDenied
     );
 }

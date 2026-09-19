@@ -31,7 +31,7 @@ The endpoint is a native local named pipe only. The deterministic name binds can
 
 The security descriptor is explicit SDDL with a protected DACL containing exactly one file-object `FILE_ALL_ACCESS` allow ACE for the current accepted user SID. No Everyone, Authenticated Users, Administrators, or default permissive DACL is admitted. The created kernel object's effective owner/DACL are read back and validated before use.
 
-On server accept, `ImpersonateNamedPipeClient` plus the thread token's `TokenUser` SID proves the connected client is the same accepted user before the connection is admitted. `RevertToSelf` failure is a hard error.
+On server accept, the transport consumes one fixed four-byte `WNP1` proof marker before calling `ImpersonateNamedPipeClient`, because Windows impersonates the security context of the last message read from the pipe. The marker is transport-only, is never surfaced to the versioned protocol, and grants no authority. After that read, `ImpersonateNamedPipeClient` plus the thread token's `TokenUser` SID proves the connected client is the same accepted user before the connection is admitted. `RevertToSelf` failure is a hard error.
 
 Official-Windows tests also impersonate the anonymous principal and prove `CreateFileW` is denied by the actual pipe DACL. This is direct denial evidence for a non-accepted principal without claiming arbitrary cross-account administration capabilities on the hosted runner.
 
