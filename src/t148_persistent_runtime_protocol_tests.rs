@@ -795,6 +795,27 @@ fn t148_lost_mutation_response_becomes_outcome_unknown_until_state_reconciliatio
         },
     );
     tracker.begin(&third).unwrap();
+    let explicit_unknown = ProtocolMessage::new(
+        connection("client-a"),
+        sequence(34),
+        Some(runtime),
+        generation(2),
+        Some(sequence(33)),
+        ProtocolPayload::Error {
+            kind: LocalControlErrorKind::OutcomeUnknown,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        tracker.acknowledge(&explicit_unknown).unwrap_err(),
+        LocalControlErrorKind::OutcomeUnknown
+    );
+    assert!(tracker.is_outcome_unknown());
+    let fourth = client_message(35, Some(runtime), ProtocolPayload::Stop);
+    assert_eq!(
+        tracker.begin(&fourth).unwrap_err(),
+        LocalControlErrorKind::OutcomeUnknown
+    );
 }
 
 #[test]

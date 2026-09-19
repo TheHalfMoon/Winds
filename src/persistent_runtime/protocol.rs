@@ -911,6 +911,17 @@ impl MutationOutcomeTracker {
         if response.runtime_namespace_id != Some(pending.runtime_namespace_id) {
             return Err(LocalControlErrorKind::UnknownRuntime);
         }
+        if matches!(
+            response.payload,
+            ProtocolPayload::Error {
+                kind: LocalControlErrorKind::OutcomeUnknown
+            }
+        ) {
+            let runtime_namespace_id = pending.runtime_namespace_id;
+            self.pending = None;
+            self.uncertain_runtime_namespace_id = Some(runtime_namespace_id);
+            return Err(LocalControlErrorKind::OutcomeUnknown);
+        }
         self.pending = None;
         Ok(())
     }
