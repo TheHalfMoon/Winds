@@ -344,14 +344,18 @@ impl RustLocalControlClient {
         target: ResolvedRuntimeTarget,
     ) -> ClientResult<ClientResponseProjection> {
         let runtime_namespace_id = target.runtime_namespace_id();
-        let (_, response) = self.transact(
-            Some(runtime_namespace_id),
-            ProtocolPayload::AttachObserver,
-            false,
-        )?;
-        let projection = project_response(&response)?;
-        self.attached_runtimes.insert(runtime_namespace_id);
-        Ok(projection)
+        let was_attached = self.attached_runtimes.insert(runtime_namespace_id);
+        let result = self
+            .transact(
+                Some(runtime_namespace_id),
+                ProtocolPayload::AttachObserver,
+                false,
+            )
+            .and_then(|(_, response)| project_response(&response));
+        if result.is_err() && !was_attached {
+            self.attached_runtimes.remove(&runtime_namespace_id);
+        }
+        result
     }
 
     pub(crate) fn detach_observer(
@@ -416,16 +420,22 @@ impl RustLocalControlClient {
         target: ResolvedRuntimeTarget,
     ) -> ClientResult<ClientResponseProjection> {
         let runtime_namespace_id = target.runtime_namespace_id();
-        let (request, response) = self.transact(
-            Some(runtime_namespace_id),
-            ProtocolPayload::AttachObserver,
-            false,
-        )?;
-        self.mutation_outcomes
-            .reconcile_state(&request, &response)
-            .map_err(map_protocol_error)?;
-        self.attached_runtimes.insert(runtime_namespace_id);
-        project_response(&response)
+        let was_attached = self.attached_runtimes.insert(runtime_namespace_id);
+        let result = (|| {
+            let (request, response) = self.transact(
+                Some(runtime_namespace_id),
+                ProtocolPayload::AttachObserver,
+                false,
+            )?;
+            self.mutation_outcomes
+                .reconcile_state(&request, &response)
+                .map_err(map_protocol_error)?;
+            project_response(&response)
+        })();
+        if result.is_err() && !was_attached {
+            self.attached_runtimes.remove(&runtime_namespace_id);
+        }
+        result
     }
 
     pub(crate) fn pop_event(&mut self) -> ClientResult<Option<ClientEventProjection>> {
