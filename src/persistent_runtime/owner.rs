@@ -207,7 +207,7 @@ impl PersistentOwner {
             reconciled_runtime_count,
             ready_unix_ms: now_unix_ms,
             startup_phase: OwnerStartupPhase::Ready,
-            runtime_registry: PersistentTerminalRegistry::new(),
+            runtime_registry: PersistentTerminalRegistry::new(generation_id),
         })
     }
 
@@ -238,7 +238,7 @@ impl PersistentOwner {
             reconciled_runtime_count,
             ready_unix_ms: now_unix_ms,
             startup_phase: OwnerStartupPhase::Ready,
-            runtime_registry: PersistentTerminalRegistry::new(),
+            runtime_registry: PersistentTerminalRegistry::new(generation_id),
         })
     }
 
@@ -284,7 +284,6 @@ impl PersistentOwner {
             .runtime_registry
             .start_shell(
                 &self.store,
-                self.generation_id,
                 runtime_alias,
                 profile,
                 cwd,
@@ -309,7 +308,6 @@ impl PersistentOwner {
                 &self.store,
                 runtime_namespace_id,
                 expected_owner_generation_id,
-                self.generation_id,
                 now_unix_ms,
             )
             .map_err(|error| OwnerError::Runtime(error.to_string()))?;
@@ -325,7 +323,7 @@ impl PersistentOwner {
     ) -> OwnerResult<PersistentTerminalSnapshot> {
         let snapshot = self
             .runtime_registry
-            .snapshot(&self.store, attachment, self.generation_id, now_unix_ms)
+            .snapshot(&self.store, attachment, now_unix_ms)
             .map_err(|error| OwnerError::Runtime(error.to_string()))?;
         self.sync_runtime_activity(now_monotonic_ms);
         Ok(snapshot)
@@ -337,7 +335,7 @@ impl PersistentOwner {
         bytes: &[u8],
     ) -> OwnerResult<()> {
         self.runtime_registry
-            .send_input(attachment, self.generation_id, bytes)
+            .send_input(attachment, bytes)
             .map_err(|error| OwnerError::Runtime(error.to_string()))
     }
 
@@ -347,7 +345,7 @@ impl PersistentOwner {
         buffer: &mut [u8],
     ) -> OwnerResult<usize> {
         self.runtime_registry
-            .read_output(attachment, self.generation_id, buffer)
+            .read_output(attachment, buffer)
             .map_err(|error| OwnerError::Runtime(error.to_string()))
     }
 
@@ -357,7 +355,7 @@ impl PersistentOwner {
         terminal_size: TerminalSize,
     ) -> OwnerResult<()> {
         self.runtime_registry
-            .resize(attachment, self.generation_id, terminal_size)
+            .resize(attachment, terminal_size)
             .map_err(|error| OwnerError::Runtime(error.to_string()))
     }
 
@@ -366,7 +364,7 @@ impl PersistentOwner {
         attachment: &PersistentTerminalAttachment,
     ) -> OwnerResult<TerminalSize> {
         self.runtime_registry
-            .current_size(attachment, self.generation_id)
+            .current_size(attachment)
             .map_err(|error| OwnerError::Runtime(error.to_string()))
     }
 
@@ -375,7 +373,7 @@ impl PersistentOwner {
         attachment: &PersistentTerminalAttachment,
     ) -> OwnerResult<()> {
         self.runtime_registry
-            .interrupt(attachment, self.generation_id)
+            .interrupt(attachment)
             .map_err(|error| OwnerError::Runtime(error.to_string()))
     }
 
@@ -387,7 +385,7 @@ impl PersistentOwner {
     ) -> OwnerResult<PersistentTerminalSnapshot> {
         let snapshot = self
             .runtime_registry
-            .terminate(&self.store, attachment, self.generation_id, now_unix_ms)
+            .terminate(&self.store, attachment, now_unix_ms)
             .map_err(|error| OwnerError::Runtime(error.to_string()))?;
         self.sync_runtime_activity(now_monotonic_ms);
         Ok(snapshot)
@@ -401,7 +399,7 @@ impl PersistentOwner {
     ) -> OwnerResult<PersistentTerminalSnapshot> {
         let snapshot = self
             .runtime_registry
-            .close(&self.store, attachment, self.generation_id, now_unix_ms)
+            .close(&self.store, attachment, now_unix_ms)
             .map_err(|error| OwnerError::Runtime(error.to_string()))?;
         self.sync_runtime_activity(now_monotonic_ms);
         Ok(snapshot)
@@ -414,7 +412,7 @@ impl PersistentOwner {
     ) -> OwnerResult<usize> {
         let observed = self
             .runtime_registry
-            .poll_exits(&self.store, self.generation_id, now_unix_ms)
+            .poll_exits(&self.store, now_unix_ms)
             .map_err(|error| OwnerError::Runtime(error.to_string()))?;
         self.sync_runtime_activity(now_monotonic_ms);
         Ok(observed)
