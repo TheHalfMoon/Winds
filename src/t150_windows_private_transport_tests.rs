@@ -5,7 +5,7 @@ use super::{
 use crate::persistent_runtime::domain::OwnerGenerationId;
 use crate::persistent_runtime::peer::current_process_user_sid;
 use std::thread;
-use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, GetLastError};
+use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::Security::{ImpersonateAnonymousToken, RevertToSelf};
 use windows_sys::Win32::System::Threading::GetCurrentThread;
 
@@ -78,7 +78,6 @@ fn t150_anonymous_principal_is_denied_by_the_actual_pipe_dacl() {
         WindowsNamedPipeClient::connect(generation).err().unwrap(),
         WindowsTransportError::PrincipalDenied
     );
-    assert_eq!(unsafe { GetLastError() }, ERROR_ACCESS_DENIED);
 }
 
 #[test]

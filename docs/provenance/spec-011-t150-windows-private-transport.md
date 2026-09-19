@@ -16,8 +16,8 @@ Direct dependency: `windows-sys = 0.61.2` under `cfg(windows)` only.
 - crate-declared MSRV: Rust 1.71, below Winds Rust 1.97.1;
 - package graph impact: the package already existed transitively; direct admission adds only the Winds root edge and retains its existing `windows-link` dependency;
 - direct dependency uses `default-features = false`;
-- exact direct features: `Win32_Foundation`, `Win32_Security`, `Win32_Security_Authorization`, `Win32_Security_Cryptography`, `Win32_Storage_FileSystem`, `Win32_System_IO`, `Win32_System_Pipes`, `Win32_System_Threading`;
-- generated parent features (`Win32`, `Win32_Storage`, `Win32_System`) are implied by those child features; T150 does not name a broad umbrella feature directly;
+- exact direct features: `Win32_Security_Authorization`, `Win32_Security_Cryptography`, `Win32_Storage_FileSystem`, `Win32_System_IO`, `Win32_System_Pipes`, `Win32_System_Threading`;
+- generated parent features (`Win32`, `Win32_Foundation`, `Win32_Security`, `Win32_Storage`, `Win32_System`) are implied by those child features; T150 does not name redundant parent/umbrella features directly;
 - pre-existing `serial2 -> portable-pty` feature unification already activates `Win32_Devices_Communication`, `Win32_System_Registry`, and `Win32_System_WindowsProgramming`; T150 does not introduce those features and does not use them;
 - no second Windows abstraction crate;
 - removal path: remove the target-specific dependency and T150 Windows modules if the named-pipe seam is replaced by a separately accepted implementation.
