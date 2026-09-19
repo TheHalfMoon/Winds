@@ -141,14 +141,17 @@ impl OwnedTerminalRuntime {
     }
 }
 
-#[derive(Default)]
 pub(crate) struct PersistentTerminalRegistry {
+    owner_generation_id: OwnerGenerationId,
     runtimes: HashMap<RuntimeNamespaceId, OwnedTerminalRuntime>,
 }
 
 impl PersistentTerminalRegistry {
-    pub(crate) fn new() -> Self {
-        Self::default()
+    pub(crate) fn new(owner_generation_id: OwnerGenerationId) -> Self {
+        Self {
+            owner_generation_id: self.owner_generation_id,
+            runtimes: HashMap::new(),
+        }
     }
 
     pub(crate) fn live_count(&self) -> usize {
@@ -161,7 +164,6 @@ impl PersistentTerminalRegistry {
     pub(crate) fn start_shell(
         &mut self,
         store: &Store,
-        owner_generation_id: OwnerGenerationId,
         runtime_alias: RuntimeAlias,
         profile: &ShellProfile,
         cwd: &Path,
@@ -191,7 +193,7 @@ impl PersistentTerminalRegistry {
 
         let runtime = OwnedTerminalRuntime {
             runtime_namespace_id,
-            owner_generation_id,
+            owner_generation_id: self.owner_generation_id,
             runtime_alias,
             session,
             output_reader,
@@ -223,7 +225,7 @@ impl PersistentTerminalRegistry {
 
         let attachment = PersistentTerminalAttachment {
             runtime_namespace_id,
-            owner_generation_id,
+            owner_generation_id: self.owner_generation_id,
         };
         self.runtimes.insert(runtime_namespace_id, runtime);
         Ok(attachment)
@@ -234,16 +236,14 @@ impl PersistentTerminalRegistry {
         store: &Store,
         runtime_namespace_id: RuntimeNamespaceId,
         expected_owner_generation_id: OwnerGenerationId,
-        live_owner_generation_id: OwnerGenerationId,
         now_unix_ms: i64,
     ) -> RuntimeResult<PersistentTerminalAttachment> {
-        if expected_owner_generation_id != live_owner_generation_id {
+        if expected_owner_generation_id != self.owner_generation_id {
             return Err(PersistentTerminalRuntimeError::StaleOwnerGeneration);
         }
         self.observe_one(
             store,
             runtime_namespace_id,
-            live_owner_generation_id,
             now_unix_ms,
         )?;
         let runtime = self
@@ -255,7 +255,7 @@ impl PersistentTerminalRegistry {
         }
         Ok(PersistentTerminalAttachment {
             runtime_namespace_id,
-            owner_generation_id: live_owner_generation_id,
+            owner_generation_id: self.owner_generation_id,
         })
     }
 
@@ -263,14 +263,12 @@ impl PersistentTerminalRegistry {
         &mut self,
         store: &Store,
         attachment: &PersistentTerminalAttachment,
-        live_owner_generation_id: OwnerGenerationId,
         now_unix_ms: i64,
     ) -> RuntimeResult<PersistentTerminalSnapshot> {
-        self.validate_attachment(attachment, live_owner_generation_id)?;
+        self.validate_attachment(attachment)?;
         self.observe_one(
             store,
             attachment.runtime_namespace_id,
-            live_owner_generation_id,
             now_unix_ms,
         )?;
         Ok(self
@@ -283,10 +281,9 @@ impl PersistentTerminalRegistry {
     pub(crate) fn send_input(
         &mut self,
         attachment: &PersistentTerminalAttachment,
-        live_owner_generation_id: OwnerGenerationId,
         bytes: &[u8],
     ) -> RuntimeResult<()> {
-        self.live_runtime_mut(attachment, live_owner_generation_id)?
+        self.live_runtime_mut(attachment)?
             .session
             .send_input(bytes)
             .map_err(|error| PersistentTerminalRuntimeError::Terminal(error.to_string()))
@@ -295,10 +292,9 @@ impl PersistentTerminalRegistry {
     pub(crate) fn read_output(
         &mut self,
         attachment: &PersistentTerminalAttachment,
-        live_owner_generation_id: OwnerGenerationId,
         buffer: &mut [u8],
     ) -> RuntimeResult<usize> {
-        self.validate_attachment(attachment, live_owner_generation_id)?;
+        self.validate_attachment(attachment)?;
         self.runtimes
             .get_mut(&attachment.runtime_namespace_id)
             .ok_or(PersistentTerminalRuntimeError::UnknownRuntime)?
@@ -310,10 +306,9 @@ impl PersistentTerminalRegistry {
     pub(crate) fn resize(
         &mut self,
         attachment: &PersistentTerminalAttachment,
-        live_owner_generation_id: OwnerGenerationId,
         terminal_size: TerminalSize,
     ) -> RuntimeResult<()> {
-        let runtime = self.live_runtime_mut(attachment, live_owner_generation_id)?;
+        let runtime = self.live_runtime_mut(attachment)?;
         runtime
             .session
             .resize(terminal_size)
@@ -325,9 +320,8 @@ impl PersistentTerminalRegistry {
     pub(crate) fn current_size(
         &mut self,
         attachment: &PersistentTerminalAttachment,
-        live_owner_generation_id: OwnerGenerationId,
     ) -> RuntimeResult<TerminalSize> {
-        let runtime = self.live_runtime_mut(attachment, live_owner_generation_id)?;
+        let runtime = self.live_runtime_mut(attachment)?;
         runtime
             .session
             .current_size()
@@ -337,9 +331,8 @@ impl PersistentTerminalRegistry {
     pub(crate) fn interrupt(
         &mut self,
         attachment: &PersistentTerminalAttachment,
-        live_owner_generation_id: OwnerGenerationId,
     ) -> RuntimeResult<()> {
-        self.live_runtime_mut(attachment, live_owner_generation_id)?
+        self.live_runtime_mut(attachment)?
             .session
             .interrupt()
             .map_err(|error| PersistentTerminalRuntimeError::Terminal(error.to_string()))
@@ -349,13 +342,11 @@ impl PersistentTerminalRegistry {
         &mut self,
         store: &Store,
         attachment: &PersistentTerminalAttachment,
-        live_owner_generation_id: OwnerGenerationId,
         now_unix_ms: i64,
     ) -> RuntimeResult<PersistentTerminalSnapshot> {
         self.finish_owned(
             store,
             attachment,
-            live_owner_generation_id,
             now_unix_ms,
             RuntimeLifecycleEventKind::RuntimeStopped,
             |session| session.terminate(),
@@ -366,13 +357,11 @@ impl PersistentTerminalRegistry {
         &mut self,
         store: &Store,
         attachment: &PersistentTerminalAttachment,
-        live_owner_generation_id: OwnerGenerationId,
         now_unix_ms: i64,
     ) -> RuntimeResult<PersistentTerminalSnapshot> {
         self.finish_owned(
             store,
             attachment,
-            live_owner_generation_id,
             now_unix_ms,
             RuntimeLifecycleEventKind::RuntimeStopped,
             |session| session.close(),
@@ -382,7 +371,6 @@ impl PersistentTerminalRegistry {
     pub(crate) fn poll_exits(
         &mut self,
         store: &Store,
-        live_owner_generation_id: OwnerGenerationId,
         now_unix_ms: i64,
     ) -> RuntimeResult<usize> {
         let runtime_ids: Vec<_> = self.runtimes.keys().copied().collect();
@@ -391,7 +379,6 @@ impl PersistentTerminalRegistry {
             if self.observe_one(
                 store,
                 runtime_namespace_id,
-                live_owner_generation_id,
                 now_unix_ms,
             )? {
                 observed = observed.saturating_add(1);
@@ -404,7 +391,6 @@ impl PersistentTerminalRegistry {
         &mut self,
         store: &Store,
         attachment: &PersistentTerminalAttachment,
-        live_owner_generation_id: OwnerGenerationId,
         now_unix_ms: i64,
         event_kind: RuntimeLifecycleEventKind,
         operation: F,
@@ -412,7 +398,7 @@ impl PersistentTerminalRegistry {
     where
         F: FnOnce(&mut TerminalSession) -> crate::git::Result<TerminalExit>,
     {
-        self.validate_attachment(attachment, live_owner_generation_id)?;
+        self.validate_attachment(attachment)?;
         self.flush_dirty(store, attachment.runtime_namespace_id)?;
         if !self
             .runtimes
@@ -454,7 +440,6 @@ impl PersistentTerminalRegistry {
         &mut self,
         store: &Store,
         runtime_namespace_id: RuntimeNamespaceId,
-        live_owner_generation_id: OwnerGenerationId,
         now_unix_ms: i64,
     ) -> RuntimeResult<bool> {
         self.flush_dirty(store, runtime_namespace_id)?;
@@ -462,7 +447,7 @@ impl PersistentTerminalRegistry {
             .runtimes
             .get_mut(&runtime_namespace_id)
             .ok_or(PersistentTerminalRuntimeError::UnknownRuntime)?;
-        if runtime.owner_generation_id != live_owner_generation_id {
+        if runtime.owner_generation_id != self.owner_generation_id {
             return Err(PersistentTerminalRuntimeError::StaleOwnerGeneration);
         }
         if !runtime.is_live() {
@@ -504,16 +489,15 @@ impl PersistentTerminalRegistry {
     fn validate_attachment(
         &self,
         attachment: &PersistentTerminalAttachment,
-        live_owner_generation_id: OwnerGenerationId,
     ) -> RuntimeResult<()> {
-        if attachment.owner_generation_id != live_owner_generation_id {
+        if attachment.owner_generation_id != self.owner_generation_id {
             return Err(PersistentTerminalRuntimeError::StaleOwnerGeneration);
         }
         let runtime = self
             .runtimes
             .get(&attachment.runtime_namespace_id)
             .ok_or(PersistentTerminalRuntimeError::UnknownRuntime)?;
-        if runtime.owner_generation_id != live_owner_generation_id {
+        if runtime.owner_generation_id != self.owner_generation_id {
             return Err(PersistentTerminalRuntimeError::StaleOwnerGeneration);
         }
         Ok(())
@@ -522,9 +506,8 @@ impl PersistentTerminalRegistry {
     fn live_runtime_mut(
         &mut self,
         attachment: &PersistentTerminalAttachment,
-        live_owner_generation_id: OwnerGenerationId,
     ) -> RuntimeResult<&mut OwnedTerminalRuntime> {
-        self.validate_attachment(attachment, live_owner_generation_id)?;
+        self.validate_attachment(attachment)?;
         let runtime = self
             .runtimes
             .get_mut(&attachment.runtime_namespace_id)
@@ -559,13 +542,13 @@ fn persist_runtime(store: &Store, runtime: &OwnedTerminalRuntime) -> RuntimeResu
 fn generate_runtime_namespace_id() -> RuntimeResult<RuntimeNamespaceId> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        return crate::persistent_runtime::transport::unix::generate_runtime_namespace_id()
-            .map_err(|error| PersistentTerminalRuntimeError::Entropy(format!("{error:?}")));
+        crate::persistent_runtime::transport::unix::generate_runtime_namespace_id()
+            .map_err(|error| PersistentTerminalRuntimeError::Entropy(format!("{error:?}")))
     }
     #[cfg(windows)]
     {
-        return crate::persistent_runtime::transport::windows::generate_runtime_namespace_id()
-            .map_err(|error| PersistentTerminalRuntimeError::Entropy(format!("{error:?}")));
+        crate::persistent_runtime::transport::windows::generate_runtime_namespace_id()
+            .map_err(|error| PersistentTerminalRuntimeError::Entropy(format!("{error:?}")))
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
