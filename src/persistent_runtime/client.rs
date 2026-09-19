@@ -3,7 +3,7 @@ use crate::persistent_runtime::domain::{
     RuntimeAlias, RuntimeLifecycleEvent, RuntimeNamespaceId, RuntimeTruth,
 };
 use crate::persistent_runtime::protocol::{
-    MAX_INBOUND_CONTROL_FRAME_BYTES, PROTOCOL_VERSION, MessageKind, MutationOutcomeTracker,
+    MAX_INBOUND_CONTROL_FRAME_BYTES, MessageKind, MutationOutcomeTracker, PROTOCOL_VERSION,
     ProtocolMessage, ProtocolPayload, decode_frame, encode_frame, validate_event_binding,
     validate_response_binding,
 };
@@ -203,8 +203,9 @@ impl PlatformWire {
 
     #[cfg(test)]
     fn connect_runtime_directory(runtime_directory: &std::path::Path) -> ClientResult<Self> {
-        let stream = crate::persistent_runtime::transport::unix::connect_same_user(runtime_directory)
-            .map_err(|error| LocalControlClientError::Transport(error.to_string()))?;
+        let stream =
+            crate::persistent_runtime::transport::unix::connect_same_user(runtime_directory)
+                .map_err(|error| LocalControlClientError::Transport(error.to_string()))?;
         Ok(Self { stream })
     }
 }
@@ -256,8 +257,10 @@ impl PlatformWire {
         let expected = expected_owner_generation_id
             .ok_or(LocalControlClientError::ExpectedOwnerGenerationRequired)?;
         let client =
-            crate::persistent_runtime::transport::windows::WindowsNamedPipeClient::connect(expected)
-                .map_err(|error| LocalControlClientError::Transport(error.to_string()))?;
+            crate::persistent_runtime::transport::windows::WindowsNamedPipeClient::connect(
+                expected,
+            )
+            .map_err(|error| LocalControlClientError::Transport(error.to_string()))?;
         Ok(Self { client })
     }
 }
@@ -341,8 +344,11 @@ impl RustLocalControlClient {
         target: ResolvedRuntimeTarget,
     ) -> ClientResult<ClientResponseProjection> {
         let runtime_namespace_id = target.runtime_namespace_id();
-        let (_, response) =
-            self.transact(Some(runtime_namespace_id), ProtocolPayload::AttachObserver, false)?;
+        let (_, response) = self.transact(
+            Some(runtime_namespace_id),
+            ProtocolPayload::AttachObserver,
+            false,
+        )?;
         let projection = project_response(&response)?;
         self.attached_runtimes.insert(runtime_namespace_id);
         Ok(projection)
@@ -410,8 +416,11 @@ impl RustLocalControlClient {
         target: ResolvedRuntimeTarget,
     ) -> ClientResult<ClientResponseProjection> {
         let runtime_namespace_id = target.runtime_namespace_id();
-        let (request, response) =
-            self.transact(Some(runtime_namespace_id), ProtocolPayload::AttachObserver, false)?;
+        let (request, response) = self.transact(
+            Some(runtime_namespace_id),
+            ProtocolPayload::AttachObserver,
+            false,
+        )?;
         self.mutation_outcomes
             .reconcile_state(&request, &response)
             .map_err(map_protocol_error)?;
@@ -423,9 +432,7 @@ impl RustLocalControlClient {
         let Some(message) = self.pending_events.pop_front() else {
             return Ok(None);
         };
-        let frame_bytes = encode_frame(&message)
-            .map_err(map_protocol_error)?
-            .len();
+        let frame_bytes = encode_frame(&message).map_err(map_protocol_error)?.len();
         self.pending_event_bytes = self.pending_event_bytes.saturating_sub(frame_bytes);
         project_event(message).map(Some)
     }
@@ -437,7 +444,9 @@ impl RustLocalControlClient {
     ) -> ClientResult<ClientResponseProjection> {
         let runtime_namespace_id = target.runtime_namespace_id();
         if self.mutation_outcomes.is_outcome_unknown() {
-            return Err(LocalControlClientError::OutcomeUnknown(runtime_namespace_id));
+            return Err(LocalControlClientError::OutcomeUnknown(
+                runtime_namespace_id,
+            ));
         }
         let (_, response) = self.transact(Some(runtime_namespace_id), payload, true)?;
         project_response(&response)
@@ -464,17 +473,19 @@ impl RustLocalControlClient {
             ProtocolPayload::Error { kind } => return Err(map_protocol_error(kind)),
             _ => return Err(LocalControlClientError::UnexpectedResponse(response.kind())),
         }
-        let connection_id = response
-            .connection_id
-            .clone()
-            .ok_or(LocalControlClientError::Protocol(
-                LocalControlErrorKind::MalformedFrame,
-            ))?;
-        let owner_generation_id = response
-            .owner_generation_id
-            .ok_or(LocalControlClientError::Protocol(
-                LocalControlErrorKind::MalformedFrame,
-            ))?;
+        let connection_id =
+            response
+                .connection_id
+                .clone()
+                .ok_or(LocalControlClientError::Protocol(
+                    LocalControlErrorKind::MalformedFrame,
+                ))?;
+        let owner_generation_id =
+            response
+                .owner_generation_id
+                .ok_or(LocalControlClientError::Protocol(
+                    LocalControlErrorKind::MalformedFrame,
+                ))?;
         Ok(Self {
             wire: Some(wire),
             connection_id,
@@ -642,13 +653,8 @@ impl RustLocalControlClient {
                 .map_err(map_protocol_error)?;
             }
             None => {
-                validate_event_binding(
-                    &self.connection_id,
-                    self.owner_generation_id,
-                    None,
-                    &event,
-                )
-                .map_err(map_protocol_error)?;
+                validate_event_binding(&self.connection_id, self.owner_generation_id, None, &event)
+                    .map_err(map_protocol_error)?;
             }
         }
         let frame_bytes = encode_frame(&event).map_err(map_protocol_error)?.len();
@@ -712,23 +718,21 @@ fn map_wire_error(error: WireError) -> LocalControlClientError {
 
 fn project_response(message: &ProtocolMessage) -> ClientResult<ClientResponseProjection> {
     match &message.payload {
-        ProtocolPayload::RuntimeSnapshot { truth } => Ok(ClientResponseProjection::RuntimeSnapshot {
-            runtime_namespace_id: message
-                .runtime_namespace_id
-                .ok_or(LocalControlClientError::Protocol(
-                    LocalControlErrorKind::UnknownRuntime,
-                ))?,
-            truth: truth.clone(),
-        }),
+        ProtocolPayload::RuntimeSnapshot { truth } => {
+            Ok(ClientResponseProjection::RuntimeSnapshot {
+                runtime_namespace_id: message.runtime_namespace_id.ok_or(
+                    LocalControlClientError::Protocol(LocalControlErrorKind::UnknownRuntime),
+                )?,
+                truth: truth.clone(),
+            })
+        }
         ProtocolPayload::ControlState {
             authority,
             controller_client_id,
         } => Ok(ClientResponseProjection::ControlState {
-            runtime_namespace_id: message
-                .runtime_namespace_id
-                .ok_or(LocalControlClientError::Protocol(
-                    LocalControlErrorKind::UnknownRuntime,
-                ))?,
+            runtime_namespace_id: message.runtime_namespace_id.ok_or(
+                LocalControlClientError::Protocol(LocalControlErrorKind::UnknownRuntime),
+            )?,
             authority: *authority,
             controller_client_id: controller_client_id.clone(),
         }),
