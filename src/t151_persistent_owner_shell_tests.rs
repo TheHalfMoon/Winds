@@ -1,14 +1,11 @@
 use super::*;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::persistent_runtime::domain::{
     ContinuityClass, EndpointAvailability, OwnerGenerationId, OwnershipState, ProcessLiveness,
     RuntimeAlias, RuntimeLifecycleEventKind, RuntimeNamespaceId, RuntimeTruth,
 };
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::persistent_runtime::persistence::{
     PersistentRuntimeRecordInput, PersistentRuntimeRecoveryReason,
 };
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::store::Store;
 use std::fs;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -39,17 +36,14 @@ fn short_runtime_root() -> PathBuf {
     path.canonicalize().unwrap()
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn generation(byte: u8) -> OwnerGenerationId {
     OwnerGenerationId::from_entropy_bytes([byte; 16]).unwrap()
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn namespace(byte: u8) -> RuntimeNamespaceId {
     RuntimeNamespaceId::from_entropy_bytes([byte; 16]).unwrap()
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn seed_live_runtime(
     home: &Path,
     generation_id: OwnerGenerationId,
@@ -224,6 +218,32 @@ fn t151_endpoint_startup_failure_occurs_after_reconciliation_and_never_returns_r
     drop(store);
     fs::remove_dir_all(home).unwrap();
     fs::remove_dir_all(runtime_root).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn t151_windows_owner_start_reconciles_prior_generation_before_ready() {
+    let home = test_root("windows-reconcile");
+    let old_generation = generation(6);
+    let runtime_id = namespace(6);
+    seed_live_runtime(&home, old_generation, runtime_id);
+
+    let owner = PersistentOwner::start(&home, 20).unwrap();
+    assert!(owner.is_ready());
+    assert_eq!(owner.ready_unix_ms(), 20);
+    assert_eq!(owner.reconciled_runtime_count(), 1);
+    assert_ne!(owner.generation_id(), old_generation);
+    let record = owner
+        .store
+        .load_persistent_runtime_record(runtime_id)
+        .unwrap();
+    assert_eq!(record.truth.ownership, OwnershipState::OwnershipLost);
+    assert_eq!(
+        record.recovery_reason,
+        Some(PersistentRuntimeRecoveryReason::OwnerGenerationChanged)
+    );
+    drop(owner);
+    fs::remove_dir_all(home).unwrap();
 }
 
 #[test]

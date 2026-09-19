@@ -31,7 +31,7 @@ No ready owner value exists if Store reconciliation or endpoint binding fails.
 
 ## Idle exit
 
-Production `OWNER_IDLE_GRACE_MS` is exactly `300_000`. The owner may exit only when both connected-client count and live-runtime count are zero for the full grace period. Any connected client or live runtime suppresses idle exit immediately. No protocol message or wire command is imported as an idle-shutdown authority.
+Production `OWNER_IDLE_GRACE_MS` is exactly `300_000` and is measured from `std::time::Instant`, not wall clock. The owner may exit only when both connected-client count and live-runtime count are zero for the full monotonic grace period. Any connected client or live runtime suppresses idle exit immediately. No protocol message or wire command is imported as an idle-shutdown authority.
 
 T151 does not yet accept protocol work into an authority loop and does not own any child process. T152 remains responsible for moving/reusing the accepted PTY/ConPTY primitive under the owner.
 

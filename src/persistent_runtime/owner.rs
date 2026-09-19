@@ -5,10 +5,10 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub(crate) const INTERNAL_OWNER_COMMAND: &str = "__winds-internal-owner-v1";
-pub(crate) const OWNER_IDLE_GRACE_MS: i64 = 300_000;
+pub(crate) const OWNER_IDLE_GRACE_MS: u64 = 300_000;
 const OWNER_POLL_INTERVAL_MS: u64 = 250;
 
 pub(crate) type OwnerResult<T> = Result<T, OwnerError>;
@@ -82,52 +82,53 @@ pub(crate) enum OwnerStartupPhase {
 pub(crate) struct OwnerActivity {
     connected_clients: usize,
     live_runtimes: usize,
-    idle_since_unix_ms: Option<i64>,
+    idle_since_monotonic_ms: Option<u64>,
 }
 
 impl OwnerActivity {
-    pub(crate) fn new(now_unix_ms: i64) -> Self {
+    pub(crate) fn new(now_monotonic_ms: u64) -> Self {
         Self {
             connected_clients: 0,
             live_runtimes: 0,
-            idle_since_unix_ms: Some(now_unix_ms),
+            idle_since_monotonic_ms: Some(now_monotonic_ms),
         }
     }
 
     pub(crate) fn client_connected(&mut self) {
         self.connected_clients = self.connected_clients.saturating_add(1);
-        self.idle_since_unix_ms = None;
+        self.idle_since_monotonic_ms = None;
     }
 
-    pub(crate) fn client_disconnected(&mut self, now_unix_ms: i64) -> OwnerResult<()> {
+    pub(crate) fn client_disconnected(&mut self, now_monotonic_ms: u64) -> OwnerResult<()> {
         if self.connected_clients == 0 {
             return Err(OwnerError::ActivityUnderflow);
         }
         self.connected_clients -= 1;
-        self.refresh_idle_start(now_unix_ms);
+        self.refresh_idle_start(now_monotonic_ms);
         Ok(())
     }
 
-    pub(crate) fn set_live_runtime_count(&mut self, count: usize, now_unix_ms: i64) {
+    pub(crate) fn set_live_runtime_count(&mut self, count: usize, now_monotonic_ms: u64) {
         self.live_runtimes = count;
         if count > 0 {
-            self.idle_since_unix_ms = None;
+            self.idle_since_monotonic_ms = None;
         } else {
-            self.refresh_idle_start(now_unix_ms);
+            self.refresh_idle_start(now_monotonic_ms);
         }
     }
 
-    pub(crate) fn should_exit(&self, now_unix_ms: i64) -> bool {
+    pub(crate) fn should_exit(&self, now_monotonic_ms: u64) -> bool {
         if self.connected_clients != 0 || self.live_runtimes != 0 {
             return false;
         }
-        self.idle_since_unix_ms
-            .is_some_and(|idle_since| now_unix_ms.saturating_sub(idle_since) >= OWNER_IDLE_GRACE_MS)
+        self.idle_since_monotonic_ms.is_some_and(|idle_since| {
+            now_monotonic_ms.saturating_sub(idle_since) >= OWNER_IDLE_GRACE_MS
+        })
     }
 
-    fn refresh_idle_start(&mut self, now_unix_ms: i64) {
+    fn refresh_idle_start(&mut self, now_monotonic_ms: u64) {
         if self.connected_clients == 0 && self.live_runtimes == 0 {
-            self.idle_since_unix_ms.get_or_insert(now_unix_ms);
+            self.idle_since_monotonic_ms.get_or_insert(now_monotonic_ms);
         }
     }
 }
@@ -192,7 +193,7 @@ impl PersistentOwner {
             generation_id,
             store,
             _endpoint: OwnerEndpoint::Posix(listener),
-            activity: OwnerActivity::new(now_unix_ms),
+            activity: OwnerActivity::new(0),
             reconciled_runtime_count,
             ready_unix_ms: now_unix_ms,
             startup_phase: OwnerStartupPhase::Ready,
@@ -222,7 +223,7 @@ impl PersistentOwner {
             generation_id,
             store,
             _endpoint: OwnerEndpoint::Windows(server),
-            activity: OwnerActivity::new(now_unix_ms),
+            activity: OwnerActivity::new(0),
             reconciled_runtime_count,
             ready_unix_ms: now_unix_ms,
             startup_phase: OwnerStartupPhase::Ready,
@@ -258,8 +259,8 @@ impl PersistentOwner {
         &mut self.activity
     }
 
-    pub(crate) fn should_exit(&self, now_unix_ms: i64) -> bool {
-        self.activity.should_exit(now_unix_ms)
+    pub(crate) fn should_exit(&self, now_monotonic_ms: u64) -> bool {
+        self.activity.should_exit(now_monotonic_ms)
     }
 }
 
@@ -295,10 +296,15 @@ fn prepare_owner_home(home: &Path) -> OwnerResult<PathBuf> {
 
 pub(crate) fn run_internal_owner(home: &Path) -> OwnerResult<()> {
     let owner = PersistentOwner::start(home, system_unix_ms()?)?;
-    while !owner.should_exit(system_unix_ms()?) {
+    let monotonic_origin = Instant::now();
+    while !owner.should_exit(monotonic_elapsed_ms(monotonic_origin)) {
         thread::sleep(Duration::from_millis(OWNER_POLL_INTERVAL_MS));
     }
     Ok(())
+}
+
+fn monotonic_elapsed_ms(origin: Instant) -> u64 {
+    u64::try_from(origin.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 fn system_unix_ms() -> OwnerResult<i64> {
