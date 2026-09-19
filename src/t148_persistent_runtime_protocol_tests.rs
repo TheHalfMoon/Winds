@@ -736,6 +736,27 @@ fn t148_lost_mutation_response_becomes_outcome_unknown_until_state_reconciliatio
         .unwrap();
     assert!(!tracker.is_outcome_unknown());
     tracker.begin(&second).unwrap();
+    let wrong_kind_response = ProtocolMessage::new(
+        connection("client-a"),
+        sequence(32),
+        Some(runtime),
+        generation(2),
+        Some(sequence(31)),
+        ProtocolPayload::RuntimeSnapshot {
+            truth: RuntimeTruth {
+                ownership: OwnershipState::OwnershipLost,
+                process_liveness: ProcessLiveness::Unknown,
+                endpoint_availability: EndpointAvailability::Unknown,
+                continuity: ContinuityClass::Unknown,
+            },
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        tracker.acknowledge(&wrong_kind_response).unwrap_err(),
+        LocalControlErrorKind::MalformedFrame
+    );
+
     let wrong_response = ProtocolMessage::new(
         connection("client-a"),
         sequence(32),

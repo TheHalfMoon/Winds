@@ -845,6 +845,7 @@ impl RequestSequenceGuard {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PendingMutation {
+    request_kind: MessageKind,
     sequence: EventSequence,
     connection_id: ClientConnectionId,
     owner_generation_id: OwnerGenerationId,
@@ -878,6 +879,7 @@ impl MutationOutcomeTracker {
             .runtime_namespace_id
             .ok_or(LocalControlErrorKind::UnknownRuntime)?;
         self.pending = Some(PendingMutation {
+            request_kind: message.kind(),
             sequence: message.sequence,
             connection_id: message
                 .connection_id
@@ -897,6 +899,7 @@ impl MutationOutcomeTracker {
             .as_ref()
             .ok_or(LocalControlErrorKind::MalformedFrame)?;
         if response.direction() != MessageDirection::OwnerToClient
+            || !response_kind_is_valid_for_request(pending.request_kind, response.kind())
             || response.correlation_sequence != Some(pending.sequence)
             || response.connection_id.as_ref() != Some(&pending.connection_id)
         {
