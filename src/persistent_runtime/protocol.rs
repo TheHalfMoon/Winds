@@ -172,7 +172,11 @@ enum CorrelationRequirement {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ProtocolPayload {
-    Hello,
+    Hello {
+        minimum_protocol_version: u16,
+        maximum_protocol_version: u16,
+        expected_owner_generation_id: Option<OwnerGenerationId>,
+    },
     HelloAck,
     Ping,
     Pong,
@@ -218,7 +222,7 @@ pub(crate) enum ProtocolPayload {
 impl ProtocolPayload {
     pub(crate) fn kind(&self) -> MessageKind {
         match self {
-            Self::Hello => MessageKind::Hello,
+            Self::Hello { .. } => MessageKind::Hello,
             Self::HelloAck => MessageKind::HelloAck,
             Self::Ping => MessageKind::Ping,
             Self::Pong => MessageKind::Pong,
@@ -244,15 +248,37 @@ impl ProtocolPayload {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ProtocolMessage {
-    pub(crate) connection_id: ClientConnectionId,
+    pub(crate) connection_id: Option<ClientConnectionId>,
     pub(crate) sequence: EventSequence,
     pub(crate) runtime_namespace_id: Option<RuntimeNamespaceId>,
-    pub(crate) owner_generation_id: OwnerGenerationId,
+    pub(crate) owner_generation_id: Option<OwnerGenerationId>,
     pub(crate) correlation_sequence: Option<EventSequence>,
     pub(crate) payload: ProtocolPayload,
 }
 
 impl ProtocolMessage {
+    pub(crate) fn hello(
+        sequence: EventSequence,
+        minimum_protocol_version: u16,
+        maximum_protocol_version: u16,
+        expected_owner_generation_id: Option<OwnerGenerationId>,
+    ) -> ProtocolResult<Self> {
+        let message = Self {
+            connection_id: None,
+            sequence,
+            runtime_namespace_id: None,
+            owner_generation_id: None,
+            correlation_sequence: None,
+            payload: ProtocolPayload::Hello {
+                minimum_protocol_version,
+                maximum_protocol_version,
+                expected_owner_generation_id,
+            },
+        };
+        validate_message(&message)?;
+        Ok(message)
+    }
+
     pub(crate) fn new(
         connection_id: ClientConnectionId,
         sequence: EventSequence,
@@ -262,10 +288,10 @@ impl ProtocolMessage {
         payload: ProtocolPayload,
     ) -> ProtocolResult<Self> {
         let message = Self {
-            connection_id,
+            connection_id: Some(connection_id),
             sequence,
             runtime_namespace_id,
-            owner_generation_id,
+            owner_generation_id: Some(owner_generation_id),
             correlation_sequence,
             payload,
         };
@@ -287,11 +313,13 @@ impl ProtocolMessage {
 struct WireEnvelope {
     protocol_version: u16,
     message_kind: MessageKind,
-    connection_id: ClientConnectionId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    connection_id: Option<ClientConnectionId>,
     sequence: EventSequence,
     #[serde(skip_serializing_if = "Option::is_none")]
     runtime_namespace_id: Option<RuntimeNamespaceId>,
-    owner_generation_id: OwnerGenerationId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    owner_generation_id: Option<OwnerGenerationId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     correlation_sequence: Option<EventSequence>,
     body: Value,
@@ -300,6 +328,15 @@ struct WireEnvelope {
 #[derive(Debug, Deserialize)]
 struct ProtocolVersionProbe {
     protocol_version: u16,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HelloBody {
+    minimum_protocol_version: u16,
+    maximum_protocol_version: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expected_owner_generation_id: Option<OwnerGenerationId>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -456,8 +493,7 @@ fn decode_payload(text: &str) -> ProtocolResult<ProtocolMessage> {
 
 fn encode_body(payload: &ProtocolPayload) -> ProtocolResult<Value> {
     match payload {
-        ProtocolPayload::Hello
-        | ProtocolPayload::HelloAck
+        ProtocolPayload::HelloAck
         | ProtocolPayload::Ping
         | ProtocolPayload::Pong
         | ProtocolPayload::ListRuntimes
@@ -467,6 +503,15 @@ fn encode_body(payload: &ProtocolPayload) -> ProtocolResult<Value> {
         | ProtocolPayload::ReleaseControl
         | ProtocolPayload::Interrupt
         | ProtocolPayload::Stop => to_value(&EmptyBody::default()),
+        ProtocolPayload::Hello {
+            minimum_protocol_version,
+            maximum_protocol_version,
+            expected_owner_generation_id,
+        } => to_value(&HelloBody {
+            minimum_protocol_version: *minimum_protocol_version,
+            maximum_protocol_version: *maximum_protocol_version,
+            expected_owner_generation_id: *expected_owner_generation_id,
+        }),
         ProtocolPayload::RuntimeSnapshot { truth } => to_value(&RuntimeSnapshotBody {
             truth: truth.clone(),
         }),
@@ -502,7 +547,14 @@ fn encode_body(payload: &ProtocolPayload) -> ProtocolResult<Value> {
 
 fn decode_body(kind: MessageKind, body: Value) -> ProtocolResult<ProtocolPayload> {
     match kind {
-        MessageKind::Hello => from_empty(body).map(|_| ProtocolPayload::Hello),
+        MessageKind::Hello => {
+            let value: HelloBody = from_value(body)?;
+            Ok(ProtocolPayload::Hello {
+                minimum_protocol_version: value.minimum_protocol_version,
+                maximum_protocol_version: value.maximum_protocol_version,
+                expected_owner_generation_id: value.expected_owner_generation_id,
+            })
+        }
         MessageKind::HelloAck => from_empty(body).map(|_| ProtocolPayload::HelloAck),
         MessageKind::Ping => from_empty(body).map(|_| ProtocolPayload::Ping),
         MessageKind::Pong => from_empty(body).map(|_| ProtocolPayload::Pong),
@@ -575,6 +627,18 @@ fn from_empty(value: Value) -> ProtocolResult<EmptyBody> {
 
 fn validate_message(message: &ProtocolMessage) -> ProtocolResult<()> {
     let kind = message.kind();
+    match kind {
+        MessageKind::Hello => {
+            if message.connection_id.is_some() || message.owner_generation_id.is_some() {
+                return Err(LocalControlErrorKind::MalformedFrame);
+            }
+        }
+        _ => {
+            if message.connection_id.is_none() || message.owner_generation_id.is_none() {
+                return Err(LocalControlErrorKind::MalformedFrame);
+            }
+        }
+    }
     match (kind.runtime_binding(), message.runtime_namespace_id) {
         (RuntimeBinding::Required, None) | (RuntimeBinding::Forbidden, Some(_)) => {
             return Err(LocalControlErrorKind::MalformedFrame);
@@ -589,11 +653,26 @@ fn validate_message(message: &ProtocolMessage) -> ProtocolResult<()> {
     }
 
     match &message.payload {
+        ProtocolPayload::Hello {
+            minimum_protocol_version,
+            maximum_protocol_version,
+            ..
+        } => {
+            if *minimum_protocol_version == 0
+                || minimum_protocol_version > maximum_protocol_version
+                || PROTOCOL_VERSION < *minimum_protocol_version
+                || PROTOCOL_VERSION > *maximum_protocol_version
+            {
+                return Err(LocalControlErrorKind::ProtocolMismatch);
+            }
+        }
         ProtocolPayload::RuntimeEvent { event } => {
-            if Some(event.runtime_namespace_id) != message.runtime_namespace_id {
+            if Some(event.runtime_namespace_id) != message.runtime_namespace_id
+                || event.sequence != message.sequence
+            {
                 return Err(LocalControlErrorKind::MalformedFrame);
             }
-            if event.owner_generation_id != message.owner_generation_id {
+            if Some(event.owner_generation_id) != message.owner_generation_id {
                 return Err(LocalControlErrorKind::StaleOwnerGeneration);
             }
         }
@@ -636,14 +715,31 @@ pub(crate) fn validate_response_binding(
     {
         return Err(LocalControlErrorKind::MalformedFrame);
     }
+    if !response_kind_is_valid_for_request(request.kind(), response.kind()) {
+        return Err(LocalControlErrorKind::MalformedFrame);
+    }
     if response.correlation_sequence != Some(request.sequence) {
         return Err(LocalControlErrorKind::MalformedFrame);
     }
-    if response.connection_id != request.connection_id {
-        return Err(LocalControlErrorKind::MalformedFrame);
-    }
-    if response.owner_generation_id != request.owner_generation_id {
-        return Err(LocalControlErrorKind::StaleOwnerGeneration);
+    if request.kind() == MessageKind::Hello {
+        if response.connection_id.is_none() || response.owner_generation_id.is_none() {
+            return Err(LocalControlErrorKind::MalformedFrame);
+        }
+        if let ProtocolPayload::Hello {
+            expected_owner_generation_id: Some(expected),
+            ..
+        } = &request.payload
+            && response.owner_generation_id != Some(*expected)
+        {
+            return Err(LocalControlErrorKind::StaleOwnerGeneration);
+        }
+    } else {
+        if response.connection_id != request.connection_id {
+            return Err(LocalControlErrorKind::MalformedFrame);
+        }
+        if response.owner_generation_id != request.owner_generation_id {
+            return Err(LocalControlErrorKind::StaleOwnerGeneration);
+        }
     }
     match (request.runtime_namespace_id, response.runtime_namespace_id) {
         (Some(expected), Some(actual)) if expected == actual => {}
@@ -653,6 +749,27 @@ pub(crate) fn validate_response_binding(
         (None, Some(_)) => return Err(LocalControlErrorKind::MalformedFrame),
     }
     Ok(())
+}
+
+fn response_kind_is_valid_for_request(request: MessageKind, response: MessageKind) -> bool {
+    if response == MessageKind::Error {
+        return true;
+    }
+    matches!(
+        (request, response),
+        (MessageKind::Hello, MessageKind::HelloAck)
+            | (MessageKind::Ping, MessageKind::Pong)
+            | (MessageKind::ListRuntimes, MessageKind::RuntimeSnapshot)
+            | (MessageKind::AttachObserver, MessageKind::RuntimeSnapshot)
+            | (MessageKind::AttachObserver, MessageKind::ControlState)
+            | (MessageKind::Detach, MessageKind::ControlState)
+            | (MessageKind::RequestControl, MessageKind::ControlState)
+            | (MessageKind::ReleaseControl, MessageKind::ControlState)
+            | (MessageKind::Input, MessageKind::ControlState)
+            | (MessageKind::Resize, MessageKind::ControlState)
+            | (MessageKind::Interrupt, MessageKind::ControlState)
+            | (MessageKind::Stop, MessageKind::ControlState)
+    )
 }
 
 pub(crate) fn validate_event_binding(
@@ -674,10 +791,10 @@ pub(crate) fn validate_event_binding(
     ) {
         return Err(LocalControlErrorKind::MalformedFrame);
     }
-    if &event.connection_id != expected_connection_id {
+    if event.connection_id.as_ref() != Some(expected_connection_id) {
         return Err(LocalControlErrorKind::MalformedFrame);
     }
-    if event.owner_generation_id != expected_owner_generation_id {
+    if event.owner_generation_id != Some(expected_owner_generation_id) {
         return Err(LocalControlErrorKind::StaleOwnerGeneration);
     }
     if event.runtime_namespace_id != expected_runtime_namespace_id {
@@ -709,10 +826,10 @@ impl RequestSequenceGuard {
         if message.direction() != MessageDirection::ClientToOwner {
             return Err(LocalControlErrorKind::MalformedFrame);
         }
-        if message.connection_id != self.connection_id {
+        if message.connection_id.as_ref() != Some(&self.connection_id) {
             return Err(LocalControlErrorKind::MalformedFrame);
         }
-        if message.owner_generation_id != self.owner_generation_id {
+        if message.owner_generation_id != Some(self.owner_generation_id) {
             return Err(LocalControlErrorKind::StaleOwnerGeneration);
         }
         if self
@@ -762,8 +879,13 @@ impl MutationOutcomeTracker {
             .ok_or(LocalControlErrorKind::UnknownRuntime)?;
         self.pending = Some(PendingMutation {
             sequence: message.sequence,
-            connection_id: message.connection_id.clone(),
-            owner_generation_id: message.owner_generation_id,
+            connection_id: message
+                .connection_id
+                .clone()
+                .ok_or(LocalControlErrorKind::MalformedFrame)?,
+            owner_generation_id: message
+                .owner_generation_id
+                .ok_or(LocalControlErrorKind::MalformedFrame)?,
             runtime_namespace_id,
         });
         Ok(())
@@ -776,11 +898,11 @@ impl MutationOutcomeTracker {
             .ok_or(LocalControlErrorKind::MalformedFrame)?;
         if response.direction() != MessageDirection::OwnerToClient
             || response.correlation_sequence != Some(pending.sequence)
-            || response.connection_id != pending.connection_id
+            || response.connection_id.as_ref() != Some(&pending.connection_id)
         {
             return Err(LocalControlErrorKind::MalformedFrame);
         }
-        if response.owner_generation_id != pending.owner_generation_id {
+        if response.owner_generation_id != Some(pending.owner_generation_id) {
             return Err(LocalControlErrorKind::StaleOwnerGeneration);
         }
         if response.runtime_namespace_id != Some(pending.runtime_namespace_id) {
