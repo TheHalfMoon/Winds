@@ -21,9 +21,9 @@ The T152 pump is deliberately bounded and non-replay:
 - read chunk: 4 KiB;
 - transient queue: 64 chunks;
 - maximum queued payload: 256 KiB;
-- a full transient queue is drained without creating an unbounded transcript;
+- a full transient queue never blocks the owner-held PTY drain; excess chunks are discarded and the runtime enters a permanent fail-closed `OutputGap` state for subsequent T152 output reads;
 - no durable terminal output is introduced;
-- no T152 claim promises output replay after detach.
+- no T152 claim promises output replay after detach, and no incomplete stream is presented as complete after a detected transient queue gap.
 
 T153 remains solely responsible for bounded replay, explicit history-gap/truncation semantics, observer delivery, aggregate replay budgets, and slow-client protection.
 
