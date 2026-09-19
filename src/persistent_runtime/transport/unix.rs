@@ -151,16 +151,16 @@ pub(crate) fn connect_same_user(
 pub(crate) fn resolve_runtime_directory() -> Result<PathBuf, PosixTransportError> {
     let uid = current_effective_uid();
     let preferred_base = preferred_runtime_base();
-    resolve_runtime_directory_from(&preferred_base, Path::new("/tmp"), uid)
+    resolve_runtime_directory_from(preferred_base.as_deref(), Path::new("/tmp"), uid)
 }
 
-fn preferred_runtime_base() -> PathBuf {
+fn preferred_runtime_base() -> Option<PathBuf> {
     #[cfg(target_os = "linux")]
     {
         if let Some(value) = env::var_os("XDG_RUNTIME_DIR") {
             let path = PathBuf::from(value);
             if path.is_absolute() {
-                return path;
+                return Some(path);
             }
         }
     }
@@ -170,20 +170,23 @@ fn preferred_runtime_base() -> PathBuf {
         if let Some(value) = env::var_os("TMPDIR") {
             let path = PathBuf::from(value);
             if path.is_absolute() {
-                return path;
+                return Some(path);
             }
         }
     }
 
-    env::temp_dir()
+    None
 }
 
 fn resolve_runtime_directory_from(
-    preferred_base: &Path,
+    preferred_base: Option<&Path>,
     fallback_base: &Path,
     uid: u32,
 ) -> Result<PathBuf, PosixTransportError> {
-    if let Ok(canonical_preferred_base) = preferred_base.canonicalize() {
+    if let Some(preferred_base) = preferred_base
+        && let Ok(canonical_preferred_base) = preferred_base.canonicalize()
+        && preferred_base_is_private(&canonical_preferred_base, uid)
+    {
         let preferred = canonical_preferred_base.join(RUNTIME_DIRECTORY_NAME);
         if preferred.is_absolute() && socket_path_fits(&preferred.join(ENDPOINT_FILE_NAME)) {
             return Ok(preferred);
@@ -201,6 +204,16 @@ fn resolve_runtime_directory_from(
         return Err(PosixTransportError::EndpointPathTooLong);
     }
     Ok(fallback)
+}
+
+fn preferred_base_is_private(path: &Path, expected_uid: u32) -> bool {
+    let Ok(metadata) = fs::symlink_metadata(path) else {
+        return false;
+    };
+    metadata.file_type().is_dir()
+        && !metadata.file_type().is_symlink()
+        && metadata.uid() == expected_uid
+        && metadata.mode() & 0o022 == 0
 }
 
 pub(crate) fn prepare_runtime_directory(path: &Path) -> Result<(), PosixTransportError> {

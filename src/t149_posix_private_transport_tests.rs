@@ -1,8 +1,8 @@
 use super::{
     BoundUnixListener, ENDPOINT_MODE, MAX_PORTABLE_UNIX_SOCKET_PATH_BYTES, RUNTIME_DIRECTORY_MODE,
     connect_same_user, endpoint_path, entropy_128_with, generate_owner_generation_id,
-    generate_runtime_namespace_id, prepare_runtime_directory, resolve_runtime_directory_from,
-    validate_directory_facts, validate_endpoint_facts,
+    generate_runtime_namespace_id, preferred_base_is_private, prepare_runtime_directory,
+    resolve_runtime_directory_from, validate_directory_facts, validate_endpoint_facts,
 };
 use crate::persistent_runtime::peer::{
     current_effective_uid, peer_effective_uid, require_same_effective_user,
@@ -55,27 +55,41 @@ fn chmod(path: &Path, mode: u32) {
 
 #[test]
 fn t149_resolver_is_absolute_deterministic_and_has_bounded_fallback() {
-    let preferred = Path::new("/tmp");
+    let serial = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
+    let preferred_raw = Path::new("/tmp").join(format!("w149p-{}-{serial}", std::process::id()));
+    let _ = fs::remove_dir_all(&preferred_raw);
+    fs::create_dir(&preferred_raw).unwrap();
+    chmod(&preferred_raw, 0o700);
+    let preferred = preferred_raw.canonicalize().unwrap();
     let fallback = Path::new("/tmp");
+    let uid = current_effective_uid();
 
-    let first = resolve_runtime_directory_from(preferred, fallback, 4242).unwrap();
-    let second = resolve_runtime_directory_from(preferred, fallback, 4242).unwrap();
+    assert!(preferred_base_is_private(&preferred, uid));
+    let first = resolve_runtime_directory_from(Some(&preferred), fallback, uid).unwrap();
+    let second = resolve_runtime_directory_from(Some(&preferred), fallback, uid).unwrap();
     assert_eq!(first, second);
     assert!(first.is_absolute());
+    assert_eq!(first, preferred.join("winds-runtime-v1"));
+
+    chmod(&preferred, 0o770);
+    assert!(!preferred_base_is_private(&preferred, uid));
+    let insecure_fallback =
+        resolve_runtime_directory_from(Some(&preferred), fallback, uid).unwrap();
     assert_eq!(
-        first,
-        preferred.canonicalize().unwrap().join("winds-runtime-v1")
+        insecure_fallback,
+        fallback
+            .canonicalize()
+            .unwrap()
+            .join(format!("winds-runtime-{uid}"))
     );
 
-    let long = PathBuf::from(format!(
-        "/tmp/{}",
-        "x".repeat(MAX_PORTABLE_UNIX_SOCKET_PATH_BYTES)
-    ));
-    let selected = resolve_runtime_directory_from(&long, fallback, 4242).unwrap();
-    assert_eq!(
-        selected,
-        fallback.canonicalize().unwrap().join("winds-runtime-4242")
-    );
+    let no_preferred = resolve_runtime_directory_from(None, fallback, uid).unwrap();
+    assert_eq!(no_preferred, insecure_fallback);
+
+    chmod(&preferred, 0o700);
+    let long = preferred.join("x".repeat(MAX_PORTABLE_UNIX_SOCKET_PATH_BYTES));
+    let selected = resolve_runtime_directory_from(Some(&long), fallback, uid).unwrap();
+    assert_eq!(selected, no_preferred);
     assert!(
         endpoint_path(&selected)
             .unwrap()
@@ -84,6 +98,8 @@ fn t149_resolver_is_absolute_deterministic_and_has_bounded_fallback() {
             .len()
             <= 100
     );
+
+    fs::remove_dir_all(&preferred).unwrap();
 }
 
 #[test]
