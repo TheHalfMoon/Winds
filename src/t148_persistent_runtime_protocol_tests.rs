@@ -1,8 +1,8 @@
 use super::{
-    MAX_INBOUND_CONTROL_FRAME_BYTES, MAX_OUTPUT_EVENT_CHUNK_BYTES, MessageAuthorityClass,
-    MessageDirection, MessageKind, MutationOutcomeTracker, ProtocolMessage, ProtocolPayload,
-    RequestSequenceGuard, decode_frame, encode_frame, read_frame, validate_event_binding,
-    validate_response_binding, write_frame,
+    MAX_INBOUND_CONTROL_FRAME_BYTES, MAX_INPUT_BYTES, MAX_OUTPUT_EVENT_CHUNK_BYTES,
+    MessageAuthorityClass, MessageDirection, MessageKind, MutationOutcomeTracker, ProtocolMessage,
+    ProtocolPayload, RequestSequenceGuard, decode_frame, encode_frame, read_frame,
+    validate_event_binding, validate_response_binding, write_frame,
 };
 use crate::persistent_runtime::domain::{
     ClientAuthority, ClientConnectionId, ContinuityClass, EndpointAvailability, EventSequence,
@@ -53,7 +53,7 @@ fn framed_json(json: &str) -> Vec<u8> {
 
 #[test]
 fn t148_hello_golden_frame_is_u32_le_followed_by_deterministic_utf8_json() {
-    let message = client_message(1, None, ProtocolPayload::Hello);
+    let message = ProtocolMessage::hello(sequence(1), 1, 1, None).unwrap();
     let encoded = encode_frame(&message).unwrap();
     let payload = &encoded[4..];
 
@@ -63,7 +63,7 @@ fn t148_hello_golden_frame_is_u32_le_followed_by_deterministic_utf8_json() {
     );
     assert_eq!(
         std::str::from_utf8(payload).unwrap(),
-        r#"{"protocol_version":1,"message_kind":"HELLO","connection_id":"client-a","sequence":1,"owner_generation_id":"02020202020202020202020202020202","body":{}}"#
+        r#"{"protocol_version":1,"message_kind":"HELLO","sequence":1,"body":{"maximum_protocol_version":1,"minimum_protocol_version":1}}"#
     );
     assert_eq!(decode_frame(&encoded).unwrap(), message);
 
@@ -71,6 +71,60 @@ fn t148_hello_golden_frame_is_u32_le_followed_by_deterministic_utf8_json() {
     write_frame(&mut sink, &message).unwrap();
     assert_eq!(sink, encoded);
     assert_eq!(read_frame(&mut Cursor::new(sink)).unwrap(), message);
+}
+
+#[test]
+fn t148_handshake_assigns_connection_identity_only_in_hello_ack_and_checks_expected_generation() {
+    let fresh = ProtocolMessage::hello(sequence(1), 1, 1, None).unwrap();
+    assert!(fresh.connection_id.is_none());
+    assert!(fresh.owner_generation_id.is_none());
+
+    let ack = ProtocolMessage::new(
+        connection("owner-assigned"),
+        sequence(2),
+        None,
+        generation(2),
+        Some(sequence(1)),
+        ProtocolPayload::HelloAck,
+    )
+    .unwrap();
+    assert!(validate_response_binding(&fresh, &ack).is_ok());
+
+    let reconnect = ProtocolMessage::hello(sequence(3), 1, 1, Some(generation(2))).unwrap();
+    assert!(
+        validate_response_binding(
+            &reconnect,
+            &ProtocolMessage::new(
+                connection("owner-assigned-2"),
+                sequence(4),
+                None,
+                generation(2),
+                Some(sequence(3)),
+                ProtocolPayload::HelloAck,
+            )
+            .unwrap()
+        )
+        .is_ok()
+    );
+
+    let replaced_owner = ProtocolMessage::new(
+        connection("owner-assigned-3"),
+        sequence(4),
+        None,
+        generation(9),
+        Some(sequence(3)),
+        ProtocolPayload::HelloAck,
+    )
+    .unwrap();
+    assert_eq!(
+        validate_response_binding(&reconnect, &replaced_owner).unwrap_err(),
+        LocalControlErrorKind::StaleOwnerGeneration
+    );
+
+    assert_eq!(
+        ProtocolMessage::hello(sequence(5), 2, 3, None).unwrap_err(),
+        LocalControlErrorKind::ProtocolMismatch
+    );
 }
 
 #[test]
@@ -164,7 +218,7 @@ fn t148_runtime_and_generation_bindings_fail_closed() {
     let event = RuntimeLifecycleEvent {
         runtime_namespace_id: runtime,
         owner_generation_id: generation(2),
-        sequence: sequence(9),
+        sequence: sequence(10),
         kind: RuntimeLifecycleEventKind::ProcessStateObserved,
         proof_class: LifecycleProofClass::WindsObserved,
         controller_client_id: None,
@@ -184,6 +238,25 @@ fn t148_runtime_and_generation_bindings_fail_closed() {
     assert_eq!(
         decode_frame(&encode_frame(&message).unwrap()).unwrap(),
         message
+    );
+
+    let wrong_event_sequence = RuntimeLifecycleEvent {
+        sequence: sequence(8),
+        ..event.clone()
+    };
+    assert_eq!(
+        ProtocolMessage::new(
+            connection("client-a"),
+            sequence(10),
+            Some(runtime),
+            generation(2),
+            None,
+            ProtocolPayload::RuntimeEvent {
+                event: wrong_event_sequence,
+            },
+        )
+        .unwrap_err(),
+        LocalControlErrorKind::MalformedFrame
     );
 
     assert_eq!(
@@ -220,7 +293,9 @@ fn t148_runtime_and_generation_bindings_fail_closed() {
             None,
             generation(2),
             None,
-            ProtocolPayload::Input { data: "x".into() },
+            ProtocolPayload::Input {
+                data: b"x".to_vec()
+            },
         )
         .unwrap_err(),
         LocalControlErrorKind::MalformedFrame
@@ -232,7 +307,11 @@ fn t148_runtime_and_generation_bindings_fail_closed() {
             Some(runtime),
             generation(2),
             None,
-            ProtocolPayload::Hello,
+            ProtocolPayload::Hello {
+                minimum_protocol_version: 1,
+                maximum_protocol_version: 1,
+                expected_owner_generation_id: None,
+            },
         )
         .unwrap_err(),
         LocalControlErrorKind::MalformedFrame
@@ -276,7 +355,7 @@ fn t148_frame_parser_rejects_oversized_truncated_invalid_utf8_and_trailing_bytes
 
 #[test]
 fn t148_json_schema_rejects_unknown_version_kind_fields_and_malformed_body() {
-    let base = r#"{"protocol_version":1,"message_kind":"HELLO","connection_id":"client-a","sequence":1,"owner_generation_id":"02020202020202020202020202020202","body":{}}"#;
+    let base = r#"{"protocol_version":1,"message_kind":"HELLO","sequence":1,"body":{"minimum_protocol_version":1,"maximum_protocol_version":1}}"#;
     assert!(decode_frame(&framed_json(base)).is_ok());
 
     let wrong_version = base.replace("\"protocol_version\":1", "\"protocol_version\":2");
@@ -289,17 +368,23 @@ fn t148_json_schema_rejects_unknown_version_kind_fields_and_malformed_body() {
         decode_frame(&framed_json(&unknown_kind)).unwrap_err(),
         LocalControlErrorKind::MalformedFrame
     );
-    let unknown_outer = base.replace("\"body\":{}", "\"extra\":1,\"body\":{}");
+    let unknown_outer = base.replace("\"sequence\":1,", "\"sequence\":1,\"extra\":1,");
     assert_eq!(
         decode_frame(&framed_json(&unknown_outer)).unwrap_err(),
         LocalControlErrorKind::MalformedFrame
     );
-    let unknown_body = base.replace("\"body\":{}", "\"body\":{\"extra\":1}");
+    let unknown_body = base.replace(
+        "\"body\":{\"minimum_protocol_version\":1,\"maximum_protocol_version\":1}",
+        "\"body\":{\"minimum_protocol_version\":1,\"maximum_protocol_version\":1,\"extra\":1}",
+    );
     assert_eq!(
         decode_frame(&framed_json(&unknown_body)).unwrap_err(),
         LocalControlErrorKind::MalformedFrame
     );
-    let missing_body = base.replace(",\"body\":{}", "");
+    let missing_body = base.replace(
+        ",\"body\":{\"minimum_protocol_version\":1,\"maximum_protocol_version\":1}",
+        "",
+    );
     assert_eq!(
         decode_frame(&framed_json(&missing_body)).unwrap_err(),
         LocalControlErrorKind::MalformedFrame
@@ -311,26 +396,46 @@ fn t148_json_schema_rejects_unknown_version_kind_fields_and_malformed_body() {
 }
 
 #[test]
-fn t148_output_chunk_limit_is_measured_before_framing() {
+fn t148_output_chunk_limit_preserves_arbitrary_bytes_and_is_measured_before_framing() {
     let runtime = namespace(3);
-    let exact = "é".repeat(MAX_OUTPUT_EVENT_CHUNK_BYTES / 2);
-    assert_eq!(exact.len(), MAX_OUTPUT_EVENT_CHUNK_BYTES);
+    let exact = vec![0xff; MAX_OUTPUT_EVENT_CHUNK_BYTES];
     let accepted = ProtocolMessage::new(
         connection("client-a"),
         sequence(4),
         Some(runtime),
         generation(2),
         None,
-        ProtocolPayload::OutputEvent { chunk: exact },
+        ProtocolPayload::OutputEvent {
+            chunk: exact.clone(),
+        },
     )
     .unwrap();
-    assert!(encode_frame(&accepted).is_ok());
+    let encoded = encode_frame(&accepted).unwrap();
+    assert!(encoded.len() <= MAX_INBOUND_CONTROL_FRAME_BYTES + 4);
+    assert_eq!(decode_frame(&encoded).unwrap(), accepted);
 
-    let too_large = "é".repeat(MAX_OUTPUT_EVENT_CHUNK_BYTES / 2 + 1);
+    let binary = vec![0x00, 0xff, 0x80, b'{', b'"', b'\\', b'\n'];
+    let binary_event = ProtocolMessage::new(
+        connection("client-a"),
+        sequence(5),
+        Some(runtime),
+        generation(2),
+        None,
+        ProtocolPayload::OutputEvent {
+            chunk: binary.clone(),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        decode_frame(&encode_frame(&binary_event).unwrap()).unwrap(),
+        binary_event
+    );
+
+    let too_large = vec![0_u8; MAX_OUTPUT_EVENT_CHUNK_BYTES + 1];
     assert_eq!(
         ProtocolMessage::new(
             connection("client-a"),
-            sequence(4),
+            sequence(6),
             Some(runtime),
             generation(2),
             None,
@@ -338,6 +443,66 @@ fn t148_output_chunk_limit_is_measured_before_framing() {
         )
         .unwrap_err(),
         LocalControlErrorKind::OversizedFrame
+    );
+
+    let malformed_hex = r#"{"protocol_version":1,"message_kind":"OUTPUT_EVENT","connection_id":"client-a","sequence":7,"runtime_namespace_id":"03030303030303030303030303030303","owner_generation_id":"02020202020202020202020202020202","body":{"chunk_hex":"fF"}}"#;
+    assert_eq!(
+        decode_frame(&framed_json(malformed_hex)).unwrap_err(),
+        LocalControlErrorKind::MalformedFrame
+    );
+}
+
+#[test]
+fn t148_input_preserves_arbitrary_terminal_bytes_and_enforces_existing_terminal_limit() {
+    let runtime = namespace(3);
+    let binary = vec![0x00, 0xff, 0x80, 0x1b, b'[', b'A', b'\\', b'\n'];
+    let message = ProtocolMessage::new(
+        connection("client-a"),
+        sequence(6),
+        Some(runtime),
+        generation(2),
+        None,
+        ProtocolPayload::Input {
+            data: binary.clone(),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        decode_frame(&encode_frame(&message).unwrap()).unwrap(),
+        message
+    );
+
+    assert_eq!(
+        ProtocolMessage::new(
+            connection("client-a"),
+            sequence(7),
+            Some(runtime),
+            generation(2),
+            None,
+            ProtocolPayload::Input { data: Vec::new() },
+        )
+        .unwrap_err(),
+        LocalControlErrorKind::MalformedFrame
+    );
+    assert_eq!(
+        ProtocolMessage::new(
+            connection("client-a"),
+            sequence(8),
+            Some(runtime),
+            generation(2),
+            None,
+            ProtocolPayload::Input {
+                data: vec![0_u8; MAX_INPUT_BYTES + 1],
+            },
+        )
+        .unwrap_err(),
+        LocalControlErrorKind::OversizedFrame
+    );
+
+    let malformed_hex = r#"{"protocol_version":1,"message_kind":"INPUT","connection_id":"client-a","sequence":9,"runtime_namespace_id":"03030303030303030303030303030303","owner_generation_id":"02020202020202020202020202020202","body":{"data_hex":"0G"}}"#;
+    assert_eq!(
+        decode_frame(&framed_json(malformed_hex)).unwrap_err(),
+        LocalControlErrorKind::MalformedFrame
     );
 }
 
@@ -479,6 +644,21 @@ fn t148_response_correlation_cannot_be_reassigned_across_identity_boundaries() {
         LocalControlErrorKind::MalformedFrame
     );
 
+    let ping = client_message(19, None, ProtocolPayload::Ping);
+    let wrong_kind = ProtocolMessage::new(
+        connection("client-a"),
+        sequence(20),
+        None,
+        generation(2),
+        Some(sequence(19)),
+        ProtocolPayload::HelloAck,
+    )
+    .unwrap();
+    assert_eq!(
+        validate_response_binding(&ping, &wrong_kind).unwrap_err(),
+        LocalControlErrorKind::MalformedFrame
+    );
+
     let list = client_message(20, None, ProtocolPayload::ListRuntimes);
     let snapshot = ProtocolMessage::new(
         connection("client-a"),
@@ -509,7 +689,7 @@ fn t148_async_event_binding_cannot_be_reassigned_across_connection_generation_or
         generation(2),
         None,
         ProtocolPayload::OutputEvent {
-            chunk: "bounded output".into(),
+            chunk: b"bounded output".to_vec(),
         },
     )
     .unwrap();
@@ -638,6 +818,27 @@ fn t148_lost_mutation_response_becomes_outcome_unknown_until_state_reconciliatio
         .unwrap();
     assert!(!tracker.is_outcome_unknown());
     tracker.begin(&second).unwrap();
+    let wrong_kind_response = ProtocolMessage::new(
+        connection("client-a"),
+        sequence(32),
+        Some(runtime),
+        generation(2),
+        Some(sequence(31)),
+        ProtocolPayload::RuntimeSnapshot {
+            truth: RuntimeTruth {
+                ownership: OwnershipState::OwnershipLost,
+                process_liveness: ProcessLiveness::Unknown,
+                endpoint_availability: EndpointAvailability::Unknown,
+                continuity: ContinuityClass::Unknown,
+            },
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        tracker.acknowledge(&wrong_kind_response).unwrap_err(),
+        LocalControlErrorKind::MalformedFrame
+    );
+
     let wrong_response = ProtocolMessage::new(
         connection("client-a"),
         sequence(32),
@@ -676,12 +877,34 @@ fn t148_lost_mutation_response_becomes_outcome_unknown_until_state_reconciliatio
         },
     );
     tracker.begin(&third).unwrap();
+    let explicit_unknown = ProtocolMessage::new(
+        connection("client-a"),
+        sequence(34),
+        Some(runtime),
+        generation(2),
+        Some(sequence(33)),
+        ProtocolPayload::Error {
+            kind: LocalControlErrorKind::OutcomeUnknown,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        tracker.acknowledge(&explicit_unknown).unwrap_err(),
+        LocalControlErrorKind::OutcomeUnknown
+    );
+    assert!(tracker.is_outcome_unknown());
+    let fourth = client_message(35, Some(runtime), ProtocolPayload::Stop);
+    assert_eq!(
+        tracker.begin(&fourth).unwrap_err(),
+        LocalControlErrorKind::OutcomeUnknown
+    );
 }
 
 #[test]
 fn t148_terminal_or_agent_text_shaped_like_control_json_remains_plain_data() {
     let runtime = namespace(3);
-    let forged = r#"{"protocol_version":1,"message_kind":"INPUT","accepted":true,"VERIFIED":true}"#;
+    let forged =
+        br#"{"protocol_version":1,"message_kind":"INPUT","accepted":true,"VERIFIED":true}"#;
     let message = ProtocolMessage::new(
         connection("client-a"),
         sequence(40),
@@ -689,7 +912,7 @@ fn t148_terminal_or_agent_text_shaped_like_control_json_remains_plain_data() {
         generation(2),
         None,
         ProtocolPayload::OutputEvent {
-            chunk: forged.to_owned(),
+            chunk: forged.to_vec(),
         },
     )
     .unwrap();
