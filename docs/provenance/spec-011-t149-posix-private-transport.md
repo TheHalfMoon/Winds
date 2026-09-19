@@ -10,7 +10,7 @@ No Windows named pipe, persistent owner process, PTY/ConPTY ownership migration,
 
 - transport: filesystem Unix-domain stream socket only;
 - deterministic endpoint filename: `owner.sock`;
-- preferred user runtime directory: platform user-runtime base plus `winds-runtime-v1`, but only when that existing base is owned by the effective UID and is not group/world-writable;
+- preferred user runtime directory: platform user-runtime base plus `winds-runtime-v1`, but only when that existing base is owned by the effective UID, owner-writable/traversable, and not group/world-writable;
 - missing, unresolved, or insecure preferred bases fall back to the UID-bound temp namespace instead of using a shared `winds-runtime-v1` name;
 - conservative portable socket-path ceiling: 100 pathname bytes;
 - deterministic overlength fallback: `/tmp/winds-runtime-<effective-uid>`;

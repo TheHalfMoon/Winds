@@ -213,6 +213,7 @@ fn preferred_base_is_private(path: &Path, expected_uid: u32) -> bool {
     metadata.file_type().is_dir()
         && !metadata.file_type().is_symlink()
         && metadata.uid() == expected_uid
+        && metadata.mode() & 0o300 == 0o300
         && metadata.mode() & 0o022 == 0
 }
 

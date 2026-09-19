@@ -71,6 +71,18 @@ fn t149_resolver_is_absolute_deterministic_and_has_bounded_fallback() {
     assert!(first.is_absolute());
     assert_eq!(first, preferred.join("winds-runtime-v1"));
 
+    chmod(&preferred, 0o500);
+    assert!(!preferred_base_is_private(&preferred, uid));
+    let unwritable_fallback =
+        resolve_runtime_directory_from(Some(&preferred), fallback, uid).unwrap();
+    assert_eq!(
+        unwritable_fallback,
+        fallback
+            .canonicalize()
+            .unwrap()
+            .join(format!("winds-runtime-{uid}"))
+    );
+
     chmod(&preferred, 0o770);
     assert!(!preferred_base_is_private(&preferred, uid));
     let insecure_fallback =
