@@ -664,6 +664,7 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 - client/controller generation confusion;
 - renderer attempting generic control access;
 - remote/TCP/HTTP/WebSocket endpoint attempts;
+- ordinary local continuity remains functional without a cloud account/control plane and no cloud dependency is introduced;
 - secret-shaped strings/full environment fixtures;
 - Git/verification/acceptance escalation attempts;
 - generic plugin/method-dispatch attempts.
@@ -801,6 +802,7 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 - inherited real Codex/Claude nonclaims preserved unless separately superseded by accepted exact evidence;
 - Herdr donor-code ledger remains empty unless a later exact task actually admitted a slice;
 - remote/plugin/marketplace/live-handoff/public-network/automatic-Git scope remains absent;
+- ordinary local continuity requires no cloud account/control plane;
 - every historical failed/rejected/superseded candidate remains inspectable and not relabelled;
 - final exact implementation state passes repository/platform/security/stress/performance gates;
 - fresh author/Ponytail/independent review reports zero material findings;
@@ -893,7 +895,7 @@ This matrix assigns a primary closure task. Supporting tasks may provide additio
 | FR-062 | T146 |
 | FR-063 | T146 / T155 |
 | FR-064 | T155 |
-| FR-065 | T151 |
+| FR-065 | T151 / T158 / T161 |
 | FR-066 | T158 |
 | FR-067 | T146 / T161 |
 | FR-068 | T146 / T161 |
