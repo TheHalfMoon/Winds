@@ -1,3 +1,4 @@
+pub(crate) mod controller;
 pub(crate) mod domain;
 pub(crate) mod owner;
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
