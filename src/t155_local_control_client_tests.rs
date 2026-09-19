@@ -384,9 +384,11 @@ fn t155_failed_attach_rolls_back_provisional_event_authority() {
         RustLocalControlClient::connect_with_wire_for_test(Box::new(wire), Some(owner_generation))
             .unwrap();
 
-    assert!(client
-        .attach_observer(ResolvedRuntimeTarget::exact(runtime_id))
-        .is_err());
+    assert!(
+        client
+            .attach_observer(ResolvedRuntimeTarget::exact(runtime_id))
+            .is_err()
+    );
     assert!(!client.attached_runtimes.contains(&runtime_id));
 }
 
