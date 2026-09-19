@@ -344,7 +344,7 @@ impl RustLocalControlClient {
         target: ResolvedRuntimeTarget,
     ) -> ClientResult<ClientResponseProjection> {
         let runtime_namespace_id = target.runtime_namespace_id();
-        let was_attached = self.attached_runtimes.insert(runtime_namespace_id);
+        let newly_attached = self.attached_runtimes.insert(runtime_namespace_id);
         let result = self
             .transact(
                 Some(runtime_namespace_id),
@@ -352,7 +352,7 @@ impl RustLocalControlClient {
                 false,
             )
             .and_then(|(_, response)| project_response(&response));
-        if result.is_err() && !was_attached {
+        if result.is_err() && newly_attached {
             self.attached_runtimes.remove(&runtime_namespace_id);
         }
         result
@@ -420,7 +420,7 @@ impl RustLocalControlClient {
         target: ResolvedRuntimeTarget,
     ) -> ClientResult<ClientResponseProjection> {
         let runtime_namespace_id = target.runtime_namespace_id();
-        let was_attached = self.attached_runtimes.insert(runtime_namespace_id);
+        let newly_attached = self.attached_runtimes.insert(runtime_namespace_id);
         let result = (|| {
             let (request, response) = self.transact(
                 Some(runtime_namespace_id),
@@ -432,7 +432,7 @@ impl RustLocalControlClient {
                 .map_err(map_protocol_error)?;
             project_response(&response)
         })();
-        if result.is_err() && !was_attached {
+        if result.is_err() && newly_attached {
             self.attached_runtimes.remove(&runtime_namespace_id);
         }
         result
