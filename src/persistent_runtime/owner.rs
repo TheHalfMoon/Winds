@@ -488,18 +488,10 @@ impl PersistentOwner {
     ) -> OwnerResult<ControllerStateSnapshot> {
         self.reap_expired_controller_leases(now_unix_ms, now_monotonic_ms)?;
         self.controller_registry
-            .renew_control(
-                runtime_namespace_id,
-                client_connection_id,
-                now_monotonic_ms,
-            )
+            .renew_control(runtime_namespace_id, client_connection_id, now_monotonic_ms)
             .map_err(|error| OwnerError::Runtime(error.to_string()))?;
         self.controller_registry
-            .control_state(
-                runtime_namespace_id,
-                client_connection_id,
-                now_monotonic_ms,
-            )
+            .control_state(runtime_namespace_id, client_connection_id, now_monotonic_ms)
             .map_err(|error| OwnerError::Runtime(error.to_string()))
     }
 
@@ -513,19 +505,11 @@ impl PersistentOwner {
         self.reap_expired_controller_leases(now_unix_ms, now_monotonic_ms)?;
         let transition = self
             .controller_registry
-            .release_control(
-                runtime_namespace_id,
-                client_connection_id,
-                now_monotonic_ms,
-            )
+            .release_control(runtime_namespace_id, client_connection_id, now_monotonic_ms)
             .map_err(|error| OwnerError::Runtime(error.to_string()))?;
         self.record_controller_transition(&transition, now_unix_ms)?;
         self.controller_registry
-            .control_state(
-                runtime_namespace_id,
-                client_connection_id,
-                now_monotonic_ms,
-            )
+            .control_state(runtime_namespace_id, client_connection_id, now_monotonic_ms)
             .map_err(|error| OwnerError::Runtime(error.to_string()))
     }
 
@@ -538,11 +522,7 @@ impl PersistentOwner {
     ) -> OwnerResult<ControllerStateSnapshot> {
         self.reap_expired_controller_leases(now_unix_ms, now_monotonic_ms)?;
         self.controller_registry
-            .control_state(
-                runtime_namespace_id,
-                client_connection_id,
-                now_monotonic_ms,
-            )
+            .control_state(runtime_namespace_id, client_connection_id, now_monotonic_ms)
             .map_err(|error| OwnerError::Runtime(error.to_string()))
     }
 
@@ -692,11 +672,7 @@ impl PersistentOwner {
     ) -> OwnerResult<()> {
         self.reap_expired_controller_leases(now_unix_ms, now_monotonic_ms)?;
         self.controller_registry
-            .authorize_mutation(
-                runtime_namespace_id,
-                client_connection_id,
-                now_monotonic_ms,
-            )
+            .authorize_mutation(runtime_namespace_id, client_connection_id, now_monotonic_ms)
             .map_err(|error| OwnerError::Runtime(error.to_string()))?;
         Ok(())
     }

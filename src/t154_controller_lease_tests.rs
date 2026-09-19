@@ -109,7 +109,9 @@ fn t154_disconnect_revokes_without_promoting_an_observer_and_old_client_cannot_r
         ControllerError::NotActiveController
     );
 
-    let observer_state = registry.control_state(runtime_id, &observer, 5_001).unwrap();
+    let observer_state = registry
+        .control_state(runtime_id, &observer, 5_001)
+        .unwrap();
     assert_eq!(observer_state.authority, ClientAuthority::Observer);
     assert!(observer_state.controller_client_id.is_none());
     assert!(observer_state.lease.is_none());
@@ -157,7 +159,9 @@ fn t154_takeover_after_expiry_invalidates_every_old_controller_mutation_class() 
     let new = client("new-controller");
     let mut registry = ControllerRegistry::new(owner(5));
     registry.register_runtime(runtime_id);
-    registry.request_control(runtime_id, old.clone(), 0).unwrap();
+    registry
+        .request_control(runtime_id, old.clone(), 0)
+        .unwrap();
 
     let expired = registry.expire_leases(CONTROLLER_LEASE_EXPIRY_MS).unwrap();
     assert_eq!(expired.len(), 1);
@@ -217,7 +221,11 @@ fn t154_expiry_and_disconnect_on_one_runtime_leave_peer_runtime_controller_uncha
             .is_ok()
     );
 
-    assert!(registry.disconnect_client(&first_controller, 30_001).is_empty());
+    assert!(
+        registry
+            .disconnect_client(&first_controller, 30_001)
+            .is_empty()
+    );
     assert!(
         registry
             .authorize_mutation(peer_runtime, &peer_controller, 30_001)

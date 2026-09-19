@@ -73,8 +73,10 @@ impl ControllerLeaseSnapshot {
         if now_monotonic_ms < self.last_heartbeat_monotonic_ms {
             return Err(ControllerError::MonotonicTimeRegression);
         }
-        Ok(now_monotonic_ms.saturating_sub(self.last_heartbeat_monotonic_ms)
-            >= CONTROLLER_HEARTBEAT_TARGET_MS)
+        Ok(
+            now_monotonic_ms.saturating_sub(self.last_heartbeat_monotonic_ms)
+                >= CONTROLLER_HEARTBEAT_TARGET_MS,
+        )
     }
 
     fn is_expired(&self, now_monotonic_ms: u64) -> ControllerResult<bool> {
@@ -162,8 +164,7 @@ impl ControllerRegistry {
             identity: identity.clone(),
             acquired_monotonic_ms: now_monotonic_ms,
             last_heartbeat_monotonic_ms: now_monotonic_ms,
-            expires_at_monotonic_ms: now_monotonic_ms
-                .saturating_add(CONTROLLER_LEASE_EXPIRY_MS),
+            expires_at_monotonic_ms: now_monotonic_ms.saturating_add(CONTROLLER_LEASE_EXPIRY_MS),
         });
         Ok(Some(ControllerTransition {
             identity,
@@ -193,8 +194,7 @@ impl ControllerRegistry {
             return Err(ControllerError::NotActiveController);
         }
         lease.last_heartbeat_monotonic_ms = now_monotonic_ms;
-        lease.expires_at_monotonic_ms =
-            now_monotonic_ms.saturating_add(CONTROLLER_LEASE_EXPIRY_MS);
+        lease.expires_at_monotonic_ms = now_monotonic_ms.saturating_add(CONTROLLER_LEASE_EXPIRY_MS);
         Ok(lease.clone())
     }
 
