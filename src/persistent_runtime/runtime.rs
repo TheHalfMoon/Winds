@@ -674,6 +674,25 @@ fn persist_runtime(store: &Store, runtime: &OwnedTerminalRuntime) -> RuntimeResu
         .map_err(|error| PersistentTerminalRuntimeError::Store(error.to_string()))
 }
 
+fn generate_runtime_namespace_id() -> RuntimeResult<RuntimeNamespaceId> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        crate::persistent_runtime::transport::unix::generate_runtime_namespace_id()
+            .map_err(|error| PersistentTerminalRuntimeError::Entropy(format!("{error:?}")))
+    }
+    #[cfg(windows)]
+    {
+        crate::persistent_runtime::transport::windows::generate_runtime_namespace_id()
+            .map_err(|error| PersistentTerminalRuntimeError::Entropy(format!("{error:?}")))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    {
+        Err(PersistentTerminalRuntimeError::Entropy(
+            "unsupported runtime platform".to_owned(),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -709,24 +728,5 @@ mod tests {
             pump.read(&mut output),
             Err(PersistentTerminalRuntimeError::OutputGap)
         );
-    }
-}
-
-fn generate_runtime_namespace_id() -> RuntimeResult<RuntimeNamespaceId> {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    {
-        crate::persistent_runtime::transport::unix::generate_runtime_namespace_id()
-            .map_err(|error| PersistentTerminalRuntimeError::Entropy(format!("{error:?}")))
-    }
-    #[cfg(windows)]
-    {
-        crate::persistent_runtime::transport::windows::generate_runtime_namespace_id()
-            .map_err(|error| PersistentTerminalRuntimeError::Entropy(format!("{error:?}")))
-    }
-    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-    {
-        Err(PersistentTerminalRuntimeError::Entropy(
-            "unsupported runtime platform".to_owned(),
-        ))
     }
 }
