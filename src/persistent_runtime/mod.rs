@@ -1,3 +1,4 @@
+pub(crate) mod client;
 pub(crate) mod controller;
 pub(crate) mod domain;
 pub(crate) mod owner;
