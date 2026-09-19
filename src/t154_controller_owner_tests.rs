@@ -158,10 +158,12 @@ fn t154_enter_terminable_workload(
     #[cfg(windows)]
     let bytes = b"echo WINDS_T154_READY
 set /p WINDS_T154_BLOCK=
-".as_slice();
+"
+    .as_slice();
     #[cfg(not(windows))]
     let bytes = b"printf 'WINDS_T154_READY\n'; exec sleep 30
-".as_slice();
+"
+    .as_slice();
 
     owner
         .controller_send_terminal_input(
@@ -210,13 +212,7 @@ fn t154_owner_path_rejects_observer_mutation_and_serializes_release_takeover_sto
         .unwrap();
 
     let denied = owner
-        .controller_send_terminal_input(
-            &observer,
-            runtime_namespace_id,
-            b"forbidden",
-            12,
-            101,
-        )
+        .controller_send_terminal_input(&observer, runtime_namespace_id, b"forbidden", 12, 101)
         .unwrap_err();
     assert!(
         denied
@@ -233,14 +229,16 @@ fn t154_owner_path_rejects_observer_mutation_and_serializes_release_takeover_sto
     let conflict = owner
         .request_terminal_control(controller_b.clone(), runtime_namespace_id, 14, 103)
         .unwrap_err();
-    assert!(conflict.to_string().contains("already held by controller-a"));
+    assert!(
+        conflict
+            .to_string()
+            .contains("already held by controller-a")
+    );
 
     owner
         .fill_terminal_observer_queue(&observer_handle)
         .unwrap();
-    let first_events = owner
-        .drain_terminal_observer(&observer_handle)
-        .unwrap();
+    let first_events = owner.drain_terminal_observer(&observer_handle).unwrap();
     assert!(first_events.iter().any(|message| {
         matches!(
             &message.payload,
@@ -256,13 +254,7 @@ fn t154_owner_path_rejects_observer_mutation_and_serializes_release_takeover_sto
         cols: 120,
     };
     owner
-        .controller_resize_terminal(
-            &controller_a,
-            runtime_namespace_id,
-            resized,
-            15,
-            104,
-        )
+        .controller_resize_terminal(&controller_a, runtime_namespace_id, resized, 15, 104)
         .unwrap();
     assert_eq!(owner.terminal_runtime_size(&attachment).unwrap(), resized);
     assert!(
@@ -270,7 +262,10 @@ fn t154_owner_path_rejects_observer_mutation_and_serializes_release_takeover_sto
             .controller_resize_terminal(
                 &controller_b,
                 runtime_namespace_id,
-                TerminalSize { rows: 41, cols: 121 },
+                TerminalSize {
+                    rows: 41,
+                    cols: 121
+                },
                 16,
                 105,
             )
@@ -326,9 +321,7 @@ fn t154_owner_path_rejects_observer_mutation_and_serializes_release_takeover_sto
     owner
         .fill_terminal_observer_queue(&observer_handle)
         .unwrap();
-    let final_events = owner
-        .drain_terminal_observer(&observer_handle)
-        .unwrap();
+    let final_events = owner.drain_terminal_observer(&observer_handle).unwrap();
     assert!(final_events.iter().any(|message| {
         matches!(
             &message.payload,
@@ -382,9 +375,8 @@ fn t154_owner_poll_expires_lease_without_automatic_observer_promotion() {
     owner
         .poll_terminal_runtimes(
             33,
-            1_000_u64.saturating_add(
-                crate::persistent_runtime::controller::CONTROLLER_LEASE_EXPIRY_MS,
-            ),
+            1_000_u64
+                .saturating_add(crate::persistent_runtime::controller::CONTROLLER_LEASE_EXPIRY_MS),
         )
         .unwrap();
 
@@ -393,9 +385,8 @@ fn t154_owner_poll_expires_lease_without_automatic_observer_promotion() {
             &observer,
             runtime_namespace_id,
             34,
-            1_000_u64.saturating_add(
-                crate::persistent_runtime::controller::CONTROLLER_LEASE_EXPIRY_MS,
-            ),
+            1_000_u64
+                .saturating_add(crate::persistent_runtime::controller::CONTROLLER_LEASE_EXPIRY_MS),
         )
         .unwrap();
     assert_eq!(observer_state.authority, ClientAuthority::Observer);
@@ -414,13 +405,14 @@ fn t154_owner_poll_expires_lease_without_automatic_observer_promotion() {
             .is_err()
     );
 
-    owner.close_terminal_runtime(
-        &attachment,
-        36,
-        1_002_u64
-            .saturating_add(crate::persistent_runtime::controller::CONTROLLER_LEASE_EXPIRY_MS),
-    )
-    .unwrap();
+    owner
+        .close_terminal_runtime(
+            &attachment,
+            36,
+            1_002_u64
+                .saturating_add(crate::persistent_runtime::controller::CONTROLLER_LEASE_EXPIRY_MS),
+        )
+        .unwrap();
     drop(owner);
     t154_cleanup(home, runtime_root);
 }
