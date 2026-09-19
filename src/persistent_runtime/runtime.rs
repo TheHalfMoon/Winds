@@ -1,5 +1,5 @@
 use crate::git::shell_profiles::ShellProfile;
-use crate::git::terminal::{TerminalExit, TerminalSession, TerminalSize};
+use crate::git::terminal::{TerminalExit, TerminalSession, TerminalSessionId, TerminalSize};
 use crate::persistent_runtime::domain::{
     ContinuityClass, EndpointAvailability, OwnerGenerationId, OwnershipState, ProcessLiveness,
     RuntimeAlias, RuntimeLifecycleEventKind, RuntimeNamespaceId, RuntimeTruth,
@@ -73,6 +73,7 @@ pub(crate) struct PersistentTerminalSnapshot {
     pub(crate) owner_generation_id: OwnerGenerationId,
     pub(crate) runtime_alias: RuntimeAlias,
     pub(crate) truth: RuntimeTruth,
+    pub(crate) terminal_session_id: TerminalSessionId,
     pub(crate) terminal_size: TerminalSize,
     pub(crate) exit: Option<TerminalExit>,
     pub(crate) last_lifecycle_event_kind: RuntimeLifecycleEventKind,
@@ -102,6 +103,7 @@ impl OwnedTerminalRuntime {
             owner_generation_id: self.owner_generation_id,
             runtime_alias: self.runtime_alias.clone(),
             truth: self.truth.clone(),
+            terminal_session_id: self.session.session_id(),
             terminal_size: self.terminal_size,
             exit: self.exit.clone(),
             last_lifecycle_event_kind: self.last_lifecycle_event_kind,
