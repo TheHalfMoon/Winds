@@ -383,6 +383,48 @@ impl PersistentTerminalRegistry {
             .count()
     }
 
+    pub(crate) fn is_live_runtime(&self, runtime_namespace_id: RuntimeNamespaceId) -> bool {
+        self.runtimes
+            .get(&runtime_namespace_id)
+            .is_some_and(OwnedTerminalRuntime::is_live)
+    }
+
+    pub(crate) fn attachment_for_runtime(
+        &self,
+        runtime_namespace_id: RuntimeNamespaceId,
+    ) -> RuntimeResult<PersistentTerminalAttachment> {
+        let runtime = self
+            .runtimes
+            .get(&runtime_namespace_id)
+            .ok_or(PersistentTerminalRuntimeError::UnknownRuntime)?;
+        if !runtime.is_live() {
+            return Err(PersistentTerminalRuntimeError::RuntimeNotLive);
+        }
+        Ok(PersistentTerminalAttachment {
+            runtime_namespace_id,
+            owner_generation_id: self.owner_generation_id,
+        })
+    }
+
+    pub(crate) fn record_controller_changed(
+        &mut self,
+        runtime_namespace_id: RuntimeNamespaceId,
+        controller_client_id: Option<ClientConnectionId>,
+        observed_unix_ms: i64,
+    ) -> RuntimeResult<()> {
+        self.reconcile_replay_ingress(runtime_namespace_id)?;
+        self.with_replay_mut(|replay| {
+            replay.append_lifecycle(
+                runtime_namespace_id,
+                RuntimeLifecycleEventKind::ControllerChanged,
+                LifecycleProofClass::WindsObserved,
+                controller_client_id,
+                u64::try_from(observed_unix_ms).ok(),
+            )?;
+            Ok(())
+        })
+    }
+
     pub(crate) fn attach_observer(
         &mut self,
         connection_id: ClientConnectionId,

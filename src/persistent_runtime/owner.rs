@@ -1,5 +1,8 @@
 use crate::git::shell_profiles::ShellProfile;
 use crate::git::terminal::TerminalSize;
+use crate::persistent_runtime::controller::{
+    ControllerDisposition, ControllerRegistry, ControllerStateSnapshot, ControllerTransition,
+};
 use crate::persistent_runtime::domain::{
     ClientConnectionId, OwnerGenerationId, RuntimeAlias, RuntimeNamespaceId,
 };
@@ -156,6 +159,7 @@ pub(crate) struct PersistentOwner {
     ready_unix_ms: i64,
     startup_phase: OwnerStartupPhase,
     runtime_registry: PersistentTerminalRegistry,
+    controller_registry: ControllerRegistry,
 }
 
 impl PersistentOwner {
@@ -212,6 +216,7 @@ impl PersistentOwner {
             ready_unix_ms: now_unix_ms,
             startup_phase: OwnerStartupPhase::Ready,
             runtime_registry: PersistentTerminalRegistry::new(generation_id),
+            controller_registry: ControllerRegistry::new(generation_id),
         })
     }
 
@@ -243,6 +248,7 @@ impl PersistentOwner {
             ready_unix_ms: now_unix_ms,
             startup_phase: OwnerStartupPhase::Ready,
             runtime_registry: PersistentTerminalRegistry::new(generation_id),
+            controller_registry: ControllerRegistry::new(generation_id),
         })
     }
 
@@ -295,6 +301,8 @@ impl PersistentOwner {
                 now_unix_ms,
             )
             .map_err(|error| OwnerError::Runtime(error.to_string()))?;
+        self.controller_registry
+            .register_runtime(attachment.runtime_namespace_id());
         self.sync_runtime_activity(now_monotonic_ms);
         Ok(attachment)
     }
@@ -391,6 +399,11 @@ impl PersistentOwner {
             .runtime_registry
             .terminate(&self.store, attachment, now_unix_ms)
             .map_err(|error| OwnerError::Runtime(error.to_string()))?;
+        self.revoke_controller_for_runtime(
+            attachment.runtime_namespace_id(),
+            now_unix_ms,
+            now_monotonic_ms,
+        )?;
         self.sync_runtime_activity(now_monotonic_ms);
         Ok(snapshot)
     }
@@ -405,6 +418,11 @@ impl PersistentOwner {
             .runtime_registry
             .close(&self.store, attachment, now_unix_ms)
             .map_err(|error| OwnerError::Runtime(error.to_string()))?;
+        self.revoke_controller_for_runtime(
+            attachment.runtime_namespace_id(),
+            now_unix_ms,
+            now_monotonic_ms,
+        )?;
         self.sync_runtime_activity(now_monotonic_ms);
         Ok(snapshot)
     }
@@ -414,16 +432,201 @@ impl PersistentOwner {
         now_unix_ms: i64,
         now_monotonic_ms: u64,
     ) -> OwnerResult<usize> {
+        self.reap_expired_controller_leases(now_unix_ms, now_monotonic_ms)?;
         let observed = self
             .runtime_registry
             .poll_exits(&self.store, now_unix_ms)
             .map_err(|error| OwnerError::Runtime(error.to_string()))?;
+        self.revoke_dead_runtime_controllers(now_unix_ms, now_monotonic_ms)?;
         self.sync_runtime_activity(now_monotonic_ms);
         Ok(observed)
     }
 
     pub(crate) fn live_terminal_runtime_count(&self) -> usize {
         self.runtime_registry.live_count()
+    }
+
+    pub(crate) fn request_terminal_control(
+        &mut self,
+        client_connection_id: ClientConnectionId,
+        runtime_namespace_id: RuntimeNamespaceId,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> OwnerResult<ControllerStateSnapshot> {
+        self.reap_expired_controller_leases(now_unix_ms, now_monotonic_ms)?;
+        if !self.runtime_registry.is_live_runtime(runtime_namespace_id) {
+            return Err(OwnerError::Runtime(
+                "controller request requires a live owned runtime".to_owned(),
+            ));
+        }
+        if let Some(transition) = self
+            .controller_registry
+            .request_control(
+                runtime_namespace_id,
+                client_connection_id.clone(),
+                now_monotonic_ms,
+            )
+            .map_err(|error| OwnerError::Runtime(error.to_string()))?
+        {
+            self.record_controller_transition(&transition, now_unix_ms)?;
+        }
+        self.controller_registry
+            .control_state(
+                runtime_namespace_id,
+                &client_connection_id,
+                now_monotonic_ms,
+            )
+            .map_err(|error| OwnerError::Runtime(error.to_string()))
+    }
+
+    pub(crate) fn renew_terminal_control(
+        &mut self,
+        client_connection_id: &ClientConnectionId,
+        runtime_namespace_id: RuntimeNamespaceId,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> OwnerResult<ControllerStateSnapshot> {
+        self.reap_expired_controller_leases(now_unix_ms, now_monotonic_ms)?;
+        self.controller_registry
+            .renew_control(runtime_namespace_id, client_connection_id, now_monotonic_ms)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))?;
+        self.controller_registry
+            .control_state(runtime_namespace_id, client_connection_id, now_monotonic_ms)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))
+    }
+
+    pub(crate) fn release_terminal_control(
+        &mut self,
+        client_connection_id: &ClientConnectionId,
+        runtime_namespace_id: RuntimeNamespaceId,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> OwnerResult<ControllerStateSnapshot> {
+        self.reap_expired_controller_leases(now_unix_ms, now_monotonic_ms)?;
+        let transition = self
+            .controller_registry
+            .release_control(runtime_namespace_id, client_connection_id, now_monotonic_ms)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))?;
+        self.record_controller_transition(&transition, now_unix_ms)?;
+        self.controller_registry
+            .control_state(runtime_namespace_id, client_connection_id, now_monotonic_ms)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))
+    }
+
+    pub(crate) fn terminal_control_state(
+        &mut self,
+        client_connection_id: &ClientConnectionId,
+        runtime_namespace_id: RuntimeNamespaceId,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> OwnerResult<ControllerStateSnapshot> {
+        self.reap_expired_controller_leases(now_unix_ms, now_monotonic_ms)?;
+        self.controller_registry
+            .control_state(runtime_namespace_id, client_connection_id, now_monotonic_ms)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))
+    }
+
+    pub(crate) fn disconnect_terminal_controller(
+        &mut self,
+        client_connection_id: &ClientConnectionId,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> OwnerResult<usize> {
+        let transitions = self
+            .controller_registry
+            .disconnect_client(client_connection_id, now_monotonic_ms);
+        for transition in &transitions {
+            self.record_controller_transition(transition, now_unix_ms)?;
+        }
+        Ok(transitions.len())
+    }
+
+    pub(crate) fn controller_send_terminal_input(
+        &mut self,
+        client_connection_id: &ClientConnectionId,
+        runtime_namespace_id: RuntimeNamespaceId,
+        bytes: &[u8],
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> OwnerResult<()> {
+        self.authorize_controller_mutation(
+            client_connection_id,
+            runtime_namespace_id,
+            now_unix_ms,
+            now_monotonic_ms,
+        )?;
+        let attachment = self
+            .runtime_registry
+            .attachment_for_runtime(runtime_namespace_id)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))?;
+        self.runtime_registry
+            .send_input(&attachment, bytes)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))
+    }
+
+    pub(crate) fn controller_resize_terminal(
+        &mut self,
+        client_connection_id: &ClientConnectionId,
+        runtime_namespace_id: RuntimeNamespaceId,
+        terminal_size: TerminalSize,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> OwnerResult<()> {
+        self.authorize_controller_mutation(
+            client_connection_id,
+            runtime_namespace_id,
+            now_unix_ms,
+            now_monotonic_ms,
+        )?;
+        let attachment = self
+            .runtime_registry
+            .attachment_for_runtime(runtime_namespace_id)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))?;
+        self.runtime_registry
+            .resize(&attachment, terminal_size)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))
+    }
+
+    pub(crate) fn controller_interrupt_terminal(
+        &mut self,
+        client_connection_id: &ClientConnectionId,
+        runtime_namespace_id: RuntimeNamespaceId,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> OwnerResult<()> {
+        self.authorize_controller_mutation(
+            client_connection_id,
+            runtime_namespace_id,
+            now_unix_ms,
+            now_monotonic_ms,
+        )?;
+        let attachment = self
+            .runtime_registry
+            .attachment_for_runtime(runtime_namespace_id)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))?;
+        self.runtime_registry
+            .interrupt(&attachment)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))
+    }
+
+    pub(crate) fn controller_stop_terminal(
+        &mut self,
+        client_connection_id: &ClientConnectionId,
+        runtime_namespace_id: RuntimeNamespaceId,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> OwnerResult<PersistentTerminalSnapshot> {
+        self.authorize_controller_mutation(
+            client_connection_id,
+            runtime_namespace_id,
+            now_unix_ms,
+            now_monotonic_ms,
+        )?;
+        let attachment = self
+            .runtime_registry
+            .attachment_for_runtime(runtime_namespace_id)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))?;
+        self.terminate_terminal_runtime(&attachment, now_unix_ms, now_monotonic_ms)
     }
 
     pub(crate) fn attach_terminal_observer(
@@ -457,6 +660,95 @@ impl PersistentOwner {
     pub(crate) fn detach_terminal_observer(&mut self, handle: &ObserverHandle) -> OwnerResult<()> {
         self.runtime_registry
             .detach_observer(handle)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))
+    }
+
+    fn authorize_controller_mutation(
+        &mut self,
+        client_connection_id: &ClientConnectionId,
+        runtime_namespace_id: RuntimeNamespaceId,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> OwnerResult<()> {
+        self.reap_expired_controller_leases(now_unix_ms, now_monotonic_ms)?;
+        self.controller_registry
+            .authorize_mutation(runtime_namespace_id, client_connection_id, now_monotonic_ms)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))?;
+        Ok(())
+    }
+
+    fn reap_expired_controller_leases(
+        &mut self,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> OwnerResult<usize> {
+        let transitions = self
+            .controller_registry
+            .expire_leases(now_monotonic_ms)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))?;
+        for transition in &transitions {
+            self.record_controller_transition(transition, now_unix_ms)?;
+        }
+        Ok(transitions.len())
+    }
+
+    fn revoke_dead_runtime_controllers(
+        &mut self,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> OwnerResult<()> {
+        let runtime_ids = self
+            .controller_registry
+            .active_runtime_ids(now_monotonic_ms)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))?;
+        for runtime_namespace_id in runtime_ids {
+            if !self.runtime_registry.is_live_runtime(runtime_namespace_id) {
+                self.revoke_controller_for_runtime(
+                    runtime_namespace_id,
+                    now_unix_ms,
+                    now_monotonic_ms,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn revoke_controller_for_runtime(
+        &mut self,
+        runtime_namespace_id: RuntimeNamespaceId,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> OwnerResult<()> {
+        if let Some(transition) = self
+            .controller_registry
+            .owner_revoke(runtime_namespace_id, now_monotonic_ms)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))?
+        {
+            self.record_controller_transition(&transition, now_unix_ms)?;
+        }
+        Ok(())
+    }
+
+    fn record_controller_transition(
+        &mut self,
+        transition: &ControllerTransition,
+        now_unix_ms: i64,
+    ) -> OwnerResult<()> {
+        let controller_client_id = match transition.disposition {
+            ControllerDisposition::Granted => {
+                Some(transition.identity.controller_client_id.clone())
+            }
+            ControllerDisposition::Released
+            | ControllerDisposition::Disconnected
+            | ControllerDisposition::Expired
+            | ControllerDisposition::OwnerRevoked => None,
+        };
+        self.runtime_registry
+            .record_controller_changed(
+                transition.identity.runtime_namespace_id,
+                controller_client_id,
+                now_unix_ms,
+            )
             .map_err(|error| OwnerError::Runtime(error.to_string()))
     }
 
@@ -751,3 +1043,7 @@ mod t151_persistent_owner_shell_tests;
 #[cfg(test)]
 #[path = "../t152_persistent_terminal_tests.rs"]
 mod t152_persistent_terminal_tests;
+
+#[cfg(test)]
+#[path = "../t154_controller_owner_tests.rs"]
+mod t154_controller_owner_tests;
