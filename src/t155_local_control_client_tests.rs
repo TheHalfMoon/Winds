@@ -501,6 +501,8 @@ fn t155_real_unix_private_endpoint_performs_same_user_generation_handshake() {
         NEXT_ROOT.fetch_add(1, Ordering::Relaxed)
     ));
     let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let root = root.canonicalize().unwrap();
     let listener = BoundUnixListener::bind(&root).unwrap();
     let owner_generation = generation(10);
     let expected_connection = connection("real-unix-client");
