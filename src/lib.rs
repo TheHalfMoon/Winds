@@ -49,6 +49,11 @@ mod git;
 )]
 mod model_mesh;
 mod model_mesh_cli;
+#[allow(
+    dead_code,
+    reason = "Spec 011 T146 pure persistent-runtime domain; later tasks add callers"
+)]
+pub(crate) mod persistent_runtime;
 mod store;
 #[cfg(test)]
 mod t068_store_regression_tests;
@@ -102,6 +107,8 @@ mod t136_desktop_files_tests;
 mod t137_desktop_inspection_tests;
 #[cfg(test)]
 mod t138_desktop_attention_tests;
+#[cfg(test)]
+mod t146_persistent_runtime_domain_tests;
 mod workbench;
 mod workflow_cli;
 
