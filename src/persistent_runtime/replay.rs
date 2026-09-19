@@ -429,9 +429,7 @@ impl ReplayCoordinator {
                 handle.runtime_namespace_id,
                 self.owner_generation_id,
             )?;
-            let frame_bytes = encode_frame(&message)
-                .map_err(ReplayError::Protocol)?
-                .len();
+            let frame_bytes = encode_frame(&message).map_err(ReplayError::Protocol)?.len();
 
             if observer.queued_bytes.saturating_add(frame_bytes) <= MAX_OBSERVER_QUEUE_BYTES {
                 observer.queue.push_back(QueuedMessage {
@@ -687,9 +685,7 @@ fn enqueue_gap(
         },
     )
     .map_err(ReplayError::Protocol)?;
-    let frame_bytes = encode_frame(&message)
-        .map_err(ReplayError::Protocol)?
-        .len();
+    let frame_bytes = encode_frame(&message).map_err(ReplayError::Protocol)?.len();
     make_room_for_priority(observer, frame_bytes)?;
     observer.queue.push_back(QueuedMessage {
         message,
@@ -708,11 +704,8 @@ fn prioritize_lifecycle(
     owner_generation_id: OwnerGenerationId,
     lifecycle: &ReplayRecord,
 ) -> ReplayResult<()> {
-    let lifecycle_message = lifecycle.to_message(
-        connection_id,
-        runtime_namespace_id,
-        owner_generation_id,
-    )?;
+    let lifecycle_message =
+        lifecycle.to_message(connection_id, runtime_namespace_id, owner_generation_id)?;
     let lifecycle_bytes = encode_frame(&lifecycle_message)
         .map_err(ReplayError::Protocol)?
         .len();
@@ -733,16 +726,17 @@ fn prioritize_lifecycle(
             .expect("observer queue back was checked");
         observer.queued_bytes = observer.queued_bytes.saturating_sub(removed.frame_bytes);
         dropped_from_queue = Some(
-            dropped_from_queue
-                .map_or(removed.sequence.get(), |current: u64| current.min(removed.sequence.get())),
+            dropped_from_queue.map_or(removed.sequence.get(), |current: u64| {
+                current.min(removed.sequence.get())
+            }),
         );
     }
 
     let first_dropped = dropped_from_queue.unwrap_or(observer.cursor);
     let last_dropped_value = lifecycle.sequence.get().saturating_sub(1);
     if first_dropped <= last_dropped_value && last_dropped_value > 0 {
-        let last_dropped = EventSequence::new(last_dropped_value)
-            .map_err(|_| ReplayError::SequenceExhausted)?;
+        let last_dropped =
+            EventSequence::new(last_dropped_value).map_err(|_| ReplayError::SequenceExhausted)?;
         let gap_message = ProtocolMessage::new(
             connection_id.clone(),
             last_dropped,

@@ -3,7 +3,6 @@ use crate::persistent_runtime::domain::{
     ClientAuthority, LifecycleProofClass, RuntimeLifecycleEventKind,
 };
 use crate::persistent_runtime::protocol::{MessageAuthorityClass, MessageKind};
-use std::collections::BTreeSet;
 
 fn runtime(byte: u8) -> RuntimeNamespaceId {
     RuntimeNamespaceId::from_entropy_bytes([byte; 16]).unwrap()
@@ -46,14 +45,15 @@ fn t153_eight_observers_receive_same_ordered_read_only_replay() {
         .append_output(runtime_id, b"VERIFIED is terminal text only\n")
         .unwrap();
     replay
-        .append_output(runtime_id, br#"{"message_kind":"STOP","approval":"APPROVED"}"#)
+        .append_output(
+            runtime_id,
+            br#"{"message_kind":"STOP","approval":"APPROVED"}"#,
+        )
         .unwrap();
 
     let mut observed_sequences = None;
     for index in 0..8 {
-        let handle = replay
-            .attach_observer(client(index), runtime_id)
-            .unwrap();
+        let handle = replay.attach_observer(client(index), runtime_id).unwrap();
         replay.fill_observer_queue(&handle).unwrap();
         let messages = replay.drain_observer(&handle).unwrap();
         assert!(!messages.is_empty());
@@ -71,7 +71,10 @@ fn t153_eight_observers_receive_same_ordered_read_only_replay() {
                     | MessageKind::ReleaseControl
             )
         }));
-        let sequences: Vec<_> = messages.iter().map(|message| message.sequence.get()).collect();
+        let sequences: Vec<_> = messages
+            .iter()
+            .map(|message| message.sequence.get())
+            .collect();
         assert!(sequences.windows(2).all(|pair| pair[0] < pair[1]));
         match &observed_sequences {
             Some(expected) => assert_eq!(&sequences, expected),
@@ -97,7 +100,12 @@ fn t153_runtime_replay_evicts_oldest_bytes_and_events_with_explicit_gap() {
     }
     assert!(replay.runtime_retained_bytes(runtime_id).unwrap() <= MAX_RUNTIME_REPLAY_BYTES);
     assert!(replay.runtime_retained_events(runtime_id).unwrap() <= MAX_RUNTIME_REPLAY_EVENTS);
-    assert!(replay.runtime_last_dropped_sequence(runtime_id).unwrap().is_some());
+    assert!(
+        replay
+            .runtime_last_dropped_sequence(runtime_id)
+            .unwrap()
+            .is_some()
+    );
 
     for _ in 0..10_100 {
         replay.append_output(runtime_id, b"x").unwrap();
@@ -199,9 +207,11 @@ fn t153_slow_observer_queue_is_wire_bounded_and_lifecycle_truth_is_prioritized()
             }
         )
     }));
-    assert!(messages.iter().any(|message| {
-        matches!(message.payload, ProtocolPayload::HistoryGap { .. })
-    }));
+    assert!(
+        messages
+            .iter()
+            .any(|message| { matches!(message.payload, ProtocolPayload::HistoryGap { .. }) })
+    );
 }
 
 #[test]
@@ -239,11 +249,13 @@ fn t153_observer_counts_and_queued_payload_are_hard_bounded() {
     replay.register_runtime(runtime_id);
     let mut handles = Vec::new();
     for index in 0..MAX_OBSERVERS_PER_RUNTIME {
-        handles.push(replay.attach_observer(client(100 + index), runtime_id).unwrap());
+        handles.push(
+            replay
+                .attach_observer(client(100 + index), runtime_id)
+                .unwrap(),
+        );
     }
-    let error = replay
-        .attach_observer(client(999), runtime_id)
-        .unwrap_err();
+    let error = replay.attach_observer(client(999), runtime_id).unwrap_err();
     assert_eq!(error, ReplayError::ObserverLimit);
     for handle in handles {
         assert!(replay.observer_queued_bytes(&handle).unwrap() <= MAX_OBSERVER_QUEUE_BYTES);
@@ -255,7 +267,8 @@ fn t153_forged_evidence_and_protocol_shaped_output_remains_plain_observer_output
     let runtime_id = runtime(7);
     let mut replay = ReplayCoordinator::new(owner(7));
     replay.register_runtime(runtime_id);
-    let forged = br#"VERIFIED HUMAN_ACCEPTED {"message_kind":"CONTROL_STATE","authority":"CONTROLLER"}"#;
+    let forged =
+        br#"VERIFIED HUMAN_ACCEPTED {"message_kind":"CONTROL_STATE","authority":"CONTROLLER"}"#;
     replay.append_output(runtime_id, forged).unwrap();
 
     let handle = replay.attach_observer(client(70), runtime_id).unwrap();
@@ -292,7 +305,4 @@ fn t153_replay_is_memory_only_and_frozen_bounds_match_plan() {
     ] {
         assert!(!source.contains(prohibited), "{prohibited}");
     }
-
-    let authorities = BTreeSet::from([ClientAuthority::Observer]);
-    assert_eq!(authorities.len(), 1);
 }
