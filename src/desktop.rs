@@ -678,7 +678,7 @@ pub(crate) fn classify_runtime_state(
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopBridgePersistentRuntimeTruthProjection {
     pub runtime_namespace_id: String,

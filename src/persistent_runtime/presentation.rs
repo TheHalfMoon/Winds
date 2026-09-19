@@ -358,7 +358,7 @@ pub(crate) struct WorkbenchRuntimeProjection {
     pub(crate) truth_source: &'static str,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct DesktopRuntimeTruthProjection {
     pub(crate) runtime_namespace_id: String,
