@@ -1,10 +1,13 @@
 use crate::git::shell_profiles::ShellProfile;
 use crate::git::terminal::{TerminalExit, TerminalSession, TerminalSessionId, TerminalSize};
 use crate::persistent_runtime::domain::{
-    ContinuityClass, EndpointAvailability, OwnerGenerationId, OwnershipState, ProcessLiveness,
-    RuntimeAlias, RuntimeLifecycleEventKind, RuntimeNamespaceId, RuntimeTruth,
+    ClientConnectionId, ContinuityClass, EndpointAvailability, LifecycleProofClass,
+    OwnerGenerationId, OwnershipState, ProcessLiveness, RuntimeAlias, RuntimeLifecycleEventKind,
+    RuntimeNamespaceId, RuntimeTruth,
 };
 use crate::persistent_runtime::persistence::PersistentRuntimeRecordInput;
+use crate::persistent_runtime::protocol::ProtocolMessage;
+use crate::persistent_runtime::replay::{ObserverHandle, ReplayCoordinator, ReplayError};
 use crate::store::Store;
 use std::collections::{HashMap, VecDeque};
 use std::error::Error;
@@ -13,7 +16,7 @@ use std::io::Read;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, TrySendError};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, TryLockError};
 use std::thread;
 use std::time::Duration;
 
@@ -29,6 +32,7 @@ pub(crate) enum PersistentTerminalRuntimeError {
     RuntimeNotLive,
     RuntimeNamespaceCollision,
     OutputGap,
+    Replay(String),
 }
 
 impl fmt::Display for PersistentTerminalRuntimeError {
@@ -57,8 +61,9 @@ impl fmt::Display for PersistentTerminalRuntimeError {
                 "generated persistent terminal runtime namespace already exists in this owner",
             ),
             Self::OutputGap => formatter.write_str(
-                "persistent terminal output exceeded the bounded T152 drain queue; replay is unavailable",
+                "persistent terminal output exceeded the bounded T152 direct-output queue; the direct stream is incomplete",
             ),
+            Self::Replay(message) => write!(formatter, "persistent terminal replay failed: {message}"),
         }
     }
 }
@@ -98,23 +103,36 @@ const OUTPUT_PUMP_CHUNK_BYTES: usize = 4 * 1024;
 const OUTPUT_PUMP_QUEUE_CHUNKS: usize = 64;
 const OUTPUT_PUMP_POLL_MS: u64 = 25;
 
+type SharedReplay = Arc<Mutex<ReplayCoordinator>>;
+
 struct RuntimeOutputPump {
     receiver: Receiver<Vec<u8>>,
     closed: Arc<AtomicBool>,
     error: Arc<Mutex<Option<String>>>,
     output_gap: Arc<AtomicBool>,
+    replay_source_gap: Arc<AtomicBool>,
+    replay_error: Arc<Mutex<Option<String>>>,
     pending: VecDeque<u8>,
 }
 
 impl RuntimeOutputPump {
-    fn start(mut reader: Box<dyn Read + Send>) -> RuntimeResult<Self> {
+    fn start(
+        mut reader: Box<dyn Read + Send>,
+        runtime_namespace_id: RuntimeNamespaceId,
+        replay: SharedReplay,
+    ) -> RuntimeResult<Self> {
         let (sender, receiver) = mpsc::sync_channel(OUTPUT_PUMP_QUEUE_CHUNKS);
         let closed = Arc::new(AtomicBool::new(false));
         let error = Arc::new(Mutex::new(None));
         let output_gap = Arc::new(AtomicBool::new(false));
+        let replay_source_gap = Arc::new(AtomicBool::new(false));
+        let replay_error = Arc::new(Mutex::new(None));
         let thread_closed = Arc::clone(&closed);
         let thread_error = Arc::clone(&error);
         let thread_output_gap = Arc::clone(&output_gap);
+        let thread_replay_source_gap = Arc::clone(&replay_source_gap);
+        let thread_replay_error = Arc::clone(&replay_error);
+        let thread_replay = Arc::clone(&replay);
 
         thread::Builder::new()
             .name("winds-persistent-pty-output".to_owned())
@@ -126,16 +144,49 @@ impl RuntimeOutputPump {
                             thread_closed.store(true, Ordering::Release);
                             return;
                         }
-                        Ok(count) => match sender.try_send(buffer[..count].to_vec()) {
-                            Ok(()) => {}
-                            Err(TrySendError::Full(_)) => {
-                                thread_output_gap.store(true, Ordering::Release);
+                        Ok(count) => {
+                            let chunk = buffer[..count].to_vec();
+                            match thread_replay.try_lock() {
+                                Ok(mut coordinator) => {
+                                    if thread_replay_source_gap.swap(false, Ordering::AcqRel)
+                                        && let Err(error) =
+                                            coordinator.note_source_gap(runtime_namespace_id)
+                                    {
+                                        store_replay_error(&thread_replay_error, error);
+                                        thread_replay_source_gap.store(true, Ordering::Release);
+                                    }
+                                    if let Err(error) =
+                                        coordinator.append_output(runtime_namespace_id, &chunk)
+                                    {
+                                        store_replay_error(&thread_replay_error, error);
+                                        thread_replay_source_gap.store(true, Ordering::Release);
+                                    }
+                                }
+                                Err(TryLockError::WouldBlock) => {
+                                    thread_replay_source_gap.store(true, Ordering::Release);
+                                }
+                                Err(TryLockError::Poisoned(_)) => {
+                                    if let Ok(mut slot) = thread_replay_error.lock() {
+                                        *slot = Some(
+                                            "persistent replay coordinator lock was poisoned"
+                                                .to_owned(),
+                                        );
+                                    }
+                                    thread_replay_source_gap.store(true, Ordering::Release);
+                                }
                             }
-                            Err(TrySendError::Disconnected(_)) => {
-                                thread_closed.store(true, Ordering::Release);
-                                return;
+
+                            match sender.try_send(chunk) {
+                                Ok(()) => {}
+                                Err(TrySendError::Full(_)) => {
+                                    thread_output_gap.store(true, Ordering::Release);
+                                }
+                                Err(TrySendError::Disconnected(_)) => {
+                                    thread_closed.store(true, Ordering::Release);
+                                    return;
+                                }
                             }
-                        },
+                        }
                         Err(read_error) => {
                             if let Ok(mut slot) = thread_error.lock() {
                                 *slot = Some(read_error.to_string());
@@ -157,8 +208,30 @@ impl RuntimeOutputPump {
             closed,
             error,
             output_gap,
+            replay_source_gap,
+            replay_error,
             pending: VecDeque::new(),
         })
+    }
+
+    fn take_replay_source_gap(&self) -> bool {
+        self.replay_source_gap.swap(false, Ordering::AcqRel)
+    }
+
+    fn replay_error(&self) -> RuntimeResult<()> {
+        let error = self
+            .replay_error
+            .lock()
+            .map_err(|_| {
+                PersistentTerminalRuntimeError::Replay(
+                    "persistent replay error state was poisoned".to_owned(),
+                )
+            })?
+            .clone();
+        if let Some(error) = error {
+            return Err(PersistentTerminalRuntimeError::Replay(error));
+        }
+        Ok(())
     }
 
     fn read(&mut self, buffer: &mut [u8]) -> RuntimeResult<usize> {
@@ -226,6 +299,12 @@ impl RuntimeOutputPump {
     }
 }
 
+fn store_replay_error(slot: &Arc<Mutex<Option<String>>>, error: ReplayError) {
+    if let Ok(mut stored) = slot.lock() {
+        *stored = Some(error.to_string());
+    }
+}
+
 struct OwnedTerminalRuntime {
     runtime_namespace_id: RuntimeNamespaceId,
     owner_generation_id: OwnerGenerationId,
@@ -285,6 +364,7 @@ impl OwnedTerminalRuntime {
 pub(crate) struct PersistentTerminalRegistry {
     owner_generation_id: OwnerGenerationId,
     runtimes: HashMap<RuntimeNamespaceId, OwnedTerminalRuntime>,
+    replay: SharedReplay,
 }
 
 impl PersistentTerminalRegistry {
@@ -292,6 +372,7 @@ impl PersistentTerminalRegistry {
         Self {
             owner_generation_id,
             runtimes: HashMap::new(),
+            replay: Arc::new(Mutex::new(ReplayCoordinator::new(owner_generation_id))),
         }
     }
 
@@ -300,6 +381,31 @@ impl PersistentTerminalRegistry {
             .values()
             .filter(|runtime| runtime.is_live())
             .count()
+    }
+
+    pub(crate) fn attach_observer(
+        &mut self,
+        connection_id: ClientConnectionId,
+        runtime_namespace_id: RuntimeNamespaceId,
+    ) -> RuntimeResult<ObserverHandle> {
+        self.reconcile_replay_ingress(runtime_namespace_id)?;
+        self.with_replay_mut(|replay| replay.attach_observer(connection_id, runtime_namespace_id))
+    }
+
+    pub(crate) fn detach_observer(&mut self, handle: &ObserverHandle) -> RuntimeResult<()> {
+        self.with_replay_mut(|replay| replay.detach_observer(handle))
+    }
+
+    pub(crate) fn fill_observer_queue(&mut self, handle: &ObserverHandle) -> RuntimeResult<usize> {
+        self.reconcile_replay_ingress(handle.runtime_namespace_id())?;
+        self.with_replay_mut(|replay| replay.fill_observer_queue(handle))
+    }
+
+    pub(crate) fn drain_observer(
+        &mut self,
+        handle: &ObserverHandle,
+    ) -> RuntimeResult<Vec<ProtocolMessage>> {
+        self.with_replay_mut(|replay| replay.drain_observer(handle))
     }
 
     pub(crate) fn start_shell(
@@ -332,9 +438,39 @@ impl PersistentTerminalRegistry {
             }
         };
 
-        let output_pump = match RuntimeOutputPump::start(output_reader) {
+        self.with_replay_mut(|replay| {
+            replay.register_runtime(runtime_namespace_id);
+            Ok(())
+        })?;
+        if let Err(error) = self.with_replay_mut(|replay| {
+            replay.append_lifecycle(
+                runtime_namespace_id,
+                RuntimeLifecycleEventKind::OwnershipEstablished,
+                LifecycleProofClass::WindsObserved,
+                None,
+                u64::try_from(now_unix_ms).ok(),
+            )?;
+            Ok(())
+        }) {
+            let _ = self.with_replay_mut(|replay| replay.unregister_runtime(runtime_namespace_id));
+            let cleanup = session.terminate();
+            if let Err(cleanup_error) = cleanup {
+                return Err(PersistentTerminalRuntimeError::Terminal(format!(
+                    "{error}; bounded cleanup after replay initialization failure also failed: {cleanup_error}"
+                )));
+            }
+            return Err(error);
+        }
+
+        let output_pump = match RuntimeOutputPump::start(
+            output_reader,
+            runtime_namespace_id,
+            Arc::clone(&self.replay),
+        ) {
             Ok(pump) => pump,
             Err(error) => {
+                let _ =
+                    self.with_replay_mut(|replay| replay.unregister_runtime(runtime_namespace_id));
                 let cleanup = session.terminate();
                 let suffix = cleanup
                     .err()
@@ -370,6 +506,7 @@ impl PersistentTerminalRegistry {
         if let Err(error) = persist_runtime(store, &runtime) {
             let mut runtime = runtime;
             let cleanup = runtime.session.terminate();
+            let _ = self.with_replay_mut(|replay| replay.unregister_runtime(runtime_namespace_id));
             if let Err(cleanup_error) = cleanup {
                 return Err(PersistentTerminalRuntimeError::Terminal(format!(
                     "{error}; bounded cleanup after persistence failure also failed: {cleanup_error}"
@@ -567,6 +704,7 @@ impl PersistentTerminalRegistry {
             runtime.mark_final(exit, event_kind, now_unix_ms);
         }
         self.flush_dirty(store, attachment.runtime_namespace_id)?;
+        self.append_lifecycle_if_changed(attachment.runtime_namespace_id, event_kind, now_unix_ms)?;
         Ok(self
             .runtimes
             .get(&attachment.runtime_namespace_id)
@@ -605,6 +743,11 @@ impl PersistentTerminalRegistry {
         );
         let _ = runtime;
         self.flush_dirty(store, runtime_namespace_id)?;
+        self.append_lifecycle_if_changed(
+            runtime_namespace_id,
+            RuntimeLifecycleEventKind::ProcessStateObserved,
+            now_unix_ms,
+        )?;
         Ok(true)
     }
 
@@ -622,6 +765,62 @@ impl PersistentTerminalRegistry {
             runtime.persistence_dirty = false;
         }
         Ok(())
+    }
+
+    fn reconcile_replay_ingress(
+        &mut self,
+        runtime_namespace_id: RuntimeNamespaceId,
+    ) -> RuntimeResult<()> {
+        let (source_gap, replay_error) = {
+            let runtime = self
+                .runtimes
+                .get(&runtime_namespace_id)
+                .ok_or(PersistentTerminalRuntimeError::UnknownRuntime)?;
+            let source_gap = runtime.output_pump.take_replay_source_gap();
+            let replay_error = runtime.output_pump.replay_error().err();
+            (source_gap, replay_error)
+        };
+        if let Some(error) = replay_error {
+            return Err(error);
+        }
+        if source_gap {
+            self.with_replay_mut(|replay| {
+                replay.note_source_gap(runtime_namespace_id)?;
+                Ok(())
+            })?;
+        }
+        Ok(())
+    }
+
+    fn append_lifecycle_if_changed(
+        &mut self,
+        runtime_namespace_id: RuntimeNamespaceId,
+        kind: RuntimeLifecycleEventKind,
+        observed_unix_ms: i64,
+    ) -> RuntimeResult<()> {
+        self.reconcile_replay_ingress(runtime_namespace_id)?;
+        self.with_replay_mut(|replay| {
+            replay.append_lifecycle_if_changed(
+                runtime_namespace_id,
+                kind,
+                LifecycleProofClass::WindsObserved,
+                u64::try_from(observed_unix_ms).ok(),
+            )?;
+            Ok(())
+        })
+    }
+
+    fn with_replay_mut<T, F>(&self, operation: F) -> RuntimeResult<T>
+    where
+        F: FnOnce(&mut ReplayCoordinator) -> Result<T, ReplayError>,
+    {
+        let mut replay = self.replay.lock().map_err(|_| {
+            PersistentTerminalRuntimeError::Replay(
+                "persistent replay coordinator lock was poisoned".to_owned(),
+            )
+        })?;
+        operation(&mut replay)
+            .map_err(|error| PersistentTerminalRuntimeError::Replay(error.to_string()))
     }
 
     fn validate_attachment(&self, attachment: &PersistentTerminalAttachment) -> RuntimeResult<()> {
@@ -699,6 +898,17 @@ mod tests {
     use std::io::Cursor;
     use std::time::Instant;
 
+    fn replay_fixture(byte: u8) -> (RuntimeNamespaceId, SharedReplay) {
+        let runtime_namespace_id = RuntimeNamespaceId::from_entropy_bytes([byte; 16]).unwrap();
+        let owner_generation_id = OwnerGenerationId::from_entropy_bytes([byte; 16]).unwrap();
+        let replay = Arc::new(Mutex::new(ReplayCoordinator::new(owner_generation_id)));
+        replay
+            .lock()
+            .unwrap()
+            .register_runtime(runtime_namespace_id);
+        (runtime_namespace_id, replay)
+    }
+
     #[test]
     fn t152_output_pump_saturation_is_bounded_nonblocking_and_fail_closed() {
         let payload = vec![
@@ -707,8 +917,10 @@ mod tests {
                 .checked_mul(OUTPUT_PUMP_QUEUE_CHUNKS + 8)
                 .expect("bounded test payload size")
         ];
+        let (runtime_namespace_id, replay) = replay_fixture(0x31);
         let mut pump =
-            RuntimeOutputPump::start(Box::new(Cursor::new(payload))).expect("pump must start");
+            RuntimeOutputPump::start(Box::new(Cursor::new(payload)), runtime_namespace_id, replay)
+                .expect("pump must start");
         let deadline = Instant::now() + Duration::from_secs(2);
         while !pump.closed.load(Ordering::Acquire) && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(10));
@@ -728,5 +940,70 @@ mod tests {
             pump.read(&mut output),
             Err(PersistentTerminalRuntimeError::OutputGap)
         );
+    }
+
+    #[test]
+    fn t153_output_pump_captures_replay_without_presentation_reads() {
+        let payload = b"detached persistent replay output".to_vec();
+        let (runtime_namespace_id, replay) = replay_fixture(0x32);
+        let pump = RuntimeOutputPump::start(
+            Box::new(Cursor::new(payload.clone())),
+            runtime_namespace_id,
+            Arc::clone(&replay),
+        )
+        .expect("pump must start");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !pump.closed.load(Ordering::Acquire) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(pump.closed.load(Ordering::Acquire));
+
+        let mut coordinator = replay.lock().unwrap();
+        let handle = coordinator
+            .attach_observer(
+                ClientConnectionId::new("runtime-pump-observer").unwrap(),
+                runtime_namespace_id,
+            )
+            .unwrap();
+        coordinator.fill_observer_queue(&handle).unwrap();
+        let messages = coordinator.drain_observer(&handle).unwrap();
+        let captured: Vec<u8> = messages
+            .iter()
+            .filter_map(|message| match &message.payload {
+                crate::persistent_runtime::protocol::ProtocolPayload::OutputEvent { chunk } => {
+                    Some(chunk.as_slice())
+                }
+                _ => None,
+            })
+            .flatten()
+            .copied()
+            .collect();
+        assert_eq!(captured, payload);
+    }
+
+    #[test]
+    fn t153_replay_lock_contention_never_blocks_pty_drain_and_marks_gap() {
+        let payload = vec![b'g'; OUTPUT_PUMP_CHUNK_BYTES * 8];
+        let (runtime_namespace_id, replay) = replay_fixture(0x33);
+        let guard = replay.lock().unwrap();
+        let pump = RuntimeOutputPump::start(
+            Box::new(Cursor::new(payload)),
+            runtime_namespace_id,
+            Arc::clone(&replay),
+        )
+        .expect("pump must start");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !pump.closed.load(Ordering::Acquire) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            pump.closed.load(Ordering::Acquire),
+            "replay coordination must never block the PTY reader"
+        );
+        assert!(
+            pump.replay_source_gap.load(Ordering::Acquire),
+            "contention must become an explicit replay source gap"
+        );
+        drop(guard);
     }
 }

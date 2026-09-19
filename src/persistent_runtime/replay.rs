@@ -243,6 +243,25 @@ impl ReplayCoordinator {
             .or_insert_with(RuntimeReplay::new);
     }
 
+    pub(crate) fn unregister_runtime(
+        &mut self,
+        runtime_namespace_id: RuntimeNamespaceId,
+    ) -> ReplayResult<()> {
+        let runtime = self
+            .runtimes
+            .remove(&runtime_namespace_id)
+            .ok_or(ReplayError::UnknownRuntime)?;
+        self.aggregate_retained_bytes = self
+            .aggregate_retained_bytes
+            .saturating_sub(runtime.retained_bytes);
+        self.observers
+            .retain(|(runtime_id, _), _| *runtime_id != runtime_namespace_id);
+        if self.fair_eviction_cursor == Some(runtime_namespace_id) {
+            self.fair_eviction_cursor = None;
+        }
+        Ok(())
+    }
+
     pub(crate) fn append_output(
         &mut self,
         runtime_namespace_id: RuntimeNamespaceId,
@@ -375,6 +394,7 @@ impl ReplayCoordinator {
             .ok_or(ReplayError::UnknownRuntime)?;
         let earliest = runtime.earliest_available_value();
         let last_dropped = runtime.last_dropped_sequence;
+        let next_sequence = runtime.next_sequence;
         let records: Vec<_> = runtime.records.iter().cloned().collect();
 
         let key = (handle.runtime_namespace_id, handle.connection_id.clone());
@@ -472,6 +492,27 @@ impl ReplayCoordinator {
             disconnect_slow_observer(observer);
             return Err(ReplayError::SlowClientBackpressure);
         }
+
+        if let Some(last) = last_dropped.filter(|value| value.get() >= observer.cursor) {
+            let first_available = last
+                .get()
+                .checked_add(1)
+                .ok_or(ReplayError::SequenceExhausted)?;
+            if first_available > next_sequence {
+                return Err(ReplayError::SequenceExhausted);
+            }
+            enqueue_gap(
+                observer,
+                &handle.connection_id,
+                handle.runtime_namespace_id,
+                self.owner_generation_id,
+                first_available,
+                last,
+            )?;
+            observer.cursor = first_available;
+            added = added.saturating_add(1);
+        }
+
         Ok(added)
     }
 

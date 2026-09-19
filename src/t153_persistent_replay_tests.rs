@@ -1,6 +1,17 @@
 use super::*;
-use crate::persistent_runtime::domain::{LifecycleProofClass, RuntimeLifecycleEventKind};
-use crate::persistent_runtime::protocol::{MessageAuthorityClass, MessageKind};
+use crate::git::shell_profiles::{ShellProfile, discover_native_shell_profiles};
+use crate::git::terminal::TerminalSize;
+use crate::git::workspace_inventory::WorkspaceEnvironmentInventory;
+use crate::persistent_runtime::domain::{
+    LifecycleProofClass, RuntimeAlias, RuntimeLifecycleEventKind,
+};
+use crate::persistent_runtime::owner::PersistentOwner;
+use crate::persistent_runtime::protocol::{MessageAuthorityClass, MessageKind, ProtocolPayload};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
+use std::time::Duration;
 
 fn runtime(byte: u8) -> RuntimeNamespaceId {
     RuntimeNamespaceId::from_entropy_bytes([byte; 16]).unwrap()
@@ -12,6 +23,120 @@ fn owner(byte: u8) -> OwnerGenerationId {
 
 fn client(index: usize) -> ClientConnectionId {
     ClientConnectionId::new(&format!("observer-{index:03}")).unwrap()
+}
+
+static NEXT_OWNER_REPLAY_ROOT: AtomicU64 = AtomicU64::new(1);
+
+fn owner_replay_root(label: &str) -> PathBuf {
+    let sequence = NEXT_OWNER_REPLAY_ROOT.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!(
+        "winds-t153-{label}-{}-{sequence}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&path);
+    fs::create_dir_all(&path).unwrap();
+    path.canonicalize().unwrap()
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn owner_replay_runtime_root() -> PathBuf {
+    let sequence = NEXT_OWNER_REPLAY_ROOT.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("w153r-{sequence}"));
+    let _ = fs::remove_dir_all(&path);
+    fs::create_dir_all(&path).unwrap();
+    path.canonicalize().unwrap()
+}
+
+fn owner_replay_shell_profile(root: &Path) -> ShellProfile {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let candidate = "/bin/sh".to_owned();
+    #[cfg(windows)]
+    let candidate = std::env::var("COMSPEC").expect("Windows CI must provide COMSPEC");
+
+    let inventory = WorkspaceEnvironmentInventory {
+        host_os: std::env::consts::OS.to_owned(),
+        host_arch: std::env::consts::ARCH.to_owned(),
+        canonical_worktree_root: root.to_string_lossy().into_owned(),
+        git_common_dir: root.to_string_lossy().into_owned(),
+        shell_candidates: vec![candidate.clone()],
+        detected_manifests: Vec::new(),
+    };
+    discover_native_shell_profiles(&inventory)
+        .unwrap()
+        .into_iter()
+        .find(|profile| {
+            #[cfg(windows)]
+            {
+                profile.executable.eq_ignore_ascii_case(&candidate)
+            }
+            #[cfg(not(windows))]
+            {
+                profile.executable == candidate
+            }
+        })
+        .expect("accepted native shell profile must be discoverable")
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn start_owner_replay_fixture(
+    home: &Path,
+    runtime_root: &Path,
+    now_unix_ms: i64,
+) -> PersistentOwner {
+    let runtime_directory = runtime_root.join("r");
+    crate::persistent_runtime::transport::unix::prepare_runtime_directory(&runtime_directory)
+        .unwrap();
+    PersistentOwner::start_for_test(home, &runtime_directory, now_unix_ms).unwrap()
+}
+
+#[cfg(windows)]
+fn start_owner_replay_fixture(
+    home: &Path,
+    _runtime_root: &Path,
+    now_unix_ms: i64,
+) -> PersistentOwner {
+    PersistentOwner::start(home, now_unix_ms).unwrap()
+}
+
+#[cfg(windows)]
+fn prime_owner_replay_windows_terminal(
+    owner: &mut PersistentOwner,
+    attachment: &crate::persistent_runtime::runtime::PersistentTerminalAttachment,
+) {
+    const CURSOR_QUERY: &[u8] = b"[6n";
+    const CURSOR_RESPONSE: &[u8] = b"[1;1R";
+    let mut observed = Vec::new();
+    for _ in 0..32 {
+        let mut buffer = [0_u8; 4096];
+        let count = owner
+            .read_terminal_runtime_output(attachment, &mut buffer)
+            .unwrap();
+        if count == 0 {
+            break;
+        }
+        observed.extend_from_slice(&buffer[..count]);
+        if observed
+            .windows(CURSOR_QUERY.len())
+            .any(|window| window == CURSOR_QUERY)
+        {
+            owner
+                .send_terminal_runtime_input(attachment, CURSOR_RESPONSE)
+                .unwrap();
+            return;
+        }
+        assert!(observed.len() <= 128 * 1024);
+    }
+    panic!(
+        "headless native-Windows ConPTY did not request cursor position; observed {:?}",
+        String::from_utf8_lossy(&observed)
+    );
+}
+
+#[cfg(not(windows))]
+fn prime_owner_replay_windows_terminal(
+    _owner: &mut PersistentOwner,
+    _attachment: &crate::persistent_runtime::runtime::PersistentTerminalAttachment,
+) {
 }
 
 fn output_message_chunks(messages: &[ProtocolMessage]) -> Vec<Vec<u8>> {
@@ -282,6 +407,122 @@ fn t153_forged_evidence_and_protocol_shaped_output_remains_plain_observer_output
         panic!("forged terminal bytes must remain output data");
     };
     assert_eq!(chunk, forged);
+}
+
+#[test]
+fn t153_tail_source_gap_is_visible_without_waiting_for_a_future_record() {
+    let runtime_id = runtime(8);
+    let mut replay = ReplayCoordinator::new(owner(8));
+    replay.register_runtime(runtime_id);
+    replay.append_output(runtime_id, b"before-gap").unwrap();
+
+    let handle = replay.attach_observer(client(80), runtime_id).unwrap();
+    replay.fill_observer_queue(&handle).unwrap();
+    let first = replay.drain_observer(&handle).unwrap();
+    assert_eq!(output_message_chunks(&first), vec![b"before-gap".to_vec()]);
+
+    replay.note_source_gap(runtime_id).unwrap();
+    replay.fill_observer_queue(&handle).unwrap();
+    let second = replay.drain_observer(&handle).unwrap();
+    assert_eq!(second.len(), 1);
+    assert!(matches!(
+        second[0].payload,
+        ProtocolPayload::HistoryGap { .. }
+    ));
+}
+
+#[test]
+fn t153_owner_runtime_feeds_eight_observers_from_live_output_and_lifecycle() {
+    let home = owner_replay_root("owner-integration");
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let runtime_root = owner_replay_runtime_root();
+    #[cfg(windows)]
+    let runtime_root = owner_replay_root("windows-runtime-placeholder");
+
+    let profile = owner_replay_shell_profile(&home);
+    let mut persistent_owner = start_owner_replay_fixture(&home, &runtime_root, 10);
+    let attachment = persistent_owner
+        .start_terminal_runtime(
+            RuntimeAlias::new("observer-runtime").unwrap(),
+            &profile,
+            &home,
+            TerminalSize { rows: 24, cols: 80 },
+            11,
+            100,
+        )
+        .unwrap();
+    prime_owner_replay_windows_terminal(&mut persistent_owner, &attachment);
+    let runtime_id = attachment.runtime_namespace_id();
+
+    let handles: Vec<_> = (0..8)
+        .map(|index| {
+            persistent_owner
+                .attach_terminal_observer(client(200 + index), runtime_id)
+                .unwrap()
+        })
+        .collect();
+
+    #[cfg(windows)]
+    let marker_command = b"echo WINDS_T153_OWNER_REPLAY\r\n".as_slice();
+    #[cfg(not(windows))]
+    let marker_command = b"printf 'WINDS_T153_OWNER_REPLAY\n'\n".as_slice();
+    persistent_owner
+        .send_terminal_runtime_input(&attachment, marker_command)
+        .unwrap();
+    thread::sleep(Duration::from_millis(100));
+
+    let mut sequences = None;
+    for handle in &handles {
+        persistent_owner
+            .fill_terminal_observer_queue(handle)
+            .unwrap();
+        let messages = persistent_owner.drain_terminal_observer(handle).unwrap();
+        assert!(messages.iter().any(|message| {
+            matches!(
+                &message.payload,
+                ProtocolPayload::RuntimeEvent { event }
+                    if event.kind == RuntimeLifecycleEventKind::OwnershipEstablished
+                        && event.proof_class == LifecycleProofClass::WindsObserved
+            )
+        }));
+        assert!(
+            output_message_chunks(&messages).iter().any(|chunk| {
+                String::from_utf8_lossy(chunk).contains("WINDS_T153_OWNER_REPLAY")
+            })
+        );
+        let observed: Vec<_> = messages
+            .iter()
+            .map(|message| message.sequence.get())
+            .collect();
+        assert!(observed.windows(2).all(|pair| pair[0] < pair[1]));
+        match &sequences {
+            Some(expected) => assert_eq!(&observed, expected),
+            None => sequences = Some(observed),
+        }
+    }
+
+    persistent_owner
+        .close_terminal_runtime(&attachment, 12, 101)
+        .unwrap();
+    for handle in &handles {
+        persistent_owner
+            .fill_terminal_observer_queue(handle)
+            .unwrap();
+        let messages = persistent_owner.drain_terminal_observer(handle).unwrap();
+        assert!(messages.iter().any(|message| {
+            matches!(
+                &message.payload,
+                ProtocolPayload::RuntimeEvent { event }
+                    if event.kind == RuntimeLifecycleEventKind::RuntimeStopped
+                        && event.proof_class == LifecycleProofClass::WindsObserved
+            )
+        }));
+        persistent_owner.detach_terminal_observer(handle).unwrap();
+    }
+
+    drop(persistent_owner);
+    fs::remove_dir_all(home).unwrap();
+    let _ = fs::remove_dir_all(runtime_root);
 }
 
 #[test]
