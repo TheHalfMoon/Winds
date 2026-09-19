@@ -6,6 +6,7 @@ use crate::domain::workflow::{
     RETRY_OUTCOME_NO_PROGRESS, StageLifecycleState, StageTransitionAuthority, TruthSource,
 };
 use crate::domain::{WindsSessionRecord, WorkspaceRecord};
+use crate::persistent_runtime::presentation::DesktopRuntimeTruthProjection as PersistentDesktopRuntimeTruthProjection;
 use crate::store::{
     DesktopAttentionFact, DesktopLayoutPresentation, DesktopLayoutPresentationInput,
     DesktopProjectPresentationInput, DesktopSessionPresentationInput, NewWindsSession, Result,
@@ -675,6 +676,52 @@ pub(crate) fn classify_runtime_state(
     } else {
         DesktopRuntimeState::Unknown
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopBridgePersistentRuntimeTruthProjection {
+    pub runtime_namespace_id: String,
+    pub display_alias: Option<String>,
+    pub ownership: String,
+    pub liveness: String,
+    pub continuity: String,
+    pub authority: String,
+    pub replay: String,
+    pub replay_first_available_sequence: Option<u64>,
+    pub replay_last_dropped_sequence: Option<u64>,
+    pub health: String,
+    pub truth_source: String,
+    pub verification: String,
+    pub human_acceptance: String,
+}
+
+impl From<PersistentDesktopRuntimeTruthProjection>
+    for DesktopBridgePersistentRuntimeTruthProjection
+{
+    fn from(value: PersistentDesktopRuntimeTruthProjection) -> Self {
+        Self {
+            runtime_namespace_id: value.runtime_namespace_id,
+            display_alias: value.display_alias,
+            ownership: value.ownership,
+            liveness: value.liveness,
+            continuity: value.continuity,
+            authority: value.authority,
+            replay: value.replay,
+            replay_first_available_sequence: value.replay_first_available_sequence,
+            replay_last_dropped_sequence: value.replay_last_dropped_sequence,
+            health: value.health,
+            truth_source: value.truth_source,
+            verification: value.verification,
+            human_acceptance: value.human_acceptance,
+        }
+    }
+}
+
+pub(crate) fn desktop_bridge_persistent_runtime_truth(
+    value: PersistentDesktopRuntimeTruthProjection,
+) -> DesktopBridgePersistentRuntimeTruthProjection {
+    value.into()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

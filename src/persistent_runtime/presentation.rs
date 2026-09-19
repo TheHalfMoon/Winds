@@ -216,7 +216,12 @@ pub(crate) fn project_runtime_truth(input: &RuntimePresentationInput) -> Runtime
                 return RuntimeOwnershipPresentation::Unknown;
             }
             match truth.ownership {
-                OwnershipState::LiveOwned => RuntimeOwnershipPresentation::LiveOwned,
+                OwnershipState::LiveOwned
+                    if input.truth_source == RuntimeTruthSource::WindsObserved =>
+                {
+                    RuntimeOwnershipPresentation::LiveOwned
+                }
+                OwnershipState::LiveOwned => RuntimeOwnershipPresentation::Unknown,
                 OwnershipState::OwnershipLost => RuntimeOwnershipPresentation::OwnershipLost,
                 OwnershipState::Unowned => RuntimeOwnershipPresentation::Unowned,
             }
@@ -231,7 +236,12 @@ pub(crate) fn project_runtime_truth(input: &RuntimePresentationInput) -> Runtime
                 return RuntimeLivenessPresentation::Unknown;
             }
             match truth.process_liveness {
-                ProcessLiveness::Running => RuntimeLivenessPresentation::Running,
+                ProcessLiveness::Running
+                    if input.truth_source == RuntimeTruthSource::WindsObserved =>
+                {
+                    RuntimeLivenessPresentation::Running
+                }
+                ProcessLiveness::Running => RuntimeLivenessPresentation::Unknown,
                 ProcessLiveness::Exited => RuntimeLivenessPresentation::Exited,
                 ProcessLiveness::Unknown => RuntimeLivenessPresentation::Unknown,
                 ProcessLiveness::Unavailable => RuntimeLivenessPresentation::Unavailable,

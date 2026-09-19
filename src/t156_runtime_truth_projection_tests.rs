@@ -73,6 +73,26 @@ fn t156_live_retained_process_requires_winds_observed_live_owned_running_truth()
 }
 
 #[test]
+fn t156_canonical_metadata_cannot_recreate_live_ownership_or_running_truth() {
+    let projection = project_runtime_truth(&input(
+        runtime(18),
+        truth(
+            OwnershipState::LiveOwned,
+            ProcessLiveness::Running,
+            ContinuityClass::RetainedLiveProcess,
+        ),
+        RuntimeTruthSource::AcceptedCanonical,
+    ));
+    assert_eq!(projection.ownership, RuntimeOwnershipPresentation::Unknown);
+    assert_eq!(projection.liveness, RuntimeLivenessPresentation::Unknown);
+    assert_eq!(
+        projection.continuity,
+        RuntimeContinuityPresentation::Unknown
+    );
+    assert_eq!(projection.health, RuntimeHealthPresentation::ProcessUnknown);
+}
+
+#[test]
 fn t156_native_resume_is_distinct_from_retained_process_and_requires_accepted_source() {
     let runtime_id = runtime(2);
     let accepted = project_runtime_truth(&input(
@@ -368,10 +388,12 @@ fn t156_display_alias_never_replaces_immutable_runtime_target() {
     let cli = project_cli_runtime(&projection);
     let workbench = project_workbench_runtime(&projection);
     let desktop = project_desktop_runtime(&projection);
+    let desktop_bridge = crate::desktop::desktop_bridge_persistent_runtime_truth(desktop.clone());
 
     assert_eq!(cli.runtime_namespace_id, runtime_id.to_string());
     assert_eq!(workbench.immutable_runtime_id, runtime_id.to_string());
     assert_eq!(desktop.runtime_namespace_id, runtime_id.to_string());
+    assert_eq!(desktop_bridge.runtime_namespace_id, runtime_id.to_string());
     assert_eq!(cli.display_alias.as_deref(), Some("planner"));
     assert_ne!(cli.runtime_namespace_id, "planner");
 }
