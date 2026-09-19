@@ -150,9 +150,9 @@ fn wait_for_runtime_marker(
 
 fn send_detached_exit(owner: &mut PersistentOwner, attachment: &PersistentTerminalAttachment) {
     #[cfg(windows)]
-    let bytes = b"echo WINDS_T152_EXITING\r\nexit\r\n";
+    let bytes = b"set \"WINDS_T152_PREFIX=WINDS_T152_\"\r\necho %WINDS_T152_PREFIX%EXITING\r\nexit\r\n";
     #[cfg(not(windows))]
-    let bytes = b"printf 'WINDS_T152_EXITING\\n'; exit\n";
+    let bytes = b"printf '\\127\\111\\116\\104\\123\\137\\124\\061\\065\\062\\137\\105\\130\\111\\124\\111\\116\\107\\012'; exit\n";
     owner
         .send_terminal_runtime_input(attachment, bytes)
         .unwrap();
@@ -164,9 +164,9 @@ fn enter_terminable_workload(
     attachment: &PersistentTerminalAttachment,
 ) {
     #[cfg(windows)]
-    let bytes = b"echo WINDS_T152_READY\r\nset /p WINDS_T152_BLOCK=\r\n";
+    let bytes = b"set \"WINDS_T152_PREFIX=WINDS_T152_\"\r\necho %WINDS_T152_PREFIX%READY\r\nset /p WINDS_T152_BLOCK=\r\n";
     #[cfg(not(windows))]
-    let bytes = b"printf 'WINDS_T152_READY\\n'; exec sleep 30\n";
+    let bytes = b"printf '\\127\\111\\116\\104\\123\\137\\124\\061\\065\\062\\137\\122\\105\\101\\104\\131\\012'; exec sleep 30\n";
     owner
         .send_terminal_runtime_input(attachment, bytes)
         .unwrap();
