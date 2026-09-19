@@ -1,7 +1,12 @@
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::io;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod unix;
+#[cfg(windows)]
+pub(crate) mod windows;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PosixTransportError {
     RuntimeDirectoryNotAbsolute,
@@ -28,6 +33,7 @@ pub(crate) enum PosixTransportError {
     Io(io::ErrorKind),
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl From<io::Error> for PosixTransportError {
     fn from(error: io::Error) -> Self {
         Self::Io(error.kind())
