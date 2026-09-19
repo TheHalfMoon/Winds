@@ -10,6 +10,9 @@ use crate::git::workspace_clone::clone_and_register_workspace;
 use crate::git::workspace_inventory::inventory_workspace_environment;
 #[cfg(windows)]
 use crate::git::wsl::discover_wsl_distributions;
+use crate::persistent_runtime::presentation::{
+    RuntimeTruthProjection as PersistentRuntimeTruthProjection, project_cli_runtime,
+};
 use crate::store::Store;
 use crate::{
     Result, ensure_allowed_flags, required, resolve_without_creation, unix_ms, utf8_path,
@@ -24,6 +27,16 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+#[allow(
+    dead_code,
+    reason = "Spec 011 T156 typed CLI runtime truth adapter; command composition lands only when an accepted persistent-runtime CLI surface requires it"
+)]
+pub(crate) fn persistent_runtime_truth_value(
+    projection: &PersistentRuntimeTruthProjection,
+) -> Result<Value> {
+    Ok(serde_json::to_value(project_cli_runtime(projection))?)
+}
 
 pub(crate) fn dispatch(command: &str, flags: HashMap<String, String>) -> Result<()> {
     match command {
