@@ -1,7 +1,5 @@
 use super::*;
-use crate::persistent_runtime::domain::{
-    ClientAuthority, LifecycleProofClass, RuntimeLifecycleEventKind,
-};
+use crate::persistent_runtime::domain::{LifecycleProofClass, RuntimeLifecycleEventKind};
 use crate::persistent_runtime::protocol::{MessageAuthorityClass, MessageKind};
 
 fn runtime(byte: u8) -> RuntimeNamespaceId {
