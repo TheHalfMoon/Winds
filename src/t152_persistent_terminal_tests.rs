@@ -119,14 +119,44 @@ fn prime_headless_windows_terminal(
 ) {
 }
 
+fn wait_for_runtime_marker(
+    owner: &mut PersistentOwner,
+    attachment: &PersistentTerminalAttachment,
+    marker: &[u8],
+) {
+    let mut observed = Vec::new();
+    while observed.len() <= 128 * 1024 {
+        let mut buffer = [0_u8; 4096];
+        let count = owner
+            .read_terminal_runtime_output(attachment, &mut buffer)
+            .unwrap();
+        if count == 0 {
+            break;
+        }
+        observed.extend_from_slice(&buffer[..count]);
+        if observed
+            .windows(marker.len())
+            .any(|window| window == marker)
+        {
+            return;
+        }
+    }
+    panic!(
+        "persistent terminal marker {:?} not observed; output {:?}",
+        String::from_utf8_lossy(marker),
+        String::from_utf8_lossy(&observed)
+    );
+}
+
 fn send_detached_exit(owner: &mut PersistentOwner, attachment: &PersistentTerminalAttachment) {
     #[cfg(windows)]
-    let bytes = b"exit\r\n";
+    let bytes = b"echo WINDS_T152_EXITING\r\nexit\r\n";
     #[cfg(not(windows))]
-    let bytes = b"exec true\n";
+    let bytes = b"printf 'WINDS_T152_EXITING\\n'; exit\n";
     owner
         .send_terminal_runtime_input(attachment, bytes)
         .unwrap();
+    wait_for_runtime_marker(owner, attachment, b"WINDS_T152_EXITING");
 }
 
 fn enter_terminable_workload(
@@ -134,13 +164,13 @@ fn enter_terminable_workload(
     attachment: &PersistentTerminalAttachment,
 ) {
     #[cfg(windows)]
-    let bytes = b"set /p WINDS_T152_BLOCK=\r\n";
+    let bytes = b"echo WINDS_T152_READY\r\nset /p WINDS_T152_BLOCK=\r\n";
     #[cfg(not(windows))]
-    let bytes = b"exec sleep 30\n";
+    let bytes = b"printf 'WINDS_T152_READY\\n'; exec sleep 30\n";
     owner
         .send_terminal_runtime_input(attachment, bytes)
         .unwrap();
-    thread::sleep(Duration::from_millis(50));
+    wait_for_runtime_marker(owner, attachment, b"WINDS_T152_READY");
 }
 
 fn wait_for_detached_exit(
