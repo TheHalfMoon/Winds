@@ -502,6 +502,11 @@ fn t155_real_unix_private_endpoint_performs_same_user_generation_handshake() {
     ));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    }
     let root = root.canonicalize().unwrap();
     let listener = BoundUnixListener::bind(&root).unwrap();
     let owner_generation = generation(10);
