@@ -81,8 +81,20 @@ fn t150_anonymous_principal_is_denied_by_the_actual_pipe_dacl() {
 }
 
 #[test]
+fn t150_closed_pipe_name_is_rebindable_without_stale_name_recovery() {
+    let generation = generation(5);
+    let first_name = {
+        let server = WindowsNamedPipeServer::bind(generation).unwrap();
+        server.pipe_name().to_owned()
+    };
+
+    let rebound = WindowsNamedPipeServer::bind(generation).unwrap();
+    assert_eq!(rebound.pipe_name(), first_name);
+}
+
+#[test]
 fn t150_same_generation_collision_and_wrong_generation_fail_closed() {
-    let active_generation = generation(5);
+    let active_generation = generation(6);
     let _server = WindowsNamedPipeServer::bind(active_generation).unwrap();
     assert_eq!(
         WindowsNamedPipeServer::bind(active_generation)
