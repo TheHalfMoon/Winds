@@ -9,6 +9,7 @@ use std::io::{Read, Write};
 pub(crate) const PROTOCOL_VERSION: u16 = 1;
 pub(crate) const MAX_INBOUND_CONTROL_FRAME_BYTES: usize = 256 * 1024;
 pub(crate) const MAX_OUTPUT_EVENT_CHUNK_BYTES: usize = 64 * 1024;
+pub(crate) const MAX_INPUT_BYTES: usize = 16 * 1024;
 
 pub(crate) type ProtocolResult<T> = Result<T, LocalControlErrorKind>;
 
@@ -190,7 +191,7 @@ pub(crate) enum ProtocolPayload {
         event: RuntimeLifecycleEvent,
     },
     OutputEvent {
-        chunk: String,
+        chunk: Vec<u8>,
     },
     HistoryGap {
         first_available_sequence: EventSequence,
@@ -209,7 +210,7 @@ pub(crate) enum ProtocolPayload {
     RequestControl,
     ReleaseControl,
     Input {
-        data: String,
+        data: Vec<u8>,
     },
     Resize {
         columns: u16,
@@ -358,7 +359,7 @@ struct RuntimeEventBody {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct OutputEventBody {
-    chunk: String,
+    chunk_hex: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -391,7 +392,7 @@ struct ControlStateBody {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct InputBody {
-    data: String,
+    data_hex: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -519,7 +520,7 @@ fn encode_body(payload: &ProtocolPayload) -> ProtocolResult<Value> {
             event: event.clone(),
         }),
         ProtocolPayload::OutputEvent { chunk } => to_value(&OutputEventBody {
-            chunk: chunk.clone(),
+            chunk_hex: encode_hex_bytes(chunk),
         }),
         ProtocolPayload::HistoryGap {
             first_available_sequence,
@@ -537,7 +538,9 @@ fn encode_body(payload: &ProtocolPayload) -> ProtocolResult<Value> {
             authority: *authority,
             controller_client_id: controller_client_id.clone(),
         }),
-        ProtocolPayload::Input { data } => to_value(&InputBody { data: data.clone() }),
+        ProtocolPayload::Input { data } => to_value(&InputBody {
+            data_hex: encode_hex_bytes(data),
+        }),
         ProtocolPayload::Resize { columns, rows } => to_value(&ResizeBody {
             columns: *columns,
             rows: *rows,
@@ -571,7 +574,9 @@ fn decode_body(kind: MessageKind, body: Value) -> ProtocolResult<ProtocolPayload
         }
         MessageKind::OutputEvent => {
             let value: OutputEventBody = from_value(body)?;
-            Ok(ProtocolPayload::OutputEvent { chunk: value.chunk })
+            Ok(ProtocolPayload::OutputEvent {
+                chunk: decode_hex_bytes(&value.chunk_hex, MAX_OUTPUT_EVENT_CHUNK_BYTES)?,
+            })
         }
         MessageKind::HistoryGap => {
             let value: HistoryGapBody = from_value(body)?;
@@ -599,7 +604,9 @@ fn decode_body(kind: MessageKind, body: Value) -> ProtocolResult<ProtocolPayload
         MessageKind::ReleaseControl => from_empty(body).map(|_| ProtocolPayload::ReleaseControl),
         MessageKind::Input => {
             let value: InputBody = from_value(body)?;
-            Ok(ProtocolPayload::Input { data: value.data })
+            Ok(ProtocolPayload::Input {
+                data: decode_hex_bytes(&value.data_hex, MAX_INPUT_BYTES)?,
+            })
         }
         MessageKind::Resize => {
             let value: ResizeBody = from_value(body)?;
@@ -623,6 +630,41 @@ fn from_value<T: for<'de> Deserialize<'de>>(value: Value) -> ProtocolResult<T> {
 
 fn from_empty(value: Value) -> ProtocolResult<EmptyBody> {
     from_value(value)
+}
+
+fn encode_hex_bytes(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    encoded
+}
+
+fn decode_hex_bytes(encoded: &str, max_decoded_bytes: usize) -> ProtocolResult<Vec<u8>> {
+    if encoded.len() > max_decoded_bytes * 2 {
+        return Err(LocalControlErrorKind::OversizedFrame);
+    }
+    if !encoded.len().is_multiple_of(2) {
+        return Err(LocalControlErrorKind::MalformedFrame);
+    }
+    let bytes = encoded.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len() / 2);
+    for pair in bytes.chunks_exact(2) {
+        let high = decode_hex_nibble(pair[0]).ok_or(LocalControlErrorKind::MalformedFrame)?;
+        let low = decode_hex_nibble(pair[1]).ok_or(LocalControlErrorKind::MalformedFrame)?;
+        decoded.push((high << 4) | low);
+    }
+    Ok(decoded)
+}
+
+fn decode_hex_nibble(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        _ => None,
+    }
 }
 
 fn validate_message(message: &ProtocolMessage) -> ProtocolResult<()> {
@@ -678,6 +720,14 @@ fn validate_message(message: &ProtocolMessage) -> ProtocolResult<()> {
         }
         ProtocolPayload::OutputEvent { chunk } => {
             if chunk.len() > MAX_OUTPUT_EVENT_CHUNK_BYTES {
+                return Err(LocalControlErrorKind::OversizedFrame);
+            }
+        }
+        ProtocolPayload::Input { data } => {
+            if data.is_empty() {
+                return Err(LocalControlErrorKind::MalformedFrame);
+            }
+            if data.len() > MAX_INPUT_BYTES {
                 return Err(LocalControlErrorKind::OversizedFrame);
             }
         }
