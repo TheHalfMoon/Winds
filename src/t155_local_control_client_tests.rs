@@ -131,7 +131,9 @@ struct ScriptedWire {
 }
 
 impl ScriptedWire {
-    fn new(receive: Vec<Result<ProtocolMessage, WireError>>) -> (Self, Arc<Mutex<Vec<ProtocolMessage>>>) {
+    fn new(
+        receive: Vec<Result<ProtocolMessage, WireError>>,
+    ) -> (Self, Arc<Mutex<Vec<ProtocolMessage>>>) {
         let sent = Arc::new(Mutex::new(Vec::new()));
         (
             Self {
@@ -184,12 +186,9 @@ fn t155_exact_generation_handshake_binds_connection_and_rejects_stale_owner() {
         replacement,
         &connection("replacement-client"),
     ))]);
-    let error = RustLocalControlClient::connect_with_wire_for_test(
-        Box::new(wire),
-        Some(expected),
-    )
-    .err()
-    .unwrap();
+    let error = RustLocalControlClient::connect_with_wire_for_test(Box::new(wire), Some(expected))
+        .err()
+        .unwrap();
     assert_eq!(error, LocalControlClientError::StaleOwnerGeneration);
 }
 
@@ -260,7 +259,13 @@ fn t155_observer_attach_and_controller_transition_keep_exact_runtime_and_queue_i
     );
     let (wire, sent) = ScriptedWire::new(vec![
         Ok(hello_ack(owner_generation, &client_id)),
-        Ok(snapshot_response(owner_generation, &client_id, runtime_id, 2, 101)),
+        Ok(snapshot_response(
+            owner_generation,
+            &client_id,
+            runtime_id,
+            2,
+            101,
+        )),
         Ok(output),
         Ok(control_response(
             owner_generation,
@@ -319,9 +324,11 @@ fn t155_observer_attach_and_controller_transition_keep_exact_runtime_and_queue_i
     assert!(matches!(sent[1].payload, ProtocolPayload::AttachObserver));
     assert!(matches!(sent[2].payload, ProtocolPayload::RequestControl));
     assert!(matches!(sent[3].payload, ProtocolPayload::ReleaseControl));
-    assert!(sent[1..]
-        .iter()
-        .all(|message| message.runtime_namespace_id == Some(runtime_id)));
+    assert!(
+        sent[1..]
+            .iter()
+            .all(|message| message.runtime_namespace_id == Some(runtime_id))
+    );
 }
 
 #[test]
@@ -338,7 +345,9 @@ fn t155_lost_mutation_response_becomes_outcome_unknown_until_same_generation_rec
             2,
             101,
         )),
-        Err(WireError::Transport("connection lost after mutation send".to_owned())),
+        Err(WireError::Transport(
+            "connection lost after mutation send".to_owned(),
+        )),
     ]);
     let mut client =
         RustLocalControlClient::connect_with_wire_for_test(Box::new(wire), Some(owner_generation))
@@ -347,7 +356,9 @@ fn t155_lost_mutation_response_becomes_outcome_unknown_until_same_generation_rec
     client.attach_observer(target).unwrap();
 
     assert_eq!(
-        client.send_input(target, b"possibly-applied".to_vec()).unwrap_err(),
+        client
+            .send_input(target, b"possibly-applied".to_vec())
+            .unwrap_err(),
         LocalControlClientError::OutcomeUnknown(runtime_id)
     );
     assert!(client.is_outcome_unknown());
@@ -394,10 +405,7 @@ fn t155_lost_mutation_response_becomes_outcome_unknown_until_same_generation_rec
 fn t155_reconnect_never_treats_replacement_owner_generation_as_continuation() {
     let first_generation = generation(7);
     let first_connection = connection("generation-one");
-    let (wire, _) = ScriptedWire::new(vec![Ok(hello_ack(
-        first_generation,
-        &first_connection,
-    ))]);
+    let (wire, _) = ScriptedWire::new(vec![Ok(hello_ack(first_generation, &first_connection))]);
     let mut client =
         RustLocalControlClient::connect_with_wire_for_test(Box::new(wire), Some(first_generation))
             .unwrap();
@@ -457,7 +465,10 @@ fn t155_client_pending_event_queue_is_hard_bounded_and_never_becomes_unbounded_b
             Some(runtime_id),
             index.saturating_add(10),
             ProtocolPayload::OutputEvent {
-                chunk: vec![b'x'; crate::persistent_runtime::protocol::MAX_OUTPUT_EVENT_CHUNK_BYTES],
+                chunk: vec![
+                    b'x';
+                    crate::persistent_runtime::protocol::MAX_OUTPUT_EVENT_CHUNK_BYTES
+                ],
             },
         );
         match client.queue_event(message) {
