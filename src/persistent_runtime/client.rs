@@ -570,17 +570,17 @@ impl RustLocalControlClient {
                     }
                     return Err(map_protocol_error(kind));
                 }
-                if consequential_mutation {
-                    if let Err(kind) = self.mutation_outcomes.acknowledge(&received) {
-                        if kind == LocalControlErrorKind::OutcomeUnknown {
-                            return Err(LocalControlClientError::OutcomeUnknown(
-                                request
-                                    .runtime_namespace_id
-                                    .expect("consequential mutations are runtime-bound"),
-                            ));
-                        }
-                        return Err(map_protocol_error(kind));
+                if consequential_mutation
+                    && let Err(kind) = self.mutation_outcomes.acknowledge(&received)
+                {
+                    if kind == LocalControlErrorKind::OutcomeUnknown {
+                        return Err(LocalControlClientError::OutcomeUnknown(
+                            request
+                                .runtime_namespace_id
+                                .expect("consequential mutations are runtime-bound"),
+                        ));
                     }
+                    return Err(map_protocol_error(kind));
                 }
                 if let ProtocolPayload::Error { kind } = received.payload {
                     return Err(map_protocol_error(kind));
