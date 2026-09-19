@@ -86,7 +86,7 @@ struct LocalSecurityDescriptor(PSECURITY_DESCRIPTOR);
 impl LocalSecurityDescriptor {
     fn for_current_user(user_sid: &WindowsUserSid) -> Result<Self, WindowsTransportError> {
         let sid = user_sid.to_sddl_string()?;
-        let sddl = format!("O:{sid}D:P(A;;GA;;;{sid})");
+        let sddl = format!("O:{sid}D:P(A;;FA;;;{sid})");
         let wide = security_descriptor_wide_nul(&sddl)?;
         let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
         // SAFETY: wide is NUL-terminated UTF-16 and descriptor is a valid writable output pointer.

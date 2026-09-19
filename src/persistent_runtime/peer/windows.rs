@@ -3,8 +3,7 @@ use std::ffi::c_void;
 use std::mem::size_of;
 use std::ptr::null_mut;
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, GENERIC_ALL, GetLastError, HANDLE,
-    LocalFree,
+    CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, GetLastError, HANDLE, LocalFree,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, GetSecurityInfo, SE_KERNEL_OBJECT,
@@ -15,6 +14,7 @@ use windows_sys::Win32::Security::{
     OWNER_SECURITY_INFORMATION, PSID, RevertToSelf, SE_DACL_PROTECTED, SECURITY_MAX_SID_SIZE,
     TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
+use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
 use windows_sys::Win32::System::Pipes::ImpersonateNamedPipeClient;
 use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, GetCurrentThread, OpenProcessToken, OpenThreadToken,
@@ -277,7 +277,7 @@ pub(crate) fn validate_pipe_owner_and_dacl(
     // SAFETY: header type/size prove the layout needed for ACCESS_ALLOWED_ACE.
     let ace = unsafe { &*ace_raw.cast::<ACCESS_ALLOWED_ACE>() };
     let sid = (&raw const ace.SidStart).cast_mut().cast::<c_void>();
-    if ace.Mask != GENERIC_ALL || !expected.matches(sid) {
+    if ace.Mask != FILE_ALL_ACCESS || !expected.matches(sid) {
         return Err(WindowsTransportError::EffectiveSecurityMismatch);
     }
     Ok(())

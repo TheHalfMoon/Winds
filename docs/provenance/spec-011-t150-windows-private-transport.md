@@ -29,7 +29,7 @@ The feature set is derived from compiled calls only: named-pipe create/connect/d
 
 The endpoint is a native local named pipe only. The deterministic name binds canonical raw current-user SID bytes (lowercase hex, bounded by `SECURITY_MAX_SID_SIZE`) and the expected owner-generation ID. This avoids unbounded textual SID expansion while preserving exact principal identity. The pipe is created with `FILE_FLAG_FIRST_PIPE_INSTANCE` and `PIPE_REJECT_REMOTE_CLIENTS`.
 
-The security descriptor is explicit SDDL with a protected DACL containing exactly one `GENERIC_ALL` allow ACE for the current accepted user SID. No Everyone, Authenticated Users, Administrators, or default permissive DACL is admitted. The created kernel object's effective owner/DACL are read back and validated before use.
+The security descriptor is explicit SDDL with a protected DACL containing exactly one file-object `FILE_ALL_ACCESS` allow ACE for the current accepted user SID. No Everyone, Authenticated Users, Administrators, or default permissive DACL is admitted. The created kernel object's effective owner/DACL are read back and validated before use.
 
 On server accept, `ImpersonateNamedPipeClient` plus the thread token's `TokenUser` SID proves the connected client is the same accepted user before the connection is admitted. `RevertToSelf` failure is a hard error.
 
