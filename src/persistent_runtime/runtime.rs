@@ -28,6 +28,7 @@ pub(crate) enum PersistentTerminalRuntimeError {
     StaleOwnerGeneration,
     RuntimeNotLive,
     RuntimeNamespaceCollision,
+    OutputGap,
 }
 
 impl fmt::Display for PersistentTerminalRuntimeError {
@@ -54,6 +55,9 @@ impl fmt::Display for PersistentTerminalRuntimeError {
             }
             Self::RuntimeNamespaceCollision => formatter.write_str(
                 "generated persistent terminal runtime namespace already exists in this owner",
+            ),
+            Self::OutputGap => formatter.write_str(
+                "persistent terminal output exceeded the bounded T152 drain queue; replay is unavailable",
             ),
         }
     }
@@ -98,6 +102,7 @@ struct RuntimeOutputPump {
     receiver: Receiver<Vec<u8>>,
     closed: Arc<AtomicBool>,
     error: Arc<Mutex<Option<String>>>,
+    output_gap: Arc<AtomicBool>,
     pending: VecDeque<u8>,
 }
 
@@ -106,8 +111,10 @@ impl RuntimeOutputPump {
         let (sender, receiver) = mpsc::sync_channel(OUTPUT_PUMP_QUEUE_CHUNKS);
         let closed = Arc::new(AtomicBool::new(false));
         let error = Arc::new(Mutex::new(None));
+        let output_gap = Arc::new(AtomicBool::new(false));
         let thread_closed = Arc::clone(&closed);
         let thread_error = Arc::clone(&error);
+        let thread_output_gap = Arc::clone(&output_gap);
 
         thread::Builder::new()
             .name("winds-persistent-pty-output".to_owned())
@@ -120,7 +127,10 @@ impl RuntimeOutputPump {
                             return;
                         }
                         Ok(count) => match sender.try_send(buffer[..count].to_vec()) {
-                            Ok(()) | Err(TrySendError::Full(_)) => {}
+                            Ok(()) => {}
+                            Err(TrySendError::Full(_)) => {
+                                thread_output_gap.store(true, Ordering::Release);
+                            }
                             Err(TrySendError::Disconnected(_)) => {
                                 thread_closed.store(true, Ordering::Release);
                                 return;
@@ -146,6 +156,7 @@ impl RuntimeOutputPump {
             receiver,
             closed,
             error,
+            output_gap,
             pending: VecDeque::new(),
         })
     }
@@ -156,6 +167,10 @@ impl RuntimeOutputPump {
         }
 
         loop {
+            if self.output_gap.load(Ordering::Acquire) {
+                return Err(PersistentTerminalRuntimeError::OutputGap);
+            }
+
             if !self.pending.is_empty() {
                 let count = buffer.len().min(self.pending.len());
                 for slot in &mut buffer[..count] {
