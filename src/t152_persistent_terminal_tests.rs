@@ -166,15 +166,17 @@ fn t152_long_running_shell_survives_complete_attachment_drop_and_exact_reattach(
     let mut owner = start_owner(&home, &runtime_root, 10);
     let alias = RuntimeAlias::new("persistent-shell").unwrap();
     let size = TerminalSize { rows: 24, cols: 80 };
-    let attachment = owner
-        .start_terminal_runtime(alias.clone(), &profile, &home, size, 20, 100)
-        .unwrap();
-    prime_headless_windows_terminal(&mut owner, &attachment);
+    let mut attachment = Some(
+        owner
+            .start_terminal_runtime(alias.clone(), &profile, &home, size, 20, 100)
+            .unwrap(),
+    );
+    prime_headless_windows_terminal(&mut owner, attachment.as_ref().unwrap());
 
-    let runtime_namespace_id = attachment.runtime_namespace_id();
-    let owner_generation_id = attachment.owner_generation_id();
+    let runtime_namespace_id = attachment.as_ref().unwrap().runtime_namespace_id();
+    let owner_generation_id = attachment.as_ref().unwrap().owner_generation_id();
     let first = owner
-        .terminal_runtime_snapshot(&attachment, 21, 101)
+        .terminal_runtime_snapshot(attachment.as_ref().unwrap(), 21, 101)
         .unwrap();
 
     assert_eq!(first.runtime_namespace_id, runtime_namespace_id);
@@ -190,7 +192,7 @@ fn t152_long_running_shell_survives_complete_attachment_drop_and_exact_reattach(
     assert_eq!(owner.live_terminal_runtime_count(), 1);
     assert!(!owner.should_exit(OWNER_IDLE_GRACE_MS + 100));
 
-    drop(attachment);
+    assert!(attachment.take().is_some());
     thread::sleep(Duration::from_millis(50));
 
     let reattached = owner
@@ -242,22 +244,24 @@ fn t152_process_exit_while_fully_detached_is_observed_and_persisted() {
 
     let profile = native_shell_profile(&home);
     let mut owner = start_owner(&home, &runtime_root, 30);
-    let attachment = owner
-        .start_terminal_runtime(
-            RuntimeAlias::new("detached-exit-shell").unwrap(),
-            &profile,
-            &home,
-            TerminalSize { rows: 24, cols: 80 },
-            31,
-            200,
-        )
-        .unwrap();
-    prime_headless_windows_terminal(&mut owner, &attachment);
-    let runtime_namespace_id = attachment.runtime_namespace_id();
-    let owner_generation_id = attachment.owner_generation_id();
+    let mut attachment = Some(
+        owner
+            .start_terminal_runtime(
+                RuntimeAlias::new("detached-exit-shell").unwrap(),
+                &profile,
+                &home,
+                TerminalSize { rows: 24, cols: 80 },
+                31,
+                200,
+            )
+            .unwrap(),
+    );
+    prime_headless_windows_terminal(&mut owner, attachment.as_ref().unwrap());
+    let runtime_namespace_id = attachment.as_ref().unwrap().runtime_namespace_id();
+    let owner_generation_id = attachment.as_ref().unwrap().owner_generation_id();
 
-    send_exit(&mut owner, &attachment);
-    drop(attachment);
+    send_exit(&mut owner, attachment.as_ref().unwrap());
+    assert!(attachment.take().is_some());
     wait_for_detached_exit(&mut owner, 32, 201);
 
     assert_eq!(owner.live_terminal_runtime_count(), 0);
