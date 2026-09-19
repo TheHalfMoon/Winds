@@ -9,7 +9,8 @@ use crate::persistent_runtime::domain::{
 use crate::persistent_runtime::protocol::ProtocolMessage;
 use crate::persistent_runtime::replay::ObserverHandle;
 use crate::persistent_runtime::runtime::{
-    PersistentTerminalAttachment, PersistentTerminalRegistry, PersistentTerminalSnapshot,
+    PersistentRuntimeShutdownReport, PersistentTerminalAttachment, PersistentTerminalRegistry,
+    PersistentTerminalSnapshot,
 };
 use crate::store::Store;
 use std::error::Error;
@@ -752,6 +753,16 @@ impl PersistentOwner {
             .map_err(|error| OwnerError::Runtime(error.to_string()))
     }
 
+    pub(crate) fn shutdown_terminal_runtimes(
+        &mut self,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> Vec<PersistentRuntimeShutdownReport> {
+        let reports = self.runtime_registry.shutdown_all(&self.store, now_unix_ms);
+        self.sync_runtime_activity(now_monotonic_ms);
+        reports
+    }
+
     fn sync_runtime_activity(&mut self, now_monotonic_ms: u64) {
         self.activity
             .set_live_runtime_count(self.runtime_registry.live_count(), now_monotonic_ms);
@@ -1047,3 +1058,7 @@ mod t152_persistent_terminal_tests;
 #[cfg(test)]
 #[path = "../t154_controller_owner_tests.rs"]
 mod t154_controller_owner_tests;
+
+#[cfg(test)]
+#[path = "../t157_owner_recovery_tests.rs"]
+mod t157_owner_recovery_tests;

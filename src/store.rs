@@ -1184,6 +1184,77 @@ impl Store {
         self.validate_persistent_runtime_schema()?;
         validate_timestamp(observed_unix_ms, "persistent runtime reconciliation time")?;
 
+        let foreign_key_violation: i64 = self.connection.query_row(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM pragma_foreign_key_check
+                WHERE \"table\" = 'persistent_runtime_namespaces'
+            )",
+            [],
+            |row| row.get(0),
+        )?;
+        if foreign_key_violation != 0 {
+            return Err(
+                "persistent runtime reconciliation found foreign-key-corrupt active metadata"
+                    .into(),
+            );
+        }
+
+        let invalid_live_row: i64 = self.connection.query_row(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM persistent_runtime_namespaces
+                WHERE ownership_state = 'LIVE_OWNED'
+                  AND (
+                    schema_version <> ?1
+                    OR length(runtime_namespace_id) <> 32
+                    OR runtime_namespace_id GLOB '*[^0-9a-f]*'
+                    OR runtime_namespace_id = '00000000000000000000000000000000'
+                    OR length(trim(runtime_alias)) NOT BETWEEN 1 AND 256
+                    OR instr(runtime_alias, char(0)) <> 0
+                    OR owner_generation_id IS NULL
+                    OR length(owner_generation_id) <> 32
+                    OR owner_generation_id GLOB '*[^0-9a-f]*'
+                    OR owner_generation_id = '00000000000000000000000000000000'
+                    OR process_liveness NOT IN ('UNKNOWN', 'RUNNING', 'EXITED', 'UNAVAILABLE')
+                    OR endpoint_availability NOT IN ('UNKNOWN', 'AVAILABLE', 'UNAVAILABLE')
+                    OR continuity_class NOT IN (
+                        'RETAINED_LIVE_PROCESS',
+                        'PROVIDER_NATIVE_RESUME',
+                        'WINDS_RECONSTRUCTION',
+                        'FRESH_PROCESS',
+                        'UNKNOWN',
+                        'UNAVAILABLE'
+                    )
+                    OR last_lifecycle_event_kind NOT IN (
+                        'NAMESPACE_CREATED',
+                        'OWNERSHIP_ESTABLISHED',
+                        'OWNERSHIP_LOST',
+                        'PROCESS_STATE_OBSERVED',
+                        'CONTINUITY_CLASSIFIED',
+                        'CONTROLLER_CHANGED',
+                        'RUNTIME_STOPPED'
+                    )
+                    OR created_unix_ms < 0
+                    OR updated_unix_ms < created_unix_ms
+                    OR (
+                        last_observed_unix_ms IS NOT NULL
+                        AND last_observed_unix_ms < created_unix_ms
+                    )
+                    OR ownership_lost_unix_ms IS NOT NULL
+                    OR recovery_reason IS NOT NULL
+                  )
+            )",
+            [PERSISTENT_RUNTIME_SCHEMA_VERSION],
+            |row| row.get(0),
+        )?;
+        if invalid_live_row != 0 {
+            return Err(
+                "persistent runtime reconciliation found corrupt LIVE_OWNED metadata; no recovery rewrite was attempted"
+                    .into(),
+            );
+        }
+
         if let Some(current) = current_owner_generation_id {
             let exists = self.connection.query_row(
                 "SELECT EXISTS(
