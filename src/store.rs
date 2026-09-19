@@ -28,6 +28,14 @@ use crate::model_mesh::{
     ModelMeshContinuityPermissionDescriptorV1, ModelMeshTargetDescriptorV1, TargetDimension,
     TargetRequest, TargetSelector, model_mesh_authority_json_matches_digest,
 };
+use crate::persistent_runtime::domain::{OwnerGenerationId, RuntimeNamespaceId, RuntimeTruth};
+use crate::persistent_runtime::persistence::{
+    PERSISTENT_RUNTIME_SCHEMA_VERSION, PersistentRuntimeRecord, PersistentRuntimeRecordInput,
+    PersistentRuntimeRecoveryReason, continuity_from_db, continuity_label,
+    endpoint_availability_from_db, endpoint_availability_label, lifecycle_kind_from_db,
+    lifecycle_kind_label, ownership_from_db, ownership_label, process_liveness_from_db,
+    process_liveness_label, validate_record_input, validate_reference, validate_timestamp,
+};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, ffi, params};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -68,6 +76,9 @@ mod t116_model_mesh_store_tests;
 #[cfg(test)]
 #[path = "t130_desktop_presentation_tests.rs"]
 mod t130_desktop_presentation_tests;
+#[cfg(test)]
+#[path = "t147_persistent_runtime_persistence_tests.rs"]
+mod t147_persistent_runtime_persistence_tests;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -450,6 +461,7 @@ impl Store {
         initialize_workflow_schema(&connection)?;
         initialize_model_mesh_schema(&connection)?;
         initialize_desktop_presentation_schema(&connection)?;
+        initialize_persistent_runtime_schema(&connection)?;
         Ok(Self {
             connection,
             home: home.to_path_buf(),
@@ -823,6 +835,103 @@ fn initialize_desktop_presentation_schema(connection: &Connection) -> Result<()>
     validate_desktop_presentation_schema_connection(connection)
 }
 
+fn persistent_runtime_schema_objects(
+    connection: &Connection,
+) -> Result<BTreeMap<String, (String, String, String)>> {
+    let mut statement = connection.prepare(
+        "SELECT name, type, tbl_name, sql
+         FROM sqlite_master
+         WHERE name GLOB 'persistent_runtime_*'
+            OR name GLOB 'idx_persistent_runtime_*'
+            OR name GLOB 'trg_persistent_runtime_*'
+         ORDER BY name",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(3)?,
+        ))
+    })?;
+    let mut objects = BTreeMap::new();
+    for row in rows {
+        let (name, object_type, table_name, sql) = row?;
+        let sql =
+            sql.ok_or_else(|| format!("persistent runtime schema object has no SQL: {name}"))?;
+        objects.insert(
+            name,
+            (object_type, table_name, normalize_workflow_schema_sql(&sql)),
+        );
+    }
+    Ok(objects)
+}
+
+fn expected_persistent_runtime_schema_objects() -> Result<BTreeMap<String, (String, String, String)>>
+{
+    let connection = Connection::open_in_memory()?;
+    connection.pragma_update(None, "foreign_keys", "ON")?;
+    connection.execute_batch(include_str!(
+        "../migrations/0002_workspace_execution_ledger.sql"
+    ))?;
+    connection.execute_batch(include_str!("../migrations/0006_agentic_identity.sql"))?;
+    connection.execute_batch(include_str!(
+        "../migrations/0013_persistent_runtime_owner.sql"
+    ))?;
+    persistent_runtime_schema_objects(&connection)
+}
+
+fn validate_persistent_runtime_schema_connection(connection: &Connection) -> Result<()> {
+    let expected = expected_persistent_runtime_schema_objects()?;
+    let observed = persistent_runtime_schema_objects(connection)?;
+    if observed.keys().collect::<Vec<_>>() != expected.keys().collect::<Vec<_>>() {
+        let missing = expected
+            .keys()
+            .filter(|name| !observed.contains_key(*name))
+            .cloned()
+            .collect::<Vec<_>>();
+        let unexpected = observed
+            .keys()
+            .filter(|name| !expected.contains_key(*name))
+            .cloned()
+            .collect::<Vec<_>>();
+        return Err(format!(
+            "persistent runtime schema object inventory mismatch; missing={missing:?}; unexpected={unexpected:?}"
+        )
+        .into());
+    }
+    for (name, expected_object) in expected {
+        let observed_object = observed
+            .get(&name)
+            .ok_or_else(|| format!("persistent runtime schema object missing: {name}"))?;
+        if observed_object != &expected_object {
+            return Err(
+                format!("persistent runtime schema object definition mismatch: {name}").into(),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn initialize_persistent_runtime_schema(connection: &Connection) -> Result<()> {
+    let existing = persistent_runtime_schema_objects(connection)?;
+    if existing.is_empty() {
+        connection.execute_batch("BEGIN IMMEDIATE")?;
+        if let Err(error) = connection.execute_batch(include_str!(
+            "../migrations/0013_persistent_runtime_owner.sql"
+        )) {
+            let _ = connection.execute_batch("ROLLBACK");
+            return Err(error.into());
+        }
+        if let Err(error) = validate_persistent_runtime_schema_connection(connection) {
+            let _ = connection.execute_batch("ROLLBACK");
+            return Err(error);
+        }
+        connection.execute_batch("COMMIT")?;
+    }
+    validate_persistent_runtime_schema_connection(connection)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StoredModelMeshApprovalAudit {
     workstream_id: String,
@@ -831,6 +940,313 @@ struct StoredModelMeshApprovalAudit {
     content_digest: String,
     canonical_content_json: String,
     approved_unix_ms: i64,
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 011 T147 persistence API; owner-process callers land in later authorized tasks"
+)]
+impl Store {
+    pub(crate) fn validate_persistent_runtime_schema(&self) -> Result<()> {
+        validate_persistent_runtime_schema_connection(&self.connection)
+    }
+
+    pub(crate) fn record_persistent_runtime_owner_generation(
+        &self,
+        owner_generation_id: OwnerGenerationId,
+        started_unix_ms: i64,
+    ) -> Result<()> {
+        self.validate_persistent_runtime_schema()?;
+        validate_timestamp(started_unix_ms, "owner generation start time")?;
+        self.connection.execute(
+            "INSERT INTO persistent_runtime_owner_generations(
+                owner_generation_id, schema_version, started_unix_ms
+             ) VALUES (?1, ?2, ?3)",
+            params![
+                owner_generation_id.as_hex(),
+                PERSISTENT_RUNTIME_SCHEMA_VERSION,
+                started_unix_ms
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn persist_persistent_runtime_record(
+        &self,
+        input: &PersistentRuntimeRecordInput<'_>,
+    ) -> Result<()> {
+        self.validate_persistent_runtime_schema()?;
+        validate_record_input(input)?;
+        let truth = input.truth;
+        self.connection.execute(
+            "INSERT INTO persistent_runtime_namespaces(
+                runtime_namespace_id,
+                schema_version,
+                runtime_alias,
+                workspace_id,
+                session_id,
+                terminal_execution_id,
+                owner_generation_id,
+                ownership_state,
+                process_liveness,
+                endpoint_availability,
+                continuity_class,
+                last_lifecycle_event_kind,
+                created_unix_ms,
+                updated_unix_ms,
+                last_observed_unix_ms,
+                ownership_lost_unix_ms,
+                recovery_reason
+             ) VALUES (
+                ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17
+             )
+             ON CONFLICT(runtime_namespace_id) DO UPDATE SET
+                runtime_alias = excluded.runtime_alias,
+                workspace_id = excluded.workspace_id,
+                session_id = excluded.session_id,
+                terminal_execution_id = excluded.terminal_execution_id,
+                owner_generation_id = excluded.owner_generation_id,
+                ownership_state = excluded.ownership_state,
+                process_liveness = excluded.process_liveness,
+                endpoint_availability = excluded.endpoint_availability,
+                continuity_class = excluded.continuity_class,
+                last_lifecycle_event_kind = excluded.last_lifecycle_event_kind,
+                updated_unix_ms = excluded.updated_unix_ms,
+                last_observed_unix_ms = excluded.last_observed_unix_ms,
+                ownership_lost_unix_ms = excluded.ownership_lost_unix_ms,
+                recovery_reason = excluded.recovery_reason",
+            params![
+                input.runtime_namespace_id.as_hex(),
+                PERSISTENT_RUNTIME_SCHEMA_VERSION,
+                input.runtime_alias.as_str(),
+                input.workspace_id,
+                input.session_id,
+                input.terminal_execution_id,
+                input.owner_generation_id.map(|value| value.as_hex()),
+                ownership_label(truth.ownership),
+                process_liveness_label(truth.process_liveness),
+                endpoint_availability_label(truth.endpoint_availability),
+                continuity_label(truth.continuity),
+                lifecycle_kind_label(input.last_lifecycle_event_kind),
+                input.created_unix_ms,
+                input.updated_unix_ms,
+                input.last_observed_unix_ms,
+                input.ownership_lost_unix_ms,
+                input
+                    .recovery_reason
+                    .map(PersistentRuntimeRecoveryReason::as_str),
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn load_persistent_runtime_record(
+        &self,
+        runtime_namespace_id: RuntimeNamespaceId,
+    ) -> Result<PersistentRuntimeRecord> {
+        self.validate_persistent_runtime_schema()?;
+        let row = self.connection.query_row(
+            "SELECT
+                runtime_namespace_id,
+                schema_version,
+                runtime_alias,
+                workspace_id,
+                session_id,
+                terminal_execution_id,
+                owner_generation_id,
+                ownership_state,
+                process_liveness,
+                endpoint_availability,
+                continuity_class,
+                last_lifecycle_event_kind,
+                created_unix_ms,
+                updated_unix_ms,
+                last_observed_unix_ms,
+                ownership_lost_unix_ms,
+                recovery_reason
+             FROM persistent_runtime_namespaces
+             WHERE runtime_namespace_id = ?1",
+            [runtime_namespace_id.as_hex()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, String>(9)?,
+                    row.get::<_, String>(10)?,
+                    row.get::<_, String>(11)?,
+                    row.get::<_, i64>(12)?,
+                    row.get::<_, i64>(13)?,
+                    row.get::<_, Option<i64>>(14)?,
+                    row.get::<_, Option<i64>>(15)?,
+                    row.get::<_, Option<String>>(16)?,
+                ))
+            },
+        )?;
+
+        if row.1 != PERSISTENT_RUNTIME_SCHEMA_VERSION {
+            return Err(format!("unsupported persistent runtime schema version: {}", row.1).into());
+        }
+        let parsed_namespace = RuntimeNamespaceId::parse(&row.0)
+            .map_err(|error| format!("stored runtime namespace id: {error}"))?;
+        if parsed_namespace != runtime_namespace_id {
+            return Err("stored runtime namespace identity mismatch".into());
+        }
+        let runtime_alias = crate::persistent_runtime::domain::RuntimeAlias::new(&row.2)
+            .map_err(|error| format!("stored runtime alias: {error}"))?;
+        validate_reference(row.3.as_deref(), "stored workspace id")?;
+        validate_reference(row.4.as_deref(), "stored session id")?;
+        validate_reference(row.5.as_deref(), "stored terminal execution id")?;
+
+        let owner_generation_id = row
+            .6
+            .as_deref()
+            .map(OwnerGenerationId::parse)
+            .transpose()
+            .map_err(|error| format!("stored owner generation id: {error}"))?;
+        let truth = RuntimeTruth {
+            ownership: ownership_from_db(&row.7)?,
+            process_liveness: process_liveness_from_db(&row.8)?,
+            endpoint_availability: endpoint_availability_from_db(&row.9)?,
+            continuity: continuity_from_db(&row.10)?,
+        };
+        let last_lifecycle_event_kind = lifecycle_kind_from_db(&row.11)?;
+
+        validate_timestamp(row.12, "stored runtime creation time")?;
+        validate_timestamp(row.13, "stored runtime update time")?;
+        if row.13 < row.12 {
+            return Err("stored runtime update time precedes creation time".into());
+        }
+        for (value, label) in [
+            (row.14, "stored runtime observation time"),
+            (row.15, "stored ownership-loss time"),
+        ] {
+            if let Some(value) = value {
+                validate_timestamp(value, label)?;
+                if value < row.12 {
+                    return Err(format!("{label} precedes runtime creation time").into());
+                }
+            }
+        }
+        let recovery_reason = row
+            .16
+            .as_deref()
+            .map(PersistentRuntimeRecoveryReason::parse)
+            .transpose()?;
+        let lost =
+            truth.ownership == crate::persistent_runtime::domain::OwnershipState::OwnershipLost;
+        if lost != row.15.is_some() || lost != recovery_reason.is_some() {
+            return Err("stored OWNERSHIP_LOST truth is missing bounded recovery metadata".into());
+        }
+        if truth.ownership == crate::persistent_runtime::domain::OwnershipState::LiveOwned {
+            owner_generation_id.ok_or("stored LIVE_OWNED truth has no owner generation")?;
+            return Err(
+                "persisted LIVE_OWNED runtime is historical metadata only; live ownership requires a retained owner-held ownership primitive"
+                    .into(),
+            );
+        }
+
+        Ok(PersistentRuntimeRecord {
+            runtime_namespace_id: parsed_namespace,
+            runtime_alias,
+            workspace_id: row.3,
+            session_id: row.4,
+            terminal_execution_id: row.5,
+            owner_generation_id,
+            truth,
+            last_lifecycle_event_kind,
+            created_unix_ms: row.12,
+            updated_unix_ms: row.13,
+            last_observed_unix_ms: row.14,
+            ownership_lost_unix_ms: row.15,
+            recovery_reason,
+        })
+    }
+
+    pub(crate) fn reconcile_persistent_runtime_records(
+        &self,
+        current_owner_generation_id: Option<OwnerGenerationId>,
+        observed_unix_ms: i64,
+    ) -> Result<usize> {
+        self.validate_persistent_runtime_schema()?;
+        validate_timestamp(observed_unix_ms, "persistent runtime reconciliation time")?;
+
+        if let Some(current) = current_owner_generation_id {
+            let exists = self.connection.query_row(
+                "SELECT EXISTS(
+                    SELECT 1
+                    FROM persistent_runtime_owner_generations
+                    WHERE owner_generation_id = ?1
+                 )",
+                [current.as_hex()],
+                |row| row.get::<_, i64>(0),
+            )?;
+            if exists != 1 {
+                return Err(
+                    "current owner generation is not recorded in persistent runtime history".into(),
+                );
+            }
+        }
+
+        let max_created: Option<i64> = match current_owner_generation_id {
+            Some(current) => self.connection.query_row(
+                "SELECT MAX(created_unix_ms)
+                 FROM persistent_runtime_namespaces
+                 WHERE ownership_state = 'LIVE_OWNED'
+                   AND owner_generation_id <> ?1",
+                [current.as_hex()],
+                |row| row.get(0),
+            )?,
+            None => self.connection.query_row(
+                "SELECT MAX(created_unix_ms)
+                 FROM persistent_runtime_namespaces
+                 WHERE ownership_state = 'LIVE_OWNED'",
+                [],
+                |row| row.get(0),
+            )?,
+        };
+        if max_created.is_some_and(|created| observed_unix_ms < created) {
+            return Err("reconciliation time precedes a targeted runtime creation time".into());
+        }
+
+        match current_owner_generation_id {
+            Some(current) => Ok(self.connection.execute(
+                "UPDATE persistent_runtime_namespaces
+                 SET ownership_state = 'OWNERSHIP_LOST',
+                     process_liveness = 'UNKNOWN',
+                     endpoint_availability = 'UNKNOWN',
+                     continuity_class = 'UNKNOWN',
+                     last_lifecycle_event_kind = 'OWNERSHIP_LOST',
+                     updated_unix_ms = ?1,
+                     last_observed_unix_ms = ?1,
+                     ownership_lost_unix_ms = ?1,
+                     recovery_reason = 'OWNER_GENERATION_CHANGED'
+                 WHERE ownership_state = 'LIVE_OWNED'
+                   AND owner_generation_id <> ?2",
+                params![observed_unix_ms, current.as_hex()],
+            )?),
+            None => Ok(self.connection.execute(
+                "UPDATE persistent_runtime_namespaces
+                 SET ownership_state = 'OWNERSHIP_LOST',
+                     process_liveness = 'UNKNOWN',
+                     endpoint_availability = 'UNKNOWN',
+                     continuity_class = 'UNKNOWN',
+                     last_lifecycle_event_kind = 'OWNERSHIP_LOST',
+                     updated_unix_ms = ?1,
+                     last_observed_unix_ms = ?1,
+                     ownership_lost_unix_ms = ?1,
+                     recovery_reason = 'OWNER_GENERATION_UNPROVEN'
+                 WHERE ownership_state = 'LIVE_OWNED'",
+                [observed_unix_ms],
+            )?),
+        }
+    }
 }
 
 fn model_mesh_error(error: String) -> Box<dyn Error + Send + Sync> {
