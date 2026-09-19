@@ -1251,6 +1251,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "vt100",
+ "windows-sys",
 ]
 
 [[package]]

@@ -260,7 +260,7 @@ test('T143 WebKitGTK harness retains raw samples for every frozen local interact
   assert.match(webkitHarness, /large:focus/);
 });
 
-test('T143 workflow separates native qualification bytes from benchmark renderer bytes without new package dependency', () => {
+test('T143 workflow separates native qualification bytes from benchmark renderer bytes with only the frozen T150 dependency seam', () => {
   assert.match(workflow, /runs-on: ubuntu-24\.04/);
   assert.match(workflow, /CANDIDATE_SHA/);
   assert.match(workflow, /T143_RSS_AMENDMENT_SHA: 55c29ebb5833a1f2856e6f3a820cc5484940b705/);
@@ -286,7 +286,16 @@ test('T143 workflow separates native qualification bytes from benchmark renderer
   assert.match(assembleHarness, /minibrowser_package/);
   assert.doesNotMatch(assembleHarness, /epiphany/);
   assert.match(workflow, /actions\/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a/);
-  assert.match(workflow, /desktop\/src-tauri\/Cargo\.toml desktop\/src-tauri\/Cargo\.lock/);
+  assert.match(workflow, /desktop\/package\.json desktop\/package-lock\.json desktop\/src-tauri\/Cargo\.toml/);
+  assert.match(workflow, /production Cargo\.toml changed outside the exact T150 windows-sys seam/);
+  assert.match(workflow, /dependency graph changed outside the exact T150 root edge/);
+  assert.match(workflow, /expected_lock_with_root_edge\("Cargo\.lock", "windows-sys"\)/);
+  assert.match(
+    workflow,
+    /expected_lock_with_root_edge\("desktop\/src-tauri\/Cargo\.lock", "windows-sys 0\.61\.2"\)/,
+  );
+  assert.match(workflow, /Win32_Security_Authorization/);
+  assert.match(workflow, /Win32_System_Threading/);
   assert.doesNotMatch(workflow, /unexpected T143 Linux dependency set/);
 });
 
