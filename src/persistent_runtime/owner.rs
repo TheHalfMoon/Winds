@@ -396,17 +396,17 @@ impl PersistentOwner {
         now_unix_ms: i64,
         now_monotonic_ms: u64,
     ) -> OwnerResult<PersistentTerminalSnapshot> {
-        let snapshot = self
+        let runtime_result = self
             .runtime_registry
             .terminate(&self.store, attachment, now_unix_ms)
-            .map_err(|error| OwnerError::Runtime(error.to_string()))?;
-        self.revoke_controller_for_runtime(
+            .map_err(|error| OwnerError::Runtime(error.to_string()));
+        let controller_result = self.revoke_controller_for_runtime(
             attachment.runtime_namespace_id(),
             now_unix_ms,
             now_monotonic_ms,
-        )?;
+        );
         self.sync_runtime_activity(now_monotonic_ms);
-        Ok(snapshot)
+        combine_runtime_and_controller_result(runtime_result, controller_result)
     }
 
     pub(crate) fn close_terminal_runtime(
@@ -415,17 +415,17 @@ impl PersistentOwner {
         now_unix_ms: i64,
         now_monotonic_ms: u64,
     ) -> OwnerResult<PersistentTerminalSnapshot> {
-        let snapshot = self
+        let runtime_result = self
             .runtime_registry
             .close(&self.store, attachment, now_unix_ms)
-            .map_err(|error| OwnerError::Runtime(error.to_string()))?;
-        self.revoke_controller_for_runtime(
+            .map_err(|error| OwnerError::Runtime(error.to_string()));
+        let controller_result = self.revoke_controller_for_runtime(
             attachment.runtime_namespace_id(),
             now_unix_ms,
             now_monotonic_ms,
-        )?;
+        );
         self.sync_runtime_activity(now_monotonic_ms);
-        Ok(snapshot)
+        combine_runtime_and_controller_result(runtime_result, controller_result)
     }
 
     pub(crate) fn poll_terminal_runtimes(
@@ -770,6 +770,20 @@ impl PersistentOwner {
 
     pub(crate) fn should_exit(&self, now_monotonic_ms: u64) -> bool {
         self.activity.should_exit(now_monotonic_ms)
+    }
+}
+
+fn combine_runtime_and_controller_result<T>(
+    runtime_result: OwnerResult<T>,
+    controller_result: OwnerResult<()>,
+) -> OwnerResult<T> {
+    match (runtime_result, controller_result) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(runtime_error), Ok(())) => Err(runtime_error),
+        (Ok(_), Err(controller_error)) => Err(controller_error),
+        (Err(runtime_error), Err(controller_error)) => Err(OwnerError::Runtime(format!(
+            "{runtime_error}; controller revocation also failed: {controller_error}"
+        ))),
     }
 }
 
