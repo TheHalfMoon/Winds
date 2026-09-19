@@ -465,6 +465,23 @@ fn t147_partial_or_corrupt_schema_fails_closed_without_silent_reinitialization()
     }
     assert!(Store::open(&corrupt_home).is_err());
     cleanup(&corrupt_home);
+
+    let foreign_named_trigger_home = test_home("foreign-named-schema-object");
+    {
+        let store = Store::open(&foreign_named_trigger_home).unwrap();
+        store
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER audit_before_runtime_insert
+                 BEFORE INSERT ON persistent_runtime_namespaces
+                 BEGIN
+                     SELECT RAISE(ABORT, 'unexpected runtime trigger');
+                 END;",
+            )
+            .unwrap();
+    }
+    assert!(Store::open(&foreign_named_trigger_home).is_err());
+    cleanup(&foreign_named_trigger_home);
 }
 
 #[test]

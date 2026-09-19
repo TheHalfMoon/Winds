@@ -102,6 +102,12 @@ Before candidate commit:
 
 The nine ignored tests are pre-existing explicitly governed live-proof or soak tests; T147 does not convert them into passing evidence.
 
+## Review repair history
+
+The first published candidate head `6a15373491075d1cde2b87c636f9df0c95ddf2ac` received a fresh CodeRabbit review that identified one material schema-integrity gap: the schema inventory selected T147 indexes/triggers by naming convention, so a differently named trigger or index attached directly to a persistent-runtime table could evade the unexpected-object check.
+
+The repair broadens observed inventory to every non-internal SQLite schema object whose `tbl_name` is either T147 table, while retaining the exact isolated expected-inventory comparison. A dedicated differently named trigger fixture now proves reopening fails closed. The finding is preserved rather than relabelled as passing evidence; the repaired successor head requires fresh exact-head qualification and review.
+
 ## Nonclaims
 
 T147 does not establish any of the following:

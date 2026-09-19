@@ -841,9 +841,16 @@ fn persistent_runtime_schema_objects(
     let mut statement = connection.prepare(
         "SELECT name, type, tbl_name, sql
          FROM sqlite_master
-         WHERE name GLOB 'persistent_runtime_*'
-            OR name GLOB 'idx_persistent_runtime_*'
-            OR name GLOB 'trg_persistent_runtime_*'
+         WHERE name NOT GLOB 'sqlite_*'
+           AND (
+                name GLOB 'persistent_runtime_*'
+                OR name GLOB 'idx_persistent_runtime_*'
+                OR name GLOB 'trg_persistent_runtime_*'
+                OR tbl_name IN (
+                    'persistent_runtime_namespaces',
+                    'persistent_runtime_owner_generations'
+                )
+           )
          ORDER BY name",
     )?;
     let rows = statement.query_map([], |row| {
