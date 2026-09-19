@@ -2,16 +2,19 @@ use crate::persistent_runtime::domain::{OwnerGenerationId, RuntimeNamespaceId};
 use crate::persistent_runtime::peer::{current_effective_uid, require_same_user_peer};
 use crate::persistent_runtime::transport::PosixTransportError;
 use std::env;
-use std::fs::{self, DirBuilder, FileType, Metadata, Permissions};
+use std::fs::{self, DirBuilder, File, FileType, Metadata, OpenOptions, Permissions};
+use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 
 const RUNTIME_DIRECTORY_NAME: &str = "winds-runtime-v1";
 const ENDPOINT_FILE_NAME: &str = "owner.sock";
+const BIND_LOCK_FILE_NAME: &str = ".bind.lock";
 const RUNTIME_DIRECTORY_MODE: u32 = 0o700;
 const ENDPOINT_MODE: u32 = 0o600;
+const BIND_LOCK_MODE: u32 = 0o600;
 const MAX_PORTABLE_UNIX_SOCKET_PATH_BYTES: usize = 100;
 const IDENTITY_ENTROPY_BYTES: usize = 16;
 
@@ -73,6 +76,7 @@ impl BoundUnixListener {
 
     pub(crate) fn bind(runtime_directory: &Path) -> Result<Self, PosixTransportError> {
         prepare_runtime_directory(runtime_directory)?;
+        let _bind_lock = acquire_bind_lock(runtime_directory)?;
         let endpoint_path = endpoint_path(runtime_directory)?;
         prepare_endpoint_for_bind(&endpoint_path)?;
 
@@ -275,6 +279,51 @@ fn validate_directory_facts(
     }
     if observed_mode & 0o777 != RUNTIME_DIRECTORY_MODE {
         return Err(PosixTransportError::RuntimeDirectoryModeMismatch);
+    }
+    Ok(())
+}
+
+fn acquire_bind_lock(runtime_directory: &Path) -> Result<File, PosixTransportError> {
+    let path = runtime_directory.join(BIND_LOCK_FILE_NAME);
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(BIND_LOCK_MODE)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let file = options
+        .open(&path)
+        .map_err(|_| PosixTransportError::BindLockUnavailable)?;
+    validate_bind_lock_file(&file, &path)?;
+
+    // SAFETY: file owns a valid descriptor for the private regular lock file. flock only uses the
+    // descriptor and releases the advisory lock automatically when this File is dropped.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(PosixTransportError::BindLockUnavailable);
+    }
+    validate_bind_lock_file(&file, &path)?;
+    Ok(file)
+}
+
+fn validate_bind_lock_file(file: &File, path: &Path) -> Result<(), PosixTransportError> {
+    let file_metadata = file
+        .metadata()
+        .map_err(|_| PosixTransportError::BindLockUnavailable)?;
+    if !file_metadata.is_file()
+        || file_metadata.uid() != current_effective_uid()
+        || file_metadata.mode() & 0o777 != BIND_LOCK_MODE
+    {
+        return Err(PosixTransportError::BindLockUnavailable);
+    }
+    let path_metadata =
+        fs::symlink_metadata(path).map_err(|_| PosixTransportError::BindLockUnavailable)?;
+    if path_metadata.file_type().is_symlink()
+        || !path_metadata.is_file()
+        || EndpointIdentity::from_metadata(&path_metadata)
+            != EndpointIdentity::from_metadata(&file_metadata)
+    {
+        return Err(PosixTransportError::BindLockUnavailable);
     }
     Ok(())
 }

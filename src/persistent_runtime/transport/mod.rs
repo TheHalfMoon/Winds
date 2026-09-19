@@ -11,6 +11,7 @@ pub(crate) enum PosixTransportError {
     RuntimeDirectoryNotDirectory,
     RuntimeDirectoryOwnershipMismatch,
     RuntimeDirectoryModeMismatch,
+    BindLockUnavailable,
     EndpointPathTooLong,
     EndpointSymlink,
     EndpointCollision,

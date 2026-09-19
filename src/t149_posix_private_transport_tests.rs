@@ -1,8 +1,9 @@
 use super::{
-    BoundUnixListener, ENDPOINT_MODE, MAX_PORTABLE_UNIX_SOCKET_PATH_BYTES, RUNTIME_DIRECTORY_MODE,
-    connect_same_user, endpoint_path, entropy_128_with, generate_owner_generation_id,
-    generate_runtime_namespace_id, preferred_base_is_private, prepare_runtime_directory,
-    resolve_runtime_directory_from, validate_directory_facts, validate_endpoint_facts,
+    BIND_LOCK_MODE, BoundUnixListener, ENDPOINT_MODE, MAX_PORTABLE_UNIX_SOCKET_PATH_BYTES,
+    RUNTIME_DIRECTORY_MODE, acquire_bind_lock, connect_same_user, endpoint_path, entropy_128_with,
+    generate_owner_generation_id, generate_runtime_namespace_id, preferred_base_is_private,
+    prepare_runtime_directory, resolve_runtime_directory_from, validate_directory_facts,
+    validate_endpoint_facts,
 };
 use crate::persistent_runtime::peer::{
     current_effective_uid, peer_effective_uid, require_same_effective_user,
@@ -206,6 +207,30 @@ fn t149_secure_listener_and_client_prove_same_user_and_exchange_bytes() {
     client.read_exact(&mut response).unwrap();
     assert_eq!(&response, b"pong");
     join.join().unwrap();
+}
+
+#[test]
+fn t149_bind_lock_is_private_identity_bound_and_rejects_path_substitution() {
+    let root = TestRoot::new("bind-lock");
+    let runtime = root.runtime_dir();
+    prepare_runtime_directory(&runtime).unwrap();
+
+    let lock = acquire_bind_lock(&runtime).unwrap();
+    let path = runtime.join(".bind.lock");
+    let metadata = fs::symlink_metadata(&path).unwrap();
+    assert!(metadata.is_file());
+    assert!(!metadata.file_type().is_symlink());
+    assert_eq!(metadata.permissions().mode() & 0o777, BIND_LOCK_MODE);
+    drop(lock);
+
+    fs::remove_file(&path).unwrap();
+    let target = runtime.join("lock-target");
+    File::create(&target).unwrap();
+    symlink(&target, &path).unwrap();
+    assert_eq!(
+        acquire_bind_lock(&runtime).unwrap_err(),
+        PosixTransportError::BindLockUnavailable
+    );
 }
 
 #[test]

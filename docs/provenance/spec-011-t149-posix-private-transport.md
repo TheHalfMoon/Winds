@@ -19,7 +19,8 @@ No Windows named pipe, persistent owner process, PTY/ConPTY ownership migration,
 - endpoint must be a non-symlink socket owned by the effective UID with exact mode `0600`;
 - regular-file and symlink collisions fail closed and are preserved;
 - a connectable existing socket is treated as live and is never replaced;
-- an existing socket is removed as stale only after `connect(2)` returns `ECONNREFUSED`, its socket/owner/mode facts are revalidated, and its device/inode identity still matches the pre-probe identity;
+- bind preparation is serialized by a private owner-only `.bind.lock` opened with `O_NOFOLLOW` and held with `flock(2)` across stale probing/removal and `bind(2)`, preventing legitimate concurrent binders from racing the stale-path decision;
+- an existing socket is removed as stale only after `connect(2)` returns `ECONNREFUSED`, its socket/owner/mode facts are revalidated, and its device/inode identity still matches the pre-probe identity while the bind lock remains held;
 - listener cleanup removes only the same device/inode socket it created, so a replacement path is not deleted by drop cleanup.
 
 This protects against cross-user pathname substitution under the accepted local-principal threat model. Spec 011 explicitly does not claim isolation from arbitrary malicious code already executing as the same effective OS user.
