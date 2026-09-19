@@ -103,8 +103,62 @@ jobs:
           git cat-file -e "$T143_RSS_AMENDMENT_SHA^{commit}"
           git merge-base --is-ancestor "$T143_RSS_AMENDMENT_SHA" "$CANDIDATE_SHA"
           git diff --exit-code "$BASE_SHA" "$CANDIDATE_SHA" -- \
-            Cargo.toml Cargo.lock desktop/package.json desktop/package-lock.json \
-            desktop/src-tauri/Cargo.toml desktop/src-tauri/Cargo.lock
+            desktop/package.json desktop/package-lock.json desktop/src-tauri/Cargo.toml
+          python3 - <<'PY'
+          import copy
+          import os
+          import subprocess
+          import tomllib
+
+          base = os.environ["BASE_SHA"]
+          candidate = os.environ["CANDIDATE_SHA"]
+
+          def load_toml(revision: str, path: str):
+              raw = subprocess.check_output(["git", "show", f"{revision}:{path}"])
+              return tomllib.loads(raw.decode("utf-8"))
+
+          root_base = load_toml(base, "Cargo.toml")
+          root_candidate = load_toml(candidate, "Cargo.toml")
+          expected_root = copy.deepcopy(root_base)
+          expected_root.setdefault("target", {}).setdefault("cfg(windows)", {}).setdefault(
+              "dependencies", {}
+          )["windows-sys"] = {
+              "version": "=0.61.2",
+              "default-features": False,
+              "features": [
+                  "Win32_Security_Authorization",
+                  "Win32_Security_Cryptography",
+                  "Win32_Storage_FileSystem",
+                  "Win32_System_IO",
+                  "Win32_System_Pipes",
+                  "Win32_System_Threading",
+              ],
+          }
+          assert root_candidate in (root_base, expected_root), (
+              "production Cargo.toml changed outside the exact T150 windows-sys seam"
+          )
+
+          def expected_lock_with_root_edge(path: str, edge: str):
+              before = load_toml(base, path)
+              after = load_toml(candidate, path)
+              expected = copy.deepcopy(before)
+              roots = [
+                  package
+                  for package in expected.get("package", [])
+                  if package.get("name") == "winds-control" and package.get("version") == "0.1.0"
+              ]
+              assert len(roots) == 1, f"{path}: expected one winds-control package"
+              dependencies = roots[0].setdefault("dependencies", [])
+              if edge not in dependencies:
+                  dependencies.append(edge)
+                  dependencies.sort()
+              assert after in (before, expected), (
+                  f"{path}: dependency graph changed outside the exact T150 root edge"
+              )
+
+          expected_lock_with_root_edge("Cargo.lock", "windows-sys")
+          expected_lock_with_root_edge("desktop/src-tauri/Cargo.lock", "windows-sys 0.61.2")
+          PY
           test "$(grep -c '#\[tauri::command\]' desktop/src-tauri/src/main.rs)" -eq 22
 
       - name: Production deterministic gates
