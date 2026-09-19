@@ -575,7 +575,67 @@ fn t148_lost_mutation_response_becomes_outcome_unknown_until_state_reconciliatio
         LocalControlErrorKind::OutcomeUnknown
     );
 
-    tracker.reconcile_state();
+    let ping = client_message(31, None, ProtocolPayload::Ping);
+    let pong = ProtocolMessage::new(
+        connection("client-a"),
+        sequence(32),
+        None,
+        generation(2),
+        Some(sequence(31)),
+        ProtocolPayload::Pong,
+    )
+    .unwrap();
+    assert_eq!(
+        tracker.reconcile_state(&ping, &pong).unwrap_err(),
+        LocalControlErrorKind::UnsupportedOperation
+    );
+    assert!(tracker.is_outcome_unknown());
+
+    let unauthenticated_clear = client_message(31, Some(runtime), ProtocolPayload::AttachObserver);
+    let unrelated_state = ProtocolMessage::new(
+        connection("client-a"),
+        sequence(32),
+        Some(namespace(4)),
+        generation(2),
+        Some(sequence(31)),
+        ProtocolPayload::RuntimeSnapshot {
+            truth: RuntimeTruth {
+                ownership: OwnershipState::OwnershipLost,
+                process_liveness: ProcessLiveness::Unknown,
+                endpoint_availability: EndpointAvailability::Unknown,
+                continuity: ContinuityClass::Unknown,
+            },
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        tracker
+            .reconcile_state(&unauthenticated_clear, &unrelated_state)
+            .unwrap_err(),
+        LocalControlErrorKind::UnknownRuntime
+    );
+    assert!(tracker.is_outcome_unknown());
+
+    let state_query = client_message(32, Some(runtime), ProtocolPayload::AttachObserver);
+    let state_response = ProtocolMessage::new(
+        connection("client-a"),
+        sequence(33),
+        Some(runtime),
+        generation(2),
+        Some(sequence(32)),
+        ProtocolPayload::RuntimeSnapshot {
+            truth: RuntimeTruth {
+                ownership: OwnershipState::OwnershipLost,
+                process_liveness: ProcessLiveness::Unknown,
+                endpoint_availability: EndpointAvailability::Unknown,
+                continuity: ContinuityClass::Unknown,
+            },
+        },
+    )
+    .unwrap();
+    tracker
+        .reconcile_state(&state_query, &state_response)
+        .unwrap();
     assert!(!tracker.is_outcome_unknown());
     tracker.begin(&second).unwrap();
     let wrong_response = ProtocolMessage::new(

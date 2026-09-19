@@ -737,14 +737,14 @@ struct PendingMutation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct MutationOutcomeTracker {
     pending: Option<PendingMutation>,
-    outcome_unknown: bool,
+    uncertain_runtime_namespace_id: Option<RuntimeNamespaceId>,
 }
 
 impl MutationOutcomeTracker {
     pub(crate) fn new() -> Self {
         Self {
             pending: None,
-            outcome_unknown: false,
+            uncertain_runtime_namespace_id: None,
         }
     }
 
@@ -754,7 +754,7 @@ impl MutationOutcomeTracker {
         {
             return Err(LocalControlErrorKind::UnsupportedOperation);
         }
-        if self.outcome_unknown || self.pending.is_some() {
+        if self.uncertain_runtime_namespace_id.is_some() || self.pending.is_some() {
             return Err(LocalControlErrorKind::OutcomeUnknown);
         }
         let runtime_namespace_id = message
@@ -791,17 +791,40 @@ impl MutationOutcomeTracker {
     }
 
     pub(crate) fn connection_lost(&mut self) {
-        if self.pending.take().is_some() {
-            self.outcome_unknown = true;
+        if let Some(pending) = self.pending.take() {
+            self.uncertain_runtime_namespace_id = Some(pending.runtime_namespace_id);
         }
     }
 
-    pub(crate) fn reconcile_state(&mut self) {
-        self.outcome_unknown = false;
+    pub(crate) fn reconcile_state(
+        &mut self,
+        request: &ProtocolMessage,
+        response: &ProtocolMessage,
+    ) -> ProtocolResult<()> {
+        let uncertain_runtime_namespace_id = self
+            .uncertain_runtime_namespace_id
+            .ok_or(LocalControlErrorKind::MalformedFrame)?;
+
+        let valid_state_query = matches!(
+            (request.kind(), response.kind()),
+            (MessageKind::ListRuntimes, MessageKind::RuntimeSnapshot)
+                | (MessageKind::AttachObserver, MessageKind::RuntimeSnapshot)
+                | (MessageKind::AttachObserver, MessageKind::ControlState)
+        );
+        if !valid_state_query {
+            return Err(LocalControlErrorKind::UnsupportedOperation);
+        }
+        validate_response_binding(request, response)?;
+        if response.runtime_namespace_id != Some(uncertain_runtime_namespace_id) {
+            return Err(LocalControlErrorKind::UnknownRuntime);
+        }
+
+        self.uncertain_runtime_namespace_id = None;
+        Ok(())
     }
 
     pub(crate) fn is_outcome_unknown(&self) -> bool {
-        self.outcome_unknown
+        self.uncertain_runtime_namespace_id.is_some()
     }
 }
 
