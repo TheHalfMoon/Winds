@@ -674,6 +674,44 @@ fn persist_runtime(store: &Store, runtime: &OwnedTerminalRuntime) -> RuntimeResu
         .map_err(|error| PersistentTerminalRuntimeError::Store(error.to_string()))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+    use std::time::Instant;
+
+    #[test]
+    fn t152_output_pump_saturation_is_bounded_nonblocking_and_fail_closed() {
+        let payload = vec![
+            b'x';
+            OUTPUT_PUMP_CHUNK_BYTES
+                .checked_mul(OUTPUT_PUMP_QUEUE_CHUNKS + 8)
+                .expect("bounded test payload size")
+        ];
+        let mut pump =
+            RuntimeOutputPump::start(Box::new(Cursor::new(payload))).expect("pump must start");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !pump.closed.load(Ordering::Acquire) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        assert!(
+            pump.closed.load(Ordering::Acquire),
+            "bounded pump must drain the finite source without blocking on a full queue"
+        );
+        assert!(
+            pump.output_gap.load(Ordering::Acquire),
+            "queue saturation must be recorded explicitly"
+        );
+
+        let mut output = [0_u8; 32];
+        assert_eq!(
+            pump.read(&mut output),
+            Err(PersistentTerminalRuntimeError::OutputGap)
+        );
+    }
+}
+
 fn generate_runtime_namespace_id() -> RuntimeResult<RuntimeNamespaceId> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
