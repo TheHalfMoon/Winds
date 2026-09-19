@@ -1,4 +1,9 @@
-use crate::persistent_runtime::domain::OwnerGenerationId;
+use crate::git::shell_profiles::ShellProfile;
+use crate::git::terminal::TerminalSize;
+use crate::persistent_runtime::domain::{OwnerGenerationId, RuntimeAlias, RuntimeNamespaceId};
+use crate::persistent_runtime::runtime::{
+    PersistentTerminalAttachment, PersistentTerminalRegistry, PersistentTerminalSnapshot,
+};
 use crate::store::Store;
 use std::error::Error;
 use std::fmt;
@@ -26,6 +31,7 @@ pub(crate) enum OwnerError {
     Endpoint(String),
     ClockUnavailable,
     ActivityUnderflow,
+    Runtime(String),
 }
 
 impl fmt::Display for OwnerError {
@@ -63,6 +69,9 @@ impl fmt::Display for OwnerError {
             Self::ClockUnavailable => formatter.write_str("persistent owner clock is unavailable"),
             Self::ActivityUnderflow => {
                 formatter.write_str("persistent owner client activity underflow")
+            }
+            Self::Runtime(message) => {
+                write!(formatter, "persistent owner runtime failed: {message}")
             }
         }
     }
@@ -142,6 +151,7 @@ pub(crate) struct PersistentOwner {
     reconciled_runtime_count: usize,
     ready_unix_ms: i64,
     startup_phase: OwnerStartupPhase,
+    runtime_registry: PersistentTerminalRegistry,
 }
 
 impl PersistentOwner {
@@ -197,6 +207,7 @@ impl PersistentOwner {
             reconciled_runtime_count,
             ready_unix_ms: now_unix_ms,
             startup_phase: OwnerStartupPhase::Ready,
+            runtime_registry: PersistentTerminalRegistry::new(generation_id),
         })
     }
 
@@ -227,6 +238,7 @@ impl PersistentOwner {
             reconciled_runtime_count,
             ready_unix_ms: now_unix_ms,
             startup_phase: OwnerStartupPhase::Ready,
+            runtime_registry: PersistentTerminalRegistry::new(generation_id),
         })
     }
 
@@ -257,6 +269,162 @@ impl PersistentOwner {
 
     pub(crate) fn activity_mut(&mut self) -> &mut OwnerActivity {
         &mut self.activity
+    }
+
+    pub(crate) fn start_terminal_runtime(
+        &mut self,
+        runtime_alias: RuntimeAlias,
+        profile: &ShellProfile,
+        cwd: &Path,
+        terminal_size: TerminalSize,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> OwnerResult<PersistentTerminalAttachment> {
+        let attachment = self
+            .runtime_registry
+            .start_shell(
+                &self.store,
+                runtime_alias,
+                profile,
+                cwd,
+                terminal_size,
+                now_unix_ms,
+            )
+            .map_err(|error| OwnerError::Runtime(error.to_string()))?;
+        self.sync_runtime_activity(now_monotonic_ms);
+        Ok(attachment)
+    }
+
+    pub(crate) fn reattach_terminal_runtime(
+        &mut self,
+        runtime_namespace_id: RuntimeNamespaceId,
+        expected_owner_generation_id: OwnerGenerationId,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> OwnerResult<PersistentTerminalAttachment> {
+        let attachment = self
+            .runtime_registry
+            .reattach(
+                &self.store,
+                runtime_namespace_id,
+                expected_owner_generation_id,
+                now_unix_ms,
+            )
+            .map_err(|error| OwnerError::Runtime(error.to_string()))?;
+        self.sync_runtime_activity(now_monotonic_ms);
+        Ok(attachment)
+    }
+
+    pub(crate) fn terminal_runtime_snapshot(
+        &mut self,
+        attachment: &PersistentTerminalAttachment,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> OwnerResult<PersistentTerminalSnapshot> {
+        let snapshot = self
+            .runtime_registry
+            .snapshot(&self.store, attachment, now_unix_ms)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))?;
+        self.sync_runtime_activity(now_monotonic_ms);
+        Ok(snapshot)
+    }
+
+    pub(crate) fn send_terminal_runtime_input(
+        &mut self,
+        attachment: &PersistentTerminalAttachment,
+        bytes: &[u8],
+    ) -> OwnerResult<()> {
+        self.runtime_registry
+            .send_input(attachment, bytes)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))
+    }
+
+    pub(crate) fn read_terminal_runtime_output(
+        &mut self,
+        attachment: &PersistentTerminalAttachment,
+        buffer: &mut [u8],
+    ) -> OwnerResult<usize> {
+        self.runtime_registry
+            .read_output(attachment, buffer)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))
+    }
+
+    pub(crate) fn resize_terminal_runtime(
+        &mut self,
+        attachment: &PersistentTerminalAttachment,
+        terminal_size: TerminalSize,
+    ) -> OwnerResult<()> {
+        self.runtime_registry
+            .resize(attachment, terminal_size)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))
+    }
+
+    pub(crate) fn terminal_runtime_size(
+        &mut self,
+        attachment: &PersistentTerminalAttachment,
+    ) -> OwnerResult<TerminalSize> {
+        self.runtime_registry
+            .current_size(attachment)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))
+    }
+
+    pub(crate) fn interrupt_terminal_runtime(
+        &mut self,
+        attachment: &PersistentTerminalAttachment,
+    ) -> OwnerResult<()> {
+        self.runtime_registry
+            .interrupt(attachment)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))
+    }
+
+    pub(crate) fn terminate_terminal_runtime(
+        &mut self,
+        attachment: &PersistentTerminalAttachment,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> OwnerResult<PersistentTerminalSnapshot> {
+        let snapshot = self
+            .runtime_registry
+            .terminate(&self.store, attachment, now_unix_ms)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))?;
+        self.sync_runtime_activity(now_monotonic_ms);
+        Ok(snapshot)
+    }
+
+    pub(crate) fn close_terminal_runtime(
+        &mut self,
+        attachment: &PersistentTerminalAttachment,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> OwnerResult<PersistentTerminalSnapshot> {
+        let snapshot = self
+            .runtime_registry
+            .close(&self.store, attachment, now_unix_ms)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))?;
+        self.sync_runtime_activity(now_monotonic_ms);
+        Ok(snapshot)
+    }
+
+    pub(crate) fn poll_terminal_runtimes(
+        &mut self,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> OwnerResult<usize> {
+        let observed = self
+            .runtime_registry
+            .poll_exits(&self.store, now_unix_ms)
+            .map_err(|error| OwnerError::Runtime(error.to_string()))?;
+        self.sync_runtime_activity(now_monotonic_ms);
+        Ok(observed)
+    }
+
+    pub(crate) fn live_terminal_runtime_count(&self) -> usize {
+        self.runtime_registry.live_count()
+    }
+
+    fn sync_runtime_activity(&mut self, now_monotonic_ms: u64) {
+        self.activity
+            .set_live_runtime_count(self.runtime_registry.live_count(), now_monotonic_ms);
     }
 
     pub(crate) fn should_exit(&self, now_monotonic_ms: u64) -> bool {
@@ -295,12 +463,16 @@ fn prepare_owner_home(home: &Path) -> OwnerResult<PathBuf> {
 }
 
 pub(crate) fn run_internal_owner(home: &Path) -> OwnerResult<()> {
-    let owner = PersistentOwner::start(home, system_unix_ms()?)?;
+    let mut owner = PersistentOwner::start(home, system_unix_ms()?)?;
     let monotonic_origin = Instant::now();
-    while !owner.should_exit(monotonic_elapsed_ms(monotonic_origin)) {
+    loop {
+        let now_monotonic_ms = monotonic_elapsed_ms(monotonic_origin);
+        owner.poll_terminal_runtimes(system_unix_ms()?, now_monotonic_ms)?;
+        if owner.should_exit(now_monotonic_ms) {
+            return Ok(());
+        }
         thread::sleep(Duration::from_millis(OWNER_POLL_INTERVAL_MS));
     }
-    Ok(())
 }
 
 fn monotonic_elapsed_ms(origin: Instant) -> u64 {
@@ -537,3 +709,7 @@ impl Drop for OwnerSingleton {
 #[cfg(test)]
 #[path = "../t151_persistent_owner_shell_tests.rs"]
 mod t151_persistent_owner_shell_tests;
+
+#[cfg(test)]
+#[path = "../t152_persistent_terminal_tests.rs"]
+mod t152_persistent_terminal_tests;
