@@ -28,12 +28,17 @@ pub(crate) enum PersistentTerminalRuntimeError {
 impl fmt::Display for PersistentTerminalRuntimeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Entropy(message) => write!(formatter, "runtime namespace entropy failed: {message}"),
+            Self::Entropy(message) => {
+                write!(formatter, "runtime namespace entropy failed: {message}")
+            }
             Self::Terminal(message) => {
                 write!(formatter, "persistent terminal operation failed: {message}")
             }
             Self::Store(message) => {
-                write!(formatter, "persistent terminal store update failed: {message}")
+                write!(
+                    formatter,
+                    "persistent terminal store update failed: {message}"
+                )
             }
             Self::UnknownRuntime => formatter.write_str("persistent terminal runtime is unknown"),
             Self::StaleOwnerGeneration => formatter.write_str(
@@ -147,7 +152,10 @@ impl PersistentTerminalRegistry {
     }
 
     pub(crate) fn live_count(&self) -> usize {
-        self.runtimes.values().filter(|runtime| runtime.is_live()).count()
+        self.runtimes
+            .values()
+            .filter(|runtime| runtime.is_live())
+            .count()
     }
 
     pub(crate) fn start_shell(

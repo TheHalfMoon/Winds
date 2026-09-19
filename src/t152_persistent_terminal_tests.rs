@@ -182,10 +182,7 @@ fn t152_long_running_shell_survives_complete_attachment_drop_and_exact_reattach(
     assert_eq!(first.runtime_alias, alias);
     assert_eq!(first.truth.ownership, OwnershipState::LiveOwned);
     assert_eq!(first.truth.process_liveness, ProcessLiveness::Running);
-    assert_eq!(
-        first.truth.continuity,
-        ContinuityClass::RetainedLiveProcess
-    );
+    assert_eq!(first.truth.continuity, ContinuityClass::RetainedLiveProcess);
     assert_eq!(
         first.truth.endpoint_availability,
         EndpointAvailability::Available
@@ -213,9 +210,7 @@ fn t152_long_running_shell_survives_complete_attachment_drop_and_exact_reattach(
         rows: 40,
         cols: 120,
     };
-    owner
-        .resize_terminal_runtime(&reattached, resized)
-        .unwrap();
+    owner.resize_terminal_runtime(&reattached, resized).unwrap();
     assert_eq!(owner.terminal_runtime_size(&reattached).unwrap(), resized);
 
     let final_snapshot = owner
@@ -333,9 +328,7 @@ fn t152_stale_generation_cannot_reattach_or_redirect_live_owned_terminal() {
     assert_eq!(snapshot.owner_generation_id, live_generation);
     assert_eq!(snapshot.truth.ownership, OwnershipState::LiveOwned);
 
-    owner
-        .close_terminal_runtime(&attachment, 54, 303)
-        .unwrap();
+    owner.close_terminal_runtime(&attachment, 54, 303).unwrap();
     drop(owner);
     cleanup(home, runtime_root);
 }
@@ -359,9 +352,7 @@ fn t152_native_windows_interrupt_remains_explicitly_fail_closed() {
         .unwrap();
     prime_headless_windows_terminal(&mut owner, &attachment);
 
-    let error = owner
-        .interrupt_terminal_runtime(&attachment)
-        .unwrap_err();
+    let error = owner.interrupt_terminal_runtime(&attachment).unwrap_err();
     assert!(
         error
             .to_string()
@@ -399,7 +390,12 @@ fn t152_runtime_layer_has_no_pid_reconstruction_provider_launch_or_second_termin
     ] {
         assert!(!runtime_source.contains(prohibited), "{prohibited}");
     }
-    for prohibited in ["process_id(", "Command::new", "portable_pty", "native_pty_system"] {
+    for prohibited in [
+        "process_id(",
+        "Command::new",
+        "portable_pty",
+        "native_pty_system",
+    ] {
         assert!(!owner_source.contains(prohibited), "{prohibited}");
     }
 }

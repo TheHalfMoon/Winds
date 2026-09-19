@@ -70,7 +70,9 @@ impl fmt::Display for OwnerError {
             Self::ActivityUnderflow => {
                 formatter.write_str("persistent owner client activity underflow")
             }
-            Self::Runtime(message) => write!(formatter, "persistent owner runtime failed: {message}"),
+            Self::Runtime(message) => {
+                write!(formatter, "persistent owner runtime failed: {message}")
+            }
         }
     }
 }
