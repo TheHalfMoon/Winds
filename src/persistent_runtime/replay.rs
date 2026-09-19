@@ -611,22 +611,32 @@ impl ReplayCoordinator {
     }
 
     fn next_fair_evictable_runtime(&self) -> Option<RuntimeNamespaceId> {
-        let keys: Vec<_> = self.runtimes.keys().copied().collect();
-        if keys.is_empty() {
+        let maximum_bytes = self
+            .runtimes
+            .values()
+            .filter(|runtime| !runtime.records.is_empty())
+            .map(|runtime| runtime.retained_bytes)
+            .max()?;
+        let candidates: Vec<_> = self
+            .runtimes
+            .iter()
+            .filter_map(|(runtime_id, runtime)| {
+                (!runtime.records.is_empty() && runtime.retained_bytes == maximum_bytes)
+                    .then_some(*runtime_id)
+            })
+            .collect();
+        if candidates.is_empty() {
             return None;
         }
         let start = self
             .fair_eviction_cursor
-            .and_then(|cursor| keys.iter().position(|key| *key == cursor))
-            .map(|position| (position + 1) % keys.len())
+            .and_then(|cursor| candidates.iter().position(|key| *key == cursor))
+            .map(|position| (position + 1) % candidates.len())
             .unwrap_or(0);
-        (0..keys.len())
-            .map(|offset| keys[(start + offset) % keys.len()])
-            .find(|key| {
-                self.runtimes
-                    .get(key)
-                    .is_some_and(|runtime| !runtime.records.is_empty())
-            })
+        candidates
+            .get(start)
+            .copied()
+            .or_else(|| candidates.first().copied())
     }
 
     fn evict_one(&mut self, runtime_namespace_id: RuntimeNamespaceId) {
