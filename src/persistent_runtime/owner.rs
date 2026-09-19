@@ -1043,3 +1043,7 @@ mod t151_persistent_owner_shell_tests;
 #[cfg(test)]
 #[path = "../t152_persistent_terminal_tests.rs"]
 mod t152_persistent_terminal_tests;
+
+#[cfg(test)]
+#[path = "../t154_controller_owner_tests.rs"]
+mod t154_controller_owner_tests;
