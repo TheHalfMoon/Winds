@@ -217,7 +217,7 @@ impl LocalControlWire for PlatformWire {
         let frame = encode_frame(message).map_err(WireError::Protocol)?;
         self.stream
             .write_all(&frame)
-            .map_err(|error| WireError::Transport(error.to_string()))
+            .map_err(|error| WireError::Transport(format!("{error:?}")))
     }
 
     fn receive(&mut self) -> Result<ProtocolMessage, WireError> {
@@ -225,7 +225,7 @@ impl LocalControlWire for PlatformWire {
         let mut length_bytes = [0_u8; 4];
         self.stream
             .read_exact(&mut length_bytes)
-            .map_err(|error| WireError::Transport(error.to_string()))?;
+            .map_err(|error| WireError::Transport(format!("{error:?}")))?;
         let claimed = u32::from_le_bytes(length_bytes) as usize;
         if claimed == 0 {
             return Err(WireError::Protocol(LocalControlErrorKind::MalformedFrame));
@@ -236,7 +236,7 @@ impl LocalControlWire for PlatformWire {
         let mut payload = vec![0_u8; claimed];
         self.stream
             .read_exact(&mut payload)
-            .map_err(|error| WireError::Transport(error.to_string()))?;
+            .map_err(|error| WireError::Transport(format!("{error:?}")))?;
         let mut frame = Vec::with_capacity(4 + claimed);
         frame.extend_from_slice(&length_bytes);
         frame.extend_from_slice(&payload);
@@ -271,14 +271,14 @@ impl LocalControlWire for PlatformWire {
         let frame = encode_frame(message).map_err(WireError::Protocol)?;
         self.client
             .write_all(&frame)
-            .map_err(|error| WireError::Transport(error.to_string()))
+            .map_err(|error| WireError::Transport(format!("{error:?}")))
     }
 
     fn receive(&mut self) -> Result<ProtocolMessage, WireError> {
         let mut length_bytes = [0_u8; 4];
         self.client
             .read_exact(&mut length_bytes)
-            .map_err(|error| WireError::Transport(error.to_string()))?;
+            .map_err(|error| WireError::Transport(format!("{error:?}")))?;
         let claimed = u32::from_le_bytes(length_bytes) as usize;
         if claimed == 0 {
             return Err(WireError::Protocol(LocalControlErrorKind::MalformedFrame));
@@ -289,7 +289,7 @@ impl LocalControlWire for PlatformWire {
         let mut payload = vec![0_u8; claimed];
         self.client
             .read_exact(&mut payload)
-            .map_err(|error| WireError::Transport(error.to_string()))?;
+            .map_err(|error| WireError::Transport(format!("{error:?}")))?;
         let mut frame = Vec::with_capacity(4 + claimed);
         frame.extend_from_slice(&length_bytes);
         frame.extend_from_slice(&payload);
