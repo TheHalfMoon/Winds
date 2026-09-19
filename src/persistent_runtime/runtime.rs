@@ -6,11 +6,16 @@ use crate::persistent_runtime::domain::{
 };
 use crate::persistent_runtime::persistence::PersistentRuntimeRecordInput;
 use crate::store::Store;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::fmt;
 use std::io::Read;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, TrySendError};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 pub(crate) type RuntimeResult<T> = Result<T, PersistentTerminalRuntimeError>;
 
@@ -85,12 +90,133 @@ pub(crate) struct PersistentTerminalSnapshot {
     pub(crate) last_observed_unix_ms: Option<i64>,
 }
 
+const OUTPUT_PUMP_CHUNK_BYTES: usize = 4 * 1024;
+const OUTPUT_PUMP_QUEUE_CHUNKS: usize = 64;
+const OUTPUT_PUMP_POLL_MS: u64 = 25;
+
+struct RuntimeOutputPump {
+    receiver: Receiver<Vec<u8>>,
+    closed: Arc<AtomicBool>,
+    error: Arc<Mutex<Option<String>>>,
+    pending: VecDeque<u8>,
+}
+
+impl RuntimeOutputPump {
+    fn start(mut reader: Box<dyn Read + Send>) -> RuntimeResult<Self> {
+        let (sender, receiver) = mpsc::sync_channel(OUTPUT_PUMP_QUEUE_CHUNKS);
+        let closed = Arc::new(AtomicBool::new(false));
+        let error = Arc::new(Mutex::new(None));
+        let thread_closed = Arc::clone(&closed);
+        let thread_error = Arc::clone(&error);
+
+        thread::Builder::new()
+            .name("winds-persistent-pty-output".to_owned())
+            .spawn(move || {
+                let mut buffer = [0_u8; OUTPUT_PUMP_CHUNK_BYTES];
+                loop {
+                    match reader.read(&mut buffer) {
+                        Ok(0) => {
+                            thread_closed.store(true, Ordering::Release);
+                            return;
+                        }
+                        Ok(count) => match sender.try_send(buffer[..count].to_vec()) {
+                            Ok(()) | Err(TrySendError::Full(_)) => {}
+                            Err(TrySendError::Disconnected(_)) => {
+                                thread_closed.store(true, Ordering::Release);
+                                return;
+                            }
+                        },
+                        Err(read_error) => {
+                            if let Ok(mut slot) = thread_error.lock() {
+                                *slot = Some(read_error.to_string());
+                            }
+                            thread_closed.store(true, Ordering::Release);
+                            return;
+                        }
+                    }
+                }
+            })
+            .map_err(|error| {
+                PersistentTerminalRuntimeError::Terminal(format!(
+                    "persistent terminal output pump could not start: {error}"
+                ))
+            })?;
+
+        Ok(Self {
+            receiver,
+            closed,
+            error,
+            pending: VecDeque::new(),
+        })
+    }
+
+    fn read(&mut self, buffer: &mut [u8]) -> RuntimeResult<usize> {
+        if buffer.is_empty() {
+            return Ok(0);
+        }
+
+        loop {
+            if !self.pending.is_empty() {
+                let count = buffer.len().min(self.pending.len());
+                for slot in &mut buffer[..count] {
+                    *slot = self
+                        .pending
+                        .pop_front()
+                        .expect("pending output length was checked");
+                }
+                return Ok(count);
+            }
+
+            match self
+                .receiver
+                .recv_timeout(Duration::from_millis(OUTPUT_PUMP_POLL_MS))
+            {
+                Ok(chunk) => self.pending.extend(chunk),
+                Err(RecvTimeoutError::Timeout) => {
+                    if self.closed.load(Ordering::Acquire) {
+                        if let Some(error) = self
+                            .error
+                            .lock()
+                            .map_err(|_| {
+                                PersistentTerminalRuntimeError::Terminal(
+                                    "persistent terminal output pump error state was poisoned"
+                                        .to_owned(),
+                                )
+                            })?
+                            .clone()
+                        {
+                            return Err(PersistentTerminalRuntimeError::Terminal(error));
+                        }
+                        return Ok(0);
+                    }
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    if let Some(error) = self
+                        .error
+                        .lock()
+                        .map_err(|_| {
+                            PersistentTerminalRuntimeError::Terminal(
+                                "persistent terminal output pump error state was poisoned"
+                                    .to_owned(),
+                            )
+                        })?
+                        .clone()
+                    {
+                        return Err(PersistentTerminalRuntimeError::Terminal(error));
+                    }
+                    return Ok(0);
+                }
+            }
+        }
+    }
+}
+
 struct OwnedTerminalRuntime {
     runtime_namespace_id: RuntimeNamespaceId,
     owner_generation_id: OwnerGenerationId,
     runtime_alias: RuntimeAlias,
     session: TerminalSession,
-    output_reader: Box<dyn Read + Send>,
+    output_pump: RuntimeOutputPump,
     terminal_size: TerminalSize,
     truth: RuntimeTruth,
     exit: Option<TerminalExit>,
@@ -191,12 +317,26 @@ impl PersistentTerminalRegistry {
             }
         };
 
+        let output_pump = match RuntimeOutputPump::start(output_reader) {
+            Ok(pump) => pump,
+            Err(error) => {
+                let cleanup = session.terminate();
+                let suffix = cleanup
+                    .err()
+                    .map(|cleanup_error| format!("; cleanup also failed: {cleanup_error}"))
+                    .unwrap_or_default();
+                return Err(PersistentTerminalRuntimeError::Terminal(format!(
+                    "{error}{suffix}"
+                )));
+            }
+        };
+
         let runtime = OwnedTerminalRuntime {
             runtime_namespace_id,
             owner_generation_id: self.owner_generation_id,
             runtime_alias,
             session,
-            output_reader,
+            output_pump,
             terminal_size,
             truth: RuntimeTruth {
                 ownership: OwnershipState::LiveOwned,
@@ -290,9 +430,8 @@ impl PersistentTerminalRegistry {
         self.runtimes
             .get_mut(&attachment.runtime_namespace_id)
             .ok_or(PersistentTerminalRuntimeError::UnknownRuntime)?
-            .output_reader
+            .output_pump
             .read(buffer)
-            .map_err(|error| PersistentTerminalRuntimeError::Terminal(error.to_string()))
     }
 
     pub(crate) fn resize(
