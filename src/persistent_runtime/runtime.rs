@@ -241,11 +241,7 @@ impl PersistentTerminalRegistry {
         if expected_owner_generation_id != self.owner_generation_id {
             return Err(PersistentTerminalRuntimeError::StaleOwnerGeneration);
         }
-        self.observe_one(
-            store,
-            runtime_namespace_id,
-            now_unix_ms,
-        )?;
+        self.observe_one(store, runtime_namespace_id, now_unix_ms)?;
         let runtime = self
             .runtimes
             .get(&runtime_namespace_id)
@@ -266,11 +262,7 @@ impl PersistentTerminalRegistry {
         now_unix_ms: i64,
     ) -> RuntimeResult<PersistentTerminalSnapshot> {
         self.validate_attachment(attachment)?;
-        self.observe_one(
-            store,
-            attachment.runtime_namespace_id,
-            now_unix_ms,
-        )?;
+        self.observe_one(store, attachment.runtime_namespace_id, now_unix_ms)?;
         Ok(self
             .runtimes
             .get(&attachment.runtime_namespace_id)
@@ -368,19 +360,11 @@ impl PersistentTerminalRegistry {
         )
     }
 
-    pub(crate) fn poll_exits(
-        &mut self,
-        store: &Store,
-        now_unix_ms: i64,
-    ) -> RuntimeResult<usize> {
+    pub(crate) fn poll_exits(&mut self, store: &Store, now_unix_ms: i64) -> RuntimeResult<usize> {
         let runtime_ids: Vec<_> = self.runtimes.keys().copied().collect();
         let mut observed = 0_usize;
         for runtime_namespace_id in runtime_ids {
-            if self.observe_one(
-                store,
-                runtime_namespace_id,
-                now_unix_ms,
-            )? {
+            if self.observe_one(store, runtime_namespace_id, now_unix_ms)? {
                 observed = observed.saturating_add(1);
             }
         }
@@ -486,10 +470,7 @@ impl PersistentTerminalRegistry {
         Ok(())
     }
 
-    fn validate_attachment(
-        &self,
-        attachment: &PersistentTerminalAttachment,
-    ) -> RuntimeResult<()> {
+    fn validate_attachment(&self, attachment: &PersistentTerminalAttachment) -> RuntimeResult<()> {
         if attachment.owner_generation_id != self.owner_generation_id {
             return Err(PersistentTerminalRuntimeError::StaleOwnerGeneration);
         }
