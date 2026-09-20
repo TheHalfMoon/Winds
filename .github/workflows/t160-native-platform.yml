@@ -127,6 +127,19 @@ jobs:
               ;;
           esac
 
+      - name: Run persistent-owner reconnect churn
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p t160-evidence
+          for ((cycle=1; cycle<=100; cycle++)); do
+            cargo test --quiet --locked --bin winds \
+              persistent_runtime::owner::t152_persistent_terminal_tests::t152_long_running_shell_survives_complete_attachment_drop_and_exact_reattach \
+              -- --exact --test-threads=1 >/dev/null
+          done
+          printf 'T160_PERSISTENT_RECONNECT_CYCLES=100\n' \
+            | tee "t160-evidence/reconnect-churn-${{ matrix.domain }}.txt"
+
       - name: Direct Unix PTY qualification
         if: runner.os != 'Windows'
         shell: bash
@@ -192,14 +205,14 @@ jobs:
                   "principal_boundary": "UNIX_PEER_CREDENTIAL",
                   "terminal_backend": "PTY",
                   "platform_security_fixture": "T149",
-                  "resource_campaign": "T153_BOUNDS+T063_100_CYCLE+T159_CORE",
+                  "resource_campaign": "T153_BOUNDS+T152_RECONNECT_100+T063_100_CYCLE+T159_CORE",
               },
               "macos": {
                   "transport": "POSIX_UNIX_SOCKET",
                   "principal_boundary": "UNIX_PEER_CREDENTIAL",
                   "terminal_backend": "PTY",
                   "platform_security_fixture": "T149",
-                  "resource_campaign": "T153_BOUNDS+T063_100_CYCLE",
+                  "resource_campaign": "T153_BOUNDS+T152_RECONNECT_100+T063_100_CYCLE",
               },
               "windows": {
                   "transport": "WINDOWS_NAMED_PIPE",
@@ -222,6 +235,7 @@ jobs:
               "rust_version": rust,
               "direct_persistent_runtime_suite": "PASS",
               "direct_terminal_backend_suite": "PASS",
+              "persistent_owner_reconnect_cycles": 100,
               "terminal_lifecycle_100_cycle_soak": "PASS",
               "active_close_resize_guard": "PASS",
               "transport": required["transport"],
