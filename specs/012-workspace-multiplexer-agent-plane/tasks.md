@@ -276,7 +276,9 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 - all existing accepted Spec 011 runtime-control message semantics remain available under v2 so T166 does not strand the in-repo client while T167 topology projection is still blocked;
 - `BLOCKED_LEGACY_OWNER` behavior for a live v1 owner with no auto-kill/reclaim/handoff/second owner;
 - freeze the complete first-program v2 wire vocabulary and bounded payload schemas for topology/write-state, agent-observation, attention, and worktree families listed by the canonical Plan, even when a later-domain handler is not yet authorized;
-- not-yet-authorized v2 domain operations return typed `UNSUPPORTED_OPERATION`/equivalent and have no side effect; later tasks activate frozen handlers/projections rather than silently changing v2 message kinds or payload schemas;
+- for every collection response frozen in v2, prove from legal count + field-byte ceilings that one encoded frame fits the 256 KiB protocol ceiling, or freeze a domain-specific bounded page/cursor shape in T166; silent truncation is prohibited;
+- any paging admitted by T166 is typed to that exact collection, cursor-bound to owner generation plus the collection's stable snapshot/revision boundary, bounded in item/byte count, and is not a generic pagination/RPC framework;
+- not-yet-authorized v2 domain operations return typed `UNSUPPORTED_OPERATION`/equivalent and have no side effect; later tasks activate frozen handlers/projections rather than silently changing v2 message kinds, payload schemas, or collection framing;
 - any incompatible wire-schema addition after T166 requires an explicit protocol-v3 or separately accepted Plan/Tasks amendment, not an in-place v2 mutation;
 - exact request sequence/correlation/owner-generation/target binding;
 - topology request includes exact workspace/target IDs + expected TopologyGeneration;
@@ -290,6 +292,7 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 - every existing Spec 011 runtime-control client operation still round-trips under v2 before T166 can close;
 - malformed/oversized/truncated/unknown-kind, unsupported-not-yet-authorized-domain, stale-generation, replay/duplicate fixtures;
 - encoded maximum-size boundary tests prove total-frame accounting;
+- each frozen v2 collection proves either exact single-frame maximum or deterministic typed paging with stale-cursor rejection, no duplicates/omissions, and no silent truncation;
 - lost-history fixtures prove resnapshot rather than silent continuation;
 - terminal strings shaped like v2 messages remain untrusted data;
 
@@ -528,6 +531,7 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 - ordered source classes and explicit observed/unknown/ambiguous/stale/unavailable states;
 - provider-native session identity remains separate and optional;
 - bounded agent-observation snapshot/event projections with explicit gap/resnapshot recovery;
+- T173 freezes the exact observation projection byte/item budget permitted by the T166 wire contract and proves its single-frame or already-frozen typed-page boundary; it may not invent new v2 framing;
 - no terminal prose detection; no verification/acceptance promotion;
 
 **Acceptance**:
@@ -596,6 +600,7 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 - stable dedup key retains source domain/event identity/exact target/kind/generation;
 - late/stale items remain bound to original target and are discarded or rendered explicitly stale;
 - event loss invalidates cached attention projection and requires fresh snapshot;
+- T175 freezes the exact attention projection byte/item budget permitted by the T166 wire contract and proves its single-frame or already-frozen typed-page boundary; it may not invent new v2 framing;
 - completion/process exit/agent success/verification/acceptance/landing remain distinct;
 
 **Acceptance**:
@@ -667,6 +672,7 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 - missing explicit member becomes stale rather than silently erased;
 - path reuse by another GitWorkspaceId cannot inherit trust/membership;
 - untrusted repositories remain read-only;
+- T177 freezes the exact worktree-inventory item/byte budget within the already-frozen T166 collection framing and proves long-path/many-worktree behavior without truncation;
 
 **Acceptance**:
 - discovery drift/deleted/recreated path/nested repository/symlink/reparse fixtures;
