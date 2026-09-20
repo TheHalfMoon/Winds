@@ -34,7 +34,10 @@ fn t162_exact_multiplexer_ids_round_trip_as_lowercase_fixed_width_hex() {
     assert_eq!(encoded, "0123456789abcdef1032547698badcfe");
     assert_eq!(encoded.len(), 32);
     assert_eq!(MultiplexerWorkspaceId::parse(&encoded).unwrap(), id);
-    assert_eq!(serde_json::to_string(&id).unwrap(), format!("\"{encoded}\""));
+    assert_eq!(
+        serde_json::to_string(&id).unwrap(),
+        format!("\"{encoded}\"")
+    );
 
     let layout = LayoutTemplateId::from_entropy_bytes([0x0a; 16]).unwrap();
     let json = serde_json::to_string(&layout).unwrap();
@@ -215,9 +218,9 @@ fn t162_agent_observation_binding_names_the_multiplexer_workspace_domain_explici
     assert_eq!(round_trip, binding);
 
     let mut ambiguous = value;
-    ambiguous
-        .as_object_mut()
-        .unwrap()
-        .insert("workspace_id".to_owned(), serde_json::json!("workspace-ambiguous"));
+    ambiguous.as_object_mut().unwrap().insert(
+        "workspace_id".to_owned(),
+        serde_json::json!("workspace-ambiguous"),
+    );
     assert!(serde_json::from_value::<AgentObservationTopologyBinding>(ambiguous).is_err());
 }
