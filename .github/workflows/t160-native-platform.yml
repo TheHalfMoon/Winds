@@ -219,7 +219,7 @@ jobs:
                   "principal_boundary": "CURRENT_USER_SID_DACL",
                   "terminal_backend": "CONPTY",
                   "platform_security_fixture": "T150",
-                  "resource_campaign": "T153_BOUNDS+T063_100_CYCLE",
+                  "resource_campaign": "T153_BOUNDS+T152_RECONNECT_100+T063_100_CYCLE",
               },
           }[domain]
 
