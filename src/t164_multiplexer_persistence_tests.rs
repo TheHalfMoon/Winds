@@ -1,17 +1,13 @@
-use super::{
-    NewWorkspace, Store, multiplexer_schema_objects,
-};
-use crate::multiplexer::domain::{
-    LayoutTemplateId, MultiplexerWorkspaceId, PaneId, TabId,
-};
+use super::{NewWorkspace, Store, multiplexer_schema_objects};
 use crate::multiplexer::domain::navigation::{
-    LayoutTemplateNode, LayoutTemplateStructure, LayoutTemplateTab, MultiplexerTopology,
-    SplitAxis, SplitRatioBps,
+    LayoutTemplateNode, LayoutTemplateStructure, LayoutTemplateTab, MultiplexerTopology, SplitAxis,
+    SplitRatioBps,
 };
 use crate::multiplexer::domain::persistence::{
     LayoutTemplateV1, RepositoryTrustRecord, TopologySnapshotV1, WorktreeMembershipRecord,
     WorktreeMembershipSource, WorktreeMembershipState,
 };
+use crate::multiplexer::domain::{LayoutTemplateId, MultiplexerWorkspaceId, PaneId, TabId};
 use rusqlite::Connection;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -129,13 +125,19 @@ fn t164_existing_database_without_0014_migrates_transactionally() {
                  DROP TABLE multiplexer_workspaces;",
             )
             .unwrap();
-        assert!(multiplexer_schema_objects(&store.connection).unwrap().is_empty());
+        assert!(
+            multiplexer_schema_objects(&store.connection)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     let reopened = Store::open(&home).unwrap();
     reopened.validate_multiplexer_schema().unwrap();
     assert_eq!(
-        multiplexer_schema_objects(&reopened.connection).unwrap().len(),
+        multiplexer_schema_objects(&reopened.connection)
+            .unwrap()
+            .len(),
         13
     );
     cleanup(&home);
@@ -341,7 +343,10 @@ fn t164_explicit_worktree_membership_is_not_discovery_fk_and_metadata_delete_is_
 
     store
         .connection
-        .execute("DELETE FROM workspaces WHERE workspace_id = 'workspace-a'", [])
+        .execute(
+            "DELETE FROM workspaces WHERE workspace_id = 'workspace-a'",
+            [],
+        )
         .unwrap();
     assert_eq!(
         store
@@ -465,7 +470,10 @@ fn t164_schema_has_no_live_process_or_secret_authority_and_prior_migration_sizes
         "candidate_id",
         "evidence_id",
     ] {
-        assert!(!migration.contains(forbidden), "migration contains {forbidden}");
+        assert!(
+            !migration.contains(forbidden),
+            "migration contains {forbidden}"
+        );
         assert!(
             !persistence.contains(forbidden),
             "persistence contains {forbidden}"
