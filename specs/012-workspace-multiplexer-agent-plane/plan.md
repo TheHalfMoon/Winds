@@ -50,17 +50,26 @@ HERDR_PLAN_WORKTREE_PARENT=74505861e40c48e070e711bd4de662a17b0939b3
 HERDR_PLAN_WORKTREE_GITHUB_VERIFICATION=VERIFIED_VALID
 HERDR_PLAN_WORKTREE_MESSAGE=fix: preserve explicit worktree workspace membership (#4301)
 
-HERDR_PLAN_RESEARCH_HEAD=65927cef1c735169ba07677311ec9d6d7435c9f3
-HERDR_PLAN_RESEARCH_TREE=516897019bb382bbdc4c0a8dba83758a9d8d1fef
-HERDR_PLAN_RESEARCH_PARENT=6c62707a3a43427a34fb418ce20c834a88089ba1
+HERDR_PLAN_EVENT_HEAD=65927cef1c735169ba07677311ec9d6d7435c9f3
+HERDR_PLAN_EVENT_TREE=516897019bb382bbdc4c0a8dba83758a9d8d1fef
+HERDR_PLAN_EVENT_PARENT=6c62707a3a43427a34fb418ce20c834a88089ba1
+HERDR_PLAN_EVENT_GITHUB_VERIFICATION=VERIFIED_VALID
+HERDR_PLAN_EVENT_MESSAGE=fix: drain event subscriptions and report history loss (#4225)
+
+HERDR_PLAN_RESEARCH_HEAD=f10df75c8a5f1b5e5f90689c3a8ceb6758366e05
+HERDR_PLAN_RESEARCH_TREE=3fa0fa2a9f48cf1cf1f0820cfab94abda63b8549
+HERDR_PLAN_RESEARCH_PARENT=65927cef1c735169ba07677311ec9d6d7435c9f3
 HERDR_PLAN_RESEARCH_GITHUB_VERIFICATION=VERIFIED_VALID
 HERDR_PLAN_RESEARCH_GITHUB_VERIFICATION_REASON=valid
-HERDR_PLAN_RESEARCH_MESSAGE=fix: drain event subscriptions and report history loss (#4225)
+HERDR_PLAN_RESEARCH_GITHUB_VERIFIED_AT=2026-09-20T15:12:12Z
+HERDR_PLAN_RESEARCH_MESSAGE=fix: reject terminal-less attach before starting a session (#4395)
 ~~~
 
 The first post-Spec delta changes only src/app/api/worktrees.rs and preserves explicit worktree-to-workspace membership rather than allowing inferred discovery refresh to silently rewrite explicit membership.
 
 The next upstream delta changes event subscription/history behavior and documentation. It drains retained lifecycle/agent-status batches, detects when a subscriber has fallen behind bounded retained history, reports explicit events_lost state, closes only the affected subscription, and requires resubscription plus authoritative snapshot recovery rather than silently continuing with missing events. It also documents that snapshot/event ordering must not be guessed across an unproven boundary.
+
+The latest upstream delta changes autodetect attach preflight. It rejects a terminal-less interactive attach before socket lookup, session-directory creation, or daemon startup. The useful design lesson is fail-before-side-effects when the selected client surface cannot satisfy the capability required by the requested operation. This is not authority to copy Herdr startup behavior or to require a TTY for Desktop.
 
 Plan consequences:
 
@@ -73,7 +82,9 @@ Plan consequences:
 - Buffered events MUST NOT be blindly replayed over a newer snapshot unless an exact Winds-owned generation/sequence relation proves they are still applicable.
 - TopologyGeneration remains the strongest ordering primitive for topology mutations; discontinuity requires resnapshot.
 - Agent/attention streams must expose explicit gap/loss state rather than silently skipping retained history.
-- Both upstream changes are design evidence only. No source reuse is admitted.
+- Any operation that requires an interactive terminal surface or geometry MUST preflight that exact client capability before creating multiplexer state, starting/binding a runtime, creating persistence records, or starting an owner solely for that request.
+- TUI/CLI terminal capability and Desktop terminal-surface capability are distinct; absence of a controlling TTY MUST NOT be generalized into a Desktop failure when the trusted Desktop surface provides the required geometry/input capability.
+- All upstream changes are design evidence only. No source reuse is admitted.
 
 ---
 
@@ -1007,6 +1018,31 @@ Any later donor proposal requires a separate exact source-path/revision/license/
 
 ---
 
+## AD-012-36 — Required client capability is preflighted before consequential side effects
+
+A requested operation must identify the client capability it actually needs before any side effect.
+
+Examples:
+
+- TUI/CLI interactive attach that requires terminal rows/columns must prove usable terminal geometry first;
+- Desktop pane binding must prove the trusted Desktop terminal surface is initialized and can provide required geometry/input semantics;
+- a noninteractive observer/list/snapshot operation does not require terminal geometry merely because another client surface does.
+
+If the required capability is unavailable, Winds fails with a typed capability-unavailable outcome before:
+
+- creating a MultiplexerWorkspaceId, TabId, or PaneId solely for the failed request;
+- starting or binding a RuntimeNamespaceId;
+- creating a session/runtime persistence record;
+- creating filesystem state;
+- starting the persistent owner solely to service that unusable interactive request;
+- changing TopologyGeneration.
+
+Capability preflight is not provider detection and does not grant process authority.
+
+A later failure after capability preflight still follows the operation's normal transactional/outcome-unknown rules; this decision only prevents known-invalid interactive requests from creating avoidable partial state.
+
+---
+
 # Protocol v2 Planning Model
 
 ## Handshake
@@ -1684,6 +1720,7 @@ This Plan may land only if the exact final candidate proves:
 - no new dependency is admitted by the Plan;
 - Herdr remains research evidence only with no source admission;
 - current Herdr plan-stage head is freshly rechecked immediately before landing and any material movement is reconciled;
+- interactive client/surface capability is preflighted before topology/runtime/persistence side effects for operations that require that capability, without imposing TTY requirements on Desktop;
 - repository quality succeeds on the exact final head;
 - author correctness/safety/architecture review passes;
 - Ponytail/YAGNI review challenges owner reuse, protocol v2, migration 0014, topology persistence, agent catalog, worktree membership/trust, resource ceilings, and any unnecessary abstraction;
