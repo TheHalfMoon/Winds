@@ -296,6 +296,10 @@ jobs:
           assert core["idle_runtime_namespaces"] >= 32
           assert core["output_observed_bytes"] >= 10 * 1024 * 1024
           assert core["output_observed_lines"] >= 100_000
+          assert core["fast_observer_output_events"] > 0
+          assert core["slow_observer_disconnect_count"] == 1
+          assert core["slow_observer_disconnect_batch"] is not None
+          assert core["replay_bounds"]["per_observer_queue_bytes"] == 4 * 1024 * 1024
           assert core["reattach_snapshot"]["p95_us"] <= 100_000
           assert core["cached_observer_attach"]["p95_us"] <= 100_000
           assert core["controller_input_dispatch"]["p95_us"] <= 10_000
