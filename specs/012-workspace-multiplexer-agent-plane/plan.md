@@ -143,7 +143,6 @@ PaneId
 TopologyGeneration
 LayoutTemplateId
 AgentObservationId
-RepositoryTrustId or equivalent internal trust key
 ~~~
 
 These identities MUST NOT reuse:
@@ -365,11 +364,16 @@ No automatic downgrade is allowed.
 
 A v2 client encountering a live v1 owner reports explicit protocol mismatch/upgrade-required state. It MUST NOT kill, replace, or hand off the old owner automatically.
 
+If a live v1 owner still owns runtimes, the v2 client enters BLOCKED_LEGACY_OWNER state for owner-backed features. It MUST NOT start a second owner, reclaim PIDs, migrate controller leases, or pretend the runtimes were upgraded. Recovery is manual/explicit: continue with a compatible v1 client, or explicitly quiesce/stop the old owner and runtimes through a compatible path before a fresh v2 owner starts. Seamless live owner upgrade is a non-goal.
+
 Planned v2 message families are closed enums, not arbitrary method names:
 
 ~~~text
 LIST_MULTIPLEXER_WORKSPACES
 MULTIPLEXER_SNAPSHOT
+REQUEST_MULTIPLEXER_WRITE
+RELEASE_MULTIPLEXER_WRITE
+MULTIPLEXER_WRITE_STATE
 APPLY_TOPOLOGY_OPERATION
 MULTIPLEXER_EVENT
 
@@ -389,14 +393,29 @@ APPLY_TOPOLOGY_OPERATION and APPLY_WORKTREE_OPERATION use closed Rust enums with
 
 No string-dispatched generic RPC method registry is allowed.
 
-## AD-012-09 — Topology operations and runtime operations have different authority requirements
+## AD-012-09 — Topology write authority and runtime controller authority are separate
 
-Topology-only mutations are serialized by the owner and require:
+Every multiplexer connection starts read-only for topology.
+
+Observer-safe operations include:
+
+- list/snapshot/read;
+- search/filter;
+- explain;
+- subscribe;
+- presentation-only inspection.
+
+A client that needs consequential topology mutation MUST explicitly request MultiplexerWrite authority after local-principal authentication. The owner records the granted connection mode. There is no automatic observer-to-writer promotion based on focus, UI visibility, or first mutation attempt.
+
+MultiplexerWrite is not exclusive: multiple authenticated interactive clients may hold it, while TopologyGeneration compare-and-apply semantics serialize conflicting mutations. It is also not durable across reconnect or owner generation.
+
+Topology-only mutations require:
 
 - authenticated local client;
+- explicit MultiplexerWrite authority;
 - exact immutable target;
 - current TopologyGeneration;
-- valid operation schema;
+- valid closed operation schema;
 - accepted user/client intent.
 
 Examples:
@@ -404,15 +423,16 @@ Examples:
 - rename workspace/tab;
 - reorder tab;
 - split an unbound pane;
-- move/swap pane;
+- move/swap unbound presentation topology;
 - focus pane;
-- resize split;
+- resize split geometry;
 - zoom pane;
-- apply layout template.
+- apply layout template;
+- pane.clear presentation epoch.
 
 These operations do not grant runtime controller authority.
 
-Runtime-affecting operations still require the existing Spec 011 RuntimeNamespaceId controller lease.
+Runtime-affecting operations still require the existing Spec 011 RuntimeNamespaceId controller lease in addition to any required MultiplexerWrite authority.
 
 Examples:
 
@@ -421,11 +441,12 @@ Examples:
 - resize actual PTY/ConPTY;
 - interrupt;
 - stop/terminate;
-- any prompt transport to a live agent pane.
+- any prompt transport to a live agent pane;
+- closing a pane when the selected close policy also stops its bound runtime.
 
-A topology mutation cannot smuggle a runtime mutation.
+A topology mutation cannot smuggle a runtime mutation. MultiplexerWrite never implies Runtime Controller, and Runtime Controller never implies MultiplexerWrite.
 
-## AD-012-10 — Pane split is topology creation, not automatic process creation
+## AD-012-10 — Pane split/close are explicit about process authority
 
 Splitting a pane creates a new unbound PaneId by default.
 
@@ -439,7 +460,20 @@ It does not:
 
 A later explicit runtime-start action may bind a runtime namespace to that pane under separately authorized Tasks.
 
-This keeps layout editing reversible and prevents split/navigation actions from gaining hidden execution authority.
+Pane close has two distinct policies:
+
+~~~text
+DETACH_VIEW
+STOP_RUNTIME_THEN_CLOSE
+~~~
+
+DETACH_VIEW removes the PaneId from topology after exact binding validation and leaves any bound RuntimeNamespaceId alive and discoverable in runtime inventory. It requires MultiplexerWrite but not Runtime Controller because it does not mutate the process.
+
+STOP_RUNTIME_THEN_CLOSE requires both MultiplexerWrite and the exact Runtime Controller lease. The pane is removed only after the stop operation reaches a truthful terminal disposition. If stop is failed, outcome-unknown, or ownership-lost, the close must not be reported as a clean process stop.
+
+There is no implicit terminate-on-close policy and no automatic orphan cleanup.
+
+This keeps layout editing reversible and prevents split/close/navigation actions from gaining hidden execution authority.
 
 ## AD-012-11 — Reuse existing PTY/ConPTY runtime ownership and replay
 
@@ -972,7 +1006,7 @@ Every consequential worktree operation includes:
 
 ~~~text
 repository_identity
-repository_trust_id or equivalent proof reference
+trust_record_revision or equivalent exact trust snapshot
 git_workspace_id when existing
 exact canonical destination/path where applicable
 exact base commit OID for create
@@ -1146,11 +1180,13 @@ Discovery does not mutate membership.
 
 ## Trust
 
-Trust is an explicit accepted action.
+Trust is an explicit accepted action stored against canonical RepositoryIdentity with a monotonic trust-record revision or equivalent exact snapshot.
 
 A repository may be observed but untrusted.
 
 Untrusted repositories can be displayed read-only but cannot create/remove worktrees.
+
+No separate opaque trust identity is required unless Tasks prove a concrete need; repository identity plus exact trust record revision is the default simpler model.
 
 ## Create
 
