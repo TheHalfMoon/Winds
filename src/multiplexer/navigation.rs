@@ -520,8 +520,7 @@ impl MultiplexerTopology {
                 return Err(MultiplexerErrorKind::UnsupportedOperation);
             }
             let tab = tab_mut(candidate.workspace_mut(workspace_id)?, tab_id)?;
-            if !contains_pane(&tab.root, first_pane_id)
-                || !contains_pane(&tab.root, second_pane_id)
+            if !contains_pane(&tab.root, first_pane_id) || !contains_pane(&tab.root, second_pane_id)
             {
                 return Err(MultiplexerErrorKind::UnknownPane);
             }
