@@ -28,8 +28,6 @@ use crate::model_mesh::{
     ModelMeshContinuityPermissionDescriptorV1, ModelMeshTargetDescriptorV1, TargetDimension,
     TargetRequest, TargetSelector, model_mesh_authority_json_matches_digest,
 };
-use crate::persistent_runtime::domain::{OwnerGenerationId, RuntimeNamespaceId, RuntimeTruth};
-use crate::multiplexer::domain::{LayoutTemplateId, MultiplexerWorkspaceId, TopologyGeneration};
 use crate::multiplexer::domain::persistence::{
     LayoutTemplateV1, MULTIPLEXER_MAX_LAYOUT_TEMPLATES, MULTIPLEXER_MAX_WORKSPACES,
     MULTIPLEXER_MAX_WORKTREE_MEMBERSHIPS, MULTIPLEXER_SCHEMA_VERSION, RepositoryTrustRecord,
@@ -38,6 +36,8 @@ use crate::multiplexer::domain::persistence::{
     validate_repository_identity, validate_template_name,
     validate_timestamp as validate_multiplexer_timestamp,
 };
+use crate::multiplexer::domain::{LayoutTemplateId, MultiplexerWorkspaceId, TopologyGeneration};
+use crate::persistent_runtime::domain::{OwnerGenerationId, RuntimeNamespaceId, RuntimeTruth};
 use crate::persistent_runtime::persistence::{
     PERSISTENT_RUNTIME_SCHEMA_VERSION, PersistentRuntimeRecord, PersistentRuntimeRecordInput,
     PersistentRuntimeRecoveryReason, continuity_from_db, continuity_label,
@@ -952,7 +952,6 @@ fn initialize_persistent_runtime_schema(connection: &Connection) -> Result<()> {
     validate_persistent_runtime_schema_connection(connection)
 }
 
-
 fn multiplexer_schema_objects(
     connection: &Connection,
 ) -> Result<BTreeMap<String, (String, String, String)>> {
@@ -996,9 +995,7 @@ fn multiplexer_schema_objects(
 fn expected_multiplexer_schema_objects() -> Result<BTreeMap<String, (String, String, String)>> {
     let connection = Connection::open_in_memory()?;
     connection.pragma_update(None, "foreign_keys", "ON")?;
-    connection.execute_batch(include_str!(
-        "../migrations/0014_workspace_multiplexer.sql"
-    ))?;
+    connection.execute_batch(include_str!("../migrations/0014_workspace_multiplexer.sql"))?;
     multiplexer_schema_objects(&connection)
 }
 
@@ -1036,9 +1033,9 @@ fn initialize_multiplexer_schema(connection: &Connection) -> Result<()> {
     let existing = multiplexer_schema_objects(connection)?;
     if existing.is_empty() {
         connection.execute_batch("BEGIN IMMEDIATE")?;
-        if let Err(error) = connection.execute_batch(include_str!(
-            "../migrations/0014_workspace_multiplexer.sql"
-        )) {
+        if let Err(error) =
+            connection.execute_batch(include_str!("../migrations/0014_workspace_multiplexer.sql"))
+        {
             let _ = connection.execute_batch("ROLLBACK");
             return Err(error.into());
         }
@@ -1078,7 +1075,9 @@ impl Store {
     ) -> Result<()> {
         self.validate_multiplexer_schema()?;
         validate_multiplexer_timestamp(now_ms, "multiplexer workspace update time")?;
-        snapshot.validate().map_err(|error| format!("multiplexer snapshot: {error}"))?;
+        snapshot
+            .validate()
+            .map_err(|error| format!("multiplexer snapshot: {error}"))?;
         let workspace_id = snapshot.workspace_id().as_hex();
         let exists = row_exists(
             &self.connection,
@@ -1088,7 +1087,8 @@ impl Store {
              )",
             &workspace_id,
         )?;
-        if !exists && count_rows(&self.connection, "multiplexer_workspaces")? >= MULTIPLEXER_MAX_WORKSPACES
+        if !exists
+            && count_rows(&self.connection, "multiplexer_workspaces")? >= MULTIPLEXER_MAX_WORKSPACES
         {
             return Err("multiplexer workspace persistence limit reached".into());
         }
@@ -1188,8 +1188,7 @@ impl Store {
         now_ms: i64,
     ) -> Result<()> {
         self.validate_multiplexer_schema()?;
-        validate_template_name(name)
-            .map_err(|error| format!("layout template name: {error}"))?;
+        validate_template_name(name).map_err(|error| format!("layout template name: {error}"))?;
         validate_multiplexer_timestamp(now_ms, "layout template update time")?;
         let template_id = layout_template_id.as_hex();
         let exists = row_exists(
@@ -1222,13 +1221,7 @@ impl Store {
                 template_name = excluded.template_name,
                 template_json = excluded.template_json,
                 updated_unix_ms = excluded.updated_unix_ms",
-            params![
-                template_id,
-                MULTIPLEXER_SCHEMA_VERSION,
-                name,
-                json,
-                now_ms,
-            ],
+            params![template_id, MULTIPLEXER_SCHEMA_VERSION, name, json, now_ms,],
         )?;
         Ok(())
     }
@@ -1439,8 +1432,8 @@ impl Store {
         )?;
         validate_git_common_dir(&row.0)
             .map_err(|error| format!("stored repository trust: {error}"))?;
-        let revision = u64::try_from(row.1)
-            .map_err(|_| "stored repository trust revision is invalid")?;
+        let revision =
+            u64::try_from(row.1).map_err(|_| "stored repository trust revision is invalid")?;
         if revision == 0 {
             return Err("stored repository trust revision must be greater than zero".into());
         }
