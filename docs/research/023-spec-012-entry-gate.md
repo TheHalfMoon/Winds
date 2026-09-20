@@ -59,8 +59,16 @@ HERDR_PIN=29f9f4056f344af60f411004fc89c7eb5f357c48
 HERDR_TREE=8e11bddc337094b8aece2a7abea4ee6ee6340f2a
 HERDR_PACKAGE_VERSION=0.9.1
 HERDR_ROOT_LICENSE=Apache-2.0
-HERDR_PIN_GITHUB_SIGNATURE=VERIFIED_VALID
+HERDR_PIN_GITHUB_COMMIT_VERIFICATION=VERIFIED_VALID
+HERDR_PIN_GITHUB_VERIFICATION_REASON=valid
+HERDR_PIN_GITHUB_VERIFIED_AT=2026-09-20T12:23:58Z
+HERDR_PIN_GITHUB_COMMITTER=GitHub <noreply@github.com>
+HERDR_PIN_GITHUB_COMMIT_URL=https://github.com/herdrdev/herdr/commit/29f9f4056f344af60f411004fc89c7eb5f357c48
+HERDR_PIN_GITHUB_VERIFIED_TREE=8e11bddc337094b8aece2a7abea4ee6ee6340f2a
+HERDR_PIN_GITHUB_VERIFIED_PARENT=a3a1c94ed54e8a65d929528336d69c7e537ed2ef
 ```
+
+GitHub's exact commit-verification response for this pin reports `verified=true`, `reason=valid`, and `verified_at=2026-09-20T12:23:58Z`. The signed payload binds the exact tree `8e11bddc...`, parent `a3a1c94e...`, author identity, and GitHub committer identity shown above. Winds records GitHub's verification result and payload binding; it does not invent a separate cryptographic signer identity beyond the metadata GitHub exposes.
 
 The immediately previous Winds research pin was:
 
