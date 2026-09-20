@@ -266,10 +266,11 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 
 **Authorized paths**:
 - `src/persistent_runtime/protocol.rs`;
+- `src/persistent_runtime/client.rs` only for the protocol-v2 handshake/version transition, explicit legacy-owner block mapping, and regression preservation of existing Spec 011 runtime-control operations;
 - new `src/multiplexer/protocol.rs` if separation reduces coupling;
 - `src/persistent_runtime/owner.rs` only for typed dispatch;
 - focused `src/t166_multiplexer_protocol_v2_tests.rs`;
-- no desktop/TUI, Git mutation, detector, dependency, network/public RPC;
+- no topology projection cache/client UX beyond the minimum version transition; no desktop/TUI, Git mutation, detector, dependency, network/public RPC;
 
 **Required work**:
 - protocol version 2 exact handshake on both owner and the existing shared Rust client; no automatic downgrade;
@@ -317,11 +318,11 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 - no renderer/WebView direct IPC, no Git mutation, detector, UI layout, or new dependency;
 
 **Required work**:
-- list/snapshot/subscribe topology through protocol v2;
+- list/snapshot/subscribe topology through the already-landed T166 protocol-v2 contract;
 - fresh subscription + authoritative snapshot recovery after gap;
 - exact next-generation application only; discontinuity triggers resnapshot;
 - immutable target/result binding retained in client projections;
-- v1 owner surfaces explicit upgrade/block state;
+- consume the T166 legacy-owner block state; no handshake/version/message-kind/payload-schema/framing change is authorized in T167;
 - read-only client does not acquire MultiplexerWrite implicitly;
 
 **Acceptance**:
