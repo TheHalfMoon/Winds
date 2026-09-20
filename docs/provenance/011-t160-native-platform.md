@@ -109,11 +109,12 @@ Every job is bound to the exact candidate SHA and runs:
 1. Rust formatting and Clippy gates.
 2. The complete `persistent_runtime::` test surface serially on that operating system.
 3. Explicit assertions that the required domain-specific T149 or T150 security fixtures actually executed and passed.
-4. Direct PTY or ConPTY backend tests.
-5. The T063 100-cycle terminal lifecycle soak.
-6. The T063 active-close/resize guard.
-7. Linux additionally reruns the release-profile T159 core resource campaign on the exact T160 candidate.
-8. An exact-domain JSON evidence artifact containing commit/tree/runner/domain identity and explicit non-substitution/non-relaxation flags.
+4. A 100-cycle persistent-owner detach/exact-generation reattach churn campaign on that same operating system.
+5. Direct PTY or ConPTY backend tests.
+6. The T063 100-cycle terminal lifecycle soak.
+7. The T063 active-close/resize guard.
+8. Linux additionally reruns the release-profile T159 core resource campaign on the exact T160 candidate.
+9. An exact-domain JSON evidence artifact containing commit/tree/runner/domain identity and explicit non-substitution/non-relaxation flags.
 
 The matrix uses `fail-fast: false` so one platform cannot hide another platform's result.
 
@@ -125,7 +126,7 @@ The primary direct fixtures are:
 
 - T149 for Linux/macOS private Unix transport, path/mode/peer identity, stale-path handling, and entropy.
 - T150 for native-Windows named-pipe DACL/current-user/anonymous-denial/collision/entropy behavior.
-- T152 for persistent terminal detach/reattach, detached exit, generation binding, and native-Windows interrupt non-support.
+- T152 for persistent terminal detach/reattach, detached exit, generation binding, native-Windows interrupt non-support, and the T160 100-cycle exact-generation reconnect churn.
 - T153 for replay bounds and slow-client backpressure.
 - T154 for controller authority and lease behavior.
 - T157 for crash/restart/recovery truth.
@@ -141,8 +142,8 @@ T160 closes only when one exact candidate has all of the following:
 1. all three `t160-native-platform` matrix jobs successful;
 2. exact candidate SHA/tree binding in each uploaded domain artifact;
 3. Linux T149/T152/T153/T154/T157/T063/T159 evidence successful;
-4. macOS T149/T152/T153/T154/T157/T063 evidence successful;
-5. native-Windows T150/T152/T153/T154/T157/T063 and ConPTY evidence successful;
+4. macOS T149/T152/T153/T154/T157/T063 evidence successful, including 100 persistent-owner reconnect cycles;
+5. native-Windows T150/T152/T153/T154/T157/T063 and ConPTY evidence successful, including 100 persistent-owner reconnect cycles;
 6. `SPEC_011_WSL_PERSISTENT_OWNER=NOT_CLAIMED` remains explicit;
 7. no threshold, security boundary, correctness gate, or authority surface weakened;
 8. exact changed-file and Alibaba OpenCodeReview delegation/rule accounting reconciled;
