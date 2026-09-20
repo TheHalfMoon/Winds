@@ -392,7 +392,11 @@ impl LayoutTemplateV1 {
             return Err("stored layout template has an invalid tab count".to_owned());
         }
         for tab in &self.tabs {
-            validate_text_bytes(&tab.alias, MULTIPLEXER_MAX_ALIAS_BYTES, "template tab alias")?;
+            validate_text_bytes(
+                &tab.alias,
+                MULTIPLEXER_MAX_ALIAS_BYTES,
+                "template tab alias",
+            )?;
             let pane_count = tab.root.pane_count()?;
             if pane_count == 0 || pane_count > MULTIPLEXER_MAX_PANES_PER_TAB {
                 return Err("stored layout template has an invalid pane count".to_owned());
@@ -511,7 +515,11 @@ pub(crate) struct RepositoryTrustRecord {
 }
 
 pub(crate) fn validate_template_name(value: &str) -> Result<(), String> {
-    validate_text_bytes(value, MULTIPLEXER_MAX_TEMPLATE_NAME_BYTES, "layout template name")
+    validate_text_bytes(
+        value,
+        MULTIPLEXER_MAX_TEMPLATE_NAME_BYTES,
+        "layout template name",
+    )
 }
 
 pub(crate) fn validate_git_workspace_id(value: &str) -> Result<(), String> {
@@ -565,11 +573,7 @@ fn validate_text_bytes(value: &str, maximum: usize, label: &str) -> Result<(), S
     Ok(())
 }
 
-fn validate_nonempty_text_bytes(
-    value: &str,
-    maximum: usize,
-    label: &str,
-) -> Result<(), String> {
+fn validate_nonempty_text_bytes(value: &str, maximum: usize, label: &str) -> Result<(), String> {
     validate_text_bytes(value, maximum, label)?;
     if value.is_empty() {
         return Err(format!("{label} must not be empty"));
