@@ -425,42 +425,6 @@ fn t159_release_resource_and_latency_campaign() {
     }
 
     drain_fast_observers(&mut owner, &handles, &mut fast_output_events);
-                owner
-                    .fill_terminal_observer_queue(
-                        handles
-                            .last()
-                            .expect("T159 slow observer handle must exist"),
-                    )
-                    .expect("slow observer queue must remain deterministically bounded");
-                slow_fill_count = slow_fill_count.saturating_add(1);
-                owner
-                    .controller_resize_terminal(
-                        &controller,
-                        runtime_id,
-                        TerminalSize {
-                            rows: 24 + (reads % 2) as u16,
-                            cols: 80 + (reads % 2) as u16,
-                        },
-                        6_000 + reads as i64,
-                        6_000 + reads,
-                    )
-                    .expect("controller resize must remain correct under output pressure");
-            }
-            if contains_marker(&mut tail, chunk) {
-                break;
-            }
-        } else {
-            owner
-                .poll_terminal_runtimes(7_000, 7_000)
-                .expect("T159 output wait poll must remain valid");
-        }
-        assert!(
-            Instant::now() < deadline,
-            "T159 high-output campaign did not complete inside the 60-second bound"
-        );
-    }
-
-    drain_fast_observers(&mut owner, &handles, &mut fast_output_events);
     for handle in handles {
         let _ = owner.fill_terminal_observer_queue(&handle);
         let _ = owner.drain_terminal_observer(&handle);
