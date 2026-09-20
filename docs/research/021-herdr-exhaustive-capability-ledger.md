@@ -2,8 +2,8 @@
 
 **Status:** Research/provenance evidence only. This ledger does not itself authorize implementation.
 
-**Herdr exact pin:** `herdrdev/herdr@da6bcd5969779bfe0396bcf89a8025d4375d611e`
-**Herdr tree:** `aece03633c003ba0fce01bc2564ad14e0fe9cac9`
+**Herdr exact pin:** `herdrdev/herdr@29f9f4056f344af60f411004fc89c7eb5f357c48`
+**Herdr tree:** `8e11bddc337094b8aece2a7abea4ee6ee6340f2a`
 **Observed root license:** Apache-2.0
 **Founder direction:** all Herdr capabilities are required parity scope for Winds; direct source reuse is permitted by Founder assertion, subject to per-slice provenance/notice/vendor review.
 
@@ -11,7 +11,11 @@
 
 This file is the omission-prevention ledger for the Founder-directed Herdr parity program. A later implementation program may improve, redesign, or replace a Herdr mechanism, but it may not silently drop a capability recorded here. Full parity closeout requires every row to reach one explicit disposition: `PROVEN_WINDS_PARITY`, `PROVEN_WINDS_SUPERSET`, or `FOUNDER_ACCEPTED_NOT_APPLICABLE`. Research-only, deferred, partial, or undocumented rows do not satisfy closeout.
 
-The ledger is source-derived from four surfaces at the exact pin: (1) the complete 104-method public serialized socket/API enum, (2) all 24 compiled agent-detection families, (3) all 17 frozen serialized integration targets **plus one experimental CLI-only Letta installable target**, and (4) feature-bearing runtime/client/config/plugin/test modules that expose product behavior beyond the public API. The explicit rows below therefore total **218** baseline capability entries: 24 agent rows + 18 integration rows + 104 public API rows + 72 additional runtime/UI/transport/config/plugin/packaging rows. A fresh exact-pin reconciliation is required before each successor Spec entry and again before final closeout.
+The ledger is source-derived from four surfaces at the exact pin: (1) the complete 105-method public serialized socket/API enum, (2) all 24 compiled agent-detection families, (3) all 17 frozen serialized integration targets **plus one experimental CLI-only Letta installable target**, and (4) feature-bearing runtime/client/config/plugin/test modules that expose product behavior beyond the public API. The explicit rows below therefore total **219** baseline capability entries: 24 agent rows + 18 integration rows + 105 public API rows + 72 additional runtime/UI/transport/config/plugin/packaging rows. A fresh exact-pin reconciliation is required before each successor Spec entry and again before final closeout.
+
+### 2026-09-20 pin reconciliation
+
+Compared with the prior ledger pin `da6bcd5969779bfe0396bcf89a8025d4375d611e`, upstream is 14 commits ahead with no reverse divergence. The compiled agent-family count remains 24; the frozen serialized integration enum remains 17 plus the existing experimental CLI-only Letta target. The public serialized API increases from 104 to 105 methods through new `pane.clear`; row M105 is appended rather than renumbering historical method IDs. Codex/Kiro/Grok detection, aggregate navigation, pane clearing, cursor/input, request-correlation, and remote qualification changes are reconciled by the Spec 012 entry gate; remote-only movement remains assigned to Spec 013.
 
 ## Agent detection families — all required
 
@@ -67,15 +71,15 @@ The frozen generation-1 serialized `IntegrationTarget::ALL` enum contains I01–
 | I17 | Install/uninstall/status integration for `Grok` | `src/api/schema/integrations.rs`; `src/integration/**` | Spec 014 | Required |
 | I18 | Experimental CLI-only install/uninstall/status integration for `Letta` outside the frozen generation-1 enum | `src/integration/mod.rs`; `src/cli/integration.rs`; `src/integration/actions.rs`; `src/integration/registry.rs` | Spec 014 | Required |
 
-## 2026-09-18 exact-pin delta note
+## 2026-09-20 exact-pin delta note
 
-The immediately preceding audit pin `18061191fdc019498610aee81f0df93f6c2ebd31` is 21 commits behind this ledger pin with no reverse divergence. The delta materially affects remote/local fallback behavior, exact session-deletion targeting, worktree removal with submodules, v0.9.1 release promotion/metadata, OpenCode registration handling, saved-machine connection metadata, native-Windows terminal/input recovery, default Windows shell selection, and Windows input qualification.
+The immediately preceding ledger pin `da6bcd5969779bfe0396bcf89a8025d4375d611e` is 14 commits behind this ledger pin with no reverse divergence. The delta materially affects Codex/Grok/Kiro detection, pane clearing, aggregate agent/terminal navigation, socket error request correlation, native-Windows cursor/input qualification, and remote transport/clipboard behavior.
 
-The delta does **not** change the 24-agent count, the 104 serialized public-method count, or the 17-member frozen integration enum. The Letta CLI-only experimental integration row is called out explicitly here because the prior research draft did not distinguish it from the frozen target count even though the experimental path already existed.
+The compiled agent count remains 24 and the frozen integration enum remains 17; the existing Letta CLI-only experimental target remains separate. The public serialized method count increases from 104 to **105** through `pane.clear`. Remote-only changes remain assigned to Spec 013 and do not expand Spec 012 authority.
 
 ## Public socket/API capabilities — complete method enum
 
-All 104 serialized methods in `src/api/schema.rs` are individually tracked below. Internal `serde(skip)` stream-control variants are implementation detail and are covered by the graphics/runtime rows in the non-API section.
+All 105 serialized methods in `src/api/schema.rs` are individually tracked below. Internal `serde(skip)` stream-control variants are implementation detail and are covered by the graphics/runtime rows in the non-API section.
 
 | ID | Herdr API method | Source evidence | Winds target | Reuse strategy candidate |
 |---|---|---|---|---|
@@ -183,6 +187,7 @@ All 104 serialized methods in `src/api/schema.rs` are individually tracked below
 | M102 | `plugin.pane.open` | `src/api/schema.rs` | Spec 014 | ADAPTED_COPY + TEST_PORT candidate |
 | M103 | `plugin.pane.focus` | `src/api/schema.rs` | Spec 014 | ADAPTED_COPY + TEST_PORT candidate |
 | M104 | `plugin.pane.close` | `src/api/schema.rs` | Spec 014 | ADAPTED_COPY + TEST_PORT candidate |
+| M105 | `pane.clear` | `src/api/schema.rs`; `src/app/api/panes.rs`; `src/input/keybindings.rs`; `src/config/model.rs` | Spec 012 | WINDS_NATIVE_ADAPTER + TEST_PORT candidate |
 
 ## Runtime, UI, transport, configuration, plugin and packaging capabilities
 
@@ -278,4 +283,4 @@ At this Herdr pin, source evidence proves GitHub-backed plugin installation plus
 
 ## Closeout rule
 
-`HERDR_FULL_PARITY=PROVEN` is forbidden until all **218 baseline rows** in this refreshed ledger have evidence-backed final dispositions, the current Herdr source has been re-audited for feature drift, all admitted direct/adapted copies have provenance/license ledgers, and Spec 015 parity closeout reconciles current Winds behavior against both this pin and any newer Founder-accepted Herdr pin.
+`HERDR_FULL_PARITY=PROVEN` is forbidden until all **219 baseline rows** in this refreshed ledger have evidence-backed final dispositions, the current Herdr source has been re-audited for feature drift, all admitted direct/adapted copies have provenance/license ledgers, and Spec 015 parity closeout reconciles current Winds behavior against both this pin and any newer Founder-accepted Herdr pin.
