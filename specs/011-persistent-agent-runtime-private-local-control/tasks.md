@@ -115,7 +115,7 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 
 ## Phase 1 — Domain, Identity, and Event Contract
 
-### [ ] T146 — Freeze persistent-runtime domain, identity entropy contract, continuity classes, and lifecycle event schema
+### [x] T146 — Freeze persistent-runtime domain, identity entropy contract, continuity classes, and lifecycle event schema
 
 **Purpose**: define the authority model before any persistence, transport, process owner, or endpoint exists.
 
@@ -162,7 +162,7 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 
 ## Phase 2 — Durable Namespace Metadata and Fail-Closed Restart Reconciliation
 
-### [ ] T147 — Add migration 0013 and Store reconciliation without PID/process reattachment
+### [x] T147 — Add migration 0013 and Store reconciliation without PID/process reattachment
 
 **Purpose**: persist only enough namespace/generation/lifecycle metadata to explain restart truth while keeping live ownership non-persistent.
 
@@ -214,7 +214,7 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 
 ## Phase 3 — Versioned Bounded Protocol Codec
 
-### [ ] T148 — Implement protocol v1 framing, typed messages, correlation, authority classes, and replay rejection over in-memory streams only
+### [x] T148 — Implement protocol v1 framing, typed messages, correlation, authority classes, and replay rejection over in-memory streams only
 
 **Purpose**: prove the wire contract and bounded parsing before a real OS endpoint exists.
 
@@ -265,7 +265,7 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 
 ## Phase 4 — POSIX Private Local Transport
 
-### [ ] T149 — Implement secure Unix-domain local transport for Linux and macOS
+### [x] T149 — Implement secure Unix-domain local transport for Linux and macOS
 
 **Purpose**: introduce the first real endpoint with platform-local principal checks and stale-path defenses, without process ownership migration.
 
@@ -313,7 +313,7 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 
 ## Phase 5 — Native-Windows Private Local Transport
 
-### [ ] T150 — Implement named-pipe current-user security and qualify the exact Win32 dependency seam
+### [x] T150 — Implement named-pipe current-user security and qualify the exact Win32 dependency seam
 
 **Purpose**: add native-Windows endpoint security without inferring it from Unix or WSL.
 
@@ -358,7 +358,7 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 
 ## Phase 6 — Owner Process Shell and Singleton Generation
 
-### [ ] T151 — Add same-binary owner mode, singleton arbitration, readiness, and mandatory idle exit with zero child ownership
+### [x] T151 — Add same-binary owner mode, singleton arbitration, readiness, and mandatory idle exit with zero child ownership
 
 **Purpose**: prove a narrow persistent process lifecycle before moving any PTY/ConPTY child into it.
 
@@ -396,7 +396,7 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 
 ## Phase 7 — Persistent PTY/ConPTY Ownership
 
-### [ ] T152 — Move/reuse accepted terminal ownership under the persistent owner for bounded shell runtimes
+### [x] T152 — Move/reuse accepted terminal ownership under the persistent owner for bounded shell runtimes
 
 **Purpose**: deliver the first real detach-survives-client capability without adding provider execution authority.
 
@@ -433,7 +433,7 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 
 ## Phase 8 — Multiple Observers, Bounded Replay, and Backpressure
 
-### [ ] T153 — Add read-only observers, bounded in-memory replay, explicit gaps, and slow-client protection
+### [x] T153 — Add read-only observers, bounded in-memory replay, explicit gaps, and slow-client protection
 
 **Purpose**: make detach/reattach useful without an unbounded transcript or resource leak.
 
@@ -476,7 +476,7 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 
 ## Phase 9 — Explicit Controller Lease and Race Semantics
 
-### [ ] T154 — Implement one explicit controller lease per runtime and deterministic takeover/revocation
+### [x] T154 — Implement one explicit controller lease per runtime and deterministic takeover/revocation
 
 **Purpose**: permit writable terminal control without accidental authority inheritance or broadcast.
 
@@ -523,7 +523,7 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 
 ## Phase 10 — Shared Rust Local-Control Client Seam
 
-### [ ] T155 — Implement one Rust-owned client for CLI/TUI/Desktop host integration
+### [x] T155 — Implement one Rust-owned client for CLI/TUI/Desktop host integration
 
 **Purpose**: keep endpoint/security/protocol/reconnect logic out of renderer/UI domains and prevent competing client implementations.
 
@@ -560,7 +560,7 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 
 ## Phase 11 — Truthful Detach/Reattach and Continuity Projections
 
-### [ ] T156 — Surface ownership, continuity, controller, replay, and mismatch states across accepted clients
+### [x] T156 — Surface ownership, continuity, controller, replay, and mismatch states across accepted clients
 
 **Purpose**: make the new runtime truth usable without visually upgrading process continuity into provider/evidence truth.
 
@@ -603,7 +603,7 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 
 ## Phase 12 — Stop, Crash, Restart, and Recovery Truth
 
-### [ ] T157 — Prove fail-closed owner/runtime stop and recovery without blind process reconstruction
+### [x] T157 — Prove fail-closed owner/runtime stop and recovery without blind process reconstruction
 
 **Purpose**: close the dangerous lifecycle edges before adversarial broadening.
 
@@ -647,7 +647,7 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 
 ## Phase 13 — Adversarial Protocol and Authority Campaign
 
-### [ ] T158 — Attack endpoint, protocol, renderer, authority, and secret boundaries
+### [x] T158 — Attack endpoint, protocol, renderer, authority, and secret boundaries
 
 **Purpose**: prove the local owner is private/least-authority rather than merely functional.
 
@@ -691,7 +691,7 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 
 ## Phase 14 — Stress, Performance, and Resource Qualification
 
-### [ ] T159 — Prove bounded resources, high output, observer scale, and reconnect churn
+### [x] T159 — Prove bounded resources, high output, observer scale, and reconnect churn
 
 **Purpose**: make persistence lightweight and prevent slow-client/output pressure from becoming an availability or authority problem.
 
@@ -729,7 +729,7 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 
 ## Phase 15 — Native Platform Qualification
 
-### [ ] T160 — Directly qualify Linux, macOS, native Windows, and any explicitly claimed WSL domain
+### [x] T160 — Directly qualify Linux, macOS, native Windows, and any explicitly claimed WSL domain
 
 **Purpose**: prevent cross-platform substitution for endpoint/process security and continuity.
 
@@ -776,7 +776,7 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 
 ## Phase 16 — Final Spec 011 Reconciliation
 
-### [ ] T161 — Reconcile every requirement/evidence boundary and close the first persistent-runtime program
+### [x] T161 — Reconcile every requirement/evidence boundary and close the first persistent-runtime program
 
 **Purpose**: prevent “it works” from becoming an unproven parity/security/authority claim.
 
