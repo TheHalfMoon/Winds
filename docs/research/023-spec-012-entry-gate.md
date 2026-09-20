@@ -96,7 +96,7 @@ Founder permission to use Herdr source remains recorded as `FOUNDER_PERMISSION_A
 
 ## 4. Upstream movement since the previous audit
 
-The 13-commit delta is material and therefore cannot be silently inherited.
+The 14-commit delta is material and therefore cannot be silently inherited.
 
 Material Spec 012-facing movement includes:
 
