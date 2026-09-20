@@ -359,6 +359,7 @@ impl MultiplexerTopology {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn split_pane(
         &mut self,
         expected: TopologyGeneration,
