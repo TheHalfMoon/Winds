@@ -1,10 +1,7 @@
-use crate::persistent_runtime::client::{
-    LocalControlClientError, validate_local_endpoint_hint,
-};
+use crate::persistent_runtime::client::{LocalControlClientError, validate_local_endpoint_hint};
 use crate::persistent_runtime::controller::{ControllerError, ControllerRegistry};
 use crate::persistent_runtime::domain::{
-    ClientConnectionId, EventSequence, LocalControlErrorKind, OwnerGenerationId,
-    RuntimeNamespaceId,
+    ClientConnectionId, EventSequence, LocalControlErrorKind, OwnerGenerationId, RuntimeNamespaceId,
 };
 use crate::persistent_runtime::protocol::{
     MAX_INBOUND_CONTROL_FRAME_BYTES, MessageAuthorityClass, MessageKind, PROTOCOL_VERSION,
@@ -41,8 +38,8 @@ fn rewrite_wire_json(frame: &[u8], mutate: impl FnOnce(&mut Value)) -> Vec<u8> {
 
 #[test]
 fn t158_protocol_campaign_rejects_downgrade_truncation_oversize_unknown_kind_and_replay() {
-    let hello = ProtocolMessage::hello(sequence(1), PROTOCOL_VERSION, PROTOCOL_VERSION, None)
-        .unwrap();
+    let hello =
+        ProtocolMessage::hello(sequence(1), PROTOCOL_VERSION, PROTOCOL_VERSION, None).unwrap();
     let frame = encode_frame(&hello).unwrap();
     assert_eq!(decode_frame(&frame).unwrap(), hello);
 
@@ -207,7 +204,10 @@ fn t158_terminal_agent_and_renderer_shaped_text_remains_plain_output_data() {
         MessageKind::HistoryGap,
         MessageKind::OwnerStatus,
     ] {
-        assert_ne!(kind.authority_class(), MessageAuthorityClass::ControllerOnly);
+        assert_ne!(
+            kind.authority_class(),
+            MessageAuthorityClass::ControllerOnly
+        );
         assert_ne!(
             kind.authority_class(),
             MessageAuthorityClass::BoundedAuthorityTransition
@@ -282,13 +282,17 @@ fn t158_persistent_runtime_surface_has_no_public_network_or_generic_plugin_dispa
         "Plugin",
         "MethodDispatch",
     ] {
-        assert!(!protocol_source.contains(prohibited_kind), "{prohibited_kind}");
+        assert!(
+            !protocol_source.contains(prohibited_kind),
+            "{prohibited_kind}"
+        );
     }
 }
 
 #[test]
 fn t158_owner_metadata_schema_has_no_secret_environment_or_terminal_payload_columns() {
-    let migration = include_str!("../migrations/0013_persistent_runtime_owner.sql").to_ascii_lowercase();
+    let migration =
+        include_str!("../migrations/0013_persistent_runtime_owner.sql").to_ascii_lowercase();
     let persistence = include_str!("persistent_runtime/persistence.rs").to_ascii_lowercase();
 
     for prohibited_column in [
@@ -305,8 +309,14 @@ fn t158_owner_metadata_schema_has_no_secret_environment_or_terminal_payload_colu
         "control_frame",
         "protocol_payload",
     ] {
-        assert!(!migration.contains(prohibited_column), "{prohibited_column}");
-        assert!(!persistence.contains(prohibited_column), "{prohibited_column}");
+        assert!(
+            !migration.contains(prohibited_column),
+            "{prohibited_column}"
+        );
+        assert!(
+            !persistence.contains(prohibited_column),
+            "{prohibited_column}"
+        );
     }
 
     let secret_fixture = [
@@ -358,7 +368,10 @@ fn t158_git_verification_acceptance_and_generic_host_authority_are_unrepresentab
             "verification_pass",
             "approve_candidate",
         ] {
-            assert!(!source.to_ascii_lowercase().contains(prohibited), "{prohibited}");
+            assert!(
+                !source.to_ascii_lowercase().contains(prohibited),
+                "{prohibited}"
+            );
         }
     }
 }
