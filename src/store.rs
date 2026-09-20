@@ -1059,6 +1059,40 @@ fn row_exists(connection: &Connection, query: &str, value: &str) -> Result<bool>
     Ok(found != 0)
 }
 
+fn decode_multiplexer_workspace_snapshot(
+    row: (String, i64, String, i64, String),
+    expected_workspace_id: Option<MultiplexerWorkspaceId>,
+) -> Result<TopologySnapshotV1> {
+    if row.1 != i64::from(MULTIPLEXER_SCHEMA_VERSION) {
+        return Err(format!(
+            "unsupported multiplexer workspace schema version: {}",
+            row.1
+        )
+        .into());
+    }
+    let workspace_id = MultiplexerWorkspaceId::parse(&row.0)
+        .map_err(|error| format!("stored multiplexer workspace id: {error}"))?;
+    if expected_workspace_id.is_some_and(|expected| expected != workspace_id) {
+        return Err("stored multiplexer workspace identity mismatch".into());
+    }
+    let generation = u64::try_from(row.3)
+        .map_err(|_| "stored multiplexer topology generation is invalid")?;
+    let generation = TopologyGeneration::new(generation)
+        .map_err(|error| format!("stored topology generation: {error}"))?;
+    let snapshot = TopologySnapshotV1::from_canonical_json(&row.4)
+        .map_err(|error| format!("stored multiplexer snapshot: {error}"))?;
+    if snapshot.workspace_id() != workspace_id {
+        return Err("stored multiplexer snapshot identity mismatch".into());
+    }
+    if snapshot.alias() != row.2 {
+        return Err("stored multiplexer workspace alias mismatch".into());
+    }
+    if snapshot.topology_generation() != generation {
+        return Err("stored multiplexer topology generation mismatch".into());
+    }
+    Ok(snapshot)
+}
+
 #[allow(
     dead_code,
     reason = "Spec 012 T164 persistence API; live owner callers land in T165"
@@ -1068,59 +1102,111 @@ impl Store {
         validate_multiplexer_schema_connection(&self.connection)
     }
 
-    pub(crate) fn persist_multiplexer_workspace_snapshot(
-        &self,
-        snapshot: &TopologySnapshotV1,
+    pub(crate) fn persist_multiplexer_topology_snapshots(
+        &mut self,
+        snapshots: &[TopologySnapshotV1],
         now_ms: i64,
     ) -> Result<()> {
         self.validate_multiplexer_schema()?;
         validate_multiplexer_timestamp(now_ms, "multiplexer workspace update time")?;
-        snapshot
-            .validate()
-            .map_err(|error| format!("multiplexer snapshot: {error}"))?;
-        let workspace_id = snapshot.workspace_id().as_hex();
-        let exists = row_exists(
-            &self.connection,
-            "SELECT EXISTS(
-                SELECT 1 FROM multiplexer_workspaces
-                WHERE multiplexer_workspace_id = ?1
-             )",
-            &workspace_id,
-        )?;
-        if !exists
-            && count_rows(&self.connection, "multiplexer_workspaces")? >= MULTIPLEXER_MAX_WORKSPACES
-        {
+        if snapshots.len() > MULTIPLEXER_MAX_WORKSPACES {
             return Err("multiplexer workspace persistence limit reached".into());
         }
-        let generation = i64::try_from(snapshot.topology_generation().get())
-            .map_err(|_| "topology generation exceeds SQLite integer range")?;
-        let json = snapshot
-            .to_canonical_json()
-            .map_err(|error| format!("multiplexer snapshot: {error}"))?;
-        self.connection.execute(
-            "INSERT INTO multiplexer_workspaces(
-                multiplexer_workspace_id,
-                schema_version,
-                workspace_alias,
-                topology_generation,
-                snapshot_json,
-                created_unix_ms,
-                updated_unix_ms
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
-             ON CONFLICT(multiplexer_workspace_id) DO UPDATE SET
-                workspace_alias = excluded.workspace_alias,
-                topology_generation = excluded.topology_generation,
-                snapshot_json = excluded.snapshot_json,
-                updated_unix_ms = excluded.updated_unix_ms",
-            params![
-                workspace_id,
-                MULTIPLEXER_SCHEMA_VERSION,
-                snapshot.alias(),
+
+        let mut workspace_ids = BTreeSet::new();
+        let mut generation = None;
+        let mut focused_count = 0_usize;
+        let mut prepared = Vec::with_capacity(snapshots.len());
+        for snapshot in snapshots {
+            snapshot
+                .validate()
+                .map_err(|error| format!("multiplexer snapshot: {error}"))?;
+            if !workspace_ids.insert(snapshot.workspace_id()) {
+                return Err("multiplexer topology snapshot set repeats a workspace identity".into());
+            }
+            match generation {
+                None => generation = Some(snapshot.topology_generation()),
+                Some(expected) if expected == snapshot.topology_generation() => {}
+                Some(_) => {
+                    return Err(
+                        "multiplexer topology snapshot set mixes topology generations".into(),
+                    );
+                }
+            }
+            focused_count += usize::from(snapshot.is_focused());
+            let generation = i64::try_from(snapshot.topology_generation().get())
+                .map_err(|_| "topology generation exceeds SQLite integer range")?;
+            let json = snapshot
+                .to_canonical_json()
+                .map_err(|error| format!("multiplexer snapshot: {error}"))?;
+            prepared.push((
+                snapshot.workspace_id().as_hex(),
+                snapshot.alias().to_owned(),
                 generation,
                 json,
-                now_ms,
-            ],
-        )?;
+            ));
+        }
+        if !snapshots.is_empty() && focused_count != 1 {
+            return Err(
+                "nonempty multiplexer topology snapshot set must have exactly one focused workspace"
+                    .into(),
+            );
+        }
+
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existing_ids = {
+            let mut statement = tx.prepare(
+                "SELECT multiplexer_workspace_id
+                 FROM multiplexer_workspaces
+                 ORDER BY multiplexer_workspace_id",
+            )?;
+            statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+
+        for (workspace_id, alias, generation, json) in &prepared {
+            tx.execute(
+                "INSERT INTO multiplexer_workspaces(
+                    multiplexer_workspace_id,
+                    schema_version,
+                    workspace_alias,
+                    topology_generation,
+                    snapshot_json,
+                    created_unix_ms,
+                    updated_unix_ms
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+                 ON CONFLICT(multiplexer_workspace_id) DO UPDATE SET
+                    workspace_alias = excluded.workspace_alias,
+                    topology_generation = excluded.topology_generation,
+                    snapshot_json = excluded.snapshot_json,
+                    updated_unix_ms = excluded.updated_unix_ms",
+                params![
+                    workspace_id,
+                    MULTIPLEXER_SCHEMA_VERSION,
+                    alias,
+                    generation,
+                    json,
+                    now_ms,
+                ],
+            )?;
+        }
+
+        let retained = prepared
+            .iter()
+            .map(|item| item.0.as_str())
+            .collect::<BTreeSet<_>>();
+        for existing_id in existing_ids {
+            if !retained.contains(existing_id.as_str()) {
+                tx.execute(
+                    "DELETE FROM multiplexer_workspaces WHERE multiplexer_workspace_id = ?1",
+                    [existing_id],
+                )?;
+            }
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -1130,42 +1216,81 @@ impl Store {
     ) -> Result<TopologySnapshotV1> {
         self.validate_multiplexer_schema()?;
         let row = self.connection.query_row(
-            "SELECT schema_version, workspace_alias, topology_generation, snapshot_json
+            "SELECT
+                multiplexer_workspace_id,
+                schema_version,
+                workspace_alias,
+                topology_generation,
+                snapshot_json
              FROM multiplexer_workspaces
              WHERE multiplexer_workspace_id = ?1",
             [workspace_id.as_hex()],
             |row| {
                 Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
                 ))
             },
         )?;
-        if row.0 != i64::from(MULTIPLEXER_SCHEMA_VERSION) {
-            return Err(format!(
-                "unsupported multiplexer workspace schema version: {}",
-                row.0
-            )
-            .into());
+        decode_multiplexer_workspace_snapshot(row, Some(workspace_id))
+    }
+
+    pub(crate) fn load_multiplexer_topology_snapshots(
+        &self,
+    ) -> Result<Vec<TopologySnapshotV1>> {
+        self.validate_multiplexer_schema()?;
+        let rows = {
+            let mut statement = self.connection.prepare(
+                "SELECT
+                    multiplexer_workspace_id,
+                    schema_version,
+                    workspace_alias,
+                    topology_generation,
+                    snapshot_json
+                 FROM multiplexer_workspaces
+                 ORDER BY multiplexer_workspace_id",
+            )?;
+            statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+
+        let mut snapshots = Vec::with_capacity(rows.len());
+        for row in rows {
+            snapshots.push(decode_multiplexer_workspace_snapshot(row, None)?);
         }
-        let generation = u64::try_from(row.2)
-            .map_err(|_| "stored multiplexer topology generation is invalid")?;
-        let generation = TopologyGeneration::new(generation)
-            .map_err(|error| format!("stored topology generation: {error}"))?;
-        let snapshot = TopologySnapshotV1::from_canonical_json(&row.3)
-            .map_err(|error| format!("stored multiplexer snapshot: {error}"))?;
-        if snapshot.workspace_id() != workspace_id {
-            return Err("stored multiplexer workspace identity mismatch".into());
+        if let Some(first) = snapshots.first() {
+            let generation = first.topology_generation();
+            if snapshots
+                .iter()
+                .any(|snapshot| snapshot.topology_generation() != generation)
+            {
+                return Err("stored multiplexer topology mixes topology generations".into());
+            }
+            if snapshots
+                .iter()
+                .filter(|snapshot| snapshot.is_focused())
+                .count()
+                != 1
+            {
+                return Err(
+                    "stored nonempty multiplexer topology must have exactly one focused workspace"
+                        .into(),
+                );
+            }
         }
-        if snapshot.alias() != row.1 {
-            return Err("stored multiplexer workspace alias mismatch".into());
-        }
-        if snapshot.topology_generation() != generation {
-            return Err("stored multiplexer topology generation mismatch".into());
-        }
-        Ok(snapshot)
+        Ok(snapshots)
     }
 
     pub(crate) fn delete_multiplexer_workspace_metadata(
