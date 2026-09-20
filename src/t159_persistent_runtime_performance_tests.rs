@@ -218,6 +218,7 @@ fn t159_release_resource_and_latency_campaign() {
 
     let mut reconnect_samples = Vec::with_capacity(RECONNECT_CYCLES);
     for index in 0..RECONNECT_CYCLES {
+        drop(attachment);
         let started = Instant::now();
         attachment = owner
             .reattach_terminal_runtime(
