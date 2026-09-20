@@ -41,26 +41,39 @@ HERDR_TEST_PORT_AUTHORIZED=NO
 
 ## Plan-Time Herdr Research Recheck
 
-The first Plan-stage upstream observation is:
+The current Plan-stage upstream observation chain is:
 
 ~~~text
-HERDR_PLAN_RESEARCH_HEAD=6c62707a3a43427a34fb418ce20c834a88089ba1
-HERDR_PLAN_RESEARCH_TREE=0940b3d41853316fcd861b5902ed7a4ebd155066
-HERDR_PLAN_RESEARCH_PARENT=74505861e40c48e070e711bd4de662a17b0939b3
+HERDR_PLAN_WORKTREE_HEAD=6c62707a3a43427a34fb418ce20c834a88089ba1
+HERDR_PLAN_WORKTREE_TREE=0940b3d41853316fcd861b5902ed7a4ebd155066
+HERDR_PLAN_WORKTREE_PARENT=74505861e40c48e070e711bd4de662a17b0939b3
+HERDR_PLAN_WORKTREE_GITHUB_VERIFICATION=VERIFIED_VALID
+HERDR_PLAN_WORKTREE_MESSAGE=fix: preserve explicit worktree workspace membership (#4301)
+
+HERDR_PLAN_RESEARCH_HEAD=65927cef1c735169ba07677311ec9d6d7435c9f3
+HERDR_PLAN_RESEARCH_TREE=516897019bb382bbdc4c0a8dba83758a9d8d1fef
+HERDR_PLAN_RESEARCH_PARENT=6c62707a3a43427a34fb418ce20c834a88089ba1
 HERDR_PLAN_RESEARCH_GITHUB_VERIFICATION=VERIFIED_VALID
 HERDR_PLAN_RESEARCH_GITHUB_VERIFICATION_REASON=valid
-HERDR_PLAN_RESEARCH_COMMIT_MESSAGE=fix: preserve explicit worktree workspace membership (#4301)
+HERDR_PLAN_RESEARCH_MESSAGE=fix: drain event subscriptions and report history loss (#4225)
 ~~~
 
-The exact post-Spec delta changes only src/app/api/worktrees.rs and preserves explicit worktree-to-workspace membership rather than allowing inferred discovery refresh to silently rewrite explicit membership.
+The first post-Spec delta changes only src/app/api/worktrees.rs and preserves explicit worktree-to-workspace membership rather than allowing inferred discovery refresh to silently rewrite explicit membership.
 
-Plan consequence:
+The next upstream delta changes event subscription/history behavior and documentation. It drains retained lifecycle/agent-status batches, detects when a subscriber has fallen behind bounded retained history, reports explicit events_lost state, closes only the affected subscription, and requires resubscription plus authoritative snapshot recovery rather than silently continuing with missing events. It also documents that snapshot/event ordering must not be guessed across an unproven boundary.
+
+Plan consequences:
 
 - Winds must model explicit repository/worktree membership as durable user-owned metadata.
 - Discovery may update observations but MUST NOT silently remove an explicit membership relation.
 - A worktree that becomes temporarily unavailable is stale/unavailable, not automatically forgotten.
 - Explicit membership remains separate from repository trust and from current filesystem existence.
-- The upstream change is design evidence only. No source reuse is admitted.
+- A lost/gapped multiplexer, agent-observation, or attention event stream marks the client projection stale.
+- Recovery requires a fresh authoritative snapshot plus a fresh subscription boundary.
+- Buffered events MUST NOT be blindly replayed over a newer snapshot unless an exact Winds-owned generation/sequence relation proves they are still applicable.
+- TopologyGeneration remains the strongest ordering primitive for topology mutations; discontinuity requires resnapshot.
+- Agent/attention streams must expose explicit gap/loss state rather than silently skipping retained history.
+- Both upstream changes are design evidence only. No source reuse is admitted.
 
 ---
 
@@ -794,9 +807,18 @@ agent observation event backlog: <= 1024 events
 attention event backlog: <= 512 events
 ~~~
 
-When a presentation event is dropped, clients receive an explicit gap/resnapshot requirement.
+When a presentation event is dropped or retained history is no longer available, clients receive an explicit gap/events-lost state and MUST mark the affected projection stale.
 
-Authority state is re-queried; it is never reconstructed from missing presentation events.
+Recovery is:
+
+1. establish a fresh subscription boundary;
+2. fetch a fresh authoritative snapshot;
+3. replace the stale cached projection;
+4. continue from newly observed events.
+
+Buffered events are not unconditionally replayed over the fresh snapshot. A topology event may be applied only when its exact resulting TopologyGeneration is the next valid generation for the cached workspace. Any generation discontinuity requires another resnapshot.
+
+Agent-observation and attention streams use the same fail-explicit principle: sequence/history loss invalidates the cached stream projection and requires a fresh snapshot. Authority state is re-queried; it is never reconstructed from missing presentation events.
 
 ## AD-012-30 — Snapshot size is bounded
 
