@@ -55,8 +55,8 @@ A fresh upstream reconciliation for this gate binds:
 ```text
 HERDR_REPOSITORY=herdrdev/herdr
 HERDR_DEFAULT_BRANCH=master
-HERDR_PIN=a3a1c94ed54e8a65d929528336d69c7e537ed2ef
-HERDR_TREE=dcafd50d8721c37dac03a89831ba24f849920839
+HERDR_PIN=29f9f4056f344af60f411004fc89c7eb5f357c48
+HERDR_TREE=8e11bddc337094b8aece2a7abea4ee6ee6340f2a
 HERDR_PACKAGE_VERSION=0.9.1
 HERDR_ROOT_LICENSE=Apache-2.0
 HERDR_PIN_GITHUB_SIGNATURE=VERIFIED_VALID
@@ -68,7 +68,9 @@ The immediately previous Winds research pin was:
 da6bcd5969779bfe0396bcf89a8025d4375d611e
 ```
 
-The current pin is 13 commits ahead with zero reverse divergence.
+The current pin is 14 commits ahead with zero reverse divergence.
+
+An intermediate pin `a3a1c94ed54e8a65d929528336d69c7e537ed2ef` was observed while this gate was being authored. Upstream advanced once more before qualification; that intermediate observation is superseded and is not used as final entry authority.
 
 Current source-derived inventory:
 
@@ -100,6 +102,7 @@ Material Spec 012-facing movement includes:
 
 - Grok activity detection under custom or disabled OSC signaling;
 - Kiro status detection from live controls and OSC signals;
+- Codex status detection under custom/remapped interrupt-key hints;
 - agent-detection tests refactored toward engine contracts;
 - the new public `pane.clear` method plus keybinding/config path;
 - aggregate navigation exposing every agent and terminal in the go-to picker;
@@ -337,7 +340,7 @@ This documentation-only candidate may close only when one exact final head prove
 - canonical base is the post-merge-qualified T161 closeout or a governance-only forward descendant;
 - changed scope is limited to the refreshed Herdr research/ledger and this Entry gate;
 - upstream Herdr head is rechecked immediately before final qualification;
-- any movement from `a3a1c94...` is classified and, if material, reconciled before landing;
+- any movement from `29f9f405...` is classified and, if material, reconciled before landing;
 - 24 agent families, 17 frozen integrations + 1 experimental Letta target, 105 public methods, and 219 total ledger rows remain exact or are forward-updated with evidence;
 - no Plan, Tasks, implementation, dependency, migration, remote, plugin, update, automatic-Git, or donor-copy authority is introduced;
 - repository `quality` succeeds on the exact final head;
