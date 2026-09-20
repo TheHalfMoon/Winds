@@ -218,7 +218,6 @@ fn t159_release_resource_and_latency_campaign() {
 
     let mut reconnect_samples = Vec::with_capacity(RECONNECT_CYCLES);
     for index in 0..RECONNECT_CYCLES {
-        drop(attachment);
         let started = Instant::now();
         attachment = owner
             .reattach_terminal_runtime(
@@ -359,7 +358,7 @@ fn t159_release_resource_and_latency_campaign() {
             observed_lines = observed_lines
                 .saturating_add(chunk.iter().filter(|byte| **byte == b'\n').count() as u64);
             reads = reads.saturating_add(1);
-            if reads % 128 == 0 {
+            if reads.is_multiple_of(128) {
                 drain_fast_observers(&mut owner, &handles, &mut fast_output_events);
                 owner
                     .fill_terminal_observer_queue(
