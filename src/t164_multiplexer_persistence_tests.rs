@@ -7,7 +7,9 @@ use crate::multiplexer::domain::persistence::{
     LayoutTemplateV1, RepositoryTrustRecord, TopologySnapshotV1, WorktreeMembershipRecord,
     WorktreeMembershipSource, WorktreeMembershipState,
 };
-use crate::multiplexer::domain::{LayoutTemplateId, MultiplexerWorkspaceId, PaneId, TabId};
+use crate::multiplexer::domain::{
+    LayoutTemplateId, MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration,
+};
 use rusqlite::Connection;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -179,9 +181,9 @@ fn t164_workspace_snapshot_round_trips_across_store_restart_without_live_authori
     let home = test_home("snapshot");
     let expected = snapshot("workspace");
     {
-        let store = Store::open(&home).unwrap();
+        let mut store = Store::open(&home).unwrap();
         store
-            .persist_multiplexer_workspace_snapshot(&expected, 10)
+            .persist_multiplexer_topology_snapshots(std::slice::from_ref(&expected), 10)
             .unwrap();
         let loaded = store
             .load_multiplexer_workspace_snapshot(expected.workspace_id())
@@ -215,14 +217,104 @@ fn t164_workspace_snapshot_round_trips_across_store_restart_without_live_authori
 }
 
 #[test]
+fn t164_topology_snapshot_set_is_atomic_and_rejects_mixed_generation_or_focus() {
+    let home = test_home("snapshot-set");
+    let first_workspace = workspace(10);
+    let second_workspace = workspace(11);
+    let mut topology = MultiplexerTopology::empty();
+    topology
+        .create_workspace(
+            topology.generation(),
+            first_workspace,
+            "first".to_owned(),
+            tab(10),
+            "first-tab".to_owned(),
+            pane(10),
+        )
+        .unwrap();
+    let generation = topology
+        .create_workspace(
+            topology.generation(),
+            second_workspace,
+            "second".to_owned(),
+            tab(11),
+            "second-tab".to_owned(),
+            pane(11),
+        )
+        .unwrap();
+
+    let first = TopologySnapshotV1::from_workspace(
+        topology.workspace(first_workspace).unwrap(),
+        generation,
+        false,
+    )
+    .unwrap();
+    let second = TopologySnapshotV1::from_workspace(
+        topology.workspace(second_workspace).unwrap(),
+        generation,
+        true,
+    )
+    .unwrap();
+
+    let mut store = Store::open(&home).unwrap();
+    store
+        .persist_multiplexer_topology_snapshots(&[first.clone(), second.clone()], 10)
+        .unwrap();
+    assert_eq!(
+        store.load_multiplexer_topology_snapshots().unwrap(),
+        vec![first.clone(), second.clone()]
+    );
+
+    let mixed_generation = TopologySnapshotV1::from_workspace(
+        topology.workspace(first_workspace).unwrap(),
+        TopologyGeneration::new(generation.get() + 1).unwrap(),
+        false,
+    )
+    .unwrap();
+    assert!(
+        store
+            .persist_multiplexer_topology_snapshots(
+                &[mixed_generation, second.clone()],
+                11,
+            )
+            .is_err()
+    );
+    assert_eq!(
+        store.load_multiplexer_topology_snapshots().unwrap(),
+        vec![first.clone(), second.clone()]
+    );
+
+    let duplicate_focus = TopologySnapshotV1::from_workspace(
+        topology.workspace(first_workspace).unwrap(),
+        generation,
+        true,
+    )
+    .unwrap();
+    assert!(
+        store
+            .persist_multiplexer_topology_snapshots(
+                &[duplicate_focus, second.clone()],
+                11,
+            )
+            .is_err()
+    );
+    assert_eq!(
+        store.load_multiplexer_topology_snapshots().unwrap(),
+        vec![first, second]
+    );
+
+    cleanup(&home);
+}
+
+#[test]
 fn t164_snapshot_validation_rejects_oversized_and_corrupt_state_without_truncation() {
     assert!(std::panic::catch_unwind(|| snapshot(&"x".repeat(129))).is_err());
 
     let home = test_home("corrupt-snapshot");
     let expected = snapshot("valid");
-    let store = Store::open(&home).unwrap();
+    let mut store = Store::open(&home).unwrap();
     store
-        .persist_multiplexer_workspace_snapshot(&expected, 10)
+        .persist_multiplexer_topology_snapshots(std::slice::from_ref(&expected), 10)
         .unwrap();
 
     store
