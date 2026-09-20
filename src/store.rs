@@ -1205,7 +1205,9 @@ impl Store {
                 .validate()
                 .map_err(|error| format!("multiplexer snapshot: {error}"))?;
             if !workspace_ids.insert(snapshot.workspace_id()) {
-                return Err("multiplexer topology snapshot set repeats a workspace identity".into());
+                return Err(
+                    "multiplexer topology snapshot set repeats a workspace identity".into(),
+                );
             }
             match generation {
                 None => generation = Some(snapshot.topology_generation()),
