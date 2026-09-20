@@ -340,20 +340,23 @@ impl MultiplexerTopology {
         tab_id: TabId,
     ) -> Result<TopologyGeneration, MultiplexerErrorKind> {
         self.transact(expected, |candidate| {
-            let workspace = candidate.workspace_mut(workspace_id)?;
-            if workspace.tabs.len() == 1 {
-                return Err(MultiplexerErrorKind::UnsupportedOperation);
-            }
-            let index = workspace
-                .tabs
-                .iter()
-                .position(|tab| tab.id == tab_id)
-                .ok_or(MultiplexerErrorKind::UnknownTab)?;
-            let tab = workspace.tabs.remove(index);
-            collect_pane_ids(&tab.root, &mut candidate.retired_pane_ids);
-            if workspace.focused_tab_id == tab_id {
-                workspace.focused_tab_id = workspace.tabs[0].id;
-            }
+            let closed_root = {
+                let workspace = candidate.workspace_mut(workspace_id)?;
+                if workspace.tabs.len() == 1 {
+                    return Err(MultiplexerErrorKind::UnsupportedOperation);
+                }
+                let index = workspace
+                    .tabs
+                    .iter()
+                    .position(|tab| tab.id == tab_id)
+                    .ok_or(MultiplexerErrorKind::UnknownTab)?;
+                let tab = workspace.tabs.remove(index);
+                if workspace.focused_tab_id == tab_id {
+                    workspace.focused_tab_id = workspace.tabs[0].id;
+                }
+                tab.root
+            };
+            collect_pane_ids(&closed_root, &mut candidate.retired_pane_ids);
             Ok(())
         })
     }
@@ -588,25 +591,27 @@ impl MultiplexerTopology {
         pane_id: PaneId,
     ) -> Result<TopologyGeneration, MultiplexerErrorKind> {
         self.transact(expected, |candidate| {
-            let workspace = candidate.workspace_mut(workspace_id)?;
-            let tab = tab_mut(workspace, tab_id)?;
-            if leaf_count(&tab.root) <= 1 {
-                return Err(MultiplexerErrorKind::UnsupportedOperation);
+            {
+                let workspace = candidate.workspace_mut(workspace_id)?;
+                let tab = tab_mut(workspace, tab_id)?;
+                if leaf_count(&tab.root) <= 1 {
+                    return Err(MultiplexerErrorKind::UnsupportedOperation);
+                }
+                let root = tab.root.clone();
+                let (root, removed) = remove_pane(root, pane_id);
+                if !removed {
+                    return Err(MultiplexerErrorKind::UnknownPane);
+                }
+                tab.root = root.ok_or(MultiplexerErrorKind::UnsupportedOperation)?;
+                if tab.focused_pane_id == pane_id {
+                    tab.focused_pane_id =
+                        first_pane(&tab.root).ok_or(MultiplexerErrorKind::UnknownPane)?;
+                }
+                if tab.zoomed_pane_id == Some(pane_id) {
+                    tab.zoomed_pane_id = None;
+                }
             }
-            let root = tab.root.clone();
-            let (root, removed) = remove_pane(root, pane_id);
-            if !removed {
-                return Err(MultiplexerErrorKind::UnknownPane);
-            }
-            tab.root = root.ok_or(MultiplexerErrorKind::UnsupportedOperation)?;
             candidate.retired_pane_ids.insert(pane_id);
-            if tab.focused_pane_id == pane_id {
-                tab.focused_pane_id =
-                    first_pane(&tab.root).ok_or(MultiplexerErrorKind::UnknownPane)?;
-            }
-            if tab.zoomed_pane_id == Some(pane_id) {
-                tab.zoomed_pane_id = None;
-            }
             Ok(())
         })
     }
@@ -858,7 +863,13 @@ fn resize_lowest_separating_split(
     second_pane: PaneId,
     ratio_bps: SplitRatioBps,
 ) -> bool {
-    let LayoutNode::Split { first, second, .. } = node else {
+    let LayoutNode::Split {
+        ratio_bps: current,
+        first,
+        second,
+        ..
+    } = node
+    else {
         return false;
     };
 
@@ -868,15 +879,9 @@ fn resize_lowest_separating_split(
     let second_in_right = contains_pane(second, second_pane);
 
     if (first_in_left && second_in_right) || (second_in_left && first_in_right) {
-        if let LayoutNode::Split {
-            ratio_bps: current, ..
-        } = node
-        {
-            *current = ratio_bps;
-            return true;
-        }
+        *current = ratio_bps;
+        return true;
     }
-
     if first_in_left && second_in_left {
         return resize_lowest_separating_split(first, first_pane, second_pane, ratio_bps);
     }
