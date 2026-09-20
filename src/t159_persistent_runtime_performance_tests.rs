@@ -172,10 +172,21 @@ fn high_output_batch_command(batch_index: usize) -> (Vec<u8>, Vec<u8>) {
     let body = "x".repeat(112);
     let marker = format!("WINDS_T159_BATCH_{batch_index:03}_DONE");
     let command = format!(
-        "awk 'BEGIN {{ for (i = 0; i < {OUTPUT_BATCH_LINES}; i++) printf \"T159-%03d-%06d-{body}\\n\", {batch_index}, i }}'; printf '{marker}\\n'\n"
+        "awk 'BEGIN {{ for (i = 0; i < {OUTPUT_BATCH_LINES}; i++) printf \"T159-%03d-%06d-{body}\\n\", {batch_index}, i }}'; printf 'WINDS_T159_BATCH_%03d_DONE\\n' {batch_index}\n"
     )
     .into_bytes();
     (command, marker.into_bytes())
+}
+
+#[test]
+fn t159_batch_completion_marker_cannot_be_satisfied_by_terminal_input_echo() {
+    let (command, marker) = high_output_batch_command(7);
+    assert!(
+        !command
+            .windows(marker.len())
+            .any(|window| window == marker.as_slice()),
+        "the exact completion marker must be emitted only by completed shell output, never by echoed input"
+    );
 }
 
 fn drain_fast_observers(
