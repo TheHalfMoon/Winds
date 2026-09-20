@@ -15,3 +15,7 @@ pub(crate) mod transport;
 #[cfg(test)]
 #[path = "../t158_persistent_runtime_adversarial_tests.rs"]
 mod t158_persistent_runtime_adversarial_tests;
+
+#[cfg(test)]
+#[path = "../t159_persistent_runtime_performance_tests.rs"]
+mod t159_persistent_runtime_performance_tests;
