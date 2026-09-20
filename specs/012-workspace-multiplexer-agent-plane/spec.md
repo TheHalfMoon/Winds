@@ -65,7 +65,7 @@ The following domains remain distinct:
 - Runtime Namespace ID: accepted Spec 011 local runtime identity.
 - Workspace ID: immutable multiplexer workspace identity.
 - Tab ID: immutable tab identity scoped to a workspace.
-- Pane ID: immutable pane identity scoped to a topology generation.
+- Pane ID: immutable pane identity. Pane bindings MUST be validated against the current topology generation, and Pane IDs MUST NOT be reused for replacement panes.
 - Agent Observation ID: immutable detection observation bound to exact pane/runtime/source evidence.
 - Provider-Native Session ID: provider-owned identity when independently available.
 - Repository/Worktree Identity: canonical repository root plus exact worktree identity/path.
