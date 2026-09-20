@@ -230,3 +230,6 @@ pub(crate) fn validate_replacement_pane_id(
 
 #[path = "navigation.rs"]
 pub(crate) mod navigation;
+
+#[path = "persistence.rs"]
+pub(crate) mod persistence;

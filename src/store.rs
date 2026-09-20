@@ -28,6 +28,15 @@ use crate::model_mesh::{
     ModelMeshContinuityPermissionDescriptorV1, ModelMeshTargetDescriptorV1, TargetDimension,
     TargetRequest, TargetSelector, model_mesh_authority_json_matches_digest,
 };
+use crate::multiplexer::domain::persistence::{
+    LayoutTemplateV1, MULTIPLEXER_MAX_LAYOUT_TEMPLATES, MULTIPLEXER_MAX_WORKSPACES,
+    MULTIPLEXER_MAX_WORKTREE_MEMBERSHIPS, MULTIPLEXER_SCHEMA_VERSION, RepositoryTrustRecord,
+    TopologySnapshotV1, WorktreeMembershipRecord, WorktreeMembershipSource,
+    WorktreeMembershipState, validate_git_common_dir, validate_git_workspace_id,
+    validate_repository_identity, validate_template_name,
+    validate_timestamp as validate_multiplexer_timestamp,
+};
+use crate::multiplexer::domain::{LayoutTemplateId, MultiplexerWorkspaceId, TopologyGeneration};
 use crate::persistent_runtime::domain::{OwnerGenerationId, RuntimeNamespaceId, RuntimeTruth};
 use crate::persistent_runtime::persistence::{
     PERSISTENT_RUNTIME_SCHEMA_VERSION, PersistentRuntimeRecord, PersistentRuntimeRecordInput,
@@ -79,6 +88,9 @@ mod t130_desktop_presentation_tests;
 #[cfg(test)]
 #[path = "t147_persistent_runtime_persistence_tests.rs"]
 mod t147_persistent_runtime_persistence_tests;
+#[cfg(test)]
+#[path = "t164_multiplexer_persistence_tests.rs"]
+mod t164_multiplexer_persistence_tests;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
@@ -462,6 +474,7 @@ impl Store {
         initialize_model_mesh_schema(&connection)?;
         initialize_desktop_presentation_schema(&connection)?;
         initialize_persistent_runtime_schema(&connection)?;
+        initialize_multiplexer_schema(&connection)?;
         Ok(Self {
             connection,
             home: home.to_path_buf(),
@@ -937,6 +950,714 @@ fn initialize_persistent_runtime_schema(connection: &Connection) -> Result<()> {
         connection.execute_batch("COMMIT")?;
     }
     validate_persistent_runtime_schema_connection(connection)
+}
+
+fn multiplexer_schema_objects(
+    connection: &Connection,
+) -> Result<BTreeMap<String, (String, String, String)>> {
+    let mut statement = connection.prepare(
+        "SELECT name, type, tbl_name, sql
+         FROM sqlite_master
+         WHERE name NOT GLOB 'sqlite_*'
+           AND (
+                name GLOB 'multiplexer_*'
+                OR name GLOB 'idx_multiplexer_*'
+                OR name GLOB 'trg_multiplexer_*'
+                OR tbl_name IN (
+                    'multiplexer_workspaces',
+                    'multiplexer_layout_templates',
+                    'multiplexer_worktree_memberships',
+                    'multiplexer_repository_trust'
+                )
+           )
+         ORDER BY name",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(3)?,
+        ))
+    })?;
+    let mut objects = BTreeMap::new();
+    for row in rows {
+        let (name, object_type, table_name, sql) = row?;
+        let sql = sql.ok_or_else(|| format!("multiplexer schema object has no SQL: {name}"))?;
+        objects.insert(
+            name,
+            (object_type, table_name, normalize_workflow_schema_sql(&sql)),
+        );
+    }
+    Ok(objects)
+}
+
+fn expected_multiplexer_schema_objects() -> Result<BTreeMap<String, (String, String, String)>> {
+    let connection = Connection::open_in_memory()?;
+    connection.pragma_update(None, "foreign_keys", "ON")?;
+    connection.execute_batch(include_str!("../migrations/0014_workspace_multiplexer.sql"))?;
+    multiplexer_schema_objects(&connection)
+}
+
+fn validate_multiplexer_schema_connection(connection: &Connection) -> Result<()> {
+    let expected = expected_multiplexer_schema_objects()?;
+    let observed = multiplexer_schema_objects(connection)?;
+    if observed.keys().collect::<Vec<_>>() != expected.keys().collect::<Vec<_>>() {
+        let missing = expected
+            .keys()
+            .filter(|name| !observed.contains_key(*name))
+            .cloned()
+            .collect::<Vec<_>>();
+        let unexpected = observed
+            .keys()
+            .filter(|name| !expected.contains_key(*name))
+            .cloned()
+            .collect::<Vec<_>>();
+        return Err(format!(
+            "multiplexer schema object inventory mismatch; missing={missing:?}; unexpected={unexpected:?}"
+        )
+        .into());
+    }
+    for (name, expected_object) in expected {
+        let observed_object = observed
+            .get(&name)
+            .ok_or_else(|| format!("multiplexer schema object missing: {name}"))?;
+        if observed_object != &expected_object {
+            return Err(format!("multiplexer schema object definition mismatch: {name}").into());
+        }
+    }
+    validate_multiplexer_foreign_keys(connection)?;
+    validate_multiplexer_row_limits(connection)?;
+    Ok(())
+}
+
+fn validate_multiplexer_foreign_keys(connection: &Connection) -> Result<()> {
+    const T164_TABLES: [&str; 4] = [
+        "multiplexer_workspaces",
+        "multiplexer_layout_templates",
+        "multiplexer_worktree_memberships",
+        "multiplexer_repository_trust",
+    ];
+
+    let table_names = {
+        let mut statement = connection.prepare(
+            "SELECT name
+             FROM sqlite_master
+             WHERE type = 'table' AND name NOT GLOB 'sqlite_*'
+             ORDER BY name",
+        )?;
+        statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+
+    for child_table in table_names {
+        let mut statement = connection.prepare(
+            r#"SELECT "table", "from", "to", on_delete
+             FROM pragma_foreign_key_list(?1)
+             ORDER BY id, seq"#,
+        )?;
+        let rows = statement.query_map([child_table.as_str()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?;
+
+        for row in rows {
+            let (parent_table, from_column, to_column, on_delete) = row?;
+            if !T164_TABLES.contains(&parent_table.as_str()) {
+                continue;
+            }
+
+            let expected_membership_fk = child_table == "multiplexer_worktree_memberships"
+                && parent_table == "multiplexer_workspaces"
+                && from_column == "multiplexer_workspace_id"
+                && to_column == "multiplexer_workspace_id"
+                && on_delete.eq_ignore_ascii_case("CASCADE");
+            if !expected_membership_fk {
+                return Err(format!(
+                    "foreign schema references T164 multiplexer table; child={child_table}; parent={parent_table}; from={from_column}; to={to_column}; on_delete={on_delete}"
+                )
+                .into());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_multiplexer_row_limits(connection: &Connection) -> Result<()> {
+    for (table, maximum) in [
+        ("multiplexer_workspaces", MULTIPLEXER_MAX_WORKSPACES),
+        (
+            "multiplexer_layout_templates",
+            MULTIPLEXER_MAX_LAYOUT_TEMPLATES,
+        ),
+        (
+            "multiplexer_worktree_memberships",
+            MULTIPLEXER_MAX_WORKTREE_MEMBERSHIPS,
+        ),
+    ] {
+        let count = count_rows(connection, table)?;
+        if count > maximum {
+            return Err(format!(
+                "stored {table} row count {count} exceeds accepted maximum {maximum}"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn initialize_multiplexer_schema(connection: &Connection) -> Result<()> {
+    let existing = multiplexer_schema_objects(connection)?;
+    if existing.is_empty() {
+        connection.execute_batch("BEGIN IMMEDIATE")?;
+        if let Err(error) =
+            connection.execute_batch(include_str!("../migrations/0014_workspace_multiplexer.sql"))
+        {
+            let _ = connection.execute_batch("ROLLBACK");
+            return Err(error.into());
+        }
+        if let Err(error) = validate_multiplexer_schema_connection(connection) {
+            let _ = connection.execute_batch("ROLLBACK");
+            return Err(error);
+        }
+        connection.execute_batch("COMMIT")?;
+    }
+    validate_multiplexer_schema_connection(connection)
+}
+
+fn count_rows(connection: &Connection, table: &str) -> Result<usize> {
+    let query = format!("SELECT COUNT(*) FROM {table}");
+    let count: i64 = connection.query_row(&query, [], |row| row.get(0))?;
+    usize::try_from(count).map_err(|_| format!("invalid row count for {table}: {count}").into())
+}
+
+fn row_exists(connection: &Connection, query: &str, value: &str) -> Result<bool> {
+    let found: i64 = connection.query_row(query, [value], |row| row.get(0))?;
+    Ok(found != 0)
+}
+
+fn decode_multiplexer_workspace_snapshot(
+    row: (String, i64, String, i64, String),
+    expected_workspace_id: Option<MultiplexerWorkspaceId>,
+) -> Result<TopologySnapshotV1> {
+    if row.1 != i64::from(MULTIPLEXER_SCHEMA_VERSION) {
+        return Err(format!(
+            "unsupported multiplexer workspace schema version: {}",
+            row.1
+        )
+        .into());
+    }
+    let workspace_id = MultiplexerWorkspaceId::parse(&row.0)
+        .map_err(|error| format!("stored multiplexer workspace id: {error}"))?;
+    if expected_workspace_id.is_some_and(|expected| expected != workspace_id) {
+        return Err("stored multiplexer workspace identity mismatch".into());
+    }
+    let generation =
+        u64::try_from(row.3).map_err(|_| "stored multiplexer topology generation is invalid")?;
+    let generation = TopologyGeneration::new(generation)
+        .map_err(|error| format!("stored topology generation: {error}"))?;
+    let snapshot = TopologySnapshotV1::from_canonical_json(&row.4)
+        .map_err(|error| format!("stored multiplexer snapshot: {error}"))?;
+    if snapshot.workspace_id() != workspace_id {
+        return Err("stored multiplexer snapshot identity mismatch".into());
+    }
+    if snapshot.alias() != row.2 {
+        return Err("stored multiplexer workspace alias mismatch".into());
+    }
+    if snapshot.topology_generation() != generation {
+        return Err("stored multiplexer topology generation mismatch".into());
+    }
+    Ok(snapshot)
+}
+
+#[allow(
+    dead_code,
+    reason = "Spec 012 T164 persistence API; live owner callers land in T165"
+)]
+impl Store {
+    pub(crate) fn validate_multiplexer_schema(&self) -> Result<()> {
+        validate_multiplexer_schema_connection(&self.connection)
+    }
+
+    pub(crate) fn persist_multiplexer_topology_snapshots(
+        &mut self,
+        snapshots: &[TopologySnapshotV1],
+        now_ms: i64,
+    ) -> Result<()> {
+        self.validate_multiplexer_schema()?;
+        validate_multiplexer_timestamp(now_ms, "multiplexer workspace update time")?;
+        if snapshots.len() > MULTIPLEXER_MAX_WORKSPACES {
+            return Err("multiplexer workspace persistence limit reached".into());
+        }
+
+        let mut workspace_ids = BTreeSet::new();
+        let mut generation = None;
+        let mut focused_count = 0_usize;
+        let mut prepared = Vec::with_capacity(snapshots.len());
+        for snapshot in snapshots {
+            snapshot
+                .validate()
+                .map_err(|error| format!("multiplexer snapshot: {error}"))?;
+            if !workspace_ids.insert(snapshot.workspace_id()) {
+                return Err(
+                    "multiplexer topology snapshot set repeats a workspace identity".into(),
+                );
+            }
+            match generation {
+                None => generation = Some(snapshot.topology_generation()),
+                Some(expected) if expected == snapshot.topology_generation() => {}
+                Some(_) => {
+                    return Err(
+                        "multiplexer topology snapshot set mixes topology generations".into(),
+                    );
+                }
+            }
+            focused_count += usize::from(snapshot.is_focused());
+            let generation = i64::try_from(snapshot.topology_generation().get())
+                .map_err(|_| "topology generation exceeds SQLite integer range")?;
+            let json = snapshot
+                .to_canonical_json()
+                .map_err(|error| format!("multiplexer snapshot: {error}"))?;
+            prepared.push((
+                snapshot.workspace_id().as_hex(),
+                snapshot.alias().to_owned(),
+                generation,
+                json,
+            ));
+        }
+        if !snapshots.is_empty() && focused_count != 1 {
+            return Err(
+                "nonempty multiplexer topology snapshot set must have exactly one focused workspace"
+                    .into(),
+            );
+        }
+
+        let tx = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existing_ids = {
+            let mut statement = tx.prepare(
+                "SELECT multiplexer_workspace_id
+                 FROM multiplexer_workspaces
+                 ORDER BY multiplexer_workspace_id",
+            )?;
+            statement
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+
+        for (workspace_id, alias, generation, json) in &prepared {
+            tx.execute(
+                "INSERT INTO multiplexer_workspaces(
+                    multiplexer_workspace_id,
+                    schema_version,
+                    workspace_alias,
+                    topology_generation,
+                    snapshot_json,
+                    created_unix_ms,
+                    updated_unix_ms
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+                 ON CONFLICT(multiplexer_workspace_id) DO UPDATE SET
+                    workspace_alias = excluded.workspace_alias,
+                    topology_generation = excluded.topology_generation,
+                    snapshot_json = excluded.snapshot_json,
+                    updated_unix_ms = excluded.updated_unix_ms",
+                params![
+                    workspace_id,
+                    MULTIPLEXER_SCHEMA_VERSION,
+                    alias,
+                    generation,
+                    json,
+                    now_ms,
+                ],
+            )?;
+        }
+
+        let retained = prepared
+            .iter()
+            .map(|item| item.0.as_str())
+            .collect::<BTreeSet<_>>();
+        for existing_id in existing_ids {
+            if !retained.contains(existing_id.as_str()) {
+                tx.execute(
+                    "DELETE FROM multiplexer_workspaces WHERE multiplexer_workspace_id = ?1",
+                    [existing_id],
+                )?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn load_multiplexer_workspace_snapshot(
+        &self,
+        workspace_id: MultiplexerWorkspaceId,
+    ) -> Result<TopologySnapshotV1> {
+        self.validate_multiplexer_schema()?;
+        let row = self.connection.query_row(
+            "SELECT
+                multiplexer_workspace_id,
+                schema_version,
+                workspace_alias,
+                topology_generation,
+                snapshot_json
+             FROM multiplexer_workspaces
+             WHERE multiplexer_workspace_id = ?1",
+            [workspace_id.as_hex()],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            },
+        )?;
+        decode_multiplexer_workspace_snapshot(row, Some(workspace_id))
+    }
+
+    pub(crate) fn load_multiplexer_topology_snapshots(&self) -> Result<Vec<TopologySnapshotV1>> {
+        self.validate_multiplexer_schema()?;
+        let rows = {
+            let mut statement = self.connection.prepare(
+                "SELECT
+                    multiplexer_workspace_id,
+                    schema_version,
+                    workspace_alias,
+                    topology_generation,
+                    snapshot_json
+                 FROM multiplexer_workspaces
+                 ORDER BY multiplexer_workspace_id",
+            )?;
+            statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
+                        row.get::<_, String>(4)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        };
+
+        let mut snapshots = Vec::with_capacity(rows.len());
+        for row in rows {
+            snapshots.push(decode_multiplexer_workspace_snapshot(row, None)?);
+        }
+        if let Some(first) = snapshots.first() {
+            let generation = first.topology_generation();
+            if snapshots
+                .iter()
+                .any(|snapshot| snapshot.topology_generation() != generation)
+            {
+                return Err("stored multiplexer topology mixes topology generations".into());
+            }
+            if snapshots
+                .iter()
+                .filter(|snapshot| snapshot.is_focused())
+                .count()
+                != 1
+            {
+                return Err(
+                    "stored nonempty multiplexer topology must have exactly one focused workspace"
+                        .into(),
+                );
+            }
+        }
+        Ok(snapshots)
+    }
+
+    pub(crate) fn delete_multiplexer_workspace_metadata(
+        &self,
+        workspace_id: MultiplexerWorkspaceId,
+    ) -> Result<()> {
+        self.validate_multiplexer_schema()?;
+        self.connection.execute(
+            "DELETE FROM multiplexer_workspaces WHERE multiplexer_workspace_id = ?1",
+            [workspace_id.as_hex()],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn persist_multiplexer_layout_template(
+        &self,
+        layout_template_id: LayoutTemplateId,
+        name: &str,
+        template: &LayoutTemplateV1,
+        now_ms: i64,
+    ) -> Result<()> {
+        self.validate_multiplexer_schema()?;
+        validate_template_name(name).map_err(|error| format!("layout template name: {error}"))?;
+        validate_multiplexer_timestamp(now_ms, "layout template update time")?;
+        let template_id = layout_template_id.as_hex();
+        let exists = row_exists(
+            &self.connection,
+            "SELECT EXISTS(
+                SELECT 1 FROM multiplexer_layout_templates
+                WHERE layout_template_id = ?1
+             )",
+            &template_id,
+        )?;
+        if !exists
+            && count_rows(&self.connection, "multiplexer_layout_templates")?
+                >= MULTIPLEXER_MAX_LAYOUT_TEMPLATES
+        {
+            return Err("multiplexer layout-template persistence limit reached".into());
+        }
+        let json = template
+            .to_canonical_json()
+            .map_err(|error| format!("layout template: {error}"))?;
+        self.connection.execute(
+            "INSERT INTO multiplexer_layout_templates(
+                layout_template_id,
+                schema_version,
+                template_name,
+                template_json,
+                created_unix_ms,
+                updated_unix_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+             ON CONFLICT(layout_template_id) DO UPDATE SET
+                template_name = excluded.template_name,
+                template_json = excluded.template_json,
+                updated_unix_ms = excluded.updated_unix_ms",
+            params![template_id, MULTIPLEXER_SCHEMA_VERSION, name, json, now_ms,],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn load_multiplexer_layout_template(
+        &self,
+        layout_template_id: LayoutTemplateId,
+    ) -> Result<(String, LayoutTemplateV1)> {
+        self.validate_multiplexer_schema()?;
+        let row = self.connection.query_row(
+            "SELECT schema_version, template_name, template_json
+             FROM multiplexer_layout_templates
+             WHERE layout_template_id = ?1",
+            [layout_template_id.as_hex()],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )?;
+        if row.0 != i64::from(MULTIPLEXER_SCHEMA_VERSION) {
+            return Err(format!(
+                "unsupported multiplexer layout-template schema version: {}",
+                row.0
+            )
+            .into());
+        }
+        validate_template_name(&row.1)
+            .map_err(|error| format!("stored layout template name: {error}"))?;
+        let template = LayoutTemplateV1::from_canonical_json(&row.2)
+            .map_err(|error| format!("stored layout template: {error}"))?;
+        Ok((row.1, template))
+    }
+
+    pub(crate) fn delete_multiplexer_layout_template(
+        &self,
+        layout_template_id: LayoutTemplateId,
+    ) -> Result<()> {
+        self.validate_multiplexer_schema()?;
+        self.connection.execute(
+            "DELETE FROM multiplexer_layout_templates WHERE layout_template_id = ?1",
+            [layout_template_id.as_hex()],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn persist_multiplexer_worktree_membership(
+        &self,
+        record: &WorktreeMembershipRecord,
+    ) -> Result<()> {
+        self.validate_multiplexer_schema()?;
+        validate_git_workspace_id(&record.git_workspace_id)
+            .map_err(|error| format!("worktree membership: {error}"))?;
+        validate_multiplexer_timestamp(record.created_unix_ms, "membership creation time")?;
+        if let Some(confirmed) = record.last_confirmed_unix_ms {
+            validate_multiplexer_timestamp(confirmed, "membership confirmation time")?;
+            if confirmed < record.created_unix_ms {
+                return Err("membership confirmation cannot precede creation".into());
+            }
+        }
+        let workspace_id = record.multiplexer_workspace_id.as_hex();
+        let exists: i64 = self.connection.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM multiplexer_worktree_memberships
+                WHERE multiplexer_workspace_id = ?1 AND git_workspace_id = ?2
+             )",
+            params![workspace_id, record.git_workspace_id],
+            |row| row.get(0),
+        )?;
+        if exists == 0
+            && count_rows(&self.connection, "multiplexer_worktree_memberships")?
+                >= MULTIPLEXER_MAX_WORKTREE_MEMBERSHIPS
+        {
+            return Err("multiplexer worktree-membership persistence limit reached".into());
+        }
+        self.connection.execute(
+            "INSERT INTO multiplexer_worktree_memberships(
+                multiplexer_workspace_id,
+                git_workspace_id,
+                membership_source,
+                membership_state,
+                created_unix_ms,
+                last_confirmed_unix_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(multiplexer_workspace_id, git_workspace_id) DO UPDATE SET
+                membership_source = excluded.membership_source,
+                membership_state = excluded.membership_state,
+                last_confirmed_unix_ms = excluded.last_confirmed_unix_ms",
+            params![
+                workspace_id,
+                record.git_workspace_id,
+                record.source.as_str(),
+                record.state.as_str(),
+                record.created_unix_ms,
+                record.last_confirmed_unix_ms,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn load_multiplexer_worktree_membership(
+        &self,
+        workspace_id: MultiplexerWorkspaceId,
+        git_workspace_id: &str,
+    ) -> Result<WorktreeMembershipRecord> {
+        self.validate_multiplexer_schema()?;
+        validate_git_workspace_id(git_workspace_id)
+            .map_err(|error| format!("worktree membership: {error}"))?;
+        let row = self.connection.query_row(
+            "SELECT membership_source, membership_state, created_unix_ms, last_confirmed_unix_ms
+             FROM multiplexer_worktree_memberships
+             WHERE multiplexer_workspace_id = ?1 AND git_workspace_id = ?2",
+            params![workspace_id.as_hex(), git_workspace_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                ))
+            },
+        )?;
+        let source = WorktreeMembershipSource::parse(&row.0)
+            .map_err(|error| format!("stored worktree membership: {error}"))?;
+        let state = WorktreeMembershipState::parse(&row.1)
+            .map_err(|error| format!("stored worktree membership: {error}"))?;
+        validate_multiplexer_timestamp(row.2, "stored membership creation time")?;
+        if let Some(confirmed) = row.3 {
+            validate_multiplexer_timestamp(confirmed, "stored membership confirmation time")?;
+            if confirmed < row.2 {
+                return Err("stored membership confirmation precedes creation".into());
+            }
+        }
+        Ok(WorktreeMembershipRecord {
+            multiplexer_workspace_id: workspace_id,
+            git_workspace_id: git_workspace_id.to_owned(),
+            source,
+            state,
+            created_unix_ms: row.2,
+            last_confirmed_unix_ms: row.3,
+        })
+    }
+
+    pub(crate) fn persist_multiplexer_repository_trust(
+        &self,
+        record: &RepositoryTrustRecord,
+    ) -> Result<()> {
+        self.validate_multiplexer_schema()?;
+        validate_repository_identity(&record.repository_identity)
+            .map_err(|error| format!("repository trust: {error}"))?;
+        validate_git_common_dir(&record.canonical_git_common_dir)
+            .map_err(|error| format!("repository trust: {error}"))?;
+        if record.revision == 0 {
+            return Err("repository trust revision must be greater than zero".into());
+        }
+        validate_multiplexer_timestamp(record.created_unix_ms, "repository trust creation time")?;
+        validate_multiplexer_timestamp(record.updated_unix_ms, "repository trust update time")?;
+        if record.updated_unix_ms < record.created_unix_ms {
+            return Err("repository trust update cannot precede creation".into());
+        }
+        let revision = i64::try_from(record.revision)
+            .map_err(|_| "repository trust revision exceeds SQLite integer range")?;
+        self.connection.execute(
+            "INSERT INTO multiplexer_repository_trust(
+                repository_identity,
+                canonical_git_common_dir,
+                trust_revision,
+                created_unix_ms,
+                updated_unix_ms
+             ) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(repository_identity) DO UPDATE SET
+                canonical_git_common_dir = excluded.canonical_git_common_dir,
+                trust_revision = excluded.trust_revision,
+                updated_unix_ms = excluded.updated_unix_ms",
+            params![
+                record.repository_identity,
+                record.canonical_git_common_dir,
+                revision,
+                record.created_unix_ms,
+                record.updated_unix_ms,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn load_multiplexer_repository_trust(
+        &self,
+        repository_identity: &str,
+    ) -> Result<RepositoryTrustRecord> {
+        self.validate_multiplexer_schema()?;
+        validate_repository_identity(repository_identity)
+            .map_err(|error| format!("repository trust: {error}"))?;
+        let row = self.connection.query_row(
+            "SELECT canonical_git_common_dir, trust_revision, created_unix_ms, updated_unix_ms
+             FROM multiplexer_repository_trust
+             WHERE repository_identity = ?1",
+            [repository_identity],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            },
+        )?;
+        validate_git_common_dir(&row.0)
+            .map_err(|error| format!("stored repository trust: {error}"))?;
+        let revision =
+            u64::try_from(row.1).map_err(|_| "stored repository trust revision is invalid")?;
+        if revision == 0 {
+            return Err("stored repository trust revision must be greater than zero".into());
+        }
+        validate_multiplexer_timestamp(row.2, "stored repository trust creation time")?;
+        validate_multiplexer_timestamp(row.3, "stored repository trust update time")?;
+        if row.3 < row.2 {
+            return Err("stored repository trust update precedes creation".into());
+        }
+        Ok(RepositoryTrustRecord {
+            repository_identity: repository_identity.to_owned(),
+            canonical_git_common_dir: row.0,
+            revision,
+            created_unix_ms: row.2,
+            updated_unix_ms: row.3,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
