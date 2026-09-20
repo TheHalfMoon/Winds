@@ -208,6 +208,7 @@ pub(crate) enum MultiplexerErrorKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct AgentObservationTopologyBinding {
     pub(crate) observation_id: AgentObservationId,
     pub(crate) multiplexer_workspace_id: MultiplexerWorkspaceId,

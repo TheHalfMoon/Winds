@@ -211,6 +211,13 @@ fn t162_agent_observation_binding_names_the_multiplexer_workspace_domain_explici
     assert!(!object.contains_key("git_workspace_id"));
 
     let round_trip: AgentObservationTopologyBinding =
-        serde_json::from_value(value).expect("binding round trip");
+        serde_json::from_value(value.clone()).expect("binding round trip");
     assert_eq!(round_trip, binding);
+
+    let mut ambiguous = value;
+    ambiguous
+        .as_object_mut()
+        .unwrap()
+        .insert("workspace_id".to_owned(), serde_json::json!("workspace-ambiguous"));
+    assert!(serde_json::from_value::<AgentObservationTopologyBinding>(ambiguous).is_err());
 }
