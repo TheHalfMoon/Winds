@@ -143,6 +143,9 @@ HERDR_DELTA_FROM_ENTRY_PIN=1_COMMIT_AHEAD_0_BEHIND
 HERDR_QUALIFICATION_GITHUB_VERIFICATION=VERIFIED_VALID
 HERDR_QUALIFICATION_GITHUB_VERIFICATION_REASON=valid
 HERDR_QUALIFICATION_GITHUB_VERIFIED_AT=2026-09-20T14:10:17Z
+HERDR_QUALIFICATION_GITHUB_COMMITTER=GitHub <noreply@github.com>
+HERDR_QUALIFICATION_GITHUB_COMMIT_URL=https://github.com/herdrdev/herdr/commit/c00a62dda169beb472fc2f386d0f673ca100dfa4
+HERDR_QUALIFICATION_GITHUB_VERIFIED_PARENT=29f9f4056f344af60f411004fc89c7eb5f357c48
 ~~~
 
 The exact upstream commit is "fix: preserve delayed mouse reports with confirmed keyboard input (#4247)". It changes eight files under rendered-client terminal input/setup, raw-input framing, Unix fd helpers, and client-mode tests. The change preserves delayed SGR mouse reports when host keyboard escape disambiguation is confirmed, buffers host input observed during capability probing, and captures geometry before replaying buffered mouse input.
