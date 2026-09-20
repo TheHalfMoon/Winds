@@ -79,10 +79,11 @@ fn t162_identity_domains_remain_structurally_distinct_from_runtime_and_generatio
     assert_ne!(TypeId::of::<PaneId>(), TypeId::of::<TabId>());
     assert_ne!(TypeId::of::<PaneId>(), TypeId::of::<AgentObservationId>());
 
-    let duplicate_label = "duplicate";
+    let first_label = "duplicate";
+    let second_label = "duplicate";
     let first = workspace(1);
     let second = workspace(2);
-    assert_eq!(duplicate_label, duplicate_label);
+    assert_eq!(first_label, second_label);
     assert_ne!(first, second);
 }
 
