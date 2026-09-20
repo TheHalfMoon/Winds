@@ -43,6 +43,9 @@ A persisted row is never live owner/process/controller proof.
 - partial or foreign multiplexer schema fails closed instead of silently reinstalling;
 - unsupported/corrupt/noncanonical JSON fails closed;
 - topology generation, trust revision, update time, and membership confirmation cannot regress;
+- the complete nonempty workspace snapshot set is persisted in one immediate transaction;
+- every workspace in one accepted snapshot set must carry the same global TopologyGeneration and exactly one workspace must be focused;
+- a failed mixed-generation/multi-focus/SQL transaction leaves the previously accepted snapshot set unchanged;
 - changed topology cannot reuse an accepted generation;
 - JSON and user-visible identifiers are byte-bounded;
 - no authoritative JSON is silently truncated;
