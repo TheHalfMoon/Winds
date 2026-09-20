@@ -414,11 +414,13 @@ fn t163_directional_navigation_and_edges_are_geometry_based_with_stable_ties() {
             .unwrap(),
         Some(right)
     );
+    // AD-012-31 minimizes primary-axis distance before orthogonal overlap.
+    // The right pane is vertically closer to left_top than left_bottom is.
     assert_eq!(
         topology
             .directional_neighbor(workspace_id, tab_id, left_top, Direction::Down)
             .unwrap(),
-        Some(left_bottom)
+        Some(right)
     );
     assert_eq!(
         topology
