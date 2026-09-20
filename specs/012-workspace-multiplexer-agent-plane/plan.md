@@ -564,19 +564,27 @@ A future manifest refresh system requires a separate amendment if static compile
 AgentObservationV1 records:
 
 ~~~text
-observation_id
+observation_id: AgentObservationId
 family
 source_class
 confidence_class
 freshness
-workspace_id
-tab_id
-pane_id
-runtime_namespace_id optional
+multiplexer_workspace_id: MultiplexerWorkspaceId
+git_workspace_id: GitWorkspaceId optional
+tab_id: TabId
+pane_id: PaneId
+runtime_namespace_id: RuntimeNamespaceId optional
 provider_native_session_id optional
 observed_at / owner generation
 structured evidence summary
 ~~~
+
+The two workspace domains are never overloaded:
+
+- `multiplexer_workspace_id` is required because the observation is presented inside one exact multiplexer topology;
+- `git_workspace_id` is optional worktree/repository context only when independently known;
+- neither field may be inferred from the other;
+- a detector or client MUST NOT use a generic `workspace_id` field whose domain is implicit.
 
 Source classes, strongest first:
 
@@ -854,11 +862,35 @@ Buffered events are not unconditionally replayed over the fresh snapshot. A topo
 
 Agent-observation and attention streams use the same fail-explicit principle: sequence/history loss invalidates the cached stream projection and requires a fresh snapshot. Authority state is re-queried; it is never reconstructed from missing presentation events.
 
-## AD-012-30 — Snapshot size is bounded
+## AD-012-30 — Snapshot size is bounded by bytes and counts
 
-A single multiplexer snapshot MUST fit the existing 256 KiB control-frame ceiling.
+A single encoded `MULTIPLEXER_SNAPSHOT` frame MUST fit within 256 KiB total, including the 4-byte length prefix and the complete serialized protocol envelope.
 
-The first program therefore plans explicit topology ceilings:
+For the first v2 program:
+
+~~~text
+MAX_MULTIPLEXER_SNAPSHOT_FRAME_BYTES = 262144
+MAX_MULTIPLEXER_SNAPSHOT_JSON_BYTES  = 262140
+~~~
+
+The snapshot encoder MUST measure the exact final encoded frame, not estimate object size from counts.
+
+Variable-length serialized fields are bounded before persistence or publication:
+
+~~~text
+opaque ID textual encoding: <= 96 UTF-8 bytes
+workspace alias: <= 128 UTF-8 bytes
+tab alias: <= 128 UTF-8 bytes
+pane label: <= 256 UTF-8 bytes
+pane title: <= 256 UTF-8 bytes
+layout-template name: <= 128 UTF-8 bytes
+agent presentation label in multiplexer projection: <= 128 UTF-8 bytes
+closed presentation-status/detail text: <= 512 UTF-8 bytes per field
+~~~
+
+Topology/presentation persistence MUST use closed typed fields. The authoritative multiplexer snapshot MUST NOT contain an unbounded arbitrary metadata map.
+
+The first program also plans explicit count ceilings:
 
 ~~~text
 multiplexer workspaces per owner: <= 32
@@ -869,6 +901,20 @@ agent observations retained as current: <= 512
 saved layout templates: <= 128
 explicit worktree memberships: <= 256
 ~~~
+
+Count ceilings and byte ceilings are independent upper bounds. A state may be below every count ceiling and still exceed the serialized-byte budget.
+
+Before accepting any mutation that changes authoritative snapshot content, the owner MUST encode the candidate resulting snapshot through the exact protocol-v2 serializer and enforce the total-frame limit. If the encoded frame would exceed 256 KiB:
+
+- reject the mutation with a typed `SNAPSHOT_LIMIT_EXCEEDED` outcome;
+- do not increment TopologyGeneration;
+- do not persist the oversized candidate as accepted state;
+- do not publish partial/truncated authoritative topology;
+- preserve the previous accepted topology unchanged.
+
+Reads of an already accepted topology are never silently truncated. If startup encounters legacy/corrupt persisted state whose exact encoded snapshot exceeds the bound, quarantine that multiplexer workspace as unavailable/recovery-required under the corrupt-record policy rather than emitting an oversized or partial snapshot.
+
+Agent-observation and attention snapshots are separate bounded protocol projections. Their Tasks must define their own exact encoded-frame byte budgets within the same 256 KiB protocol-frame ceiling; their 512/current-event count limits alone are not treated as byte-size proof.
 
 These are first-program resource ceilings, not product marketing claims.
 
