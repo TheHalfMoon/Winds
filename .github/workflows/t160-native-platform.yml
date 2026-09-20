@@ -97,7 +97,7 @@ jobs:
           test -s "$log"
 
           require_test() {
-            grep -Fq "$1 ... ok" "$log"
+            grep -Fq "test $1" "$log"
           }
 
           require_test "persistent_runtime::owner::t152_persistent_terminal_tests::t152_long_running_shell_survives_complete_attachment_drop_and_exact_reattach"
