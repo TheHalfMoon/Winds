@@ -17,8 +17,7 @@ use std::fmt;
 use std::io::Read;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, TrySendError};
-use std::sync::{Arc, Mutex, TryLockError};
+use std::sync::{Arc, Condvar, Mutex, TryLockError};
 use std::thread;
 use std::time::Duration;
 
@@ -118,18 +117,20 @@ pub(crate) struct PersistentRuntimeShutdownReport {
 
 const OUTPUT_PUMP_CHUNK_BYTES: usize = 4 * 1024;
 const OUTPUT_PUMP_QUEUE_CHUNKS: usize = 64;
+const OUTPUT_PUMP_QUEUE_BYTES: usize = OUTPUT_PUMP_CHUNK_BYTES * OUTPUT_PUMP_QUEUE_CHUNKS;
 const OUTPUT_PUMP_POLL_MS: u64 = 25;
 
 type SharedReplay = Arc<Mutex<ReplayCoordinator>>;
+type SharedOutputQueue = Arc<(Mutex<VecDeque<u8>>, Condvar)>;
 
 struct RuntimeOutputPump {
-    receiver: Receiver<Vec<u8>>,
+    queue: SharedOutputQueue,
     closed: Arc<AtomicBool>,
+    consumer_alive: Arc<AtomicBool>,
     error: Arc<Mutex<Option<String>>>,
     output_gap: Arc<AtomicBool>,
     replay_source_gap: Arc<AtomicBool>,
     replay_error: Arc<Mutex<Option<String>>>,
-    pending: VecDeque<u8>,
 }
 
 impl RuntimeOutputPump {
@@ -138,13 +139,16 @@ impl RuntimeOutputPump {
         runtime_namespace_id: RuntimeNamespaceId,
         replay: SharedReplay,
     ) -> RuntimeResult<Self> {
-        let (sender, receiver) = mpsc::sync_channel(OUTPUT_PUMP_QUEUE_CHUNKS);
+        let queue = Arc::new((Mutex::new(VecDeque::new()), Condvar::new()));
         let closed = Arc::new(AtomicBool::new(false));
+        let consumer_alive = Arc::new(AtomicBool::new(true));
         let error = Arc::new(Mutex::new(None));
         let output_gap = Arc::new(AtomicBool::new(false));
         let replay_source_gap = Arc::new(AtomicBool::new(false));
         let replay_error = Arc::new(Mutex::new(None));
+        let thread_queue = Arc::clone(&queue);
         let thread_closed = Arc::clone(&closed);
+        let thread_consumer_alive = Arc::clone(&consumer_alive);
         let thread_error = Arc::clone(&error);
         let thread_output_gap = Arc::clone(&output_gap);
         let thread_replay_source_gap = Arc::clone(&replay_source_gap);
@@ -159,10 +163,17 @@ impl RuntimeOutputPump {
                     match reader.read(&mut buffer) {
                         Ok(0) => {
                             thread_closed.store(true, Ordering::Release);
+                            thread_queue.1.notify_all();
                             return;
                         }
                         Ok(count) => {
-                            let chunk = buffer[..count].to_vec();
+                            if !thread_consumer_alive.load(Ordering::Acquire) {
+                                thread_closed.store(true, Ordering::Release);
+                                thread_queue.1.notify_all();
+                                return;
+                            }
+
+                            let chunk = &buffer[..count];
                             match thread_replay.try_lock() {
                                 Ok(mut coordinator) => {
                                     if thread_replay_source_gap.swap(false, Ordering::AcqRel)
@@ -173,7 +184,7 @@ impl RuntimeOutputPump {
                                         thread_replay_source_gap.store(true, Ordering::Release);
                                     }
                                     if let Err(error) =
-                                        coordinator.append_output(runtime_namespace_id, &chunk)
+                                        coordinator.append_output(runtime_namespace_id, chunk)
                                     {
                                         store_replay_error(&thread_replay_error, error);
                                         thread_replay_source_gap.store(true, Ordering::Release);
@@ -193,13 +204,29 @@ impl RuntimeOutputPump {
                                 }
                             }
 
-                            match sender.try_send(chunk) {
-                                Ok(()) => {}
-                                Err(TrySendError::Full(_)) => {
-                                    thread_output_gap.store(true, Ordering::Release);
+                            let (queue_lock, queue_ready) = &*thread_queue;
+                            match queue_lock.lock() {
+                                Ok(mut queued) => {
+                                    let fits = queued
+                                        .len()
+                                        .checked_add(count)
+                                        .is_some_and(|next| next <= OUTPUT_PUMP_QUEUE_BYTES);
+                                    if fits {
+                                        queued.extend(chunk.iter().copied());
+                                        queue_ready.notify_one();
+                                    } else {
+                                        thread_output_gap.store(true, Ordering::Release);
+                                    }
                                 }
-                                Err(TrySendError::Disconnected(_)) => {
+                                Err(_) => {
+                                    if let Ok(mut slot) = thread_error.lock() {
+                                        *slot = Some(
+                                            "persistent terminal output queue state was poisoned"
+                                                .to_owned(),
+                                        );
+                                    }
                                     thread_closed.store(true, Ordering::Release);
+                                    queue_ready.notify_all();
                                     return;
                                 }
                             }
@@ -209,6 +236,7 @@ impl RuntimeOutputPump {
                                 *slot = Some(read_error.to_string());
                             }
                             thread_closed.store(true, Ordering::Release);
+                            thread_queue.1.notify_all();
                             return;
                         }
                     }
@@ -221,13 +249,13 @@ impl RuntimeOutputPump {
             })?;
 
         Ok(Self {
-            receiver,
+            queue,
             closed,
+            consumer_alive,
             error,
             output_gap,
             replay_source_gap,
             replay_error,
-            pending: VecDeque::new(),
         })
     }
 
@@ -261,58 +289,55 @@ impl RuntimeOutputPump {
                 return Err(PersistentTerminalRuntimeError::OutputGap);
             }
 
-            if !self.pending.is_empty() {
-                let count = buffer.len().min(self.pending.len());
+            let (queue_lock, queue_ready) = &*self.queue;
+            let mut queued = queue_lock.lock().map_err(|_| {
+                PersistentTerminalRuntimeError::Terminal(
+                    "persistent terminal output queue state was poisoned".to_owned(),
+                )
+            })?;
+
+            if !queued.is_empty() {
+                let count = buffer.len().min(queued.len());
                 for slot in &mut buffer[..count] {
-                    *slot = self
-                        .pending
+                    *slot = queued
                         .pop_front()
-                        .expect("pending output length was checked");
+                        .expect("queued output length was checked");
                 }
                 return Ok(count);
             }
 
-            match self
-                .receiver
-                .recv_timeout(Duration::from_millis(OUTPUT_PUMP_POLL_MS))
-            {
-                Ok(chunk) => self.pending.extend(chunk),
-                Err(RecvTimeoutError::Timeout) => {
-                    if self.closed.load(Ordering::Acquire) {
-                        if let Some(error) = self
-                            .error
-                            .lock()
-                            .map_err(|_| {
-                                PersistentTerminalRuntimeError::Terminal(
-                                    "persistent terminal output pump error state was poisoned"
-                                        .to_owned(),
-                                )
-                            })?
-                            .clone()
-                        {
-                            return Err(PersistentTerminalRuntimeError::Terminal(error));
-                        }
-                        return Ok(0);
-                    }
+            if self.closed.load(Ordering::Acquire) {
+                drop(queued);
+                if let Some(error) = self
+                    .error
+                    .lock()
+                    .map_err(|_| {
+                        PersistentTerminalRuntimeError::Terminal(
+                            "persistent terminal output pump error state was poisoned".to_owned(),
+                        )
+                    })?
+                    .clone()
+                {
+                    return Err(PersistentTerminalRuntimeError::Terminal(error));
                 }
-                Err(RecvTimeoutError::Disconnected) => {
-                    if let Some(error) = self
-                        .error
-                        .lock()
-                        .map_err(|_| {
-                            PersistentTerminalRuntimeError::Terminal(
-                                "persistent terminal output pump error state was poisoned"
-                                    .to_owned(),
-                            )
-                        })?
-                        .clone()
-                    {
-                        return Err(PersistentTerminalRuntimeError::Terminal(error));
-                    }
-                    return Ok(0);
-                }
+                return Ok(0);
             }
+
+            let (_queued, _) = queue_ready
+                .wait_timeout(queued, Duration::from_millis(OUTPUT_PUMP_POLL_MS))
+                .map_err(|_| {
+                    PersistentTerminalRuntimeError::Terminal(
+                        "persistent terminal output queue state was poisoned".to_owned(),
+                    )
+                })?;
         }
+    }
+}
+
+impl Drop for RuntimeOutputPump {
+    fn drop(&mut self) {
+        self.consumer_alive.store(false, Ordering::Release);
+        self.queue.1.notify_all();
     }
 }
 
@@ -1082,7 +1107,7 @@ mod t157_runtime_recovery_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
+    use std::io::{Cursor, Read};
     use std::time::Instant;
 
     fn replay_fixture(byte: u8) -> (RuntimeNamespaceId, SharedReplay) {
@@ -1094,6 +1119,62 @@ mod tests {
             .unwrap()
             .register_runtime(runtime_namespace_id);
         (runtime_namespace_id, replay)
+    }
+
+    struct OneByteReader {
+        inner: Cursor<Vec<u8>>,
+    }
+
+    impl OneByteReader {
+        fn new(payload: Vec<u8>) -> Self {
+            Self {
+                inner: Cursor::new(payload),
+            }
+        }
+    }
+
+    impl Read for OneByteReader {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            if buffer.is_empty() {
+                return Ok(0);
+            }
+            self.inner.read(&mut buffer[..1])
+        }
+    }
+
+    #[test]
+    fn t152_output_pump_capacity_is_byte_bounded_not_read_fragment_bounded() {
+        let payload = vec![b'f'; OUTPUT_PUMP_QUEUE_CHUNKS + 8];
+        let (runtime_namespace_id, replay) = replay_fixture(0x30);
+        let mut pump = RuntimeOutputPump::start(
+            Box::new(OneByteReader::new(payload.clone())),
+            runtime_namespace_id,
+            replay,
+        )
+        .expect("pump must start");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !pump.closed.load(Ordering::Acquire) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        assert!(pump.closed.load(Ordering::Acquire));
+        assert!(
+            !pump.output_gap.load(Ordering::Acquire),
+            "sub-ceiling output must not become a gap solely because the reader fragmented it"
+        );
+
+        let mut captured = Vec::new();
+        loop {
+            let mut buffer = [0_u8; 32];
+            let count = pump
+                .read(&mut buffer)
+                .expect("sub-ceiling read must remain complete");
+            if count == 0 {
+                break;
+            }
+            captured.extend_from_slice(&buffer[..count]);
+        }
+        assert_eq!(captured, payload);
     }
 
     #[test]
