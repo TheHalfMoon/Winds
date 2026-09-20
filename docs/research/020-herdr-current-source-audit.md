@@ -6,13 +6,13 @@
 
 - Repository: `https://github.com/herdrdev/herdr`
 - Default branch observed: `master`
-- Commit: `a3a1c94ed54e8a65d929528336d69c7e537ed2ef`
-- Tree: `dcafd50d8721c37dac03a89831ba24f849920839`
+- Commit: `29f9f4056f344af60f411004fc89c7eb5f357c48`
+- Tree: `8e11bddc337094b8aece2a7abea4ee6ee6340f2a`
 - Package version observed: `0.9.1`
 - Root repository license observed: Apache-2.0
 - Immediately previous Winds audit pin: `da6bcd5969779bfe0396bcf89a8025d4375d611e`
 - Previous audit tree: `aece03633c003ba0fce01bc2564ad14e0fe9cac9`
-- Commits from previous audit pin to current pin: **13**
+- Commits from previous audit pin to current pin: **14**
 - Earlier September research pin: `ef2674bab8a3b38984578473c1a80589ebcbb333`
 - Current Winds canonical base for this research refresh: `bdc30eb34dea2d89213aebabb1bccdf2d5eb5edd`
 
@@ -92,9 +92,9 @@ The 2026-09-16 draft PR #212 counted the 17 frozen enum targets but did not sepa
 
 The public surface spans server/config/manifest control, workspace, worktree, tab, agent, pane, layout, events/waiting, integration, and plugin operations. The exact method ledger is preserved in `docs/research/021-herdr-exhaustive-capability-ledger.md`.
 
-## 13-commit delta from the previous audit
+## 14-commit delta from the previous audit
 
-The current pin is 13 commits ahead of `da6bcd59...` with no reverse divergence. The exact commit series includes material changes in these product/qualification domains:
+The current pin is 14 commits ahead of `da6bcd59...` with no reverse divergence. The exact commit series includes material changes in these product/qualification domains:
 
 - Grok activity detection under custom/disabled OSC signaling;
 - agent-detection test refactoring around engine contracts;
@@ -106,7 +106,8 @@ The current pin is 13 commits ahead of `da6bcd59...` with no reverse divergence.
 - configurable pane screen/scrollback clearing, including the new `pane.clear` public API method and keybinding/config path;
 - aggregate navigation that shows every agent and terminal in the go-to picker;
 - native-Windows cursor redraw stabilization and input-origin qualification;
-- Kiro status detection from live controls and OSC signals.
+- Kiro status detection from live controls and OSC signals;
+- Codex status detection under custom/remapped interrupt-key hints.
 
 The 24 compiled agent families remain unchanged. The frozen serialized integration enum remains 17 plus the existing experimental CLI-only Letta target. The public serialized API increases from 104 to **105** methods because `pane.clear` was added. This delta is directly material to proposed Spec 012 agent detection, multiplexer/navigation, terminal UX, and Windows-input qualification; SSH/remote-clipboard movement is recorded for Spec 013 and does not expand Spec 012 authority.
 
