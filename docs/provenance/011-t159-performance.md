@@ -33,20 +33,39 @@ The idle-owner campaign measures a separate `target/release/winds __winds-intern
 
 The workflow assembles `t159-evidence/combined.json` with exact commit/tree identity, release binary SHA-256, runner image identity, Rust identity, CPU/memory description, raw campaign measurements, and explicit non-relaxation flags. The raw logs and combined evidence are uploaded as an exact-head artifact.
 
-## T152 predecessor qualification note
+## T152 predecessor repair qualification
 
-Canonical predecessor `main` was verified at merge commit `68fe2b1b2ccbc0a87e788ca14565c04fe9cb8cc1`, with T158 PR #242 merged from exact head `d6b03673647e389a63eec9f63d4cd710c184595c`.
+The predecessor state after T158 was canonical `main` merge `68fe2b1b2ccbc0a87e788ca14565c04fe9cb8cc1`. A local full-binary regression had exposed `PersistentTerminalRuntimeError::OutputGap` in the T152 detach/reattach fixture.
 
-Post-merge push workflows on that exact merge commit all completed successfully:
+Focused and isolated local reruns did not reproduce that failure consistently, but the initial T159 Ubuntu campaign independently reproduced the same defect on exact candidate `5eb1fd205f31ec5f86cd0dca035ce98ae01ca45a`:
 
-- `quality` — run `35487628367`;
-- `windows-terminal` — run `35487628361`;
-- `t141-desktop-security` — run `35487628377`;
-- `t142-native-platform` — run `35487628432`.
+- workflow: `t159-performance`;
+- run: `35489854065`;
+- job: `106022819284`;
+- correctness/security gate: `PASS`;
+- core campaign: `FAIL`;
+- error: `persistent terminal output exceeded the bounded T152 direct-output queue; the direct stream is incomplete`.
 
-A previously observed local T152 direct-output `OutputGap` was investigated before T159 work began. From a fresh exact-main clone, the focused detach/reattach test passed 20/20 serialized runs, a 12-worker campaign with isolated temporary namespaces passed 360/360 runs, and four independent full binary regressions each completed with `782 passed / 0 failed / 5 ignored`. A separate cross-process stress attempt reused colliding temporary runtime paths and therefore produced `LiveEndpointCollision` failures plus one `OutputGap`; rerunning with isolated temporary roots removed both failure classes. The direct-output overflow remains fail-closed by design and no queue bound or assertion was relaxed.
+That GitHub reproduction superseded the earlier environmental/temp-path-collision hypothesis. The defect was product-real: the T152 direct-output bound was implemented as 64 queued read fragments, so sub-256-KiB output could fail solely because the PTY reader fragmented it into many small reads.
 
-Those local runs are diagnostic predecessor evidence only. T159 closure authority comes from the exact-head GitHub workflow artifact and required reviews for the T159 candidate.
+PR #244 repaired the implementation without increasing the accepted 256 KiB payload ceiling or weakening fail-closed overflow behavior. Exact repair head `90089e01003b5843c397e45aaac9585798f90b77` replaced fragment-count capacity with byte-count capacity and added a one-byte-reader regression proving that sub-ceiling output cannot become a gap solely due to read fragmentation.
+
+PR #244 exact-head workflows all succeeded:
+
+- `quality` — run `35490510910`;
+- `release-candidate` — run `35490510900`;
+- `t141-desktop-security` — run `35490510908`;
+- `t142-native-platform` — run `35490510913`;
+- `windows-terminal` — run `35490510911`.
+
+PR #244 merged normally as canonical `main` `2e1e81e96046ce6027702c4b92dfe22a7a3b653e`. All actually-triggered post-merge push workflows on that exact merge also succeeded:
+
+- `quality` — run `35490969665`;
+- `windows-terminal` — run `35490969654`;
+- `t141-desktop-security` — run `35490969695`;
+- `t142-native-platform` — run `35490969686`.
+
+T159 must therefore qualify only on a candidate containing canonical repair `2e1e81e96046ce6027702c4b92dfe22a7a3b653e` or a proven successor. No evidence from the failed pre-repair T159 head qualifies a repaired successor.
 
 ## Closure rule
 
