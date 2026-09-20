@@ -4,7 +4,7 @@ use crate::git::shell_profiles::{ShellProfile, discover_native_shell_profiles};
 use crate::git::terminal::TerminalSize;
 use crate::git::workspace_inventory::WorkspaceEnvironmentInventory;
 use crate::persistent_runtime::domain::{ClientConnectionId, RuntimeAlias};
-use crate::persistent_runtime::owner::PersistentOwner;
+use crate::persistent_runtime::owner::{OwnerError, PersistentOwner};
 use crate::persistent_runtime::protocol::ProtocolPayload;
 use crate::persistent_runtime::replay::{
     MAX_AGGREGATE_REPLAY_BYTES, MAX_OBSERVER_QUEUE_BYTES, MAX_RUNTIME_REPLAY_BYTES,
@@ -360,6 +360,8 @@ fn t159_release_resource_and_latency_campaign() {
     let mut observed_lines = 0_u64;
     let mut fast_output_events = 0_u64;
     let mut slow_fill_count = 0_u64;
+    let mut slow_disconnect_count = 0_u64;
+    let mut slow_disconnect_batch = None;
 
     for batch_index in 0..OUTPUT_BATCH_COUNT {
         let (command, marker) = high_output_batch_command(batch_index);
@@ -414,24 +416,55 @@ fn t159_release_resource_and_latency_campaign() {
         }
 
         drain_fast_observers(&mut owner, &handles, &mut fast_output_events);
-        owner
-            .fill_terminal_observer_queue(
-                handles
-                    .last()
-                    .expect("T159 slow observer handle must exist"),
-            )
-            .expect("slow observer queue must remain deterministically bounded");
-        slow_fill_count = slow_fill_count.saturating_add(1);
+        if slow_disconnect_count == 0 {
+            let slow_handle = handles
+                .last()
+                .expect("T159 slow observer handle must exist");
+            match owner.fill_terminal_observer_queue(slow_handle) {
+                Ok(_) => {
+                    slow_fill_count = slow_fill_count.saturating_add(1);
+                }
+                Err(OwnerError::Runtime(message))
+                    if message
+                        == "persistent terminal replay failed: replay observer disconnected for slow-client backpressure" =>
+                {
+                    slow_disconnect_count = slow_disconnect_count.saturating_add(1);
+                    slow_disconnect_batch = Some(batch_index);
+                }
+                Err(error) => {
+                    panic!("unexpected T159 slow-observer backpressure result: {error}");
+                }
+            }
+        }
     }
 
     drain_fast_observers(&mut owner, &handles, &mut fast_output_events);
-    for handle in handles {
-        let _ = owner.fill_terminal_observer_queue(&handle);
-        let _ = owner.drain_terminal_observer(&handle);
+    assert_eq!(
+        slow_disconnect_count, 1,
+        "T159 slow observer must disconnect exactly once at the accepted backpressure boundary"
+    );
+    assert!(
+        slow_disconnect_batch.is_some(),
+        "T159 slow-observer disconnect batch must be recorded"
+    );
+    for handle in handles.iter().take(OBSERVER_COUNT - 1) {
         owner
-            .detach_terminal_observer(&handle)
-            .expect("T159 observer cleanup must succeed");
+            .fill_terminal_observer_queue(handle)
+            .expect("T159 fast observer must remain available after slow-observer disconnect");
+        let _ = owner
+            .drain_terminal_observer(handle)
+            .expect("T159 fast observer must remain drainable after slow-observer disconnect");
+        owner
+            .detach_terminal_observer(handle)
+            .expect("T159 fast observer cleanup must succeed");
     }
+    owner
+        .detach_terminal_observer(
+            handles
+                .last()
+                .expect("T159 slow observer handle must exist for cleanup"),
+        )
+        .expect("T159 disconnected slow observer cleanup must succeed");
 
     assert!(
         observed_bytes >= OUTPUT_MIN_BYTES,
@@ -495,6 +528,8 @@ fn t159_release_resource_and_latency_campaign() {
         "output_observed_lines": observed_lines,
         "fast_observer_output_events": fast_output_events,
         "slow_observer_fill_count": slow_fill_count,
+        "slow_observer_disconnect_count": slow_disconnect_count,
+        "slow_observer_disconnect_batch": slow_disconnect_batch,
         "replay_bounds": {
             "per_runtime_bytes": MAX_RUNTIME_REPLAY_BYTES,
             "per_runtime_events": MAX_RUNTIME_REPLAY_EVENTS,
