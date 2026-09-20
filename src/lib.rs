@@ -51,6 +51,11 @@ mod model_mesh;
 mod model_mesh_cli;
 #[allow(
     dead_code,
+    reason = "Spec 012 T162 pure multiplexer domain; later tasks add callers"
+)]
+pub(crate) mod multiplexer;
+#[allow(
+    dead_code,
     reason = "Spec 011 T146 pure persistent-runtime domain; later tasks add callers"
 )]
 pub(crate) mod persistent_runtime;
@@ -109,6 +114,8 @@ mod t137_desktop_inspection_tests;
 mod t138_desktop_attention_tests;
 #[cfg(test)]
 mod t146_persistent_runtime_domain_tests;
+#[cfg(test)]
+mod t162_multiplexer_domain_tests;
 mod workbench;
 mod workflow_cli;
 
