@@ -262,6 +262,7 @@ fn t157_corrupt_live_owned_row_fails_before_reconciliation_rewrite() {
         .unwrap();
     assert_eq!(row.0, "LIVE_OWNED");
     assert_eq!(row.1, None);
+    drop(connection);
 
     let _ = fs::remove_dir_all(runtime_root);
     fs::remove_dir_all(home).unwrap();
