@@ -2,8 +2,8 @@
 
 **Status:** Research/provenance evidence only. This ledger does not itself authorize implementation.
 
-**Herdr exact pin:** `herdrdev/herdr@a3a1c94ed54e8a65d929528336d69c7e537ed2ef`
-**Herdr tree:** `dcafd50d8721c37dac03a89831ba24f849920839`
+**Herdr exact pin:** `herdrdev/herdr@29f9f4056f344af60f411004fc89c7eb5f357c48`
+**Herdr tree:** `8e11bddc337094b8aece2a7abea4ee6ee6340f2a`
 **Observed root license:** Apache-2.0
 **Founder direction:** all Herdr capabilities are required parity scope for Winds; direct source reuse is permitted by Founder assertion, subject to per-slice provenance/notice/vendor review.
 
@@ -15,7 +15,7 @@ The ledger is source-derived from four surfaces at the exact pin: (1) the comple
 
 ### 2026-09-20 pin reconciliation
 
-Compared with the prior ledger pin `da6bcd5969779bfe0396bcf89a8025d4375d611e`, upstream is 13 commits ahead with no reverse divergence. The compiled agent-family count remains 24; the frozen serialized integration enum remains 17 plus the existing experimental CLI-only Letta target. The public serialized API increases from 104 to 105 methods through new `pane.clear`; row M105 is appended rather than renumbering historical method IDs. Kiro/Grok detection, aggregate navigation, pane clearing, cursor/input, request-correlation, and remote qualification changes are reconciled by the Spec 012 entry gate; remote-only movement remains assigned to Spec 013.
+Compared with the prior ledger pin `da6bcd5969779bfe0396bcf89a8025d4375d611e`, upstream is 14 commits ahead with no reverse divergence. The compiled agent-family count remains 24; the frozen serialized integration enum remains 17 plus the existing experimental CLI-only Letta target. The public serialized API increases from 104 to 105 methods through new `pane.clear`; row M105 is appended rather than renumbering historical method IDs. Codex/Kiro/Grok detection, aggregate navigation, pane clearing, cursor/input, request-correlation, and remote qualification changes are reconciled by the Spec 012 entry gate; remote-only movement remains assigned to Spec 013.
 
 ## Agent detection families — all required
 
@@ -73,7 +73,7 @@ The frozen generation-1 serialized `IntegrationTarget::ALL` enum contains I01–
 
 ## 2026-09-20 exact-pin delta note
 
-The immediately preceding ledger pin `da6bcd5969779bfe0396bcf89a8025d4375d611e` is 13 commits behind this ledger pin with no reverse divergence. The delta materially affects Grok/Kiro detection, pane clearing, aggregate agent/terminal navigation, socket error request correlation, native-Windows cursor/input qualification, and remote transport/clipboard behavior.
+The immediately preceding ledger pin `da6bcd5969779bfe0396bcf89a8025d4375d611e` is 14 commits behind this ledger pin with no reverse divergence. The delta materially affects Codex/Grok/Kiro detection, pane clearing, aggregate agent/terminal navigation, socket error request correlation, native-Windows cursor/input qualification, and remote transport/clipboard behavior.
 
 The compiled agent count remains 24 and the frozen integration enum remains 17; the existing Letta CLI-only experimental target remains separate. The public serialized method count increases from 104 to **105** through `pane.clear`. Remote-only changes remain assigned to Spec 013 and do not expand Spec 012 authority.
 
