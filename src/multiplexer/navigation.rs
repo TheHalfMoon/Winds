@@ -1,6 +1,4 @@
-use super::{
-    MultiplexerErrorKind, MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration,
-};
+use super::{MultiplexerErrorKind, MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration};
 use std::collections::BTreeSet;
 
 const GEOMETRY_EXTENT: u32 = 1_000_000;
@@ -402,8 +400,7 @@ impl MultiplexerTopology {
                 return Err(MultiplexerErrorKind::UnsupportedOperation);
             }
             let tab = tab_mut(candidate.workspace_mut(workspace_id)?, tab_id)?;
-            if !contains_pane(&tab.root, first_pane_id)
-                || !contains_pane(&tab.root, second_pane_id)
+            if !contains_pane(&tab.root, first_pane_id) || !contains_pane(&tab.root, second_pane_id)
             {
                 return Err(MultiplexerErrorKind::UnknownPane);
             }
@@ -445,10 +442,7 @@ impl MultiplexerTopology {
                 return Err(MultiplexerErrorKind::UnsupportedOperation);
             }
             if !contains_pane(&workspace.tabs[source_index].root, pane_id)
-                || !contains_pane(
-                    &workspace.tabs[destination_index].root,
-                    destination_pane_id,
-                )
+                || !contains_pane(&workspace.tabs[destination_index].root, destination_pane_id)
             {
                 return Err(MultiplexerErrorKind::UnknownPane);
             }
@@ -498,8 +492,8 @@ impl MultiplexerTopology {
                     let source_tab = &mut workspace.tabs[source_index];
                     source_tab.root = source_root;
                     if source_tab.focused_pane_id == pane_id {
-                        source_tab.focused_pane_id =
-                            first_pane(&source_tab.root).ok_or(MultiplexerErrorKind::UnknownPane)?;
+                        source_tab.focused_pane_id = first_pane(&source_tab.root)
+                            .ok_or(MultiplexerErrorKind::UnknownPane)?;
                     }
                     if source_tab.zoomed_pane_id == Some(pane_id) {
                         source_tab.zoomed_pane_id = None;

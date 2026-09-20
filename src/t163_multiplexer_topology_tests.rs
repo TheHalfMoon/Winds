@@ -110,7 +110,10 @@ fn t163_workspace_and_tab_identity_survive_duplicate_aliases_renames_moves_and_f
         topology.workspace(first_workspace).unwrap().focused_tab_id,
         first_tab
     );
-    assert_eq!(topology.workspace(first_workspace).unwrap().tabs[0].id, third_tab);
+    assert_eq!(
+        topology.workspace(first_workspace).unwrap().tabs[0].id,
+        third_tab
+    );
 }
 
 #[test]
@@ -350,15 +353,21 @@ fn t163_directional_navigation_and_edges_are_geometry_based_with_stable_ties() {
         Some(left_bottom)
     );
     assert_eq!(
-        topology.edge_pane(workspace_id, tab_id, Edge::Left).unwrap(),
+        topology
+            .edge_pane(workspace_id, tab_id, Edge::Left)
+            .unwrap(),
         left_top
     );
     assert_eq!(
-        topology.edge_pane(workspace_id, tab_id, Edge::Right).unwrap(),
+        topology
+            .edge_pane(workspace_id, tab_id, Edge::Right)
+            .unwrap(),
         right
     );
     assert_eq!(
-        topology.edge_pane(workspace_id, tab_id, Edge::Bottom).unwrap(),
+        topology
+            .edge_pane(workspace_id, tab_id, Edge::Bottom)
+            .unwrap(),
         left_bottom
     );
 }
@@ -428,12 +437,7 @@ fn t163_delayed_close_cannot_hit_a_replacement_in_the_same_visual_position() {
         .unwrap();
 
     assert_eq!(
-        topology.close_pane(
-            generation_before_split,
-            workspace_id,
-            tab_id,
-            closed
-        ),
+        topology.close_pane(generation_before_split, workspace_id, tab_id, closed),
         Err(MultiplexerErrorKind::StaleTopologyGeneration)
     );
     assert!(super::contains_pane(
@@ -511,9 +515,14 @@ fn t163_workspace_close_retires_all_panes_and_focuses_deterministic_fallback() {
         ),
         Err(MultiplexerErrorKind::IdentityReuse)
     );
-    assert!(topology
-        .tab(first_workspace, topology.workspace(first_workspace).unwrap().focused_tab_id)
-        .is_ok());
+    assert!(
+        topology
+            .tab(
+                first_workspace,
+                topology.workspace(first_workspace).unwrap().focused_tab_id
+            )
+            .is_ok()
+    );
     assert!(first_pane != second_pane);
 }
 

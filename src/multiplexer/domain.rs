@@ -228,6 +228,5 @@ pub(crate) fn validate_replacement_pane_id(
     Ok(())
 }
 
-
 #[path = "navigation.rs"]
 pub(crate) mod navigation;
