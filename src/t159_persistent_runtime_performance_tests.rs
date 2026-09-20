@@ -213,14 +213,35 @@ fn t159_release_resource_and_latency_campaign() {
     let mut owner = start_owner(&home, &runtime_root);
     let generation = owner.generation_id();
 
-    let mut attachment = start_runtime(&mut owner, &profile, &home, "t159-primary", 11, 100);
-    let runtime_id = attachment.runtime_namespace_id();
+    let mut attachment = Some(start_runtime(
+        &mut owner,
+        &profile,
+        &home,
+        "t159-primary",
+        11,
+        100,
+    ));
+    let runtime_id = attachment
+        .as_ref()
+        .expect("T159 primary attachment must exist")
+        .runtime_namespace_id();
 
     let mut reconnect_samples = Vec::with_capacity(RECONNECT_CYCLES);
     for index in 0..RECONNECT_CYCLES {
-        drop(attachment);
+        let detached_identity = {
+            let detached = attachment
+                .take()
+                .expect("T159 attachment must exist before detach");
+            (
+                detached.runtime_namespace_id(),
+                detached.owner_generation_id(),
+            )
+        };
+        assert_eq!(detached_identity.0, runtime_id);
+        assert_eq!(detached_identity.1, generation);
+
         let started = Instant::now();
-        attachment = owner
+        let reattached = owner
             .reattach_terminal_runtime(
                 runtime_id,
                 generation,
@@ -229,12 +250,14 @@ fn t159_release_resource_and_latency_campaign() {
             )
             .expect("exact-generation T159 reattach must succeed");
         let snapshot = owner
-            .terminal_runtime_snapshot(&attachment, 20 + index as i64, 200 + index as u64)
+            .terminal_runtime_snapshot(&reattached, 20 + index as i64, 200 + index as u64)
             .expect("T159 reattach snapshot must succeed");
         reconnect_samples.push(started.elapsed());
         assert_eq!(snapshot.runtime_namespace_id, runtime_id);
         assert_eq!(snapshot.owner_generation_id, generation);
+        attachment = Some(reattached);
     }
+    let attachment = attachment.expect("T159 final attachment must exist");
     let reconnect = summarize(reconnect_samples);
     assert!(
         reconnect.p95_us <= 100_000,
