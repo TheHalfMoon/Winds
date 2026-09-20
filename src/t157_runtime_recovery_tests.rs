@@ -177,16 +177,11 @@ fn t157_owner_shutdown_reports_each_runtime_independently_and_is_idempotent_for_
         )
         .unwrap();
 
-    request_shell_exit(&mut registry, &terminal);
-    let mut observed = false;
-    for offset in 0..200_i64 {
-        if registry.poll_exits(&store, 30 + offset).unwrap() > 0 {
-            observed = true;
-            break;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-    assert!(observed, "terminal fixture must exit before owner shutdown");
+    let terminal_snapshot = registry.terminate(&store, &terminal, 30).unwrap();
+    assert_eq!(
+        terminal_snapshot.truth.process_liveness,
+        ProcessLiveness::Exited
+    );
 
     let reports = registry.shutdown_all(&store, 300);
     assert_eq!(reports.len(), 2);
