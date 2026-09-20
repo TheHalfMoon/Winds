@@ -1,0 +1,250 @@
+name: t160-native-platform
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "src/persistent_runtime/**"
+      - "src/t149_posix_private_transport_tests.rs"
+      - "src/t150_windows_private_transport_tests.rs"
+      - "src/t152_persistent_terminal_tests.rs"
+      - "src/t154_controller_owner_tests.rs"
+      - "src/t157_owner_recovery_tests.rs"
+      - "src/t063_soak_tests.rs"
+      - "docs/provenance/011-t160-native-platform.md"
+      - ".github/workflows/t160-native-platform.yml"
+  push:
+    branches: [main]
+    paths:
+      - "src/persistent_runtime/**"
+      - "src/t149_posix_private_transport_tests.rs"
+      - "src/t150_windows_private_transport_tests.rs"
+      - "src/t152_persistent_terminal_tests.rs"
+      - "src/t154_controller_owner_tests.rs"
+      - "src/t157_owner_recovery_tests.rs"
+      - "src/t063_soak_tests.rs"
+      - "docs/provenance/011-t160-native-platform.md"
+      - ".github/workflows/t160-native-platform.yml"
+
+concurrency:
+  group: t160-native-platform-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  qualify:
+    name: persistent-runtime (${{ matrix.domain }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            domain: linux
+          - os: macos-15
+            domain: macos
+          - os: windows-2025
+            domain: windows
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact candidate head
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ env.CANDIDATE_SHA }}
+
+      - name: Verify exact candidate identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test -n "$(git rev-parse 'HEAD^{tree}')"
+
+      - name: Install exact Rust toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+
+      - name: Preserve formatting and lint gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          cargo clippy --locked --bin winds --tests -- -D warnings
+
+      - name: Run direct persistent-runtime qualification
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p t160-evidence
+          cargo test --locked --bin winds persistent_runtime:: -- --test-threads=1 --nocapture \
+            | tee "t160-evidence/persistent-runtime-${{ matrix.domain }}.log"
+
+      - name: Assert direct domain evidence
+        shell: bash
+        env:
+          T160_DOMAIN: ${{ matrix.domain }}
+        run: |
+          set -euo pipefail
+          log="t160-evidence/persistent-runtime-${T160_DOMAIN}.log"
+          test -s "$log"
+
+          require_test() {
+            grep -Fq "$1 ... ok" "$log"
+          }
+
+          require_test "persistent_runtime::owner::t152_persistent_terminal_tests::t152_long_running_shell_survives_complete_attachment_drop_and_exact_reattach"
+          require_test "persistent_runtime::owner::t152_persistent_terminal_tests::t152_process_exit_while_fully_detached_is_observed_and_persisted"
+          require_test "persistent_runtime::owner::t154_controller_owner_tests::t154_owner_path_rejects_observer_mutation_and_serializes_release_takeover_stop"
+          require_test "persistent_runtime::owner::t157_owner_recovery_tests::t157_abrupt_owner_loss_reconciles_to_unknown_without_process_reconstruction"
+          require_test "persistent_runtime::replay::t153_persistent_replay_tests::t153_slow_observer_queue_is_wire_bounded_and_lifecycle_truth_is_prioritized"
+
+          case "$T160_DOMAIN" in
+            linux|macos)
+              require_test "persistent_runtime::transport::unix::t149_posix_private_transport_tests::t149_runtime_directory_is_user_owned_0700_and_rejects_symlink_mode_and_type_confusion"
+              require_test "persistent_runtime::transport::unix::t149_posix_private_transport_tests::t149_same_user_kernel_peer_proof_succeeds_and_wrong_uid_fails_closed"
+              require_test "persistent_runtime::transport::unix::t149_posix_private_transport_tests::t149_secure_listener_and_client_prove_same_user_and_exchange_bytes"
+              require_test "persistent_runtime::transport::unix::t149_posix_private_transport_tests::t149_entropy_contract_rejects_short_failed_and_zero_results"
+              ;;
+            windows)
+              require_test "persistent_runtime::transport::windows::t150_windows_private_transport_tests::t150_effective_dacl_same_user_round_trip_and_peer_sid_proof_succeed"
+              require_test "persistent_runtime::transport::windows::t150_windows_private_transport_tests::t150_anonymous_principal_is_denied_by_the_actual_pipe_dacl"
+              require_test "persistent_runtime::transport::windows::t150_windows_private_transport_tests::t150_same_generation_collision_and_wrong_generation_fail_closed"
+              require_test "persistent_runtime::transport::windows::t150_windows_private_transport_tests::t150_bcrypt_entropy_contract_rejects_short_failure_and_zero_results"
+              require_test "persistent_runtime::owner::t152_persistent_terminal_tests::t152_native_windows_interrupt_remains_explicitly_fail_closed"
+              require_test "persistent_runtime::owner::t157_owner_recovery_tests::t157_closed_named_pipe_never_requires_stale_pid_or_endpoint_reconstruction"
+              ;;
+            *)
+              echo "unknown T160 domain: $T160_DOMAIN" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Direct Unix PTY qualification
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --bin winds git::terminal::tests -- --test-threads=1 --nocapture \
+            | tee "t160-evidence/terminal-${{ matrix.domain }}.log"
+
+      - name: Direct native Windows ConPTY qualification
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --bin winds terminal::windows_tests -- --test-threads=1 --nocapture \
+            | tee "t160-evidence/terminal-${{ matrix.domain }}.log"
+
+      - name: Run 100-cycle terminal lifecycle resource cleanup
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --locked --bin winds \
+            git::t063_soak_tests::controlled_terminal_lifecycle_soak_100_cycles \
+            -- --ignored --exact --test-threads=1 --nocapture \
+            | tee "t160-evidence/t063-lifecycle-${{ matrix.domain }}.log"
+          cargo test --locked --bin winds \
+            git::t063_soak_tests::active_close_and_windows_child_resize_guard \
+            -- --ignored --exact --test-threads=1 --nocapture \
+            | tee "t160-evidence/t063-close-resize-${{ matrix.domain }}.log"
+
+      - name: Preserve exact Linux T159 resource campaign
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test --release --locked --bin winds \
+            persistent_runtime::t159_persistent_runtime_performance_tests::t159_release_resource_and_latency_campaign \
+            -- --ignored --exact --nocapture --test-threads=1 \
+            | tee t160-evidence/t159-linux-resource.log
+          grep -Fq 'T159_CORE_JSON=' t160-evidence/t159-linux-resource.log
+
+      - name: Assemble exact-domain evidence
+        shell: bash
+        env:
+          T160_DOMAIN: ${{ matrix.domain }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import platform
+          import subprocess
+          from pathlib import Path
+
+          domain = os.environ["T160_DOMAIN"]
+          candidate = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          tree = subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], text=True).strip()
+          if candidate != os.environ["CANDIDATE_SHA"]:
+              raise SystemExit("candidate moved before T160 evidence assembly")
+
+          required = {
+              "linux": {
+                  "transport": "POSIX_UNIX_SOCKET",
+                  "principal_boundary": "UNIX_PEER_CREDENTIAL",
+                  "terminal_backend": "PTY",
+                  "platform_security_fixture": "T149",
+                  "resource_campaign": "T153_BOUNDS+T063_100_CYCLE+T159_CORE",
+              },
+              "macos": {
+                  "transport": "POSIX_UNIX_SOCKET",
+                  "principal_boundary": "UNIX_PEER_CREDENTIAL",
+                  "terminal_backend": "PTY",
+                  "platform_security_fixture": "T149",
+                  "resource_campaign": "T153_BOUNDS+T063_100_CYCLE",
+              },
+              "windows": {
+                  "transport": "WINDOWS_NAMED_PIPE",
+                  "principal_boundary": "CURRENT_USER_SID_DACL",
+                  "terminal_backend": "CONPTY",
+                  "platform_security_fixture": "T150",
+                  "resource_campaign": "T153_BOUNDS+T063_100_CYCLE",
+              },
+          }[domain]
+
+          rust = subprocess.check_output(["rustc", "--version", "--verbose"], text=True).strip()
+          evidence = {
+              "schema": "WINDS_SPEC_011_T160_NATIVE_PLATFORM_V1",
+              "candidate_commit": candidate,
+              "candidate_tree": tree,
+              "domain": domain,
+              "runner_os": os.environ.get("RUNNER_OS", "UNAVAILABLE"),
+              "runner_arch": os.environ.get("RUNNER_ARCH", "UNAVAILABLE"),
+              "platform": platform.platform(),
+              "rust_version": rust,
+              "direct_persistent_runtime_suite": "PASS",
+              "direct_terminal_backend_suite": "PASS",
+              "terminal_lifecycle_100_cycle_soak": "PASS",
+              "active_close_resize_guard": "PASS",
+              "transport": required["transport"],
+              "principal_boundary": required["principal_boundary"],
+              "terminal_backend": required["terminal_backend"],
+              "platform_security_fixture": required["platform_security_fixture"],
+              "resource_campaign": required["resource_campaign"],
+              "linux_t159_resource_campaign": "PASS" if domain == "linux" else "NOT_APPLICABLE",
+              "spec_011_wsl_persistent_owner": "NOT_CLAIMED",
+              "windows_host_to_wsl_owner_bridge": "NOT_INTRODUCED",
+              "cross_platform_evidence_substitution": False,
+              "thresholds_relaxed": False,
+              "security_or_correctness_gates_disabled": False,
+          }
+          out = Path("t160-evidence") / f"t160-platform-{domain}.json"
+          out.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          print("T160_PLATFORM_JSON=" + json.dumps(evidence, sort_keys=True))
+          PY
+
+      - name: Upload exact-domain evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: t160-native-platform-${{ matrix.domain }}-${{ env.CANDIDATE_SHA }}
+          path: t160-evidence/
+          if-no-files-found: error
+          retention-days: 30
