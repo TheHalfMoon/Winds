@@ -353,7 +353,7 @@ FR_FALSELY_UPGRADED_NONCLAIMS=0
 | SC-018 | TRUTHFUL_WSL_BOUNDARY | E160 — WSL remains distinct; Spec 011 persistent owner inside WSL is explicitly NOT_CLAIMED rather than inferred. |
 | SC-019 | PROVEN_RESOURCE_BOUND | E159 — idle CPU/RSS/FD/storage remain within frozen ceilings. |
 | SC-020 | PROVEN_HIGH_OUTPUT_BOUND | E159 — high output + observers preserve controller/target truth and bounded owner resources. |
-| SC-021 | PROVEN_RECONNECT_BOUND | E159 + E160 — reconnect churn/repeated lifecycle campaigns produce no ambiguous generation or unbounded client/controller/runtime records. |
+| SC-021 | PROVEN_RECONNECT_BOUND | E154 + E157 + E159 + E160 — client disconnect/revocation, recovery uncertainty, reconnect churn, and repeated lifecycle campaigns preserve generation/controller/client/runtime bounds without ambiguous authority or unbounded records. |
 | SC-022 | PROVEN_RENDERER_SECURITY | E158 — WebView/terminal/agent content cannot invoke generic control, create controller authority, or manufacture lifecycle/evidence truth. |
 | SC-023 | PROVEN_NEGATIVE_SCOPE | E158 + T161 inventory — no public network control, remote execution, plugin runtime, marketplace, live binary handoff, automatic Git landing, or same-user sandbox claim entered. |
 | SC-024 | T161_FINAL_GATE | Canonical implementation evidence through T160 is complete; fresh exact T161 author/Ponytail/independent review, quality, guarded landing, and post-merge proof remain required. |
