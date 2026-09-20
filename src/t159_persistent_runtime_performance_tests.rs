@@ -413,6 +413,14 @@ fn t159_release_resource_and_latency_campaign() {
         observed_lines >= OUTPUT_MIN_LINES,
         "T159 observed fewer than 100,000 logical lines: {observed_lines}"
     );
+    assert!(
+        fast_output_events > 0,
+        "T159 fast observers received no output events during the high-output campaign"
+    );
+    assert!(
+        slow_fill_count > 0,
+        "T159 slow-observer pressure was not exercised during the high-output campaign"
+    );
 
     let mut idle_attachments = Vec::with_capacity(IDLE_RUNTIME_NAMESPACES - 1);
     for index in 1..IDLE_RUNTIME_NAMESPACES {
