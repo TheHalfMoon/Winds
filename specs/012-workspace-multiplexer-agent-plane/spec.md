@@ -182,7 +182,25 @@ The exact upstream commit is "fix: preserve delayed mouse reports with confirmed
 
 This movement is material to Spec 012 terminal input qualification, especially FR-022, FR-023, FR-029, SC-024, and the Plan-stage keyboard/mouse/IME/input-source decision. It does not modify agent detection manifests, integration enums, or the serialized API schema; therefore the Entry-pinned 24-agent, 17-plus-1-integration, 105-public-method, 219-baseline-row, and 142-Spec-012-row counts remain unchanged by this one-commit delta.
 
-The newer upstream head is research evidence only. It does not admit source reuse or expand implementation authority.
+A second fresh qualification recheck observed one additional upstream commit after `c00a62dd...`:
+
+~~~text
+HERDR_FINAL_RECHECK_HEAD=74505861e40c48e070e711bd4de662a17b0939b3
+HERDR_FINAL_RECHECK_TREE=736ad65c9dba956554529b4169bc54827dc342e3
+HERDR_DELTA_FROM_PRIOR_QUALIFICATION=1_COMMIT_AHEAD_0_BEHIND
+HERDR_FINAL_RECHECK_GITHUB_VERIFICATION=VERIFIED_VALID
+HERDR_FINAL_RECHECK_GITHUB_VERIFICATION_REASON=valid
+HERDR_FINAL_RECHECK_GITHUB_VERIFIED_AT=2026-09-20T14:33:50Z
+HERDR_FINAL_RECHECK_GITHUB_COMMITTER=GitHub <noreply@github.com>
+HERDR_FINAL_RECHECK_GITHUB_COMMIT_URL=https://github.com/herdrdev/herdr/commit/74505861e40c48e070e711bd4de662a17b0939b3
+HERDR_FINAL_RECHECK_GITHUB_VERIFIED_PARENT=c00a62dda169beb472fc2f386d0f673ca100dfa4
+~~~
+
+That commit, `fix: keep workspace navigation visible in terminal theme (#4408)`, changes rendered-client workspace navigation/highlight behavior and its tests. It keeps accepted workspace selection visible in terminal themes while direct focus awaits authoritative projection and clears stale workspace highlight when directional pane focus or other focus-changing intent takes over.
+
+This movement is material to Spec 012 workspace navigation and stale-presentation qualification, especially FR-009, FR-053, FR-063, FR-075 through FR-083, SC-003, SC-013, SC-021, SC-022, and SC-023. It changes no agent-detection manifests, integration enums, or serialized API schema, so the Entry-pinned inventory counts and 142-row Spec 012 assignment remain unchanged.
+
+The latest upstream head remains research evidence only. It does not admit source reuse or expand implementation authority.
 
 Herdr remains research/design evidence. No direct copy, adapted copy, or test port is admitted by this file.
 
