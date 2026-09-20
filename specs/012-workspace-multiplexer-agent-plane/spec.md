@@ -132,6 +132,36 @@ Muse
 
 No family receives real-execution authority merely because it can be detected. Desired agent.start, agent.prompt, agent.wait, agent.send_keys, launch, or install behavior remains dependent on later Plan/Tasks proof. This Spec does not authorize any implementation seam.
 
+## Spec 012 Ledger Traceability
+
+The 142-row assignment is omission-prevention evidence, not a mandate to copy upstream architecture. The specification maps the assigned rows as follows:
+
+| Ledger rows | Specification disposition |
+| --- | --- |
+| A01-A24 | FR-031 through FR-047; SC-007 through SC-011. Detection/presentation only at specification time. |
+| M005-M006 | FR-035 through FR-037. Manifest inspection/refresh may be qualified later without generic plugin execution. |
+| M007 | FR-028 and SC-019. Local bounded notification behavior only. |
+| M010 | FR-059 through FR-064; SC-016. Typed allowlisted command invocation only. |
+| M011-M013 | FR-025 and FR-075 through FR-084. Window/surface presentation only; no remote authority. |
+| M015-M023 | FR-001 through FR-015. Workspace identity, metadata, ordering, movement, focus, and close remain exact-target. |
+| M024-M027 | FR-065 through FR-074; SC-017 through SC-018. Worktree discovery/create/open/remove only under explicit trust and path safety. |
+| M028-M034 | FR-001 through FR-015. Tab identity/navigation/mutation remain exact-target. |
+| M035-M046 | FR-031 through FR-047. Agent read/presentation operations are separated from later execution-seam qualification. |
+| M047-M090 and M105 | FR-003 through FR-030 plus FR-048 through FR-064. Pane topology, read/input/copy/link/graphics/agent association/events/wait/clear behavior stays exact-target and bounded. |
+| R008-R017 | FR-001 through FR-030. Multiplexer, layout, scrollback, selection, links, local graphics/clipboard, terminal presentation, and local notifications. |
+| R018-R020 | FR-031 through FR-047. Agent detection, state, and compact agent-dock presentation. |
+| R021-R030 | FR-021 through FR-030, FR-055 through FR-064, and FR-075 through FR-086. Keybindings, navigation, palette, menus/overlays/settings/theme/sidebar/tab presentation, mouse, and CJK/IME remain local presentation/control concerns. |
+| R039-R040 | FR-065 through FR-074. Worktree workflows and repository trust. |
+| R058 | First-run onboarding is presentation-only Plan-stage qualification. It MUST NOT create account, network, plugin, execution, or repository authority and MUST truthfully expose unsupported/unproven capabilities. |
+| R060 | FR-017. Terminal default-shell/profile behavior remains inside accepted ownership. |
+| R062 | FR-018 and SC-006. Scrollback memory is bounded. |
+| R063 | FR-006 through FR-015 and FR-055 through FR-064. Naming and close-confirmation UX cannot substitute aliases/focus for immutable target identity. |
+| R064-R066 | FR-025, FR-028, and FR-075 through FR-084. Pane chrome, accent/status presentation, and toasts remain accessible, bounded, and non-authoritative. |
+| R067 | FR-072. Worktree root-directory configuration is explicit and path-safe. |
+| R071 | FR-029 plus FR-085-FR-086. Host redraw/cursor behavior requires direct platform evidence. |
+
+For rows whose upstream implementation mixes local and remote behavior, only the local Spec 012 portion is covered here. Remote clipboard/file bridging, remote title/control authority, remote machines, SSH, and thin-client behavior remain assigned to Spec 013 and are not imported through shared upstream modules.
+
 ## Qualification-Time Herdr Drift Reconciliation
 
 A fresh qualification check observed one upstream commit after the Entry pin:
