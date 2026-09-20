@@ -311,6 +311,74 @@ fn t163_move_refuses_to_empty_a_source_tab() {
 }
 
 #[test]
+fn t163_split_geometry_uses_wide_intermediates_and_preserves_requested_ratios() {
+    let (mut topology, workspace_id, tab_id, first) = topology();
+    let second = pane(19);
+    topology
+        .split_pane(
+            topology.generation(),
+            workspace_id,
+            tab_id,
+            first,
+            second,
+            SplitAxis::Horizontal,
+            PanePlacement::After,
+            ratio(5_000),
+        )
+        .unwrap();
+
+    let tab = topology.tab(workspace_id, tab_id).unwrap();
+    let rects = super::pane_rects(&tab.root);
+    let first_rect = rects
+        .iter()
+        .find(|(pane_id, _)| *pane_id == first)
+        .unwrap()
+        .1;
+    let second_rect = rects
+        .iter()
+        .find(|(pane_id, _)| *pane_id == second)
+        .unwrap()
+        .1;
+
+    assert_eq!(first_rect.left, 0);
+    assert_eq!(first_rect.right, 500_000);
+    assert_eq!(second_rect.left, 500_000);
+    assert_eq!(second_rect.right, 1_000_000);
+
+    let third = pane(18);
+    topology
+        .split_pane(
+            topology.generation(),
+            workspace_id,
+            tab_id,
+            second,
+            third,
+            SplitAxis::Vertical,
+            PanePlacement::After,
+            ratio(9_000),
+        )
+        .unwrap();
+
+    let tab = topology.tab(workspace_id, tab_id).unwrap();
+    let rects = super::pane_rects(&tab.root);
+    let second_rect = rects
+        .iter()
+        .find(|(pane_id, _)| *pane_id == second)
+        .unwrap()
+        .1;
+    let third_rect = rects
+        .iter()
+        .find(|(pane_id, _)| *pane_id == third)
+        .unwrap()
+        .1;
+
+    assert_eq!(second_rect.top, 0);
+    assert_eq!(second_rect.bottom, 900_000);
+    assert_eq!(third_rect.top, 900_000);
+    assert_eq!(third_rect.bottom, 1_000_000);
+}
+
+#[test]
 fn t163_directional_navigation_and_edges_are_geometry_based_with_stable_ties() {
     let (mut topology, workspace_id, tab_id, left_top) = topology();
     let right = pane(20);

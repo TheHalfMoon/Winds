@@ -955,7 +955,8 @@ fn collect_rects(node: &LayoutNode, rect: PaneRect, output: &mut Vec<(PaneId, Pa
             match axis {
                 SplitAxis::Horizontal => {
                     let width = rect.right - rect.left;
-                    let cut = rect.left + width.saturating_mul(ratio) / 10_000;
+                    let cut_offset = (u64::from(width) * u64::from(ratio) / 10_000) as u32;
+                    let cut = rect.left + cut_offset;
                     collect_rects(
                         first,
                         PaneRect {
@@ -979,7 +980,8 @@ fn collect_rects(node: &LayoutNode, rect: PaneRect, output: &mut Vec<(PaneId, Pa
                 }
                 SplitAxis::Vertical => {
                     let height = rect.bottom - rect.top;
-                    let cut = rect.top + height.saturating_mul(ratio) / 10_000;
+                    let cut_offset = (u64::from(height) * u64::from(ratio) / 10_000) as u32;
+                    let cut = rect.top + cut_offset;
                     collect_rects(
                         first,
                         PaneRect {
