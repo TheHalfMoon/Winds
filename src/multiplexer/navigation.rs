@@ -104,6 +104,8 @@ pub(crate) struct MultiplexerTopology {
     generation: TopologyGeneration,
     workspaces: Vec<WorkspaceState>,
     focused_workspace_id: Option<MultiplexerWorkspaceId>,
+    retired_workspace_ids: BTreeSet<MultiplexerWorkspaceId>,
+    retired_tab_ids: BTreeSet<(MultiplexerWorkspaceId, TabId)>,
     retired_pane_ids: BTreeSet<PaneId>,
 }
 
@@ -113,6 +115,8 @@ impl MultiplexerTopology {
             generation: TopologyGeneration::initial(),
             workspaces: Vec::new(),
             focused_workspace_id: None,
+            retired_workspace_ids: BTreeSet::new(),
+            retired_tab_ids: BTreeSet::new(),
             retired_pane_ids: BTreeSet::new(),
         }
     }
@@ -161,13 +165,15 @@ impl MultiplexerTopology {
         first_pane_id: PaneId,
     ) -> Result<TopologyGeneration, MultiplexerErrorKind> {
         self.transact(expected, |candidate| {
-            if candidate
-                .workspaces
-                .iter()
-                .any(|workspace| workspace.id == workspace_id)
+            if candidate.retired_workspace_ids.contains(&workspace_id)
+                || candidate
+                    .workspaces
+                    .iter()
+                    .any(|workspace| workspace.id == workspace_id)
             {
                 return Err(MultiplexerErrorKind::IdentityReuse);
             }
+            candidate.require_fresh_tab_id(workspace_id, first_tab_id)?;
             candidate.require_fresh_pane_id(first_pane_id)?;
             candidate.workspaces.push(WorkspaceState {
                 id: workspace_id,
@@ -243,7 +249,9 @@ impl MultiplexerTopology {
                 .position(|workspace| workspace.id == workspace_id)
                 .ok_or(MultiplexerErrorKind::UnknownWorkspace)?;
             let workspace = candidate.workspaces.remove(index);
+            candidate.retired_workspace_ids.insert(workspace_id);
             for tab in &workspace.tabs {
+                candidate.retired_tab_ids.insert((workspace_id, tab.id));
                 collect_pane_ids(&tab.root, &mut candidate.retired_pane_ids);
             }
             if candidate.focused_workspace_id == Some(workspace_id) {
@@ -262,11 +270,9 @@ impl MultiplexerTopology {
         first_pane_id: PaneId,
     ) -> Result<TopologyGeneration, MultiplexerErrorKind> {
         self.transact(expected, |candidate| {
+            candidate.require_fresh_tab_id(workspace_id, tab_id)?;
             candidate.require_fresh_pane_id(first_pane_id)?;
             let workspace = candidate.workspace_mut(workspace_id)?;
-            if workspace.tabs.iter().any(|tab| tab.id == tab_id) {
-                return Err(MultiplexerErrorKind::IdentityReuse);
-            }
             workspace.tabs.push(TabState {
                 id: tab_id,
                 alias,
@@ -354,6 +360,7 @@ impl MultiplexerTopology {
                 }
                 tab.root
             };
+            candidate.retired_tab_ids.insert((workspace_id, tab_id));
             collect_pane_ids(&closed_root, &mut candidate.retired_pane_ids);
             Ok(())
         })
@@ -660,6 +667,23 @@ impl MultiplexerTopology {
             .iter_mut()
             .find(|workspace| workspace.id == workspace_id)
             .ok_or(MultiplexerErrorKind::UnknownWorkspace)
+    }
+
+    fn require_fresh_tab_id(
+        &self,
+        workspace_id: MultiplexerWorkspaceId,
+        tab_id: TabId,
+    ) -> Result<(), MultiplexerErrorKind> {
+        if self.retired_tab_ids.contains(&(workspace_id, tab_id))
+            || self
+                .workspaces
+                .iter()
+                .find(|workspace| workspace.id == workspace_id)
+                .is_some_and(|workspace| workspace.tabs.iter().any(|tab| tab.id == tab_id))
+        {
+            return Err(MultiplexerErrorKind::IdentityReuse);
+        }
+        Ok(())
     }
 
     fn require_fresh_pane_id(&self, pane_id: PaneId) -> Result<(), MultiplexerErrorKind> {

@@ -527,6 +527,86 @@ fn t163_workspace_close_retires_all_panes_and_focuses_deterministic_fallback() {
 }
 
 #[test]
+fn t163_closed_workspace_identity_cannot_be_resurrected() {
+    let (mut topology, workspace_id, _, _) = topology();
+    let generation = topology
+        .close_workspace(topology.generation(), workspace_id)
+        .unwrap();
+    let snapshot = topology.clone();
+
+    assert_eq!(
+        topology.create_workspace(
+            generation,
+            workspace_id,
+            "replacement".into(),
+            tab(60),
+            "tab".into(),
+            pane(61),
+        ),
+        Err(MultiplexerErrorKind::IdentityReuse)
+    );
+    assert_eq!(topology, snapshot);
+}
+
+#[test]
+fn t163_closed_tab_identity_cannot_be_reused_in_the_same_workspace() {
+    let (mut topology, workspace_id, first_tab, _) = topology();
+    let closed_tab = tab(62);
+    let closed_pane = pane(63);
+    let generation = topology
+        .create_tab(
+            topology.generation(),
+            workspace_id,
+            closed_tab,
+            "closed".into(),
+            closed_pane,
+        )
+        .unwrap();
+    let generation = topology
+        .close_tab(generation, workspace_id, closed_tab)
+        .unwrap();
+    let snapshot = topology.clone();
+
+    assert_eq!(
+        topology.create_tab(
+            generation,
+            workspace_id,
+            closed_tab,
+            "replacement".into(),
+            pane(64),
+        ),
+        Err(MultiplexerErrorKind::IdentityReuse)
+    );
+    assert_eq!(topology, snapshot);
+
+    assert_eq!(
+        topology.focus_tab(generation, workspace_id, first_tab),
+        Ok(TopologyGeneration::new(generation.get() + 1).unwrap())
+    );
+}
+
+#[test]
+fn t163_tab_identity_is_scoped_to_its_workspace() {
+    let (mut topology, first_workspace, first_tab, _) = topology();
+    let second_workspace = workspace(65);
+    let second_pane = pane(66);
+
+    topology
+        .create_workspace(
+            topology.generation(),
+            second_workspace,
+            "second".into(),
+            first_tab,
+            "same-scoped-tab-id".into(),
+            second_pane,
+        )
+        .unwrap();
+
+    assert!(topology.tab(first_workspace, first_tab).is_ok());
+    assert!(topology.tab(second_workspace, first_tab).is_ok());
+}
+
+#[test]
 fn t163_topology_generation_exhaustion_fails_before_mutation() {
     let (mut topology, workspace_id, _, _) = topology();
     topology.generation = TopologyGeneration::new(u64::MAX).unwrap();
