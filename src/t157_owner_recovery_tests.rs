@@ -287,7 +287,7 @@ fn t157_abrupt_owner_helper() {
         .start_terminal_runtime(
             RuntimeAlias::new("abrupt-owner-child").unwrap(),
             &profile,
-            &home,
+            &runtime_root,
             TerminalSize { rows: 24, cols: 80 },
             31,
             1,
@@ -295,9 +295,9 @@ fn t157_abrupt_owner_helper() {
         .unwrap();
 
     #[cfg(windows)]
-    let long_running = b"ping -n 6 127.0.0.1 >nul\r\n";
+    let long_running = b"ping -n 6 127.0.0.1 >nul & exit\r\n";
     #[cfg(not(windows))]
-    let long_running = b"sleep 5\n";
+    let long_running = b"sleep 5; exit\n";
     owner
         .send_terminal_runtime_input(&attachment, long_running)
         .unwrap();
