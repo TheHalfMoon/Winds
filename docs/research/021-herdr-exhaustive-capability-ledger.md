@@ -71,15 +71,15 @@ The frozen generation-1 serialized `IntegrationTarget::ALL` enum contains I01–
 | I17 | Install/uninstall/status integration for `Grok` | `src/api/schema/integrations.rs`; `src/integration/**` | Spec 014 | Required |
 | I18 | Experimental CLI-only install/uninstall/status integration for `Letta` outside the frozen generation-1 enum | `src/integration/mod.rs`; `src/cli/integration.rs`; `src/integration/actions.rs`; `src/integration/registry.rs` | Spec 014 | Required |
 
-## 2026-09-18 exact-pin delta note
+## 2026-09-20 exact-pin delta note
 
-The immediately preceding audit pin `18061191fdc019498610aee81f0df93f6c2ebd31` is 21 commits behind this ledger pin with no reverse divergence. The delta materially affects remote/local fallback behavior, exact session-deletion targeting, worktree removal with submodules, v0.9.1 release promotion/metadata, OpenCode registration handling, saved-machine connection metadata, native-Windows terminal/input recovery, default Windows shell selection, and Windows input qualification.
+The immediately preceding ledger pin `da6bcd5969779bfe0396bcf89a8025d4375d611e` is 13 commits behind this ledger pin with no reverse divergence. The delta materially affects Grok/Kiro detection, pane clearing, aggregate agent/terminal navigation, socket error request correlation, native-Windows cursor/input qualification, and remote transport/clipboard behavior.
 
-The delta does **not** change the 24-agent count, the 104 serialized public-method count, or the 17-member frozen integration enum. The Letta CLI-only experimental integration row is called out explicitly here because the prior research draft did not distinguish it from the frozen target count even though the experimental path already existed.
+The compiled agent count remains 24 and the frozen integration enum remains 17; the existing Letta CLI-only experimental target remains separate. The public serialized method count increases from 104 to **105** through `pane.clear`. Remote-only changes remain assigned to Spec 013 and do not expand Spec 012 authority.
 
 ## Public socket/API capabilities — complete method enum
 
-All 104 serialized methods in `src/api/schema.rs` are individually tracked below. Internal `serde(skip)` stream-control variants are implementation detail and are covered by the graphics/runtime rows in the non-API section.
+All 105 serialized methods in `src/api/schema.rs` are individually tracked below. Internal `serde(skip)` stream-control variants are implementation detail and are covered by the graphics/runtime rows in the non-API section.
 
 | ID | Herdr API method | Source evidence | Winds target | Reuse strategy candidate |
 |---|---|---|---|---|
