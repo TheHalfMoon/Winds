@@ -132,6 +132,25 @@ Muse
 
 No family receives real-execution authority merely because it can be detected. Desired agent.start, agent.prompt, agent.wait, agent.send_keys, launch, or install behavior remains dependent on later Plan/Tasks proof. This Spec does not authorize any implementation seam.
 
+## Qualification-Time Herdr Drift Reconciliation
+
+A fresh qualification check observed one upstream commit after the Entry pin:
+
+~~~text
+HERDR_QUALIFICATION_HEAD=c00a62dda169beb472fc2f386d0f673ca100dfa4
+HERDR_QUALIFICATION_TREE=ff0822ed7bb848e2e340dc382920da7c519f2458
+HERDR_DELTA_FROM_ENTRY_PIN=1_COMMIT_AHEAD_0_BEHIND
+HERDR_QUALIFICATION_GITHUB_VERIFICATION=VERIFIED_VALID
+HERDR_QUALIFICATION_GITHUB_VERIFICATION_REASON=valid
+HERDR_QUALIFICATION_GITHUB_VERIFIED_AT=2026-09-20T14:10:17Z
+~~~
+
+The exact upstream commit is "fix: preserve delayed mouse reports with confirmed keyboard input (#4247)". It changes eight files under rendered-client terminal input/setup, raw-input framing, Unix fd helpers, and client-mode tests. The change preserves delayed SGR mouse reports when host keyboard escape disambiguation is confirmed, buffers host input observed during capability probing, and captures geometry before replaying buffered mouse input.
+
+This movement is material to Spec 012 terminal input qualification, especially FR-022, FR-023, FR-029, SC-024, and the Plan-stage keyboard/mouse/IME/input-source decision. It does not modify agent detection manifests, integration enums, or the serialized API schema; therefore the Entry-pinned 24-agent, 17-plus-1-integration, 105-public-method, 219-baseline-row, and 142-Spec-012-row counts remain unchanged by this one-commit delta.
+
+The newer upstream head is research evidence only. It does not admit source reuse or expand implementation authority.
+
 Herdr remains research/design evidence. No direct copy, adapted copy, or test port is admitted by this file.
 
 ---
