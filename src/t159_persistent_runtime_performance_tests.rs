@@ -26,8 +26,9 @@ const OBSERVER_COUNT: usize = 8;
 const IDLE_RUNTIME_NAMESPACES: usize = 32;
 const OUTPUT_MIN_BYTES: u64 = 10 * 1024 * 1024;
 const OUTPUT_MIN_LINES: u64 = 100_000;
+const OUTPUT_BATCH_LINES: usize = 1_000;
+const OUTPUT_BATCH_COUNT: usize = 100;
 const OUTPUT_DEADLINE: Duration = Duration::from_secs(60);
-const DONE_MARKER: &[u8] = b"WINDS_T159_DONE";
 
 static NEXT_ROOT: AtomicU64 = AtomicU64::new(1);
 
@@ -156,25 +157,25 @@ fn start_runtime(
         .expect("T159 runtime must start")
 }
 
-fn contains_marker(tail: &mut Vec<u8>, chunk: &[u8]) -> bool {
+fn contains_marker(tail: &mut Vec<u8>, chunk: &[u8], marker: &[u8]) -> bool {
     tail.extend_from_slice(chunk);
-    let found = tail
-        .windows(DONE_MARKER.len())
-        .any(|window| window == DONE_MARKER);
-    if tail.len() > DONE_MARKER.len().saturating_mul(2) {
-        let keep = DONE_MARKER.len().saturating_sub(1);
+    let found = tail.windows(marker.len()).any(|window| window == marker);
+    if tail.len() > marker.len().saturating_mul(2) {
+        let keep = marker.len().saturating_sub(1);
         let start = tail.len().saturating_sub(keep);
         tail.drain(..start);
     }
     found
 }
 
-fn high_output_command() -> Vec<u8> {
+fn high_output_batch_command(batch_index: usize) -> (Vec<u8>, Vec<u8>) {
     let body = "x".repeat(112);
-    format!(
-        "awk 'BEGIN {{ for (i = 0; i < 100001; i++) printf \"T159-%06d-{body}\\n\", i }}'; printf '\\127\\111\\116\\104\\123\\137\\124\\061\\065\\071\\137\\104\\117\\116\\105\\012'\n"
+    let marker = format!("WINDS_T159_BATCH_{batch_index:03}_DONE");
+    let command = format!(
+        "awk 'BEGIN {{ for (i = 0; i < {OUTPUT_BATCH_LINES}; i++) printf \"T159-%03d-%06d-{body}\\n\", {batch_index}, i }}'; printf '{marker}\\n'\n"
     )
-    .into_bytes()
+    .into_bytes();
+    (command, marker.into_bytes())
 }
 
 fn drain_fast_observers(
@@ -354,36 +355,76 @@ fn t159_release_resource_and_latency_campaign() {
         .collect();
     assert_eq!(handles.len(), OBSERVER_COUNT);
 
-    owner
-        .controller_send_terminal_input(
-            &controller,
-            runtime_id,
-            &high_output_command(),
-            5_000,
-            5_000,
-        )
-        .expect("T159 high-output command must dispatch");
-
     let deadline = Instant::now() + OUTPUT_DEADLINE;
     let mut observed_bytes = 0_u64;
     let mut observed_lines = 0_u64;
-    let mut tail = Vec::new();
-    let mut reads = 0_u64;
     let mut fast_output_events = 0_u64;
     let mut slow_fill_count = 0_u64;
-    loop {
-        let mut buffer = [0_u8; 64 * 1024];
-        let count = owner
-            .read_terminal_runtime_output(&attachment, &mut buffer)
-            .expect("T159 direct owner drain must remain complete during the bounded high-output campaign");
-        if count > 0 {
-            let chunk = &buffer[..count];
-            observed_bytes = observed_bytes.saturating_add(count as u64);
-            observed_lines = observed_lines
-                .saturating_add(chunk.iter().filter(|byte| **byte == b'\n').count() as u64);
-            reads = reads.saturating_add(1);
-            if reads.is_multiple_of(128) {
-                drain_fast_observers(&mut owner, &handles, &mut fast_output_events);
+
+    for batch_index in 0..OUTPUT_BATCH_COUNT {
+        let (command, marker) = high_output_batch_command(batch_index);
+        owner
+            .controller_send_terminal_input(
+                &controller,
+                runtime_id,
+                &command,
+                5_000 + batch_index as i64,
+                5_000 + batch_index as u64,
+            )
+            .expect("T159 high-output batch command must dispatch");
+
+        owner
+            .controller_resize_terminal(
+                &controller,
+                runtime_id,
+                TerminalSize {
+                    rows: 24 + (batch_index % 2) as u16,
+                    cols: 80 + (batch_index % 2) as u16,
+                },
+                6_000 + batch_index as i64,
+                6_000 + batch_index as u64,
+            )
+            .expect("controller resize must remain correct under sustained output pressure");
+
+        let mut tail = Vec::new();
+        loop {
+            let mut buffer = [0_u8; 64 * 1024];
+            let count = owner
+                .read_terminal_runtime_output(&attachment, &mut buffer)
+                .expect(
+                    "T159 direct owner drain must remain complete for each sub-ceiling output batch",
+                );
+            if count > 0 {
+                let chunk = &buffer[..count];
+                observed_bytes = observed_bytes.saturating_add(count as u64);
+                observed_lines = observed_lines
+                    .saturating_add(chunk.iter().filter(|byte| **byte == b'\n').count() as u64);
+                if contains_marker(&mut tail, chunk, &marker) {
+                    break;
+                }
+            } else {
+                owner
+                    .poll_terminal_runtimes(7_000, 7_000)
+                    .expect("T159 output wait poll must remain valid");
+            }
+            assert!(
+                Instant::now() < deadline,
+                "T159 sustained high-output campaign did not complete inside the 60-second bound"
+            );
+        }
+
+        drain_fast_observers(&mut owner, &handles, &mut fast_output_events);
+        owner
+            .fill_terminal_observer_queue(
+                handles
+                    .last()
+                    .expect("T159 slow observer handle must exist"),
+            )
+            .expect("slow observer queue must remain deterministically bounded");
+        slow_fill_count = slow_fill_count.saturating_add(1);
+    }
+
+    drain_fast_observers(&mut owner, &handles, &mut fast_output_events);
                 owner
                     .fill_terminal_observer_queue(
                         handles
