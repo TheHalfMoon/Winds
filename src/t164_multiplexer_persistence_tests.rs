@@ -10,7 +10,6 @@ use crate::multiplexer::domain::persistence::{
 use crate::multiplexer::domain::{
     LayoutTemplateId, MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration,
 };
-use rusqlite::Connection;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -99,14 +98,17 @@ fn t164_fresh_store_installs_and_validates_exact_schema_inventory() {
             "multiplexer_repository_trust",
             "multiplexer_workspaces",
             "multiplexer_worktree_memberships",
+            "trg_multiplexer_layout_template_capacity",
             "trg_multiplexer_layout_template_time_regression",
             "trg_multiplexer_membership_confirmation_regression",
             "trg_multiplexer_repository_trust_revision_regression",
             "trg_multiplexer_repository_trust_revision_reuse",
             "trg_multiplexer_repository_trust_time_regression",
+            "trg_multiplexer_workspace_capacity",
             "trg_multiplexer_workspace_generation_regression",
             "trg_multiplexer_workspace_generation_reuse",
             "trg_multiplexer_workspace_time_regression",
+            "trg_multiplexer_worktree_membership_capacity",
         ]
     );
 
@@ -140,7 +142,7 @@ fn t164_existing_database_without_0014_migrates_transactionally() {
         multiplexer_schema_objects(&reopened.connection)
             .unwrap()
             .len(),
-        13
+        16
     );
     cleanup(&home);
 }
@@ -174,6 +176,115 @@ fn t164_partial_or_foreign_schema_fails_closed_without_silent_reinitialization()
     }
     assert!(Store::open(&foreign_home).is_err());
     cleanup(&foreign_home);
+}
+
+#[test]
+fn t164_unrelated_foreign_key_to_multiplexer_table_fails_closed() {
+    let home = test_home("foreign-fk");
+    {
+        let store = Store::open(&home).unwrap();
+        store
+            .connection
+            .execute_batch(
+                "CREATE TABLE external_metadata (
+                    id TEXT PRIMARY KEY,
+                    mux_id TEXT NOT NULL
+                        REFERENCES multiplexer_workspaces(multiplexer_workspace_id)
+                        ON DELETE CASCADE
+                );",
+            )
+            .unwrap();
+    }
+
+    assert!(Store::open(&home).is_err());
+    cleanup(&home);
+}
+
+#[test]
+fn t164_database_capacity_triggers_enforce_global_limits() {
+    let home = test_home("capacity-triggers");
+    let store = Store::open(&home).unwrap();
+
+    for index in 1_u128..=32 {
+        let workspace_id = format!("{index:032x}");
+        store
+            .connection
+            .execute(
+                "INSERT INTO multiplexer_workspaces(
+                    multiplexer_workspace_id, schema_version, workspace_alias,
+                    topology_generation, snapshot_json, created_unix_ms, updated_unix_ms
+                 ) VALUES (?1, 1, 'a', 1, '{}', 0, 0)",
+                [workspace_id],
+            )
+            .unwrap();
+    }
+    assert!(
+        store
+            .connection
+            .execute(
+                "INSERT INTO multiplexer_workspaces(
+                    multiplexer_workspace_id, schema_version, workspace_alias,
+                    topology_generation, snapshot_json, created_unix_ms, updated_unix_ms
+                 ) VALUES ('00000000000000000000000000000021', 1, 'a', 1, '{}', 0, 0)",
+                [],
+            )
+            .is_err()
+    );
+
+    for index in 1_u128..=128 {
+        let template_id = format!("{:032x}", index + 1_000);
+        store
+            .connection
+            .execute(
+                "INSERT INTO multiplexer_layout_templates(
+                    layout_template_id, schema_version, template_name, template_json,
+                    created_unix_ms, updated_unix_ms
+                 ) VALUES (?1, 1, 't', '{}', 0, 0)",
+                [template_id],
+            )
+            .unwrap();
+    }
+    assert!(
+        store
+            .connection
+            .execute(
+                "INSERT INTO multiplexer_layout_templates(
+                    layout_template_id, schema_version, template_name, template_json,
+                    created_unix_ms, updated_unix_ms
+                 ) VALUES ('00000000000000000000000000001000', 1, 't', '{}', 0, 0)",
+                [],
+            )
+            .is_err()
+    );
+
+    let workspace_id = "00000000000000000000000000000001";
+    for index in 0..256 {
+        let git_workspace_id = format!("workspace-{index:03}");
+        store
+            .connection
+            .execute(
+                "INSERT INTO multiplexer_worktree_memberships(
+                    multiplexer_workspace_id, git_workspace_id, membership_source,
+                    membership_state, created_unix_ms, last_confirmed_unix_ms
+                 ) VALUES (?1, ?2, 'EXPLICIT_USER', 'PRESENT', 0, 0)",
+                rusqlite::params![workspace_id, git_workspace_id],
+            )
+            .unwrap();
+    }
+    assert!(
+        store
+            .connection
+            .execute(
+                "INSERT INTO multiplexer_worktree_memberships(
+                    multiplexer_workspace_id, git_workspace_id, membership_source,
+                    membership_state, created_unix_ms, last_confirmed_unix_ms
+                 ) VALUES (?1, 'workspace-over-cap', 'EXPLICIT_USER', 'PRESENT', 0, 0)",
+                [workspace_id],
+            )
+            .is_err()
+    );
+
+    cleanup(&home);
 }
 
 #[test]
@@ -399,7 +510,7 @@ fn t164_layout_template_round_trip_is_structure_only_and_rejects_authority_field
 #[test]
 fn t164_explicit_worktree_membership_is_not_discovery_fk_and_metadata_delete_is_not_git_delete() {
     let home = test_home("membership");
-    let store = Store::open(&home).unwrap();
+    let mut store = Store::open(&home).unwrap();
     store
         .create_workspace(
             NewWorkspace {
@@ -413,7 +524,7 @@ fn t164_explicit_worktree_membership_is_not_discovery_fk_and_metadata_delete_is_
 
     let snapshot = snapshot("mux");
     store
-        .persist_multiplexer_workspace_snapshot(&snapshot, 10)
+        .persist_multiplexer_topology_snapshots(std::slice::from_ref(&snapshot), 10)
         .unwrap();
     let membership = WorktreeMembershipRecord {
         multiplexer_workspace_id: snapshot.workspace_id(),

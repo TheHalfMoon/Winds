@@ -75,6 +75,43 @@ CREATE TABLE IF NOT EXISTS multiplexer_repository_trust (
     CHECK (instr(canonical_git_common_dir, char(0)) = 0)
 );
 
+CREATE TRIGGER IF NOT EXISTS trg_multiplexer_workspace_capacity
+BEFORE INSERT ON multiplexer_workspaces
+WHEN NOT EXISTS (
+    SELECT 1
+    FROM multiplexer_workspaces
+    WHERE multiplexer_workspace_id = NEW.multiplexer_workspace_id
+)
+ AND (SELECT COUNT(*) FROM multiplexer_workspaces) >= 32
+BEGIN
+    SELECT RAISE(ABORT, 'multiplexer workspace persistence limit reached');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_multiplexer_layout_template_capacity
+BEFORE INSERT ON multiplexer_layout_templates
+WHEN NOT EXISTS (
+    SELECT 1
+    FROM multiplexer_layout_templates
+    WHERE layout_template_id = NEW.layout_template_id
+)
+ AND (SELECT COUNT(*) FROM multiplexer_layout_templates) >= 128
+BEGIN
+    SELECT RAISE(ABORT, 'multiplexer layout-template persistence limit reached');
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_multiplexer_worktree_membership_capacity
+BEFORE INSERT ON multiplexer_worktree_memberships
+WHEN NOT EXISTS (
+    SELECT 1
+    FROM multiplexer_worktree_memberships
+    WHERE multiplexer_workspace_id = NEW.multiplexer_workspace_id
+      AND git_workspace_id = NEW.git_workspace_id
+)
+ AND (SELECT COUNT(*) FROM multiplexer_worktree_memberships) >= 256
+BEGIN
+    SELECT RAISE(ABORT, 'multiplexer worktree-membership persistence limit reached');
+END;
+
 CREATE TRIGGER IF NOT EXISTS trg_multiplexer_workspace_time_regression
 BEFORE UPDATE ON multiplexer_workspaces
 WHEN NEW.updated_unix_ms < OLD.updated_unix_ms

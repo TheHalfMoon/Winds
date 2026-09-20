@@ -76,3 +76,15 @@ HERDR_SOURCE_REUSE=NO
 ```
 
 Canonical T164 acceptance authorizes T165 only.
+
+
+## Independent-review repairs
+
+Scoped independent review of predecessor head `2530e197aabfe9b1024d43d7db085cf222a642eb` found two material persistence-boundary gaps.
+
+1. Schema validation did not inspect unrelated table names whose foreign keys referenced a T164 table. The corrected candidate enumerates foreign keys for every non-SQLite table and permits only the intended `multiplexer_worktree_memberships.multiplexer_workspace_id -> multiplexer_workspaces.multiplexer_workspace_id ON DELETE CASCADE` relation. Any other foreign key into a T164 table fails closed.
+2. Application count prechecks alone were not a durable capacity invariant under concurrent writers. Migration 0014 now owns database-level `BEFORE INSERT` capacity triggers for the 32-workspace, 128-template, and 256-membership ceilings. The triggers exempt updates to existing identities and reject new rows at capacity, so SQLite's serialized write boundary enforces the cap independently of application interleaving.
+
+Focused regression coverage proves an unrelated foreign-key child table fails closed and direct SQL cannot exceed any of the three global capacity ceilings.
+
+The repair also removes a stale test call to the superseded single-workspace persistence API and keeps topology persistence on the atomic snapshot-set API.

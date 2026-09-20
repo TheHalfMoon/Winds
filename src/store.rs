@@ -1026,6 +1026,89 @@ fn validate_multiplexer_schema_connection(connection: &Connection) -> Result<()>
             return Err(format!("multiplexer schema object definition mismatch: {name}").into());
         }
     }
+    validate_multiplexer_foreign_keys(connection)?;
+    validate_multiplexer_row_limits(connection)?;
+    Ok(())
+}
+
+fn validate_multiplexer_foreign_keys(connection: &Connection) -> Result<()> {
+    const T164_TABLES: [&str; 4] = [
+        "multiplexer_workspaces",
+        "multiplexer_layout_templates",
+        "multiplexer_worktree_memberships",
+        "multiplexer_repository_trust",
+    ];
+
+    let table_names = {
+        let mut statement = connection.prepare(
+            "SELECT name
+             FROM sqlite_master
+             WHERE type = 'table' AND name NOT GLOB 'sqlite_*'
+             ORDER BY name",
+        )?;
+        statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+
+    for child_table in table_names {
+        let mut statement = connection.prepare(
+            "SELECT "table", "from", "to", on_delete
+             FROM pragma_foreign_key_list(?1)
+             ORDER BY id, seq",
+        )?;
+        let rows = statement.query_map([child_table.as_str()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?;
+
+        for row in rows {
+            let (parent_table, from_column, to_column, on_delete) = row?;
+            if !T164_TABLES.contains(&parent_table.as_str()) {
+                continue;
+            }
+
+            let expected_membership_fk = child_table == "multiplexer_worktree_memberships"
+                && parent_table == "multiplexer_workspaces"
+                && from_column == "multiplexer_workspace_id"
+                && to_column == "multiplexer_workspace_id"
+                && on_delete.eq_ignore_ascii_case("CASCADE");
+            if !expected_membership_fk {
+                return Err(format!(
+                    "foreign schema references T164 multiplexer table; child={child_table}; parent={parent_table}; from={from_column}; to={to_column}; on_delete={on_delete}"
+                )
+                .into());
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_multiplexer_row_limits(connection: &Connection) -> Result<()> {
+    for (table, maximum) in [
+        ("multiplexer_workspaces", MULTIPLEXER_MAX_WORKSPACES),
+        (
+            "multiplexer_layout_templates",
+            MULTIPLEXER_MAX_LAYOUT_TEMPLATES,
+        ),
+        (
+            "multiplexer_worktree_memberships",
+            MULTIPLEXER_MAX_WORKTREE_MEMBERSHIPS,
+        ),
+    ] {
+        let count = count_rows(connection, table)?;
+        if count > maximum {
+            return Err(format!(
+                "stored {table} row count {count} exceeds accepted maximum {maximum}"
+            )
+            .into());
+        }
+    }
     Ok(())
 }
 
