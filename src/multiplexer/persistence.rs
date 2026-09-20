@@ -7,10 +7,7 @@ use super::navigation::{
     LayoutNode, LayoutTemplateNode, LayoutTemplateStructure, LayoutTemplateTab, SplitAxis,
     SplitRatioBps, TabState, WorkspaceState,
 };
-use super::{
-    LayoutTemplateId, MultiplexerErrorKind, MultiplexerWorkspaceId, PaneId, TabId,
-    TopologyGeneration,
-};
+use super::{MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -559,7 +556,7 @@ fn validate_json_bytes(value: &str, label: &str) -> Result<(), String> {
 }
 
 fn validate_text_bytes(value: &str, maximum: usize, label: &str) -> Result<(), String> {
-    if value.as_bytes().len() > maximum {
+    if value.len() > maximum {
         return Err(format!("{label} exceeds {maximum} UTF-8 bytes"));
     }
     if value.contains('\0') {
@@ -578,12 +575,4 @@ fn validate_nonempty_text_bytes(
         return Err(format!("{label} must not be empty"));
     }
     Ok(())
-}
-
-pub(crate) fn map_persistence_error(error: String) -> MultiplexerErrorKind {
-    if error.contains("262140") || error.contains("exceeds") {
-        MultiplexerErrorKind::SnapshotLimitExceeded
-    } else {
-        MultiplexerErrorKind::UnsupportedOperation
-    }
 }
