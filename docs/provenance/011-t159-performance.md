@@ -67,6 +67,24 @@ PR #244 merged normally as canonical `main` `2e1e81e96046ce6027702c4b92dfe22a7a3
 
 T159 must therefore qualify only on a candidate containing canonical repair `2e1e81e96046ce6027702c4b92dfe22a7a3b653e` or a proven successor. No evidence from the failed pre-repair T159 head qualifies a repaired successor.
 
+## Superseded T159 campaign failures and retained semantics
+
+The repaired T159 program preserved two later failed candidates as negative evidence rather than relabelling them as qualification.
+
+Exact candidate `a63847633d946fb3e5ecff8046958ac2f708db96` passed its persistent-runtime correctness/security gate and repository quality, then failed the Ubuntu T159 core campaign in run `35492553589`, job `106029868895`. The campaign emitted the entire >10 MiB workload as one burst before the accepted direct consumer could continuously drain the fixed 256 KiB transient direct-output queue. The intentional T152 `OutputGap` contract therefore fired. The failure did not authorize a larger queue. The successor retained the exact 256 KiB ceiling and the same >=10 MiB / >=100,000-line requirement while switching the qualification workload to 100 sustained 1,000-line batches, each drained before the next batch.
+
+Exact candidate `8a3e3af527cc8fa0d8402cfa2c58eb3feac6adb1` passed its persistent-runtime correctness/security gate and its exact-head `quality`, `release-candidate`, `t141-desktop-security`, `t142-native-platform`, and `windows-terminal` workflows. Its T159 core campaign failed in run `35492782420`, job `106030468177`, when the deliberately undrained observer reached the already-accepted T153 slow-client boundary:
+
+```text
+persistent terminal replay failed: replay observer disconnected for slow-client backpressure
+```
+
+That result exposed a campaign-expectation defect, not a runtime defect. Spec 011 Plan AD-011-13 explicitly requires bounded per-client queues and permits deterministic slow-observer disconnect after the limit is exceeded, while requiring that a slow observer cannot stall the controller, another observer, PTY reader, or owner authority loop.
+
+The successor campaign therefore requires exactly one accepted slow-observer disconnect, records the batch where it occurs, continues draining all seven fast observers, continues controller resize during sustained output pressure, and requires cleanup of the disconnected observer handle. The evidence assembler independently binds the final artifact to one disconnect, a recorded disconnect batch, positive fast-observer output delivery, and the unchanged 4 MiB observer queue ceiling.
+
+These campaign corrections change no runtime implementation, queue ceiling, performance threshold, sample floor, authority boundary, correctness gate, or security gate.
+
 ## Closure rule
 
 T159 is not closed by this document, by a local run, or by a green unrelated workflow. Closure requires all of the following on one exact candidate:
