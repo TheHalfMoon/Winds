@@ -5,7 +5,9 @@ use crate::persistent_runtime::domain::{
     OwnerGenerationId, OwnershipState, ProcessLiveness, RuntimeAlias, RuntimeLifecycleEventKind,
     RuntimeNamespaceId, RuntimeTruth,
 };
-use crate::persistent_runtime::persistence::PersistentRuntimeRecordInput;
+use crate::persistent_runtime::persistence::{
+    PersistentRuntimeRecordInput, PersistentRuntimeRecoveryReason,
+};
 use crate::persistent_runtime::protocol::ProtocolMessage;
 use crate::persistent_runtime::replay::{ObserverHandle, ReplayCoordinator, ReplayError};
 use crate::store::Store;
@@ -97,6 +99,21 @@ pub(crate) struct PersistentTerminalSnapshot {
     pub(crate) exit: Option<TerminalExit>,
     pub(crate) last_lifecycle_event_kind: RuntimeLifecycleEventKind,
     pub(crate) last_observed_unix_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PersistentRuntimeShutdownDisposition {
+    Stopped,
+    AlreadyTerminal,
+    OwnershipLost,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PersistentRuntimeShutdownReport {
+    pub(crate) runtime_namespace_id: RuntimeNamespaceId,
+    pub(crate) disposition: PersistentRuntimeShutdownDisposition,
+    pub(crate) snapshot: PersistentTerminalSnapshot,
+    pub(crate) error: Option<String>,
 }
 
 const OUTPUT_PUMP_CHUNK_BYTES: usize = 4 * 1024;
@@ -318,6 +335,8 @@ struct OwnedTerminalRuntime {
     created_unix_ms: i64,
     updated_unix_ms: i64,
     last_observed_unix_ms: Option<i64>,
+    ownership_lost_unix_ms: Option<i64>,
+    recovery_reason: Option<PersistentRuntimeRecoveryReason>,
     persistence_dirty: bool,
 }
 
@@ -357,6 +376,25 @@ impl OwnedTerminalRuntime {
         self.last_lifecycle_event_kind = event_kind;
         self.updated_unix_ms = observed_unix_ms;
         self.last_observed_unix_ms = Some(observed_unix_ms);
+        self.ownership_lost_unix_ms = None;
+        self.recovery_reason = None;
+        self.persistence_dirty = true;
+    }
+
+    fn mark_cleanup_unproven(&mut self, observed_unix_ms: i64) {
+        self.session.suppress_drop_cleanup_after_ownership_loss();
+        self.truth = RuntimeTruth {
+            ownership: OwnershipState::OwnershipLost,
+            process_liveness: ProcessLiveness::Unknown,
+            endpoint_availability: EndpointAvailability::Unknown,
+            continuity: ContinuityClass::Unknown,
+        };
+        self.exit = None;
+        self.last_lifecycle_event_kind = RuntimeLifecycleEventKind::OwnershipLost;
+        self.updated_unix_ms = observed_unix_ms;
+        self.last_observed_unix_ms = Some(observed_unix_ms);
+        self.ownership_lost_unix_ms = Some(observed_unix_ms);
+        self.recovery_reason = Some(PersistentRuntimeRecoveryReason::OwnerGenerationUnproven);
         self.persistence_dirty = true;
     }
 }
@@ -381,6 +419,80 @@ impl PersistentTerminalRegistry {
             .values()
             .filter(|runtime| runtime.is_live())
             .count()
+    }
+
+    pub(crate) fn runtime_ids(&self) -> Vec<RuntimeNamespaceId> {
+        let mut runtime_ids = self.runtimes.keys().copied().collect::<Vec<_>>();
+        runtime_ids.sort();
+        runtime_ids
+    }
+
+    pub(crate) fn shutdown_all(
+        &mut self,
+        store: &Store,
+        now_unix_ms: i64,
+    ) -> Vec<PersistentRuntimeShutdownReport> {
+        let runtime_ids = self.runtime_ids();
+        let mut reports = Vec::with_capacity(runtime_ids.len());
+        for runtime_namespace_id in runtime_ids {
+            let before = self
+                .runtimes
+                .get(&runtime_namespace_id)
+                .expect("runtime id came from the registry")
+                .snapshot();
+
+            if before.truth.ownership == OwnershipState::OwnershipLost {
+                reports.push(PersistentRuntimeShutdownReport {
+                    runtime_namespace_id,
+                    disposition: PersistentRuntimeShutdownDisposition::OwnershipLost,
+                    snapshot: before,
+                    error: None,
+                });
+                continue;
+            }
+            if before.truth.process_liveness == ProcessLiveness::Exited
+                || before.truth.ownership == OwnershipState::Unowned
+            {
+                reports.push(PersistentRuntimeShutdownReport {
+                    runtime_namespace_id,
+                    disposition: PersistentRuntimeShutdownDisposition::AlreadyTerminal,
+                    snapshot: before,
+                    error: None,
+                });
+                continue;
+            }
+
+            let attachment = PersistentTerminalAttachment {
+                runtime_namespace_id,
+                owner_generation_id: self.owner_generation_id,
+            };
+            match self.terminate(store, &attachment, now_unix_ms) {
+                Ok(snapshot) => reports.push(PersistentRuntimeShutdownReport {
+                    runtime_namespace_id,
+                    disposition: PersistentRuntimeShutdownDisposition::Stopped,
+                    snapshot,
+                    error: None,
+                }),
+                Err(error) => {
+                    let snapshot = self
+                        .runtimes
+                        .get(&runtime_namespace_id)
+                        .expect("failed shutdown retains its runtime record")
+                        .snapshot();
+                    reports.push(PersistentRuntimeShutdownReport {
+                        runtime_namespace_id,
+                        disposition: if snapshot.truth.ownership == OwnershipState::OwnershipLost {
+                            PersistentRuntimeShutdownDisposition::OwnershipLost
+                        } else {
+                            PersistentRuntimeShutdownDisposition::AlreadyTerminal
+                        },
+                        snapshot,
+                        error: Some(error.to_string()),
+                    });
+                }
+            }
+        }
+        reports
     }
 
     pub(crate) fn is_live_runtime(&self, runtime_namespace_id: RuntimeNamespaceId) -> bool {
@@ -542,6 +654,8 @@ impl PersistentTerminalRegistry {
             created_unix_ms: now_unix_ms,
             updated_unix_ms: now_unix_ms,
             last_observed_unix_ms: Some(now_unix_ms),
+            ownership_lost_unix_ms: None,
+            recovery_reason: None,
             persistence_dirty: false,
         };
 
@@ -735,8 +849,35 @@ impl PersistentTerminalRegistry {
                 .runtimes
                 .get_mut(&attachment.runtime_namespace_id)
                 .ok_or(PersistentTerminalRuntimeError::UnknownRuntime)?;
-            operation(&mut runtime.session)
-                .map_err(|error| PersistentTerminalRuntimeError::Terminal(error.to_string()))?
+            match operation(&mut runtime.session) {
+                Ok(exit) => exit,
+                Err(error) => {
+                    let cleanup_error = error.to_string();
+                    runtime.mark_cleanup_unproven(now_unix_ms);
+                    let _ = runtime;
+                    let persistence_result =
+                        self.flush_dirty(store, attachment.runtime_namespace_id);
+                    let lifecycle_result = self.append_lifecycle_if_changed(
+                        attachment.runtime_namespace_id,
+                        RuntimeLifecycleEventKind::OwnershipLost,
+                        now_unix_ms,
+                    );
+                    let mut message = format!(
+                        "cleanup outcome is unproven; live ownership was revoked: {cleanup_error}"
+                    );
+                    if let Err(persist_error) = persistence_result {
+                        message.push_str(&format!(
+                            "; ownership-loss persistence also failed: {persist_error}"
+                        ));
+                    }
+                    if let Err(lifecycle_error) = lifecycle_result {
+                        message.push_str(&format!(
+                            "; ownership-loss replay event also failed: {lifecycle_error}"
+                        ));
+                    }
+                    return Err(PersistentTerminalRuntimeError::Terminal(message));
+                }
+            }
         };
         {
             let runtime = self
@@ -909,8 +1050,8 @@ fn persist_runtime(store: &Store, runtime: &OwnedTerminalRuntime) -> RuntimeResu
             created_unix_ms: runtime.created_unix_ms,
             updated_unix_ms: runtime.updated_unix_ms,
             last_observed_unix_ms: runtime.last_observed_unix_ms,
-            ownership_lost_unix_ms: None,
-            recovery_reason: None,
+            ownership_lost_unix_ms: runtime.ownership_lost_unix_ms,
+            recovery_reason: runtime.recovery_reason,
         })
         .map_err(|error| PersistentTerminalRuntimeError::Store(error.to_string()))
 }
@@ -933,6 +1074,10 @@ fn generate_runtime_namespace_id() -> RuntimeResult<RuntimeNamespaceId> {
         ))
     }
 }
+
+#[cfg(test)]
+#[path = "../t157_runtime_recovery_tests.rs"]
+mod t157_runtime_recovery_tests;
 
 #[cfg(test)]
 mod tests {

@@ -784,3 +784,7 @@ fn project_event(message: ProtocolMessage) -> ClientResult<ClientEventProjection
 #[cfg(test)]
 #[path = "../t155_local_control_client_tests.rs"]
 mod t155_local_control_client_tests;
+
+#[cfg(test)]
+#[path = "../t157_client_recovery_tests.rs"]
+mod t157_client_recovery_tests;
