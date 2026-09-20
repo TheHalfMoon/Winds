@@ -384,10 +384,7 @@ fn t164_topology_snapshot_set_is_atomic_and_rejects_mixed_generation_or_focus() 
     .unwrap();
     assert!(
         store
-            .persist_multiplexer_topology_snapshots(
-                &[mixed_generation, second.clone()],
-                11,
-            )
+            .persist_multiplexer_topology_snapshots(&[mixed_generation, second.clone()], 11)
             .is_err()
     );
     assert_eq!(
@@ -403,10 +400,7 @@ fn t164_topology_snapshot_set_is_atomic_and_rejects_mixed_generation_or_focus() 
     .unwrap();
     assert!(
         store
-            .persist_multiplexer_topology_snapshots(
-                &[duplicate_focus, second.clone()],
-                11,
-            )
+            .persist_multiplexer_topology_snapshots(&[duplicate_focus, second.clone()], 11)
             .is_err()
     );
     assert_eq!(

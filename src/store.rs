@@ -1053,9 +1053,9 @@ fn validate_multiplexer_foreign_keys(connection: &Connection) -> Result<()> {
 
     for child_table in table_names {
         let mut statement = connection.prepare(
-            "SELECT "table", "from", "to", on_delete
+            r#"SELECT "table", "from", "to", on_delete
              FROM pragma_foreign_key_list(?1)
-             ORDER BY id, seq",
+             ORDER BY id, seq"#,
         )?;
         let rows = statement.query_map([child_table.as_str()], |row| {
             Ok((
@@ -1158,8 +1158,8 @@ fn decode_multiplexer_workspace_snapshot(
     if expected_workspace_id.is_some_and(|expected| expected != workspace_id) {
         return Err("stored multiplexer workspace identity mismatch".into());
     }
-    let generation = u64::try_from(row.3)
-        .map_err(|_| "stored multiplexer topology generation is invalid")?;
+    let generation =
+        u64::try_from(row.3).map_err(|_| "stored multiplexer topology generation is invalid")?;
     let generation = TopologyGeneration::new(generation)
         .map_err(|error| format!("stored topology generation: {error}"))?;
     let snapshot = TopologySnapshotV1::from_canonical_json(&row.4)
@@ -1321,9 +1321,7 @@ impl Store {
         decode_multiplexer_workspace_snapshot(row, Some(workspace_id))
     }
 
-    pub(crate) fn load_multiplexer_topology_snapshots(
-        &self,
-    ) -> Result<Vec<TopologySnapshotV1>> {
+    pub(crate) fn load_multiplexer_topology_snapshots(&self) -> Result<Vec<TopologySnapshotV1>> {
         self.validate_multiplexer_schema()?;
         let rows = {
             let mut statement = self.connection.prepare(
