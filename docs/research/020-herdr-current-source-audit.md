@@ -1,4 +1,4 @@
-# Herdr Current Source Audit — 2026-09-18
+# Herdr Current Source Audit — 2026-09-20
 
 **Status:** Research/provenance evidence only. No code admission or implementation authority.
 
@@ -6,15 +6,15 @@
 
 - Repository: `https://github.com/herdrdev/herdr`
 - Default branch observed: `master`
-- Commit: `da6bcd5969779bfe0396bcf89a8025d4375d611e`
-- Tree: `aece03633c003ba0fce01bc2564ad14e0fe9cac9`
+- Commit: `a3a1c94ed54e8a65d929528336d69c7e537ed2ef`
+- Tree: `dcafd50d8721c37dac03a89831ba24f849920839`
 - Package version observed: `0.9.1`
 - Root repository license observed: Apache-2.0
-- Immediately previous Winds audit pin: `18061191fdc019498610aee81f0df93f6c2ebd31`
-- Previous audit tree: `ab44d1c6939f1e9b5657512e831c6e50969941a2`
-- Commits from previous audit pin to current pin: **21**
+- Immediately previous Winds audit pin: `da6bcd5969779bfe0396bcf89a8025d4375d611e`
+- Previous audit tree: `aece03633c003ba0fce01bc2564ad14e0fe9cac9`
+- Commits from previous audit pin to current pin: **13**
 - Earlier September research pin: `ef2674bab8a3b38984578473c1a80589ebcbb333`
-- Current Winds canonical base for this research refresh: `7ed50fb6b173c4853394a93b51691e54fa463349`
+- Current Winds canonical base for this research refresh: `bdc30eb34dea2d89213aebabb1bccdf2d5eb5edd`
 
 ## Founder reuse statement
 
@@ -88,26 +88,27 @@ The 2026-09-16 draft PR #212 counted the 17 frozen enum targets but did not sepa
 
 ### Public structured API
 
-`src/api/schema.rs` still exposes exactly **104 serialized public methods**. Internal `serde(skip)` graphics stream-control variants are implementation detail and are not counted as public serialized methods.
+`src/api/schema.rs` exposes exactly **105 serialized public methods** at this pin. This is one more than the previous audit: `pane.clear` was added as a public serialized method. Internal `serde(skip)` graphics stream-control variants remain implementation detail and are not counted as public serialized methods.
 
 The public surface spans server/config/manifest control, workspace, worktree, tab, agent, pane, layout, events/waiting, integration, and plugin operations. The exact method ledger is preserved in `docs/research/021-herdr-exhaustive-capability-ledger.md`.
 
-## 21-commit delta from the previous audit
+## 13-commit delta from the previous audit
 
-The current pin is 21 commits ahead of `18061191...` with no reverse divergence. The exact commit series includes material changes in these product/qualification domains:
+The current pin is 13 commits ahead of `da6bcd59...` with no reverse divergence. The exact commit series includes material changes in these product/qualification domains:
 
-- local usability when remote machines stall;
-- cancellation of remote handoffs when local agent navigation wins;
-- exact session-name confirmation before deletion;
-- worktree forced-removal behavior for submodules;
-- protected-preview -> stable release promotion and release metadata for v0.9.1;
-- OpenCode `tui.json` integration registration;
-- saved-machine connection metadata caching;
-- native-Windows VT/mouse/input recovery and terminal restoration;
-- Windows default pane shell preference for `pwsh`;
-- local Windows input gauntlet coverage and symlink-test qualification.
+- Grok activity detection under custom/disabled OSC signaling;
+- agent-detection test refactoring around engine contracts;
+- native-Windows remote clipboard image-paste qualification;
+- SSH compression for remote connections;
+- request-id preservation in socket error responses;
+- selected-agent reveal while cycling the sidebar;
+- integration-asset isolation from inherited OMP environment;
+- configurable pane screen/scrollback clearing, including the new `pane.clear` public API method and keybinding/config path;
+- aggregate navigation that shows every agent and terminal in the go-to picker;
+- native-Windows cursor redraw stabilization and input-origin qualification;
+- Kiro status detection from live controls and OSC signals.
 
-This delta does not change the 24-agent or 104-public-method counts, and the frozen integration enum remains 17. It is nevertheless material to later remote, Windows, integration, worktree, release/update, and platform qualification specifications.
+The 24 compiled agent families remain unchanged. The frozen serialized integration enum remains 17 plus the existing experimental CLI-only Letta target. The public serialized API increases from 104 to **105** methods because `pane.clear` was added. This delta is directly material to proposed Spec 012 agent detection, multiplexer/navigation, terminal UX, and Windows-input qualification; SSH/remote-clipboard movement is recorded for Spec 013 and does not expand Spec 012 authority.
 
 ## Feature-bearing source families inspected
 
@@ -139,14 +140,16 @@ HERDR_ROOT_LICENSE=APACHE-2.0
 FOUNDER_PERMISSION_ASSERTION=RECORDED
 FULL_PARITY_PRODUCT_TARGET=YES
 AGENT_FAMILIES=24
-PUBLIC_SERIALIZED_API_METHODS=104
+PUBLIC_SERIALIZED_API_METHODS=105
 FROZEN_INTEGRATION_TARGETS=17
 EXPERIMENTAL_CLI_ONLY_INTEGRATIONS=1
 DIRECT_COPY_AUTHORITY=NO_UNTIL_FORMAL_TASK_ADMISSION
 THIRD_PARTY_VENDOR_BLANKET_ADMISSION=NO
-SPEC_011_ENTRY_AUTHORIZED=NO
-PERSISTENT_OWNER_IMPLEMENTATION_AUTHORIZED=NO
-PRIVATE_IPC_IMPLEMENTATION_AUTHORIZED=NO
+SPEC_011_FIRST_PERSISTENT_RUNTIME_PROGRAM=CLOSED_CANONICAL
+SPEC_012_FORMAL_SPEC_AUTHORIZED=NO
+SPEC_012_PLAN_AUTHORIZED=NO
+SPEC_012_TASKS_AUTHORIZED=NO
+SPEC_012_IMPLEMENTATION_AUTHORIZED=NO
 REMOTE_EXECUTION_IMPLEMENTATION_AUTHORIZED=NO
 PLUGIN_RUNTIME_IMPLEMENTATION_AUTHORIZED=NO
 ```
