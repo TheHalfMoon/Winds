@@ -272,9 +272,12 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 - no desktop/TUI, Git mutation, detector, dependency, network/public RPC;
 
 **Required work**:
-- protocol version 2 exact handshake; no automatic downgrade;
+- protocol version 2 exact handshake on both owner and the existing shared Rust client; no automatic downgrade;
+- all existing accepted Spec 011 runtime-control message semantics remain available under v2 so T166 does not strand the in-repo client while T167 topology projection is still blocked;
 - `BLOCKED_LEGACY_OWNER` behavior for a live v1 owner with no auto-kill/reclaim/handoff/second owner;
-- closed message families for topology snapshots/events/write authority, later agent/worktree/attention extensions reserved only as typed enums;
+- freeze the complete first-program v2 wire vocabulary and bounded payload schemas for topology/write-state, agent-observation, attention, and worktree families listed by the canonical Plan, even when a later-domain handler is not yet authorized;
+- not-yet-authorized v2 domain operations return typed `UNSUPPORTED_OPERATION`/equivalent and have no side effect; later tasks activate frozen handlers/projections rather than silently changing v2 message kinds or payload schemas;
+- any incompatible wire-schema addition after T166 requires an explicit protocol-v3 or separately accepted Plan/Tasks amendment, not an in-place v2 mutation;
 - exact request sequence/correlation/owner-generation/target binding;
 - topology request includes exact workspace/target IDs + expected TopologyGeneration;
 - event loss/gap explicitly marks client projection stale and requires fresh subscription + authoritative snapshot;
@@ -283,7 +286,9 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 - `SNAPSHOT_LIMIT_EXCEEDED` rejects before generation/persistence/publication with no truncation;
 
 **Acceptance**:
-- v1/v2 mismatch, malformed/oversized/truncated/unknown-kind, stale-generation, replay/duplicate fixtures;
+- v1/v2 mismatch in both directions, live-v1 owner blocking, and same-revision owner/client v2 regression fixtures;
+- every existing Spec 011 runtime-control client operation still round-trips under v2 before T166 can close;
+- malformed/oversized/truncated/unknown-kind, unsupported-not-yet-authorized-domain, stale-generation, replay/duplicate fixtures;
 - encoded maximum-size boundary tests prove total-frame accounting;
 - lost-history fixtures prove resnapshot rather than silent continuation;
 - terminal strings shaped like v2 messages remain untrusted data;
@@ -513,7 +518,7 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 **Authorized paths**:
 - new `src/multiplexer/agent_state.rs`;
 - `src/multiplexer/service.rs`, protocol/projection support narrowly;
-- `src/persistent_runtime/protocol.rs` only for admitted v2 typed agent snapshot/event variants;
+- activation of the already-frozen T166 agent-observation v2 handlers/projections only; no v2 message-kind or payload-schema change;
 - focused `src/t173_agent_observation_tests.rs`;
 - no agent launch/provider API, UI dock, Git mutation, or dependency;
 
@@ -581,7 +586,7 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 
 **Authorized paths**:
 - new `src/multiplexer/attention.rs`;
-- service/protocol/projection support narrowly;
+- service/projection support and activation of already-frozen T166 attention v2 handlers narrowly;
 - `src/desktop.rs` / workbench attention projection only as required;
 - focused `src/t175_needs_you_tests.rs` and desktop tests;
 - no terminal-text classifier, LLM inference, provider launch, or dependency;
