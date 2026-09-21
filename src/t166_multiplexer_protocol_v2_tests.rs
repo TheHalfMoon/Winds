@@ -1021,7 +1021,7 @@ fn t166_stale_topology_and_history_gap_are_explicit_wire_outcomes() {
                         error: crate::multiplexer::domain::MultiplexerErrorKind::StaleTopologyGeneration,
                     },
                     accepted_topology_generation: None,
-                    multiplexer_workspace_id: workspace(36),
+                    multiplexer_workspace_id: Some(workspace(36)),
                     tab_id: None,
                     pane_id: None,
                 },
