@@ -1648,12 +1648,10 @@ pub(super) fn validate_v2_response_binding(
                     snapshot: workspace_snapshot,
                 },
             ) if workspace_snapshot.multiplexer_workspace_id == *expected_workspace_id => {}
-            (
-                expected_workspace_id,
-                MultiplexerSnapshotV2::MutationResult { result, snapshot },
-            ) if matches!(result.outcome, TopologyMutationOutcomeV2::Rejected { .. })
-                && result.multiplexer_workspace_id == *expected_workspace_id
-                && snapshot.is_none() => {}
+            (expected_workspace_id, MultiplexerSnapshotV2::MutationResult { result, snapshot })
+                if matches!(result.outcome, TopologyMutationOutcomeV2::Rejected { .. })
+                    && result.multiplexer_workspace_id == *expected_workspace_id
+                    && snapshot.is_none() => {}
             _ => return Err(LocalControlErrorKind::MalformedFrame),
         },
         (
@@ -1753,7 +1751,8 @@ pub(super) fn validate_v2_response_binding(
             if result.page_offset != 0
                 || result.next_cursor.is_some()
                 || result.multiplexer_workspace_id != request.multiplexer_workspace_id
-                || result.repository_identity.as_deref() != Some(request.repository_identity.as_str())
+                || result.repository_identity.as_deref()
+                    != Some(request.repository_identity.as_str())
             {
                 return Err(LocalControlErrorKind::MalformedFrame);
             }

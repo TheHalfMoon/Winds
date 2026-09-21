@@ -20,16 +20,16 @@ use crate::persistent_runtime::protocol::{
     MAX_V2_ATTENTION_ITEMS_PER_PAGE, MAX_V2_BRANCH_BYTES, MAX_V2_DETAIL_BYTES,
     MAX_V2_EVIDENCE_SUMMARY_BYTES, MAX_V2_GIT_WORKSPACE_ID_BYTES, MAX_V2_PANES_PER_TAB,
     MAX_V2_PATH_BYTES, MAX_V2_PROVIDER_SESSION_ID_BYTES, MAX_V2_REPOSITORY_IDENTITY_BYTES,
-    MAX_V2_TABS_PER_WORKSPACE, MAX_V2_WORKSPACES, MAX_V2_WORKTREES_PER_PAGE,
-    MessageAuthorityClass, MessageKind, MultiplexerEventV2, MultiplexerSnapshotV2,
-    MultiplexerWriteStateV2, PROTOCOL_VERSION, ProtocolLayoutNodeV2, ProtocolPanePlacement,
-    ProtocolSplitAxis, ProtocolTabSnapshotV2, ProtocolWorkspaceSnapshotV2,
-    ProtocolWorkspaceSummaryV2, RequestMultiplexerWriteV2, TopologyMutationOutcomeV2,
-    TopologyMutationResultV2, TopologyOperationV2, WorktreeCursorV2, WorktreeMembershipV2,
-    WorktreeObservationV2, WorktreeOperationOutcomeV2, WorktreeOperationResultV2,
-    WorktreeOperationV2, apply_topology_operation_v2, decode_frame, encode_frame,
-    inactive_v2_domain_response, multiplexer_snapshot_for_request_v2,
-    validate_candidate_topology_v2, validate_owner_v2_handshake, validate_response_binding,
+    MAX_V2_TABS_PER_WORKSPACE, MAX_V2_WORKSPACES, MAX_V2_WORKTREES_PER_PAGE, MessageAuthorityClass,
+    MessageKind, MultiplexerEventV2, MultiplexerSnapshotV2, MultiplexerWriteStateV2,
+    PROTOCOL_VERSION, ProtocolLayoutNodeV2, ProtocolPanePlacement, ProtocolSplitAxis,
+    ProtocolTabSnapshotV2, ProtocolWorkspaceSnapshotV2, ProtocolWorkspaceSummaryV2,
+    RequestMultiplexerWriteV2, TopologyMutationOutcomeV2, TopologyMutationResultV2,
+    TopologyOperationV2, WorktreeCursorV2, WorktreeMembershipV2, WorktreeObservationV2,
+    WorktreeOperationOutcomeV2, WorktreeOperationResultV2, WorktreeOperationV2,
+    apply_topology_operation_v2, decode_frame, encode_frame, inactive_v2_domain_response,
+    multiplexer_snapshot_for_request_v2, validate_candidate_topology_v2,
+    validate_owner_v2_handshake, validate_response_binding,
 };
 use crate::persistent_runtime::protocol::{ProtocolMessage, ProtocolPayload};
 use std::collections::VecDeque;
@@ -300,26 +300,16 @@ fn t166_response_binding_rejects_topology_target_and_generation_substitution() {
     };
 
     assert_eq!(
-        validate_response_binding(
-            &request,
-            &response(workspace(19), topology_generation(9))
-        )
-        .unwrap_err(),
+        validate_response_binding(&request, &response(workspace(19), topology_generation(9)))
+            .unwrap_err(),
         LocalControlErrorKind::MalformedFrame
     );
     assert_eq!(
-        validate_response_binding(
-            &request,
-            &response(workspace(18), topology_generation(10))
-        )
-        .unwrap_err(),
+        validate_response_binding(&request, &response(workspace(18), topology_generation(10)))
+            .unwrap_err(),
         LocalControlErrorKind::MalformedFrame
     );
-    validate_response_binding(
-        &request,
-        &response(workspace(18), topology_generation(9)),
-    )
-    .unwrap();
+    validate_response_binding(&request, &response(workspace(18), topology_generation(9))).unwrap();
 }
 
 #[test]
@@ -1256,9 +1246,7 @@ struct Spec011V2RoundTripWire {
 }
 
 impl Spec011V2RoundTripWire {
-    fn new(
-        owner_generation_id: OwnerGenerationId,
-    ) -> (Self, Arc<Mutex<Vec<ProtocolMessage>>>) {
+    fn new(owner_generation_id: OwnerGenerationId) -> (Self, Arc<Mutex<Vec<ProtocolMessage>>>) {
         let sent = Arc::new(Mutex::new(Vec::new()));
         (
             Self {
@@ -1275,12 +1263,12 @@ impl Spec011V2RoundTripWire {
         let response_sequence = sequence(request.sequence.get().saturating_add(1_000));
         let payload = match &request.payload {
             ProtocolPayload::Hello { .. } => ProtocolPayload::HelloAck,
-            ProtocolPayload::AttachObserver | ProtocolPayload::Detach | ProtocolPayload::ReleaseControl => {
-                ProtocolPayload::ControlState {
-                    authority: ClientAuthority::Observer,
-                    controller_client_id: None,
-                }
-            }
+            ProtocolPayload::AttachObserver
+            | ProtocolPayload::Detach
+            | ProtocolPayload::ReleaseControl => ProtocolPayload::ControlState {
+                authority: ClientAuthority::Observer,
+                controller_client_id: None,
+            },
             ProtocolPayload::RequestControl
             | ProtocolPayload::Input { .. }
             | ProtocolPayload::Resize { .. }
@@ -1289,7 +1277,11 @@ impl Spec011V2RoundTripWire {
                 authority: ClientAuthority::Controller,
                 controller_client_id: Some(self.connection_id.clone()),
             },
-            _ => return Err(WireError::Protocol(LocalControlErrorKind::UnsupportedOperation)),
+            _ => {
+                return Err(WireError::Protocol(
+                    LocalControlErrorKind::UnsupportedOperation,
+                ));
+            }
         };
         ProtocolMessage::new(
             self.connection_id.clone(),
@@ -1314,10 +1306,8 @@ impl LocalControlWire for Spec011V2RoundTripWire {
         let decoded = decode_frame(&frame).map_err(WireError::Protocol)?;
         self.sent.lock().unwrap().push(decoded.clone());
         let response = self.response_for(&decoded)?;
-        let response = decode_frame(
-            &encode_frame(&response).map_err(WireError::Protocol)?,
-        )
-        .map_err(WireError::Protocol)?;
+        let response = decode_frame(&encode_frame(&response).map_err(WireError::Protocol)?)
+            .map_err(WireError::Protocol)?;
         self.receive.push_back(Ok(response));
         Ok(())
     }
@@ -1335,9 +1325,11 @@ fn t166_all_existing_spec011_client_operations_round_trip_under_v2() {
     let runtime_namespace_id = runtime(48);
     let target = ResolvedRuntimeTarget::exact(runtime_namespace_id);
     let (wire, sent) = Spec011V2RoundTripWire::new(owner_generation_id);
-    let mut client =
-        RustLocalControlClient::connect_with_wire_for_test(Box::new(wire), Some(owner_generation_id))
-            .unwrap();
+    let mut client = RustLocalControlClient::connect_with_wire_for_test(
+        Box::new(wire),
+        Some(owner_generation_id),
+    )
+    .unwrap();
 
     assert!(matches!(
         client.attach_observer(target).unwrap(),
