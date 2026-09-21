@@ -1281,10 +1281,8 @@ pub(super) fn validate_v2_response_binding(
         (
             ProtocolPayload::ApplyWorktreeOperation { .. },
             ProtocolPayload::WorktreeOperationResult { result },
-        ) => {
-            if result.page_offset != 0 || result.next_cursor.is_some() {
-                return Err(LocalControlErrorKind::MalformedFrame);
-            }
+        ) if result.page_offset != 0 || result.next_cursor.is_some() => {
+            return Err(LocalControlErrorKind::MalformedFrame);
         }
         _ => {}
     }
