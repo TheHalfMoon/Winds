@@ -973,9 +973,22 @@ fn validate_snapshot(snapshot: &MultiplexerSnapshotV2) -> ProtocolResult<()> {
                 TopologyMutationOutcomeV2::Rejected {
                     error: MultiplexerErrorKind::SnapshotLimitExceeded
                 }
-            ) && result.accepted_topology_generation.is_some()
+            ) && (result.accepted_topology_generation.is_some() || snapshot.is_some())
             {
                 return Err(LocalControlErrorKind::MalformedFrame);
+            }
+            match result.outcome {
+                TopologyMutationOutcomeV2::Accepted
+                    if result.accepted_topology_generation.is_none() =>
+                {
+                    return Err(LocalControlErrorKind::MalformedFrame);
+                }
+                TopologyMutationOutcomeV2::Rejected { .. }
+                    if result.accepted_topology_generation.is_some() =>
+                {
+                    return Err(LocalControlErrorKind::MalformedFrame);
+                }
+                _ => {}
             }
             if let Some(snapshot) = snapshot {
                 validate_workspace_snapshot(snapshot)?;
