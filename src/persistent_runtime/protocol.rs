@@ -301,7 +301,9 @@ pub(crate) enum ProtocolPayload {
     MultiplexerSnapshot {
         snapshot: MultiplexerSnapshotV2,
     },
-    RequestMultiplexerWrite,
+    RequestMultiplexerWrite {
+        request: RequestMultiplexerWriteV2,
+    },
     ReleaseMultiplexerWrite,
     MultiplexerWriteState {
         state: MultiplexerWriteStateV2,
@@ -363,7 +365,7 @@ impl ProtocolPayload {
             Self::Stop => MessageKind::Stop,
             Self::ListMultiplexerWorkspaces { .. } => MessageKind::ListMultiplexerWorkspaces,
             Self::MultiplexerSnapshot { .. } => MessageKind::MultiplexerSnapshot,
-            Self::RequestMultiplexerWrite => MessageKind::RequestMultiplexerWrite,
+            Self::RequestMultiplexerWrite { .. } => MessageKind::RequestMultiplexerWrite,
             Self::ReleaseMultiplexerWrite => MessageKind::ReleaseMultiplexerWrite,
             Self::MultiplexerWriteState { .. } => MessageKind::MultiplexerWriteState,
             Self::ApplyTopologyOperation { .. } => MessageKind::ApplyTopologyOperation,

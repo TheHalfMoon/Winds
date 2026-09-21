@@ -4,7 +4,8 @@ use crate::multiplexer::domain::navigation::{
     WorkspaceState,
 };
 use crate::multiplexer::domain::{
-    AgentObservationId, MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration,
+    AgentObservationId, ClientSurfaceCapability, MultiplexerAuthority, MultiplexerErrorKind,
+    MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration,
 };
 use crate::persistent_runtime::domain::{
     ClientConnectionId, EventSequence, LocalControlErrorKind, OwnerGenerationId, RuntimeNamespaceId,
@@ -22,7 +23,8 @@ use crate::persistent_runtime::protocol::{
     MAX_V2_TABS_PER_WORKSPACE, MAX_V2_WORKTREES_PER_PAGE, MessageAuthorityClass, MessageKind,
     MultiplexerEventV2, MultiplexerSnapshotV2, PROTOCOL_VERSION, ProtocolLayoutNodeV2,
     ProtocolPanePlacement, ProtocolSplitAxis, ProtocolTabSnapshotV2, ProtocolWorkspaceSnapshotV2,
-    TopologyMutationOutcomeV2, TopologyMutationResultV2, TopologyOperationV2, WorktreeCursorV2,
+    RequestMultiplexerWriteV2, TopologyMutationOutcomeV2, TopologyMutationResultV2,
+    TopologyOperationV2, WorktreeCursorV2,
     WorktreeMembershipV2, WorktreeObservationV2, WorktreeOperationOutcomeV2,
     WorktreeOperationResultV2, WorktreeOperationV2, decode_frame, encode_frame,
     inactive_v2_domain_response, validate_candidate_topology_v2, validate_owner_v2_handshake,
@@ -851,4 +853,45 @@ fn t166_live_v1_mismatch_maps_to_blocked_legacy_owner_without_handoff() {
         .err()
         .unwrap();
     assert_eq!(error, LocalControlClientError::BlockedLegacyOwner);
+}
+
+
+#[test]
+fn t166_request_multiplexer_write_carries_client_surface_capability() {
+    let request = v2_message(ProtocolPayload::RequestMultiplexerWrite {
+        request: RequestMultiplexerWriteV2 {
+            client_surface_capability: ClientSurfaceCapability::TrustedDesktopTerminalSurface,
+        },
+    });
+    let frame = encode_frame(&request).unwrap();
+    let json = std::str::from_utf8(&frame[4..]).unwrap();
+    assert!(json.contains("TRUSTED_DESKTOP_TERMINAL_SURFACE"));
+    assert_eq!(decode_frame(&frame).unwrap(), request);
+}
+
+#[test]
+fn t166_topology_helpers_execute_only_currently_authorized_operations() {
+    let mut topology = MultiplexerTopology::empty();
+    let create = TopologyOperationV2::CreateWorkspace {
+        multiplexer_workspace_id: workspace(70),
+        alias: "dispatch".to_owned(),
+        first_tab_id: tab(71),
+        first_tab_alias: "main".to_owned(),
+        first_pane_id: pane(72),
+    };
+    let accepted =
+        apply_topology_operation_v2(&mut topology, topology_generation(1), &create).unwrap();
+    assert_eq!(accepted, topology_generation(2));
+    assert_eq!(topology.workspace(workspace(70)).unwrap().alias, "dispatch");
+
+    let deferred = TopologyOperationV2::ClearPane {
+        multiplexer_workspace_id: workspace(70),
+        tab_id: tab(71),
+        pane_id: pane(72),
+        presentation_epoch: 1,
+    };
+    assert_eq!(
+        apply_topology_operation_v2(&mut topology, accepted, &deferred).unwrap_err(),
+        MultiplexerErrorKind::UnsupportedOperation
+    );
 }

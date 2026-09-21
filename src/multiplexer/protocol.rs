@@ -3,11 +3,11 @@ use super::{
     encode_frame,
 };
 use crate::multiplexer::domain::navigation::{
-    LayoutNode, MultiplexerTopology, SplitAxis, WorkspaceState,
+    LayoutNode, MultiplexerTopology, PanePlacement, SplitAxis, SplitRatioBps, WorkspaceState,
 };
 use crate::multiplexer::domain::{
-    AgentObservationId, LayoutTemplateId, MultiplexerAuthority, MultiplexerErrorKind,
-    MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration,
+    AgentObservationId, ClientSurfaceCapability, LayoutTemplateId, MultiplexerAuthority,
+    MultiplexerErrorKind, MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration,
 };
 use crate::persistent_runtime::domain::{
     ClientConnectionId, EventSequence, LocalControlErrorKind, OwnerGenerationId, RuntimeNamespaceId,
@@ -142,10 +142,18 @@ pub(crate) struct ListMultiplexerWorkspacesV2 {
     pub(crate) multiplexer_workspace_id: Option<MultiplexerWorkspaceId>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RequestMultiplexerWriteV2 {
+    pub(crate) client_surface_capability: ClientSurfaceCapability,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct MultiplexerWriteStateV2 {
     pub(crate) authority: MultiplexerAuthority,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) error: Option<MultiplexerErrorKind>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -597,6 +605,336 @@ fn protocol_workspace_snapshot(
     }
 }
 
+
+pub(crate) fn multiplexer_snapshot_for_request_v2(
+    topology: &MultiplexerTopology,
+    requested_workspace_id: Option<MultiplexerWorkspaceId>,
+) -> Result<MultiplexerSnapshotV2, MultiplexerErrorKind> {
+    if let Some(workspace_id) = requested_workspace_id {
+        let workspace = topology.workspace(workspace_id)?;
+        return Ok(MultiplexerSnapshotV2::Workspace {
+            snapshot: protocol_workspace_snapshot(workspace, topology.generation()),
+        });
+    }
+
+    Ok(MultiplexerSnapshotV2::WorkspaceList {
+        topology_generation: topology.generation(),
+        workspaces: topology
+            .workspaces()
+            .iter()
+            .map(|workspace| ProtocolWorkspaceSummaryV2 {
+                multiplexer_workspace_id: workspace.id,
+                alias: workspace.alias.clone(),
+                topology_generation: topology.generation(),
+                is_focused: topology.focused_workspace_id() == Some(workspace.id),
+            })
+            .collect(),
+    })
+}
+
+fn split_axis_from_protocol(value: ProtocolSplitAxis) -> SplitAxis {
+    match value {
+        ProtocolSplitAxis::Horizontal => SplitAxis::Horizontal,
+        ProtocolSplitAxis::Vertical => SplitAxis::Vertical,
+    }
+}
+
+fn pane_placement_from_protocol(value: ProtocolPanePlacement) -> PanePlacement {
+    match value {
+        ProtocolPanePlacement::Before => PanePlacement::Before,
+        ProtocolPanePlacement::After => PanePlacement::After,
+    }
+}
+
+pub(crate) fn topology_operation_target_ids_v2(
+    operation: &TopologyOperationV2,
+) -> (
+    Option<MultiplexerWorkspaceId>,
+    Option<TabId>,
+    Option<PaneId>,
+) {
+    match operation {
+        TopologyOperationV2::CreateWorkspace {
+            multiplexer_workspace_id,
+            first_tab_id,
+            first_pane_id,
+            ..
+        } => (
+            Some(*multiplexer_workspace_id),
+            Some(*first_tab_id),
+            Some(*first_pane_id),
+        ),
+        TopologyOperationV2::FocusWorkspace {
+            multiplexer_workspace_id,
+        }
+        | TopologyOperationV2::RenameWorkspace {
+            multiplexer_workspace_id,
+            ..
+        }
+        | TopologyOperationV2::MoveWorkspace {
+            multiplexer_workspace_id,
+            ..
+        }
+        | TopologyOperationV2::CloseWorkspace {
+            multiplexer_workspace_id,
+        } => (Some(*multiplexer_workspace_id), None, None),
+        TopologyOperationV2::CreateTab {
+            multiplexer_workspace_id,
+            tab_id,
+            first_pane_id,
+            ..
+        } => (
+            Some(*multiplexer_workspace_id),
+            Some(*tab_id),
+            Some(*first_pane_id),
+        ),
+        TopologyOperationV2::FocusTab {
+            multiplexer_workspace_id,
+            tab_id,
+        }
+        | TopologyOperationV2::RenameTab {
+            multiplexer_workspace_id,
+            tab_id,
+            ..
+        }
+        | TopologyOperationV2::MoveTab {
+            multiplexer_workspace_id,
+            tab_id,
+            ..
+        }
+        | TopologyOperationV2::CloseTab {
+            multiplexer_workspace_id,
+            tab_id,
+        } => (Some(*multiplexer_workspace_id), Some(*tab_id), None),
+        TopologyOperationV2::SplitPane {
+            multiplexer_workspace_id,
+            tab_id,
+            target_pane_id,
+            ..
+        } => (
+            Some(*multiplexer_workspace_id),
+            Some(*tab_id),
+            Some(*target_pane_id),
+        ),
+        TopologyOperationV2::SwapPanes {
+            multiplexer_workspace_id,
+            tab_id,
+            first_pane_id,
+            ..
+        }
+        | TopologyOperationV2::ResizeSplit {
+            multiplexer_workspace_id,
+            tab_id,
+            first_pane_id,
+            ..
+        } => (
+            Some(*multiplexer_workspace_id),
+            Some(*tab_id),
+            Some(*first_pane_id),
+        ),
+        TopologyOperationV2::MovePane {
+            multiplexer_workspace_id,
+            source_tab_id,
+            pane_id,
+            ..
+        } => (
+            Some(*multiplexer_workspace_id),
+            Some(*source_tab_id),
+            Some(*pane_id),
+        ),
+        TopologyOperationV2::ToggleZoom {
+            multiplexer_workspace_id,
+            tab_id,
+            pane_id,
+        }
+        | TopologyOperationV2::FocusPane {
+            multiplexer_workspace_id,
+            tab_id,
+            pane_id,
+        }
+        | TopologyOperationV2::ClosePane {
+            multiplexer_workspace_id,
+            tab_id,
+            pane_id,
+            ..
+        }
+        | TopologyOperationV2::ClearPane {
+            multiplexer_workspace_id,
+            tab_id,
+            pane_id,
+            ..
+        } => (
+            Some(*multiplexer_workspace_id),
+            Some(*tab_id),
+            Some(*pane_id),
+        ),
+        TopologyOperationV2::ApplyLayoutTemplate {
+            multiplexer_workspace_id,
+            ..
+        } => (Some(*multiplexer_workspace_id), None, None),
+    }
+}
+
+pub(crate) fn apply_topology_operation_v2(
+    topology: &mut MultiplexerTopology,
+    expected: TopologyGeneration,
+    operation: &TopologyOperationV2,
+) -> Result<TopologyGeneration, MultiplexerErrorKind> {
+    match operation {
+        TopologyOperationV2::CreateWorkspace {
+            multiplexer_workspace_id,
+            alias,
+            first_tab_id,
+            first_tab_alias,
+            first_pane_id,
+        } => topology.create_workspace(
+            expected,
+            *multiplexer_workspace_id,
+            alias.clone(),
+            *first_tab_id,
+            first_tab_alias.clone(),
+            *first_pane_id,
+        ),
+        TopologyOperationV2::FocusWorkspace {
+            multiplexer_workspace_id,
+        } => topology.focus_workspace(expected, *multiplexer_workspace_id),
+        TopologyOperationV2::RenameWorkspace {
+            multiplexer_workspace_id,
+            alias,
+        } => topology.rename_workspace(expected, *multiplexer_workspace_id, alias.clone()),
+        TopologyOperationV2::MoveWorkspace {
+            multiplexer_workspace_id,
+            new_index,
+        } => topology.move_workspace(expected, *multiplexer_workspace_id, usize::from(*new_index)),
+        TopologyOperationV2::CloseWorkspace {
+            multiplexer_workspace_id,
+        } => topology.close_workspace(expected, *multiplexer_workspace_id),
+        TopologyOperationV2::CreateTab {
+            multiplexer_workspace_id,
+            tab_id,
+            alias,
+            first_pane_id,
+        } => topology.create_tab(
+            expected,
+            *multiplexer_workspace_id,
+            *tab_id,
+            alias.clone(),
+            *first_pane_id,
+        ),
+        TopologyOperationV2::FocusTab {
+            multiplexer_workspace_id,
+            tab_id,
+        } => topology.focus_tab(expected, *multiplexer_workspace_id, *tab_id),
+        TopologyOperationV2::RenameTab {
+            multiplexer_workspace_id,
+            tab_id,
+            alias,
+        } => topology.rename_tab(expected, *multiplexer_workspace_id, *tab_id, alias.clone()),
+        TopologyOperationV2::MoveTab {
+            multiplexer_workspace_id,
+            tab_id,
+            new_index,
+        } => topology.move_tab(
+            expected,
+            *multiplexer_workspace_id,
+            *tab_id,
+            usize::from(*new_index),
+        ),
+        TopologyOperationV2::CloseTab {
+            multiplexer_workspace_id,
+            tab_id,
+        } => topology.close_tab(expected, *multiplexer_workspace_id, *tab_id),
+        TopologyOperationV2::SplitPane {
+            multiplexer_workspace_id,
+            tab_id,
+            target_pane_id,
+            new_pane_id,
+            axis,
+            placement,
+            ratio_basis_points,
+        } => topology.split_pane(
+            expected,
+            *multiplexer_workspace_id,
+            *tab_id,
+            *target_pane_id,
+            *new_pane_id,
+            split_axis_from_protocol(*axis),
+            pane_placement_from_protocol(*placement),
+            SplitRatioBps::new(*ratio_basis_points)?,
+        ),
+        TopologyOperationV2::SwapPanes {
+            multiplexer_workspace_id,
+            tab_id,
+            first_pane_id,
+            second_pane_id,
+        } => topology.swap_panes(
+            expected,
+            *multiplexer_workspace_id,
+            *tab_id,
+            *first_pane_id,
+            *second_pane_id,
+        ),
+        TopologyOperationV2::MovePane {
+            multiplexer_workspace_id,
+            source_tab_id,
+            pane_id,
+            destination_tab_id,
+            destination_pane_id,
+            axis,
+            placement,
+            ratio_basis_points,
+        } => topology.move_pane(
+            expected,
+            *multiplexer_workspace_id,
+            *source_tab_id,
+            *pane_id,
+            *destination_tab_id,
+            *destination_pane_id,
+            split_axis_from_protocol(*axis),
+            pane_placement_from_protocol(*placement),
+            SplitRatioBps::new(*ratio_basis_points)?,
+        ),
+        TopologyOperationV2::ResizeSplit {
+            multiplexer_workspace_id,
+            tab_id,
+            first_pane_id,
+            second_pane_id,
+            ratio_basis_points,
+        } => topology.resize_split_between(
+            expected,
+            *multiplexer_workspace_id,
+            *tab_id,
+            *first_pane_id,
+            *second_pane_id,
+            SplitRatioBps::new(*ratio_basis_points)?,
+        ),
+        TopologyOperationV2::ToggleZoom {
+            multiplexer_workspace_id,
+            tab_id,
+            pane_id,
+        } => topology.toggle_zoom(expected, *multiplexer_workspace_id, *tab_id, *pane_id),
+        TopologyOperationV2::FocusPane {
+            multiplexer_workspace_id,
+            tab_id,
+            pane_id,
+        } => topology.focus_pane(expected, *multiplexer_workspace_id, *tab_id, *pane_id),
+        TopologyOperationV2::ClosePane {
+            multiplexer_workspace_id,
+            tab_id,
+            pane_id,
+            policy: ProtocolPaneClosePolicy::DetachView,
+        } => topology.close_pane(expected, *multiplexer_workspace_id, *tab_id, *pane_id),
+        TopologyOperationV2::ClosePane {
+            policy: ProtocolPaneClosePolicy::StopRuntimeThenClose,
+            ..
+        }
+        | TopologyOperationV2::ClearPane { .. }
+        | TopologyOperationV2::ApplyLayoutTemplate { .. } => {
+            Err(MultiplexerErrorKind::UnsupportedOperation)
+        }
+    }
+}
+
 fn layout_pane_count(node: &LayoutNode) -> usize {
     match node {
         LayoutNode::Pane(_) => 1,
@@ -706,9 +1044,8 @@ pub(super) fn encode_v2_body(payload: &ProtocolPayload) -> ProtocolResult<Value>
     match payload {
         ProtocolPayload::ListMultiplexerWorkspaces { request } => to_value(request),
         ProtocolPayload::MultiplexerSnapshot { snapshot } => to_value(snapshot),
-        ProtocolPayload::RequestMultiplexerWrite | ProtocolPayload::ReleaseMultiplexerWrite => {
-            to_value(&EmptyV2 {})
-        }
+        ProtocolPayload::RequestMultiplexerWrite { request } => to_value(request),
+        ProtocolPayload::ReleaseMultiplexerWrite => to_value(&EmptyV2 {})
         ProtocolPayload::MultiplexerWriteState { state } => to_value(state),
         ProtocolPayload::ApplyTopologyOperation { request } => to_value(request),
         ProtocolPayload::MultiplexerEvent { event } => to_value(event),
@@ -732,10 +1069,9 @@ pub(super) fn decode_v2_body(kind: MessageKind, body: Value) -> ProtocolResult<P
         MessageKind::MultiplexerSnapshot => Ok(ProtocolPayload::MultiplexerSnapshot {
             snapshot: from_value(body)?,
         }),
-        MessageKind::RequestMultiplexerWrite => {
-            from_value::<EmptyV2>(body)?;
-            Ok(ProtocolPayload::RequestMultiplexerWrite)
-        }
+        MessageKind::RequestMultiplexerWrite => Ok(ProtocolPayload::RequestMultiplexerWrite {
+            request: from_value(body)?,
+        }),
         MessageKind::ReleaseMultiplexerWrite => {
             from_value::<EmptyV2>(body)?;
             Ok(ProtocolPayload::ReleaseMultiplexerWrite)
@@ -780,9 +1116,14 @@ pub(super) fn decode_v2_body(kind: MessageKind, body: Value) -> ProtocolResult<P
 pub(super) fn validate_v2_payload(payload: &ProtocolPayload) -> ProtocolResult<()> {
     match payload {
         ProtocolPayload::ListMultiplexerWorkspaces { .. }
-        | ProtocolPayload::RequestMultiplexerWrite
-        | ProtocolPayload::ReleaseMultiplexerWrite
-        | ProtocolPayload::MultiplexerWriteState { .. } => Ok(()),
+        | ProtocolPayload::RequestMultiplexerWrite { .. }
+        | ProtocolPayload::ReleaseMultiplexerWrite => Ok(()),
+        ProtocolPayload::MultiplexerWriteState { state } => {
+            if state.authority == MultiplexerAuthority::MultiplexerWrite && state.error.is_some() {
+                return Err(LocalControlErrorKind::MalformedFrame);
+            }
+            Ok(())
+        }
         ProtocolPayload::MultiplexerSnapshot { snapshot } => validate_snapshot(snapshot),
         ProtocolPayload::ApplyTopologyOperation { request } => {
             validate_topology_operation(&request.operation)

@@ -9,9 +9,15 @@ use crate::persistent_runtime::controller::{
     ControllerDisposition, ControllerRegistry, ControllerStateSnapshot, ControllerTransition,
 };
 use crate::persistent_runtime::domain::{
-    ClientConnectionId, OwnerGenerationId, RuntimeAlias, RuntimeNamespaceId,
+    ClientConnectionId, EventSequence, LocalControlErrorKind, OwnerGenerationId, RuntimeAlias,
+    RuntimeNamespaceId,
 };
-use crate::persistent_runtime::protocol::{ProtocolMessage, validate_candidate_topology_v2};
+use crate::persistent_runtime::protocol::{
+    MultiplexerSnapshotV2, MultiplexerWriteStateV2, ProtocolMessage, ProtocolPayload,
+    ProtocolResult, TopologyMutationOutcomeV2, TopologyMutationResultV2,
+    apply_topology_operation_v2, inactive_v2_domain_response, multiplexer_snapshot_for_request_v2,
+    topology_operation_target_ids_v2, validate_candidate_topology_v2, validate_owner_v2_handshake,
+};
 use crate::persistent_runtime::replay::ObserverHandle;
 use crate::persistent_runtime::runtime::{
     PersistentRuntimeShutdownReport, PersistentTerminalAttachment, PersistentTerminalRegistry,
@@ -345,6 +351,158 @@ impl PersistentOwner {
                 validate_candidate_topology_v2(candidate, owner_generation_id)?;
                 Ok(accepted)
             },
+        )
+    }
+
+
+    pub(crate) fn dispatch_multiplexer_protocol_v2(
+        &mut self,
+        authenticated_connection_id: ClientConnectionId,
+        request: &ProtocolMessage,
+        response_sequence: EventSequence,
+        now_unix_ms: i64,
+    ) -> ProtocolResult<ProtocolMessage> {
+        if matches!(request.payload, ProtocolPayload::Hello { .. }) {
+            validate_owner_v2_handshake(request)?;
+            return ProtocolMessage::new(
+                authenticated_connection_id,
+                response_sequence,
+                None,
+                self.generation_id,
+                Some(request.sequence),
+                ProtocolPayload::HelloAck,
+            );
+        }
+
+        if request.connection_id.as_ref() != Some(&authenticated_connection_id) {
+            return Err(LocalControlErrorKind::MalformedFrame);
+        }
+        if request.owner_generation_id != Some(self.generation_id) {
+            return Err(LocalControlErrorKind::StaleOwnerGeneration);
+        }
+
+        let payload = match &request.payload {
+            ProtocolPayload::ListMultiplexerWorkspaces { request: list } => {
+                let snapshot = match multiplexer_snapshot_for_request_v2(
+                    self.multiplexer_topology(),
+                    list.multiplexer_workspace_id,
+                ) {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => MultiplexerSnapshotV2::MutationResult {
+                        result: TopologyMutationResultV2 {
+                            outcome: TopologyMutationOutcomeV2::Rejected { error },
+                            accepted_topology_generation: None,
+                            multiplexer_workspace_id: list.multiplexer_workspace_id,
+                            tab_id: None,
+                            pane_id: None,
+                        },
+                        snapshot: None,
+                    },
+                };
+                ProtocolPayload::MultiplexerSnapshot { snapshot }
+            }
+            ProtocolPayload::RequestMultiplexerWrite { request: write } => {
+                let (authority, error) = match self.request_multiplexer_write(
+                    authenticated_connection_id.clone(),
+                    write.client_surface_capability,
+                ) {
+                    Ok(authority) => (authority, None),
+                    Err(error) => (MultiplexerAuthority::Observer, Some(error)),
+                };
+                ProtocolPayload::MultiplexerWriteState {
+                    state: MultiplexerWriteStateV2 { authority, error },
+                }
+            }
+            ProtocolPayload::ReleaseMultiplexerWrite => {
+                ProtocolPayload::MultiplexerWriteState {
+                    state: MultiplexerWriteStateV2 {
+                        authority: self.release_multiplexer_write(&authenticated_connection_id),
+                        error: None,
+                    },
+                }
+            }
+            ProtocolPayload::ApplyTopologyOperation { request: mutation } => {
+                if let Ok(response) = inactive_v2_domain_response(request, response_sequence) {
+                    return Ok(response);
+                }
+
+                let (workspace_id, tab_id, pane_id) =
+                    topology_operation_target_ids_v2(&mutation.operation);
+                let outcome = self.mutate_multiplexer_topology(
+                    &authenticated_connection_id,
+                    mutation.expected_topology_generation,
+                    now_unix_ms,
+                    |topology, expected| {
+                        apply_topology_operation_v2(topology, expected, &mutation.operation)
+                    },
+                );
+
+                let (result, snapshot) = match outcome {
+                    Ok(accepted_topology_generation) => {
+                        let snapshot = workspace_id.and_then(|workspace_id| {
+                            multiplexer_snapshot_for_request_v2(
+                                self.multiplexer_topology(),
+                                Some(workspace_id),
+                            )
+                            .ok()
+                            .and_then(|snapshot| match snapshot {
+                                MultiplexerSnapshotV2::Workspace { snapshot } => Some(snapshot),
+                                _ => None,
+                            })
+                        });
+                        (
+                            TopologyMutationResultV2 {
+                                outcome: TopologyMutationOutcomeV2::Accepted,
+                                accepted_topology_generation: Some(accepted_topology_generation),
+                                multiplexer_workspace_id: workspace_id,
+                                tab_id,
+                                pane_id,
+                            },
+                            snapshot,
+                        )
+                    }
+                    Err(MultiplexerServiceError::Domain(error)) => (
+                        TopologyMutationResultV2 {
+                            outcome: TopologyMutationOutcomeV2::Rejected { error },
+                            accepted_topology_generation: None,
+                            multiplexer_workspace_id: workspace_id,
+                            tab_id,
+                            pane_id,
+                        },
+                        None,
+                    ),
+                    Err(MultiplexerServiceError::Persistence(_)) => (
+                        TopologyMutationResultV2 {
+                            outcome: TopologyMutationOutcomeV2::Rejected {
+                                error: MultiplexerErrorKind::OutcomeUnknown,
+                            },
+                            accepted_topology_generation: None,
+                            multiplexer_workspace_id: workspace_id,
+                            tab_id,
+                            pane_id,
+                        },
+                        None,
+                    ),
+                };
+                ProtocolPayload::MultiplexerSnapshot {
+                    snapshot: MultiplexerSnapshotV2::MutationResult { result, snapshot },
+                }
+            }
+            ProtocolPayload::ListAgentObservations { .. }
+            | ProtocolPayload::ListWorktrees { .. }
+            | ProtocolPayload::ApplyWorktreeOperation { .. } => {
+                return inactive_v2_domain_response(request, response_sequence);
+            }
+            _ => return Err(LocalControlErrorKind::UnsupportedOperation),
+        };
+
+        ProtocolMessage::new(
+            authenticated_connection_id,
+            response_sequence,
+            None,
+            self.generation_id,
+            Some(request.sequence),
+            payload,
         )
     }
 
