@@ -996,6 +996,37 @@ pub(crate) fn validate_response_binding(
     Ok(())
 }
 
+pub(crate) fn inactive_v2_domain_response(
+    request: &ProtocolMessage,
+    response_sequence: EventSequence,
+) -> ProtocolResult<ProtocolMessage> {
+    if !matches!(
+        request.kind(),
+        MessageKind::ListAgentObservations
+            | MessageKind::ListWorktrees
+            | MessageKind::ApplyWorktreeOperation
+    ) {
+        return Err(LocalControlErrorKind::UnsupportedOperation);
+    }
+    let connection_id = request
+        .connection_id
+        .clone()
+        .ok_or(LocalControlErrorKind::MalformedFrame)?;
+    let owner_generation_id = request
+        .owner_generation_id
+        .ok_or(LocalControlErrorKind::MalformedFrame)?;
+    ProtocolMessage::new(
+        connection_id,
+        response_sequence,
+        None,
+        owner_generation_id,
+        Some(request.sequence),
+        ProtocolPayload::Error {
+            kind: LocalControlErrorKind::UnsupportedOperation,
+        },
+    )
+}
+
 fn response_kind_is_valid_for_request(request: MessageKind, response: MessageKind) -> bool {
     if response == MessageKind::Error {
         return true;
