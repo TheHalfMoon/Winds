@@ -996,16 +996,42 @@ pub(crate) fn validate_response_binding(
     Ok(())
 }
 
+pub(crate) fn validate_owner_v2_handshake(request: &ProtocolMessage) -> ProtocolResult<()> {
+    match &request.payload {
+        ProtocolPayload::Hello {
+            minimum_protocol_version,
+            maximum_protocol_version,
+            ..
+        } if *minimum_protocol_version == PROTOCOL_VERSION
+            && *maximum_protocol_version == PROTOCOL_VERSION =>
+        {
+            Ok(())
+        }
+        ProtocolPayload::Hello { .. } => Err(LocalControlErrorKind::ProtocolMismatch),
+        _ => Err(LocalControlErrorKind::MalformedFrame),
+    }
+}
+
 pub(crate) fn inactive_v2_domain_response(
     request: &ProtocolMessage,
     response_sequence: EventSequence,
 ) -> ProtocolResult<ProtocolMessage> {
-    if !matches!(
-        request.kind(),
-        MessageKind::ListAgentObservations
-            | MessageKind::ListWorktrees
-            | MessageKind::ApplyWorktreeOperation
-    ) {
+    let inactive = match &request.payload {
+        ProtocolPayload::ListAgentObservations { .. }
+        | ProtocolPayload::ListWorktrees { .. }
+        | ProtocolPayload::ApplyWorktreeOperation { .. } => true,
+        ProtocolPayload::ApplyTopologyOperation { request } => matches!(
+            request.operation,
+            TopologyOperationV2::ClearPane { .. }
+                | TopologyOperationV2::ApplyLayoutTemplate { .. }
+                | TopologyOperationV2::ClosePane {
+                    policy: ProtocolPaneClosePolicy::StopRuntimeThenClose,
+                    ..
+                }
+        ),
+        _ => false,
+    };
+    if !inactive {
         return Err(LocalControlErrorKind::UnsupportedOperation);
     }
     let connection_id = request
