@@ -608,8 +608,10 @@ fn protocol_workspace_snapshot(
 
 pub(crate) fn multiplexer_snapshot_for_request_v2(
     topology: &MultiplexerTopology,
+    owner_generation_id: OwnerGenerationId,
     requested_workspace_id: Option<MultiplexerWorkspaceId>,
 ) -> Result<MultiplexerSnapshotV2, MultiplexerErrorKind> {
+    validate_candidate_topology_v2(topology, owner_generation_id)?;
     if let Some(workspace_id) = requested_workspace_id {
         let workspace = topology.workspace(workspace_id)?;
         return Ok(MultiplexerSnapshotV2::Workspace {

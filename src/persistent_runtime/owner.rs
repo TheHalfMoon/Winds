@@ -399,6 +399,7 @@ impl PersistentOwner {
             ProtocolPayload::ListMultiplexerWorkspaces { request: list } => {
                 let snapshot = match multiplexer_snapshot_for_request_v2(
                     self.multiplexer_topology(),
+                    self.generation_id,
                     list.multiplexer_workspace_id,
                 ) {
                     Ok(snapshot) => snapshot,
@@ -456,6 +457,7 @@ impl PersistentOwner {
                         let snapshot = workspace_id.and_then(|workspace_id| {
                             multiplexer_snapshot_for_request_v2(
                                 self.multiplexer_topology(),
+                                self.generation_id,
                                 Some(workspace_id),
                             )
                             .ok()

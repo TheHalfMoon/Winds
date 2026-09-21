@@ -485,6 +485,10 @@ fn t166_owner_preflight_accepts_256_panes_and_rejects_257() {
         validate_candidate_topology_v2(&rejected, generation(40)),
         Err(crate::multiplexer::domain::MultiplexerErrorKind::SnapshotLimitExceeded)
     );
+    assert_eq!(
+        multiplexer_snapshot_for_request_v2(&rejected, generation(40), None),
+        Err(crate::multiplexer::domain::MultiplexerErrorKind::SnapshotLimitExceeded)
+    );
 }
 
 #[test]
