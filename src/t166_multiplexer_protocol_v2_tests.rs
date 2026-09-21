@@ -550,6 +550,42 @@ fn t166_typed_worktree_page_is_bounded_and_single_frame_safe() {
 }
 
 #[test]
+fn t166_agent_observation_rejects_negative_observation_time() {
+    let error = ProtocolMessage::new(
+        connection("t166-negative-observation-time"),
+        sequence(26),
+        None,
+        generation(26),
+        Some(sequence(25)),
+        ProtocolPayload::AgentObservationSnapshot {
+            snapshot: AgentObservationSnapshotV2 {
+                snapshot_revision: 1,
+                page_offset: 0,
+                observations: vec![AgentObservationV2 {
+                    observation_id: observation(26),
+                    family: AgentFamilyV2::Claude,
+                    source_class: AgentObservationSourceV2::OwnedProcessMetadata,
+                    confidence_class: AgentObservationConfidenceV2::Strong,
+                    freshness: AgentObservationFreshnessV2::Current,
+                    multiplexer_workspace_id: workspace(26),
+                    git_workspace_id: None,
+                    tab_id: tab(26),
+                    pane_id: pane(26),
+                    runtime_namespace_id: None,
+                    provider_native_session_id: None,
+                    owner_generation_id: generation(26),
+                    observed_unix_ms: -1,
+                    structured_evidence_summary: "evidence".to_owned(),
+                }],
+                next_cursor: None,
+            },
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error, LocalControlErrorKind::MalformedFrame);
+}
+
+#[test]
 fn t166_paged_collections_reject_duplicate_item_identities() {
     let owner_generation_id = generation(14);
     let duplicate_observation = AgentObservationV2 {
