@@ -26,7 +26,8 @@ use crate::persistent_runtime::protocol::{
     ProtocolTabSnapshotV2, ProtocolWorkspaceSnapshotV2, TopologyMutationOutcomeV2,
     TopologyMutationResultV2, TopologyOperationV2, WorktreeCursorV2, WorktreeMembershipV2,
     WorktreeObservationV2, WorktreeOperationOutcomeV2, WorktreeOperationResultV2,
-    WorktreeOperationV2, decode_frame, encode_frame, inactive_v2_domain_response, validate_candidate_topology_v2, validate_response_binding,
+    WorktreeOperationV2, decode_frame, encode_frame, inactive_v2_domain_response, validate_candidate_topology_v2, validate_owner_v2_handshake,
+    validate_response_binding,
 };
 use crate::persistent_runtime::protocol::{ProtocolMessage, ProtocolPayload};
 use std::collections::VecDeque;
@@ -129,12 +130,17 @@ fn t166_exact_v2_handshake_preserves_legacy_fixture_without_downgrade() {
     assert_eq!(LEGACY_PROTOCOL_VERSION, 1);
 
     let current = ProtocolMessage::hello(sequence(1), 2, 2, None).unwrap();
+    validate_owner_v2_handshake(&current).unwrap();
     let current_frame = encode_frame(&current).unwrap();
     let current_json = std::str::from_utf8(&current_frame[4..]).unwrap();
     assert!(current_json.contains(r#""protocol_version":2"#));
     assert_eq!(decode_frame(&current_frame).unwrap(), current);
 
     let legacy = ProtocolMessage::hello(sequence(2), 1, 1, None).unwrap();
+    assert_eq!(
+        validate_owner_v2_handshake(&legacy).unwrap_err(),
+        LocalControlErrorKind::ProtocolMismatch
+    );
     let legacy_frame = encode_frame(&legacy).unwrap();
     let legacy_json = std::str::from_utf8(&legacy_frame[4..]).unwrap();
     assert!(legacy_json.contains(r#""protocol_version":1"#));
@@ -679,6 +685,33 @@ fn t166_inactive_future_domains_return_typed_unsupported_without_side_effect_pat
     assert_eq!(response.correlation_sequence, Some(sequence(50)));
     assert_eq!(response.owner_generation_id, Some(generation(35)));
     validate_response_binding(&request, &response).unwrap();
+
+    let future_topology = ProtocolMessage::new(
+        connection("t166-inactive"),
+        sequence(52),
+        None,
+        generation(35),
+        None,
+        ProtocolPayload::ApplyTopologyOperation {
+            request: ApplyTopologyOperationV2 {
+                expected_topology_generation: topology_generation(2),
+                operation: TopologyOperationV2::ClearPane {
+                    multiplexer_workspace_id: workspace(35),
+                    tab_id: tab(35),
+                    pane_id: pane(35),
+                    presentation_epoch: 1,
+                },
+            },
+        },
+    )
+    .unwrap();
+    let future_response = inactive_v2_domain_response(&future_topology, sequence(53)).unwrap();
+    assert_eq!(
+        future_response.payload,
+        ProtocolPayload::Error {
+            kind: LocalControlErrorKind::UnsupportedOperation,
+        }
+    );
 }
 
 #[test]
