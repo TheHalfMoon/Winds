@@ -623,7 +623,10 @@ pub(crate) fn read_frame<R: Read>(reader: &mut R) -> ProtocolResult<ProtocolMess
 fn decode_payload(text: &str) -> ProtocolResult<ProtocolMessage> {
     let probe: ProtocolVersionProbe =
         serde_json::from_str(text).map_err(|_| LocalControlErrorKind::MalformedFrame)?;
-    if !matches!(probe.protocol_version, LEGACY_PROTOCOL_VERSION | PROTOCOL_VERSION) {
+    if !matches!(
+        probe.protocol_version,
+        LEGACY_PROTOCOL_VERSION | PROTOCOL_VERSION
+    ) {
         return Err(LocalControlErrorKind::ProtocolMismatch);
     }
 
