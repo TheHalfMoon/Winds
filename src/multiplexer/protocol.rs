@@ -773,10 +773,10 @@ fn validate_workspace_snapshot(snapshot: &ProtocolWorkspaceSnapshotV2) -> Protoc
         if pane_ids.len() == before || !pane_ids.contains(&tab.focused_pane_id) {
             return Err(LocalControlErrorKind::MalformedFrame);
         }
-        if let Some(zoomed) = tab.zoomed_pane_id {
-            if !pane_ids.contains(&zoomed) {
-                return Err(LocalControlErrorKind::MalformedFrame);
-            }
+        if let Some(zoomed) = tab.zoomed_pane_id
+            && !pane_ids.contains(&zoomed)
+        {
+            return Err(LocalControlErrorKind::MalformedFrame);
         }
     }
     if !tab_ids.contains(&snapshot.focused_tab_id) {
@@ -813,10 +813,10 @@ fn validate_snapshot(snapshot: &MultiplexerSnapshotV2) -> ProtocolResult<()> {
             }
             if let Some(snapshot) = snapshot {
                 validate_workspace_snapshot(snapshot)?;
-                if let Some(accepted) = result.accepted_topology_generation {
-                    if accepted != snapshot.topology_generation {
-                        return Err(LocalControlErrorKind::MalformedFrame);
-                    }
+                if let Some(accepted) = result.accepted_topology_generation
+                    && accepted != snapshot.topology_generation
+                {
+                    return Err(LocalControlErrorKind::MalformedFrame);
                 }
             }
             Ok(())
