@@ -1480,7 +1480,7 @@ fn validate_worktree_operation(operation: &WorktreeOperationV2) -> ProtocolResul
             validate_nonempty_text(destination_path, MAX_V2_PATH_BYTES)?;
             validate_oid(base_commit_oid)?;
             if let Some(branch) = new_branch_name {
-                validate_bounded_text(branch, MAX_V2_BRANCH_BYTES)?;
+                validate_nonempty_text(branch, MAX_V2_BRANCH_BYTES)?;
             }
             Ok(())
         }
