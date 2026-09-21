@@ -1332,13 +1332,23 @@ fn validate_workspace_snapshot(snapshot: &ProtocolWorkspaceSnapshotV2) -> Protoc
 
 fn validate_snapshot(snapshot: &MultiplexerSnapshotV2) -> ProtocolResult<()> {
     match snapshot {
-        MultiplexerSnapshotV2::WorkspaceList { workspaces, .. } => {
+        MultiplexerSnapshotV2::WorkspaceList {
+            topology_generation,
+            workspaces,
+        } => {
             if workspaces.len() > MAX_V2_WORKSPACES {
                 return Err(LocalControlErrorKind::OversizedFrame);
             }
             let mut ids = BTreeSet::new();
+            let mut focused_count = 0_usize;
             for workspace in workspaces {
-                if !ids.insert(workspace.multiplexer_workspace_id) {
+                if !ids.insert(workspace.multiplexer_workspace_id)
+                    || workspace.topology_generation != *topology_generation
+                {
+                    return Err(LocalControlErrorKind::MalformedFrame);
+                }
+                focused_count += usize::from(workspace.is_focused);
+                if focused_count > 1 {
                     return Err(LocalControlErrorKind::MalformedFrame);
                 }
                 validate_bounded_text(&workspace.alias, MAX_V2_ALIAS_BYTES)?;
