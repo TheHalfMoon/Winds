@@ -1732,7 +1732,7 @@ pub(super) fn validate_v2_response_binding(
             if result.page_offset != 0
                 || result.next_cursor.is_some()
                 || result.multiplexer_workspace_id != request.multiplexer_workspace_id
-                || result.repository_identity.as_deref() != Some(&request.repository_identity)
+                || result.repository_identity.as_deref() != Some(request.repository_identity.as_str())
             {
                 return Err(LocalControlErrorKind::MalformedFrame);
             }
@@ -1752,7 +1752,7 @@ pub(super) fn validate_v2_response_binding(
                 }
                 | WorktreeOperationV2::Remove {
                     git_workspace_id, ..
-                } if result.git_workspace_id.as_deref() != Some(git_workspace_id) => {
+                } if result.git_workspace_id.as_deref() != Some(git_workspace_id.as_str()) => {
                     return Err(LocalControlErrorKind::MalformedFrame);
                 }
                 _ => {}
