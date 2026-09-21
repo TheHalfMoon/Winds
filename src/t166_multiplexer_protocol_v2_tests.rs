@@ -2,21 +2,19 @@ use super::*;
 use crate::multiplexer::domain::{
     AgentObservationId, MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration,
 };
+use crate::persistent_runtime::domain::{
+    ClientConnectionId, EventSequence, LocalControlErrorKind, OwnerGenerationId, RuntimeNamespaceId,
+};
 use crate::persistent_runtime::protocol::{
     AgentFamilyV2, AgentObservationConfidenceV2, AgentObservationCursorV2,
     AgentObservationFreshnessV2, AgentObservationSnapshotV2, AgentObservationSourceV2,
     AgentObservationV2, ApplyTopologyOperationV2, ApplyWorktreeOperationV2,
-    LEGACY_PROTOCOL_VERSION, ListAgentObservationsV2, ListWorktreesV2,
-    MAX_CONTROL_FRAME_BYTES, MAX_INBOUND_CONTROL_FRAME_BYTES, MAX_V2_BRANCH_BYTES,
-    MAX_V2_PATH_BYTES, MAX_V2_REPOSITORY_IDENTITY_BYTES, MAX_V2_WORKTREES_PER_PAGE,
-    MessageAuthorityClass, MessageKind, PROTOCOL_VERSION, ProtocolPanePlacement,
-    ProtocolSplitAxis, TopologyOperationV2, WorktreeCursorV2, WorktreeMembershipV2,
-    WorktreeObservationV2, WorktreeOperationOutcomeV2, WorktreeOperationResultV2,
-    WorktreeOperationV2, decode_frame, encode_frame,
-};
-use crate::persistent_runtime::domain::{
-    ClientConnectionId, EventSequence, LocalControlErrorKind, OwnerGenerationId,
-    RuntimeNamespaceId,
+    LEGACY_PROTOCOL_VERSION, ListAgentObservationsV2, ListWorktreesV2, MAX_CONTROL_FRAME_BYTES,
+    MAX_INBOUND_CONTROL_FRAME_BYTES, MAX_V2_BRANCH_BYTES, MAX_V2_PATH_BYTES,
+    MAX_V2_REPOSITORY_IDENTITY_BYTES, MAX_V2_WORKTREES_PER_PAGE, MessageAuthorityClass,
+    MessageKind, PROTOCOL_VERSION, ProtocolPanePlacement, ProtocolSplitAxis, TopologyOperationV2,
+    WorktreeCursorV2, WorktreeMembershipV2, WorktreeObservationV2, WorktreeOperationOutcomeV2,
+    WorktreeOperationResultV2, WorktreeOperationV2, decode_frame, encode_frame,
 };
 use crate::persistent_runtime::protocol::{ProtocolMessage, ProtocolPayload};
 use std::collections::VecDeque;
