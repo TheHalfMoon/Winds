@@ -10,8 +10,7 @@ use crate::multiplexer::domain::{
     MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration,
 };
 use crate::persistent_runtime::domain::{
-    ClientConnectionId, EventSequence, LocalControlErrorKind, OwnerGenerationId,
-    RuntimeNamespaceId,
+    ClientConnectionId, EventSequence, LocalControlErrorKind, OwnerGenerationId, RuntimeNamespaceId,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -1030,7 +1029,9 @@ fn validate_topology_operation(operation: &TopologyOperationV2) -> ProtocolResul
         }
         TopologyOperationV2::RenameWorkspace { alias, .. }
         | TopologyOperationV2::CreateTab { alias, .. }
-        | TopologyOperationV2::RenameTab { alias, .. } => validate_bounded_text(alias, MAX_V2_ALIAS_BYTES),
+        | TopologyOperationV2::RenameTab { alias, .. } => {
+            validate_bounded_text(alias, MAX_V2_ALIAS_BYTES)
+        }
         TopologyOperationV2::MoveWorkspace { new_index, .. } => {
             if usize::from(*new_index) >= MAX_V2_WORKSPACES {
                 Err(LocalControlErrorKind::MalformedFrame)

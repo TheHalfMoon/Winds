@@ -10,23 +10,22 @@ use crate::persistent_runtime::domain::{
     ClientConnectionId, EventSequence, LocalControlErrorKind, OwnerGenerationId, RuntimeNamespaceId,
 };
 use crate::persistent_runtime::protocol::{
-    AgentFamilyV2, AgentObservationConfidenceV2, AgentObservationCursorV2,
-    AgentObservationEventV2, AgentObservationFreshnessV2, AgentObservationSnapshotV2,
-    AgentObservationSourceV2, AgentObservationV2, ApplyTopologyOperationV2,
-    ApplyWorktreeOperationV2, AttentionEventV2, AttentionItemV2, AttentionKindV2,
-    AttentionSnapshotV2, LEGACY_PROTOCOL_VERSION, ListAgentObservationsV2, ListWorktreesV2,
-    MAX_CONTROL_FRAME_BYTES, MAX_INBOUND_CONTROL_FRAME_BYTES,
-    MAX_V2_AGENT_OBSERVATIONS_PER_PAGE, MAX_V2_ALIAS_BYTES, MAX_V2_ATTENTION_ITEMS_PER_PAGE,
-    MAX_V2_BRANCH_BYTES, MAX_V2_DETAIL_BYTES, MAX_V2_EVIDENCE_SUMMARY_BYTES,
-    MAX_V2_GIT_WORKSPACE_ID_BYTES, MAX_V2_PATH_BYTES, MAX_V2_PROVIDER_SESSION_ID_BYTES,
-    MAX_V2_PANES_PER_TAB, MAX_V2_REPOSITORY_IDENTITY_BYTES, MAX_V2_TABS_PER_WORKSPACE,
-    MAX_V2_WORKTREES_PER_PAGE,
-    MessageAuthorityClass, MessageKind, MultiplexerEventV2, MultiplexerSnapshotV2,
-    PROTOCOL_VERSION, ProtocolLayoutNodeV2, ProtocolPanePlacement, ProtocolSplitAxis,
-    ProtocolTabSnapshotV2, ProtocolWorkspaceSnapshotV2, TopologyMutationOutcomeV2,
-    TopologyMutationResultV2, TopologyOperationV2, WorktreeCursorV2, WorktreeMembershipV2,
-    WorktreeObservationV2, WorktreeOperationOutcomeV2, WorktreeOperationResultV2,
-    WorktreeOperationV2, decode_frame, encode_frame, inactive_v2_domain_response, validate_candidate_topology_v2, validate_owner_v2_handshake,
+    AgentFamilyV2, AgentObservationConfidenceV2, AgentObservationCursorV2, AgentObservationEventV2,
+    AgentObservationFreshnessV2, AgentObservationSnapshotV2, AgentObservationSourceV2,
+    AgentObservationV2, ApplyTopologyOperationV2, ApplyWorktreeOperationV2, AttentionEventV2,
+    AttentionItemV2, AttentionKindV2, AttentionSnapshotV2, LEGACY_PROTOCOL_VERSION,
+    ListAgentObservationsV2, ListWorktreesV2, MAX_CONTROL_FRAME_BYTES,
+    MAX_INBOUND_CONTROL_FRAME_BYTES, MAX_V2_AGENT_OBSERVATIONS_PER_PAGE, MAX_V2_ALIAS_BYTES,
+    MAX_V2_ATTENTION_ITEMS_PER_PAGE, MAX_V2_BRANCH_BYTES, MAX_V2_DETAIL_BYTES,
+    MAX_V2_EVIDENCE_SUMMARY_BYTES, MAX_V2_GIT_WORKSPACE_ID_BYTES, MAX_V2_PANES_PER_TAB,
+    MAX_V2_PATH_BYTES, MAX_V2_PROVIDER_SESSION_ID_BYTES, MAX_V2_REPOSITORY_IDENTITY_BYTES,
+    MAX_V2_TABS_PER_WORKSPACE, MAX_V2_WORKTREES_PER_PAGE, MessageAuthorityClass, MessageKind,
+    MultiplexerEventV2, MultiplexerSnapshotV2, PROTOCOL_VERSION, ProtocolLayoutNodeV2,
+    ProtocolPanePlacement, ProtocolSplitAxis, ProtocolTabSnapshotV2, ProtocolWorkspaceSnapshotV2,
+    TopologyMutationOutcomeV2, TopologyMutationResultV2, TopologyOperationV2, WorktreeCursorV2,
+    WorktreeMembershipV2, WorktreeObservationV2, WorktreeOperationOutcomeV2,
+    WorktreeOperationResultV2, WorktreeOperationV2, decode_frame, encode_frame,
+    inactive_v2_domain_response, validate_candidate_topology_v2, validate_owner_v2_handshake,
     validate_response_binding,
 };
 use crate::persistent_runtime::protocol::{ProtocolMessage, ProtocolPayload};
@@ -766,7 +765,10 @@ fn t166_stale_topology_and_history_gap_are_explicit_wire_outcomes() {
             payload,
         )
         .unwrap();
-        assert_eq!(decode_frame(&encode_frame(&message).unwrap()).unwrap(), message);
+        assert_eq!(
+            decode_frame(&encode_frame(&message).unwrap()).unwrap(),
+            message
+        );
     }
 }
 
