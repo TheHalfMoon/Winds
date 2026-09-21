@@ -21,14 +21,14 @@ use crate::persistent_runtime::protocol::{
     MAX_V2_EVIDENCE_SUMMARY_BYTES, MAX_V2_GIT_WORKSPACE_ID_BYTES, MAX_V2_PANES_PER_TAB,
     MAX_V2_PATH_BYTES, MAX_V2_PROVIDER_SESSION_ID_BYTES, MAX_V2_REPOSITORY_IDENTITY_BYTES,
     MAX_V2_TABS_PER_WORKSPACE, MAX_V2_WORKTREES_PER_PAGE, MessageAuthorityClass, MessageKind,
-    MultiplexerEventV2, MultiplexerSnapshotV2, PROTOCOL_VERSION, ProtocolLayoutNodeV2,
-    ProtocolPanePlacement, ProtocolSplitAxis, ProtocolTabSnapshotV2, ProtocolWorkspaceSnapshotV2,
-    RequestMultiplexerWriteV2, TopologyMutationOutcomeV2, TopologyMutationResultV2,
-    TopologyOperationV2, WorktreeCursorV2,
-    WorktreeMembershipV2, WorktreeObservationV2, WorktreeOperationOutcomeV2,
-    WorktreeOperationResultV2, WorktreeOperationV2, decode_frame, encode_frame,
-    inactive_v2_domain_response, validate_candidate_topology_v2, validate_owner_v2_handshake,
-    validate_response_binding,
+    MultiplexerEventV2, MultiplexerSnapshotV2, MultiplexerWriteStateV2, PROTOCOL_VERSION,
+    ProtocolLayoutNodeV2, ProtocolPanePlacement, ProtocolSplitAxis, ProtocolTabSnapshotV2,
+    ProtocolWorkspaceSnapshotV2, RequestMultiplexerWriteV2, TopologyMutationOutcomeV2,
+    TopologyMutationResultV2, TopologyOperationV2, WorktreeCursorV2, WorktreeMembershipV2,
+    WorktreeObservationV2, WorktreeOperationOutcomeV2, WorktreeOperationResultV2,
+    WorktreeOperationV2, apply_topology_operation_v2, decode_frame, encode_frame,
+    inactive_v2_domain_response, multiplexer_snapshot_for_request_v2,
+    validate_candidate_topology_v2, validate_owner_v2_handshake, validate_response_binding,
 };
 use crate::persistent_runtime::protocol::{ProtocolMessage, ProtocolPayload};
 use std::collections::VecDeque;
@@ -859,7 +859,6 @@ fn t166_live_v1_mismatch_maps_to_blocked_legacy_owner_without_handoff() {
     assert_eq!(error, LocalControlClientError::BlockedLegacyOwner);
 }
 
-
 #[test]
 fn t166_request_multiplexer_write_carries_client_surface_capability() {
     let request = v2_message(ProtocolPayload::RequestMultiplexerWrite {
@@ -900,7 +899,6 @@ fn t166_topology_helpers_execute_only_currently_authorized_operations() {
     );
 }
 
-
 #[test]
 fn t166_owner_dispatch_preflights_capability_and_applies_exact_topology() {
     use crate::persistent_runtime::owner::PersistentOwner;
@@ -912,10 +910,8 @@ fn t166_owner_dispatch_preflights_capability_and_applies_exact_topology() {
 
     fn test_root(label: &str) -> PathBuf {
         let id = NEXT_T166_DISPATCH_ROOT.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "winds-t166-{label}-{}-{id}",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("winds-t166-{label}-{}-{id}", std::process::id()));
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).unwrap();
         path.canonicalize().unwrap()
@@ -1048,12 +1044,7 @@ fn t166_owner_dispatch_preflights_capability_and_applies_exact_topology() {
 
     assert_eq!(
         owner
-            .dispatch_multiplexer_protocol_v2(
-                client.clone(),
-                &mutation_request,
-                sequence(96),
-                104,
-            )
+            .dispatch_multiplexer_protocol_v2(client.clone(), &mutation_request, sequence(96), 104,)
             .unwrap_err(),
         LocalControlErrorKind::DuplicateOrOutOfOrderRequest
     );
