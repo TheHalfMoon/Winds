@@ -895,3 +895,154 @@ fn t166_topology_helpers_execute_only_currently_authorized_operations() {
         MultiplexerErrorKind::UnsupportedOperation
     );
 }
+
+
+#[test]
+fn t166_owner_dispatch_preflights_capability_and_applies_exact_topology() {
+    use crate::persistent_runtime::owner::PersistentOwner;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_T166_DISPATCH_ROOT: AtomicU64 = AtomicU64::new(1);
+
+    fn test_root(label: &str) -> PathBuf {
+        let id = NEXT_T166_DISPATCH_ROOT.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "winds-t166-{label}-{}-{id}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        path.canonicalize().unwrap()
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn start_owner(home: &Path, runtime_root: &Path) -> PersistentOwner {
+        let runtime_directory = runtime_root.join("r");
+        crate::persistent_runtime::transport::unix::prepare_runtime_directory(&runtime_directory)
+            .unwrap();
+        PersistentOwner::start_for_test(home, &runtime_directory, 100).unwrap()
+    }
+
+    #[cfg(windows)]
+    fn start_owner(home: &Path, _runtime_root: &Path) -> PersistentOwner {
+        PersistentOwner::start(home, 100).unwrap()
+    }
+
+    let home = test_root("dispatch-home");
+    let runtime_root = test_root("dispatch-runtime");
+    let mut owner = start_owner(&home, &runtime_root);
+    let client = connection("t166-owner-dispatch");
+
+    let observer_request = ProtocolMessage::new(
+        client.clone(),
+        sequence(90),
+        None,
+        owner.generation_id(),
+        None,
+        ProtocolPayload::RequestMultiplexerWrite {
+            request: RequestMultiplexerWriteV2 {
+                client_surface_capability: ClientSurfaceCapability::NonInteractiveObserver,
+            },
+        },
+    )
+    .unwrap();
+    let observer_response = owner
+        .dispatch_multiplexer_protocol_v2(client.clone(), &observer_request, sequence(91), 101)
+        .unwrap();
+    assert!(matches!(
+        observer_response.payload,
+        ProtocolPayload::MultiplexerWriteState {
+            state: MultiplexerWriteStateV2 {
+                authority: MultiplexerAuthority::Observer,
+                error: Some(MultiplexerErrorKind::CapabilityUnavailable),
+            }
+        }
+    ));
+    assert_eq!(
+        owner.multiplexer_authority(&client),
+        MultiplexerAuthority::Observer
+    );
+
+    let write_request = ProtocolMessage::new(
+        client.clone(),
+        sequence(92),
+        None,
+        owner.generation_id(),
+        None,
+        ProtocolPayload::RequestMultiplexerWrite {
+            request: RequestMultiplexerWriteV2 {
+                client_surface_capability: ClientSurfaceCapability::ControllingTerminal,
+            },
+        },
+    )
+    .unwrap();
+    let write_response = owner
+        .dispatch_multiplexer_protocol_v2(client.clone(), &write_request, sequence(93), 102)
+        .unwrap();
+    assert!(matches!(
+        write_response.payload,
+        ProtocolPayload::MultiplexerWriteState {
+            state: MultiplexerWriteStateV2 {
+                authority: MultiplexerAuthority::MultiplexerWrite,
+                error: None,
+            }
+        }
+    ));
+
+    let expected = owner.multiplexer_topology().generation();
+    let mutation_request = ProtocolMessage::new(
+        client.clone(),
+        sequence(94),
+        None,
+        owner.generation_id(),
+        None,
+        ProtocolPayload::ApplyTopologyOperation {
+            request: ApplyTopologyOperationV2 {
+                expected_topology_generation: expected,
+                operation: TopologyOperationV2::CreateWorkspace {
+                    multiplexer_workspace_id: workspace(76),
+                    alias: "wire-dispatch".to_owned(),
+                    first_tab_id: tab(77),
+                    first_tab_alias: "main".to_owned(),
+                    first_pane_id: pane(78),
+                },
+            },
+        },
+    )
+    .unwrap();
+    let mutation_response = owner
+        .dispatch_multiplexer_protocol_v2(client.clone(), &mutation_request, sequence(95), 103)
+        .unwrap();
+    assert!(matches!(
+        mutation_response.payload,
+        ProtocolPayload::MultiplexerSnapshot {
+            snapshot: MultiplexerSnapshotV2::MutationResult {
+                result: TopologyMutationResultV2 {
+                    outcome: TopologyMutationOutcomeV2::Accepted,
+                    accepted_topology_generation: Some(_),
+                    multiplexer_workspace_id: Some(_),
+                    ..
+                },
+                snapshot: Some(_),
+            }
+        }
+    ));
+    assert_eq!(
+        owner
+            .multiplexer_topology()
+            .workspace(workspace(76))
+            .unwrap()
+            .alias,
+        "wire-dispatch"
+    );
+    assert_eq!(
+        owner.multiplexer_topology().generation(),
+        expected.checked_next().unwrap()
+    );
+
+    drop(owner);
+    let _ = fs::remove_dir_all(home);
+    let _ = fs::remove_dir_all(runtime_root);
+}
