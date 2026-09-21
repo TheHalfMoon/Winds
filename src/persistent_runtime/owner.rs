@@ -362,7 +362,7 @@ impl PersistentOwner {
         response_sequence: EventSequence,
         now_unix_ms: i64,
     ) -> ProtocolResult<ProtocolMessage> {
-        if matches!(request.payload, ProtocolPayload::Hello { .. }) {
+        if matches!(&request.payload, ProtocolPayload::Hello { .. }) {
             validate_owner_v2_handshake(request)?;
             return ProtocolMessage::new(
                 authenticated_connection_id,
