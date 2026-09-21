@@ -421,6 +421,66 @@ fn t166_snapshot_rejects_cross_tab_focus_and_zoom_bindings() {
 }
 
 #[test]
+fn t166_workspace_list_rejects_mixed_generation_and_multiple_focus() {
+    let summary = |id: u8, generation_value: u64, is_focused: bool| ProtocolWorkspaceSummaryV2 {
+        multiplexer_workspace_id: workspace(id),
+        alias: format!("workspace-{id}"),
+        topology_generation: topology_generation(generation_value),
+        is_focused,
+    };
+
+    for workspaces in [
+        vec![summary(24, 2, true), summary(25, 3, false)],
+        vec![summary(24, 2, true), summary(25, 2, true)],
+    ] {
+        let error = ProtocolMessage::new(
+            connection("t166-workspace-list"),
+            sequence(24),
+            None,
+            generation(24),
+            Some(sequence(23)),
+            ProtocolPayload::MultiplexerSnapshot {
+                snapshot: MultiplexerSnapshotV2::WorkspaceList {
+                    topology_generation: topology_generation(2),
+                    workspaces,
+                },
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error, LocalControlErrorKind::MalformedFrame);
+    }
+}
+
+#[test]
+fn t166_max_workspace_list_frame_is_bounded() {
+    let workspaces = (0..MAX_V2_WORKSPACES)
+        .map(|index| ProtocolWorkspaceSummaryV2 {
+            multiplexer_workspace_id: workspace((index + 1) as u8),
+            alias: "w".repeat(MAX_V2_ALIAS_BYTES),
+            topology_generation: topology_generation(2),
+            is_focused: index == 0,
+        })
+        .collect();
+    let message = ProtocolMessage::new(
+        connection("t166-max-workspace-list"),
+        sequence(25),
+        None,
+        generation(25),
+        Some(sequence(24)),
+        ProtocolPayload::MultiplexerSnapshot {
+            snapshot: MultiplexerSnapshotV2::WorkspaceList {
+                topology_generation: topology_generation(2),
+                workspaces,
+            },
+        },
+    )
+    .unwrap();
+    let frame = encode_frame(&message).unwrap();
+    assert!(frame.len() <= MAX_CONTROL_FRAME_BYTES);
+    assert_eq!(decode_frame(&frame).unwrap(), message);
+}
+
+#[test]
 fn t166_typed_worktree_page_is_bounded_and_single_frame_safe() {
     let result = WorktreeOperationResultV2 {
         outcome: WorktreeOperationOutcomeV2::Accepted,
