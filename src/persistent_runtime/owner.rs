@@ -14,7 +14,7 @@ use crate::persistent_runtime::domain::{
 };
 use crate::persistent_runtime::protocol::{
     MultiplexerSnapshotV2, MultiplexerWriteStateV2, ProtocolMessage, ProtocolPayload,
-    ProtocolResult, TopologyMutationOutcomeV2, TopologyMutationResultV2,
+    ProtocolResult, RequestSequenceGuard, TopologyMutationOutcomeV2, TopologyMutationResultV2,
     apply_topology_operation_v2, inactive_v2_domain_response, multiplexer_snapshot_for_request_v2,
     topology_operation_target_ids_v2, validate_candidate_topology_v2, validate_owner_v2_handshake,
 };
@@ -24,6 +24,7 @@ use crate::persistent_runtime::runtime::{
     PersistentTerminalSnapshot,
 };
 use crate::store::Store;
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::fs;
@@ -173,6 +174,7 @@ pub(crate) struct PersistentOwner {
     runtime_registry: PersistentTerminalRegistry,
     controller_registry: ControllerRegistry,
     multiplexer_service: MultiplexerService,
+    multiplexer_request_sequences: BTreeMap<ClientConnectionId, RequestSequenceGuard>,
 }
 
 impl PersistentOwner {
@@ -233,6 +235,7 @@ impl PersistentOwner {
             runtime_registry: PersistentTerminalRegistry::new(generation_id),
             controller_registry: ControllerRegistry::new(generation_id),
             multiplexer_service,
+            multiplexer_request_sequences: BTreeMap::new(),
         })
     }
 
@@ -268,6 +271,7 @@ impl PersistentOwner {
             runtime_registry: PersistentTerminalRegistry::new(generation_id),
             controller_registry: ControllerRegistry::new(generation_id),
             multiplexer_service,
+            multiplexer_request_sequences: BTreeMap::new(),
         })
     }
 
@@ -325,6 +329,7 @@ impl PersistentOwner {
     ) {
         self.multiplexer_service
             .disconnect_client(client_connection_id);
+        self.multiplexer_request_sequences.remove(client_connection_id);
     }
 
     pub(crate) fn mutate_multiplexer_topology<F>(
@@ -380,6 +385,15 @@ impl PersistentOwner {
         if request.owner_generation_id != Some(self.generation_id) {
             return Err(LocalControlErrorKind::StaleOwnerGeneration);
         }
+        self.multiplexer_request_sequences
+            .entry(authenticated_connection_id.clone())
+            .or_insert_with(|| {
+                RequestSequenceGuard::new(
+                    authenticated_connection_id.clone(),
+                    self.generation_id,
+                )
+            })
+            .accept(request)?;
 
         let payload = match &request.payload {
             ProtocolPayload::ListMultiplexerWorkspaces { request: list } => {

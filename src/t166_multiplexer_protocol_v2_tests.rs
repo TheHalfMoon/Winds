@@ -1042,6 +1042,22 @@ fn t166_owner_dispatch_preflights_capability_and_applies_exact_topology() {
         expected.checked_next().unwrap()
     );
 
+    assert_eq!(
+        owner
+            .dispatch_multiplexer_protocol_v2(
+                client.clone(),
+                &mutation_request,
+                sequence(96),
+                104,
+            )
+            .unwrap_err(),
+        LocalControlErrorKind::DuplicateOrOutOfOrderRequest
+    );
+    assert_eq!(
+        owner.multiplexer_topology().generation(),
+        expected.checked_next().unwrap()
+    );
+
     drop(owner);
     let _ = fs::remove_dir_all(home);
     let _ = fs::remove_dir_all(runtime_root);
