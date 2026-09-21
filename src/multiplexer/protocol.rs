@@ -1447,6 +1447,9 @@ fn validate_multiplexer_event(event: &MultiplexerEventV2) -> ProtocolResult<()> 
 }
 
 fn validate_agent_observation(observation: &AgentObservationV2) -> ProtocolResult<()> {
+    if observation.observed_unix_ms < 0 {
+        return Err(LocalControlErrorKind::MalformedFrame);
+    }
     if let Some(git_workspace_id) = &observation.git_workspace_id {
         validate_nonempty_text(git_workspace_id, MAX_V2_GIT_WORKSPACE_ID_BYTES)?;
     }
