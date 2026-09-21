@@ -291,6 +291,8 @@ fn t166_response_binding_rejects_topology_target_and_generation_substitution() {
                         multiplexer_workspace_id: Some(workspace_id),
                         tab_id: None,
                         pane_id: None,
+                        secondary_tab_id: None,
+                        secondary_pane_id: None,
                     },
                     snapshot: None,
                 },
@@ -310,6 +312,118 @@ fn t166_response_binding_rejects_topology_target_and_generation_substitution() {
         LocalControlErrorKind::MalformedFrame
     );
     validate_response_binding(&request, &response(workspace(18), topology_generation(9))).unwrap();
+}
+
+#[test]
+fn t166_response_binding_preserves_complete_multi_target_ids() {
+    let split_request = ProtocolMessage::new(
+        connection("t166-split-bind"),
+        sequence(20),
+        None,
+        generation(18),
+        None,
+        ProtocolPayload::ApplyTopologyOperation {
+            request: ApplyTopologyOperationV2 {
+                expected_topology_generation: topology_generation(8),
+                operation: TopologyOperationV2::SplitPane {
+                    multiplexer_workspace_id: workspace(18),
+                    tab_id: tab(18),
+                    target_pane_id: pane(18),
+                    new_pane_id: pane(19),
+                    axis: ProtocolSplitAxis::Vertical,
+                    placement: ProtocolPanePlacement::After,
+                    ratio_basis_points: 5_000,
+                },
+            },
+        },
+    )
+    .unwrap();
+    let split_response = |secondary_pane_id| {
+        ProtocolMessage::new(
+            connection("t166-split-bind"),
+            sequence(21),
+            None,
+            generation(18),
+            Some(sequence(20)),
+            ProtocolPayload::MultiplexerSnapshot {
+                snapshot: MultiplexerSnapshotV2::MutationResult {
+                    result: TopologyMutationResultV2 {
+                        outcome: TopologyMutationOutcomeV2::Accepted,
+                        accepted_topology_generation: Some(topology_generation(9)),
+                        multiplexer_workspace_id: Some(workspace(18)),
+                        tab_id: Some(tab(18)),
+                        pane_id: Some(pane(18)),
+                        secondary_tab_id: None,
+                        secondary_pane_id: Some(secondary_pane_id),
+                    },
+                    snapshot: None,
+                },
+            },
+        )
+        .unwrap()
+    };
+    validate_response_binding(&split_request, &split_response(pane(19))).unwrap();
+    assert_eq!(
+        validate_response_binding(&split_request, &split_response(pane(20))).unwrap_err(),
+        LocalControlErrorKind::MalformedFrame
+    );
+
+    let move_request = ProtocolMessage::new(
+        connection("t166-move-bind"),
+        sequence(22),
+        None,
+        generation(18),
+        None,
+        ProtocolPayload::ApplyTopologyOperation {
+            request: ApplyTopologyOperationV2 {
+                expected_topology_generation: topology_generation(9),
+                operation: TopologyOperationV2::MovePane {
+                    multiplexer_workspace_id: workspace(18),
+                    source_tab_id: tab(18),
+                    pane_id: pane(18),
+                    destination_tab_id: tab(19),
+                    destination_pane_id: pane(21),
+                    axis: ProtocolSplitAxis::Horizontal,
+                    placement: ProtocolPanePlacement::Before,
+                    ratio_basis_points: 4_000,
+                },
+            },
+        },
+    )
+    .unwrap();
+    let move_response = |secondary_tab_id, secondary_pane_id| {
+        ProtocolMessage::new(
+            connection("t166-move-bind"),
+            sequence(23),
+            None,
+            generation(18),
+            Some(sequence(22)),
+            ProtocolPayload::MultiplexerSnapshot {
+                snapshot: MultiplexerSnapshotV2::MutationResult {
+                    result: TopologyMutationResultV2 {
+                        outcome: TopologyMutationOutcomeV2::Accepted,
+                        accepted_topology_generation: Some(topology_generation(10)),
+                        multiplexer_workspace_id: Some(workspace(18)),
+                        tab_id: Some(tab(18)),
+                        pane_id: Some(pane(18)),
+                        secondary_tab_id: Some(secondary_tab_id),
+                        secondary_pane_id: Some(secondary_pane_id),
+                    },
+                    snapshot: None,
+                },
+            },
+        )
+        .unwrap()
+    };
+    validate_response_binding(&move_request, &move_response(tab(19), pane(21))).unwrap();
+    assert_eq!(
+        validate_response_binding(&move_request, &move_response(tab(20), pane(21))).unwrap_err(),
+        LocalControlErrorKind::MalformedFrame
+    );
+    assert_eq!(
+        validate_response_binding(&move_request, &move_response(tab(19), pane(22))).unwrap_err(),
+        LocalControlErrorKind::MalformedFrame
+    );
 }
 
 #[test]
@@ -1024,6 +1138,8 @@ fn t166_stale_topology_and_history_gap_are_explicit_wire_outcomes() {
                     multiplexer_workspace_id: Some(workspace(36)),
                     tab_id: None,
                     pane_id: None,
+                    secondary_tab_id: None,
+                    secondary_pane_id: None,
                 },
                 snapshot: None,
             },

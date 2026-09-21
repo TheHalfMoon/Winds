@@ -116,6 +116,10 @@ pub(crate) struct TopologyMutationResultV2 {
     pub(crate) tab_id: Option<TabId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) pane_id: Option<PaneId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) secondary_tab_id: Option<TabId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) secondary_pane_id: Option<PaneId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -660,6 +664,8 @@ pub(crate) fn topology_operation_target_ids_v2(
     Option<MultiplexerWorkspaceId>,
     Option<TabId>,
     Option<PaneId>,
+    Option<TabId>,
+    Option<PaneId>,
 ) {
     match operation {
         TopologyOperationV2::CreateWorkspace {
@@ -671,6 +677,8 @@ pub(crate) fn topology_operation_target_ids_v2(
             Some(*multiplexer_workspace_id),
             Some(*first_tab_id),
             Some(*first_pane_id),
+            None,
+            None,
         ),
         TopologyOperationV2::FocusWorkspace {
             multiplexer_workspace_id,
@@ -685,7 +693,7 @@ pub(crate) fn topology_operation_target_ids_v2(
         }
         | TopologyOperationV2::CloseWorkspace {
             multiplexer_workspace_id,
-        } => (Some(*multiplexer_workspace_id), None, None),
+        } => (Some(*multiplexer_workspace_id), None, None, None, None),
         TopologyOperationV2::CreateTab {
             multiplexer_workspace_id,
             tab_id,
@@ -695,6 +703,8 @@ pub(crate) fn topology_operation_target_ids_v2(
             Some(*multiplexer_workspace_id),
             Some(*tab_id),
             Some(*first_pane_id),
+            None,
+            None,
         ),
         TopologyOperationV2::FocusTab {
             multiplexer_workspace_id,
@@ -713,42 +723,58 @@ pub(crate) fn topology_operation_target_ids_v2(
         | TopologyOperationV2::CloseTab {
             multiplexer_workspace_id,
             tab_id,
-        } => (Some(*multiplexer_workspace_id), Some(*tab_id), None),
+        } => (
+            Some(*multiplexer_workspace_id),
+            Some(*tab_id),
+            None,
+            None,
+            None,
+        ),
         TopologyOperationV2::SplitPane {
             multiplexer_workspace_id,
             tab_id,
             target_pane_id,
+            new_pane_id,
             ..
         } => (
             Some(*multiplexer_workspace_id),
             Some(*tab_id),
             Some(*target_pane_id),
+            None,
+            Some(*new_pane_id),
         ),
         TopologyOperationV2::SwapPanes {
             multiplexer_workspace_id,
             tab_id,
             first_pane_id,
-            ..
+            second_pane_id,
         }
         | TopologyOperationV2::ResizeSplit {
             multiplexer_workspace_id,
             tab_id,
             first_pane_id,
+            second_pane_id,
             ..
         } => (
             Some(*multiplexer_workspace_id),
             Some(*tab_id),
             Some(*first_pane_id),
+            None,
+            Some(*second_pane_id),
         ),
         TopologyOperationV2::MovePane {
             multiplexer_workspace_id,
             source_tab_id,
             pane_id,
+            destination_tab_id,
+            destination_pane_id,
             ..
         } => (
             Some(*multiplexer_workspace_id),
             Some(*source_tab_id),
             Some(*pane_id),
+            Some(*destination_tab_id),
+            Some(*destination_pane_id),
         ),
         TopologyOperationV2::ToggleZoom {
             multiplexer_workspace_id,
@@ -775,14 +801,15 @@ pub(crate) fn topology_operation_target_ids_v2(
             Some(*multiplexer_workspace_id),
             Some(*tab_id),
             Some(*pane_id),
+            None,
+            None,
         ),
         TopologyOperationV2::ApplyLayoutTemplate {
             multiplexer_workspace_id,
             ..
-        } => (Some(*multiplexer_workspace_id), None, None),
+        } => (Some(*multiplexer_workspace_id), None, None, None, None),
     }
 }
-
 pub(crate) fn apply_topology_operation_v2(
     topology: &mut MultiplexerTopology,
     expected: TopologyGeneration,
@@ -1674,11 +1701,13 @@ pub(super) fn validate_v2_response_binding(
                 snapshot: MultiplexerSnapshotV2::MutationResult { result, snapshot },
             },
         ) => {
-            let (workspace_id, tab_id, pane_id) =
+            let (workspace_id, tab_id, pane_id, secondary_tab_id, secondary_pane_id) =
                 topology_operation_target_ids_v2(&request.operation);
             if result.multiplexer_workspace_id != workspace_id
                 || result.tab_id != tab_id
                 || result.pane_id != pane_id
+                || result.secondary_tab_id != secondary_tab_id
+                || result.secondary_pane_id != secondary_pane_id
             {
                 return Err(LocalControlErrorKind::MalformedFrame);
             }

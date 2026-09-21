@@ -407,6 +407,8 @@ impl PersistentOwner {
                             multiplexer_workspace_id: list.multiplexer_workspace_id,
                             tab_id: None,
                             pane_id: None,
+                            secondary_tab_id: None,
+                            secondary_pane_id: None,
                         },
                         snapshot: None,
                     },
@@ -436,7 +438,7 @@ impl PersistentOwner {
                     return Ok(response);
                 }
 
-                let (workspace_id, tab_id, pane_id) =
+                let (workspace_id, tab_id, pane_id, secondary_tab_id, secondary_pane_id) =
                     topology_operation_target_ids_v2(&mutation.operation);
                 let outcome = self.mutate_multiplexer_topology(
                     &authenticated_connection_id,
@@ -468,6 +470,8 @@ impl PersistentOwner {
                                 multiplexer_workspace_id: workspace_id,
                                 tab_id,
                                 pane_id,
+                                secondary_tab_id,
+                                secondary_pane_id,
                             },
                             snapshot,
                         )
@@ -479,6 +483,8 @@ impl PersistentOwner {
                             multiplexer_workspace_id: workspace_id,
                             tab_id,
                             pane_id,
+                            secondary_tab_id,
+                            secondary_pane_id,
                         },
                         None,
                     ),
@@ -491,6 +497,8 @@ impl PersistentOwner {
                             multiplexer_workspace_id: workspace_id,
                             tab_id,
                             pane_id,
+                            secondary_tab_id,
+                            secondary_pane_id,
                         },
                         None,
                     ),
