@@ -1279,25 +1279,32 @@ fn validate_workspace_snapshot(snapshot: &ProtocolWorkspaceSnapshotV2) -> Protoc
     }
 
     let mut tab_ids = BTreeSet::new();
-    let mut pane_ids = BTreeSet::new();
+    let mut workspace_pane_ids = BTreeSet::new();
     for tab in &snapshot.tabs {
         if !tab_ids.insert(tab.tab_id) {
             return Err(LocalControlErrorKind::MalformedFrame);
         }
         validate_bounded_text(&tab.alias, MAX_V2_ALIAS_BYTES)?;
-        let before = pane_ids.len();
-        validate_layout_node(&tab.root, &mut pane_ids)?;
-        let tab_pane_count = pane_ids.len().saturating_sub(before);
+        let mut tab_pane_ids = BTreeSet::new();
+        validate_layout_node(&tab.root, &mut tab_pane_ids)?;
+        let tab_pane_count = tab_pane_ids.len();
         if tab_pane_count == 0
             || tab_pane_count > MAX_V2_PANES_PER_TAB
-            || pane_ids.len() > MAX_V2_AGGREGATE_PANES
-            || !pane_ids.contains(&tab.focused_pane_id)
+            || !tab_pane_ids.contains(&tab.focused_pane_id)
         {
             return Err(LocalControlErrorKind::MalformedFrame);
         }
         if let Some(zoomed) = tab.zoomed_pane_id
-            && !pane_ids.contains(&zoomed)
+            && !tab_pane_ids.contains(&zoomed)
         {
+            return Err(LocalControlErrorKind::MalformedFrame);
+        }
+        for pane_id in tab_pane_ids {
+            if !workspace_pane_ids.insert(pane_id) {
+                return Err(LocalControlErrorKind::MalformedFrame);
+            }
+        }
+        if workspace_pane_ids.len() > MAX_V2_AGGREGATE_PANES {
             return Err(LocalControlErrorKind::MalformedFrame);
         }
     }
