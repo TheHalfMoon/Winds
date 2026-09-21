@@ -20,6 +20,7 @@ pub(crate) enum LocalControlClientError {
     Transport(String),
     Protocol(LocalControlErrorKind),
     ProtocolMismatch,
+    BlockedLegacyOwner,
     StaleOwnerGeneration,
     RemoteEndpointRejected,
     ExpectedOwnerGenerationRequired,
@@ -38,6 +39,9 @@ impl fmt::Display for LocalControlClientError {
             Self::Transport(message) => write!(formatter, "local-control transport failed: {message}"),
             Self::Protocol(kind) => write!(formatter, "local-control protocol failed: {kind:?}"),
             Self::ProtocolMismatch => formatter.write_str("local-control protocol version mismatch"),
+            Self::BlockedLegacyOwner => formatter.write_str(
+                "local-control owner is live on legacy protocol v1; v2 owner-backed features are blocked until the legacy owner is explicitly quiesced",
+            ),
             Self::StaleOwnerGeneration => {
                 formatter.write_str("local-control owner generation is stale or mismatched")
             }
@@ -476,7 +480,13 @@ impl RustLocalControlClient {
         )
         .map_err(map_protocol_error)?;
         wire.send(&hello).map_err(map_wire_error)?;
-        let response = wire.receive().map_err(map_wire_error)?;
+        let response = match wire.receive() {
+            Ok(response) => response,
+            Err(WireError::Protocol(LocalControlErrorKind::ProtocolMismatch)) => {
+                return Err(LocalControlClientError::BlockedLegacyOwner);
+            }
+            Err(error) => return Err(map_wire_error(error)),
+        };
         validate_response_binding(&hello, &response).map_err(map_protocol_error)?;
         match response.payload {
             ProtocolPayload::HelloAck => {}
@@ -788,3 +798,7 @@ mod t155_local_control_client_tests;
 #[cfg(test)]
 #[path = "../t157_client_recovery_tests.rs"]
 mod t157_client_recovery_tests;
+
+#[cfg(test)]
+#[path = "../t166_multiplexer_protocol_v2_tests.rs"]
+mod t166_multiplexer_protocol_v2_tests;
