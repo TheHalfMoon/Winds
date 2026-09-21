@@ -582,6 +582,23 @@ pub(crate) fn decode_frame(frame: &[u8]) -> ProtocolResult<ProtocolMessage> {
     Ok(message)
 }
 
+pub(crate) fn is_legacy_protocol_frame(frame: &[u8]) -> bool {
+    if frame.len() < 5 {
+        return false;
+    }
+    let mut length_bytes = [0_u8; 4];
+    length_bytes.copy_from_slice(&frame[..4]);
+    let claimed = u32::from_le_bytes(length_bytes) as usize;
+    if claimed == 0
+        || claimed > MAX_INBOUND_CONTROL_FRAME_BYTES
+        || frame.len() != claimed.saturating_add(4)
+    {
+        return false;
+    }
+    serde_json::from_slice::<ProtocolVersionProbe>(&frame[4..])
+        .is_ok_and(|probe| probe.protocol_version == LEGACY_PROTOCOL_VERSION)
+}
+
 pub(crate) fn read_frame<R: Read>(reader: &mut R) -> ProtocolResult<ProtocolMessage> {
     let mut length_bytes = [0_u8; 4];
     reader

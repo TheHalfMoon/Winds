@@ -394,11 +394,10 @@ impl LocalControlWire for LegacyMismatchWire {
 fn t166_live_v1_mismatch_maps_to_blocked_legacy_owner_without_handoff() {
     let wire = LegacyMismatchWire {
         sent: Vec::new(),
-        receive: VecDeque::from([Err(WireError::Protocol(
-            LocalControlErrorKind::ProtocolMismatch,
-        ))]),
+        receive: VecDeque::from([Err(WireError::LegacyProtocol)]),
     };
-    let error =
-        RustLocalControlClient::connect_with_wire_for_test(Box::new(wire), None).unwrap_err();
+    let error = RustLocalControlClient::connect_with_wire_for_test(Box::new(wire), None)
+        .err()
+        .unwrap();
     assert_eq!(error, LocalControlClientError::BlockedLegacyOwner);
 }

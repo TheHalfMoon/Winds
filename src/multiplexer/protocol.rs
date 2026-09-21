@@ -92,8 +92,15 @@ pub(crate) struct ProtocolWorkspaceSummaryV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) enum TopologyMutationOutcomeV2 {
+    Accepted,
+    Rejected { error: MultiplexerErrorKind },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct TopologyMutationResultV2 {
-    pub(crate) outcome: MultiplexerErrorKind,
+    pub(crate) outcome: TopologyMutationOutcomeV2,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) accepted_topology_generation: Option<TopologyGeneration>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -794,8 +801,12 @@ fn validate_snapshot(snapshot: &MultiplexerSnapshotV2) -> ProtocolResult<()> {
         }
         MultiplexerSnapshotV2::Workspace { snapshot } => validate_workspace_snapshot(snapshot),
         MultiplexerSnapshotV2::MutationResult { result, snapshot } => {
-            if result.outcome == MultiplexerErrorKind::SnapshotLimitExceeded
-                && result.accepted_topology_generation.is_some()
+            if matches!(
+                result.outcome,
+                TopologyMutationOutcomeV2::Rejected {
+                    error: MultiplexerErrorKind::SnapshotLimitExceeded
+                }
+            ) && result.accepted_topology_generation.is_some()
             {
                 return Err(LocalControlErrorKind::MalformedFrame);
             }

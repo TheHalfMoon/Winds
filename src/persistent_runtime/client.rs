@@ -4,8 +4,8 @@ use crate::persistent_runtime::domain::{
 };
 use crate::persistent_runtime::protocol::{
     MAX_INBOUND_CONTROL_FRAME_BYTES, MessageKind, MutationOutcomeTracker, PROTOCOL_VERSION,
-    ProtocolMessage, ProtocolPayload, decode_frame, encode_frame, validate_event_binding,
-    validate_response_binding,
+    ProtocolMessage, ProtocolPayload, decode_frame, encode_frame, is_legacy_protocol_frame,
+    validate_event_binding, validate_response_binding,
 };
 use std::collections::{BTreeSet, VecDeque};
 use std::error::Error;
@@ -183,6 +183,7 @@ pub(crate) enum ClientEventProjection {
 enum WireError {
     Transport(String),
     Protocol(LocalControlErrorKind),
+    LegacyProtocol,
 }
 
 trait LocalControlWire {
@@ -244,7 +245,7 @@ impl LocalControlWire for PlatformWire {
         let mut frame = Vec::with_capacity(4 + claimed);
         frame.extend_from_slice(&length_bytes);
         frame.extend_from_slice(&payload);
-        decode_frame(&frame).map_err(WireError::Protocol)
+        decode_platform_frame(&frame)
     }
 }
 
@@ -297,7 +298,16 @@ impl LocalControlWire for PlatformWire {
         let mut frame = Vec::with_capacity(4 + claimed);
         frame.extend_from_slice(&length_bytes);
         frame.extend_from_slice(&payload);
-        decode_frame(&frame).map_err(WireError::Protocol)
+        decode_platform_frame(&frame)
+    }
+}
+
+fn decode_platform_frame(frame: &[u8]) -> Result<ProtocolMessage, WireError> {
+    match decode_frame(frame) {
+        Err(LocalControlErrorKind::ProtocolMismatch) if is_legacy_protocol_frame(frame) => {
+            Err(WireError::LegacyProtocol)
+        }
+        result => result.map_err(WireError::Protocol),
     }
 }
 
@@ -480,13 +490,7 @@ impl RustLocalControlClient {
         )
         .map_err(map_protocol_error)?;
         wire.send(&hello).map_err(map_wire_error)?;
-        let response = match wire.receive() {
-            Ok(response) => response,
-            Err(WireError::Protocol(LocalControlErrorKind::ProtocolMismatch)) => {
-                return Err(LocalControlClientError::BlockedLegacyOwner);
-            }
-            Err(error) => return Err(map_wire_error(error)),
-        };
+        let response = wire.receive().map_err(map_wire_error)?;
         validate_response_binding(&hello, &response).map_err(map_protocol_error)?;
         match response.payload {
             ProtocolPayload::HelloAck => {}
@@ -733,6 +737,7 @@ fn map_wire_error(error: WireError) -> LocalControlClientError {
     match error {
         WireError::Transport(message) => LocalControlClientError::Transport(message),
         WireError::Protocol(kind) => map_protocol_error(kind),
+        WireError::LegacyProtocol => LocalControlClientError::BlockedLegacyOwner,
     }
 }
 
