@@ -329,7 +329,8 @@ impl PersistentOwner {
     ) {
         self.multiplexer_service
             .disconnect_client(client_connection_id);
-        self.multiplexer_request_sequences.remove(client_connection_id);
+        self.multiplexer_request_sequences
+            .remove(client_connection_id);
     }
 
     pub(crate) fn mutate_multiplexer_topology<F>(
@@ -359,7 +360,6 @@ impl PersistentOwner {
         )
     }
 
-
     pub(crate) fn dispatch_multiplexer_protocol_v2(
         &mut self,
         authenticated_connection_id: ClientConnectionId,
@@ -388,10 +388,7 @@ impl PersistentOwner {
         self.multiplexer_request_sequences
             .entry(authenticated_connection_id.clone())
             .or_insert_with(|| {
-                RequestSequenceGuard::new(
-                    authenticated_connection_id.clone(),
-                    self.generation_id,
-                )
+                RequestSequenceGuard::new(authenticated_connection_id.clone(), self.generation_id)
             })
             .accept(request)?;
 
@@ -428,14 +425,12 @@ impl PersistentOwner {
                     state: MultiplexerWriteStateV2 { authority, error },
                 }
             }
-            ProtocolPayload::ReleaseMultiplexerWrite => {
-                ProtocolPayload::MultiplexerWriteState {
-                    state: MultiplexerWriteStateV2 {
-                        authority: self.release_multiplexer_write(&authenticated_connection_id),
-                        error: None,
-                    },
-                }
-            }
+            ProtocolPayload::ReleaseMultiplexerWrite => ProtocolPayload::MultiplexerWriteState {
+                state: MultiplexerWriteStateV2 {
+                    authority: self.release_multiplexer_write(&authenticated_connection_id),
+                    error: None,
+                },
+            },
             ProtocolPayload::ApplyTopologyOperation { request: mutation } => {
                 if let Ok(response) = inactive_v2_domain_response(request, response_sequence) {
                     return Ok(response);
