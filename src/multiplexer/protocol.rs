@@ -605,7 +605,6 @@ fn protocol_workspace_snapshot(
     }
 }
 
-
 pub(crate) fn multiplexer_snapshot_for_request_v2(
     topology: &MultiplexerTopology,
     owner_generation_id: OwnerGenerationId,
