@@ -1045,7 +1045,7 @@ pub(super) fn encode_v2_body(payload: &ProtocolPayload) -> ProtocolResult<Value>
         ProtocolPayload::ListMultiplexerWorkspaces { request } => to_value(request),
         ProtocolPayload::MultiplexerSnapshot { snapshot } => to_value(snapshot),
         ProtocolPayload::RequestMultiplexerWrite { request } => to_value(request),
-        ProtocolPayload::ReleaseMultiplexerWrite => to_value(&EmptyV2 {})
+        ProtocolPayload::ReleaseMultiplexerWrite => to_value(&EmptyV2 {}),
         ProtocolPayload::MultiplexerWriteState { state } => to_value(state),
         ProtocolPayload::ApplyTopologyOperation { request } => to_value(request),
         ProtocolPayload::MultiplexerEvent { event } => to_value(event),
