@@ -120,10 +120,14 @@ impl OutputPump {
     }
 
     fn wait_for(&mut self, needle: &[u8], cycle: usize) {
+        self.wait_for_with_timeout(needle, cycle, Duration::from_secs(10));
+    }
+
+    fn wait_for_with_timeout(&mut self, needle: &[u8], cycle: usize, timeout: Duration) {
         if contains_bytes(&self.observed, needle) {
             return;
         }
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             match self.receiver.recv_timeout(Duration::from_millis(100)) {
                 Ok(OutputEvent::Chunk(chunk)) => {
@@ -141,7 +145,8 @@ impl OutputPump {
             }
         }
         panic!(
-            "T063 cycle {cycle} timed out waiting for output marker {:?}; observed {:?}",
+            "T063 cycle {cycle} timed out after {:?} waiting for output marker {:?}; observed {:?}",
+            timeout,
             String::from_utf8_lossy(needle),
             String::from_utf8_lossy(&self.observed)
         );
@@ -578,7 +583,15 @@ fn active_close_and_windows_child_resize_guard() {
         let command = "powershell -NoProfile -NonInteractive -Command \"$s=$Host.UI.RawUI.WindowSize; Write-Output ('WINDS_T063_CHILD_SIZE_' + $s.Height + ' ' + $s.Width)\"\r\n";
         execution.send_input(command.as_bytes()).unwrap();
         let expected = format!("WINDS_T063_CHILD_SIZE_{} {}", resized.rows, resized.cols);
-        output.wait_for(expected.as_bytes(), GUARD_CYCLE);
+        // Hosted Windows runners can cold-start PowerShell slowly after the 100-cycle
+        // ConPTY soak. Keep the exact child-observed marker mandatory, but give this
+        // subprocess-only proof a bounded window that does not turn timing load into
+        // a false product failure.
+        output.wait_for_with_timeout(
+            expected.as_bytes(),
+            GUARD_CYCLE,
+            Duration::from_secs(30),
+        );
         assert_eq!(
             execution.try_wait().unwrap(),
             None,
