@@ -7,19 +7,22 @@ use crate::persistent_runtime::domain::{
 };
 use crate::persistent_runtime::protocol::{
     AgentFamilyV2, AgentObservationConfidenceV2, AgentObservationCursorV2,
-    AgentObservationFreshnessV2, AgentObservationSnapshotV2, AgentObservationSourceV2,
-    AgentObservationV2, ApplyTopologyOperationV2, ApplyWorktreeOperationV2, AttentionItemV2,
-    AttentionKindV2, AttentionSnapshotV2, LEGACY_PROTOCOL_VERSION, ListAgentObservationsV2,
-    ListWorktreesV2, MAX_CONTROL_FRAME_BYTES, MAX_INBOUND_CONTROL_FRAME_BYTES,
+    AgentObservationEventV2, AgentObservationFreshnessV2, AgentObservationSnapshotV2,
+    AgentObservationSourceV2, AgentObservationV2, ApplyTopologyOperationV2,
+    ApplyWorktreeOperationV2, AttentionEventV2, AttentionItemV2, AttentionKindV2,
+    AttentionSnapshotV2, LEGACY_PROTOCOL_VERSION, ListAgentObservationsV2, ListWorktreesV2,
+    MAX_CONTROL_FRAME_BYTES, MAX_INBOUND_CONTROL_FRAME_BYTES,
     MAX_V2_AGENT_OBSERVATIONS_PER_PAGE, MAX_V2_ALIAS_BYTES, MAX_V2_ATTENTION_ITEMS_PER_PAGE,
     MAX_V2_BRANCH_BYTES, MAX_V2_DETAIL_BYTES, MAX_V2_EVIDENCE_SUMMARY_BYTES,
     MAX_V2_GIT_WORKSPACE_ID_BYTES, MAX_V2_PATH_BYTES, MAX_V2_PROVIDER_SESSION_ID_BYTES,
     MAX_V2_REPOSITORY_IDENTITY_BYTES, MAX_V2_TABS_PER_WORKSPACE, MAX_V2_WORKTREES_PER_PAGE,
-    MessageAuthorityClass, MessageKind, MultiplexerSnapshotV2, PROTOCOL_VERSION,
-    ProtocolLayoutNodeV2, ProtocolPanePlacement, ProtocolSplitAxis, ProtocolTabSnapshotV2,
-    ProtocolWorkspaceSnapshotV2, TopologyOperationV2, WorktreeCursorV2, WorktreeMembershipV2,
+    MessageAuthorityClass, MessageKind, MultiplexerEventV2, MultiplexerSnapshotV2,
+    PROTOCOL_VERSION, ProtocolLayoutNodeV2, ProtocolPanePlacement, ProtocolSplitAxis,
+    ProtocolTabSnapshotV2, ProtocolWorkspaceSnapshotV2, TopologyMutationOutcomeV2,
+    TopologyMutationResultV2, TopologyOperationV2, WorktreeCursorV2, WorktreeMembershipV2,
     WorktreeObservationV2, WorktreeOperationOutcomeV2, WorktreeOperationResultV2,
-    WorktreeOperationV2, decode_frame, encode_frame, validate_response_binding,
+    WorktreeOperationV2, decode_frame, encode_frame, inactive_v2_domain_response,
+    validate_response_binding,
 };
 use crate::persistent_runtime::protocol::{ProtocolMessage, ProtocolPayload};
 use std::collections::VecDeque;
@@ -282,7 +285,7 @@ fn t166_agent_observation_schema_keeps_workspace_domains_unambiguous() {
 #[test]
 fn t166_typed_worktree_page_is_bounded_and_single_frame_safe() {
     let result = WorktreeOperationResultV2 {
-        outcome: WorktreeOperationOutcomeV2::UnsupportedOperation,
+        outcome: WorktreeOperationOutcomeV2::Accepted,
         snapshot_revision: 1,
         page_offset: 0,
         worktrees: (0..MAX_V2_WORKTREES_PER_PAGE).map(worktree).collect(),
@@ -306,7 +309,7 @@ fn t166_typed_worktree_page_is_bounded_and_single_frame_safe() {
     assert_eq!(decode_frame(&frame).unwrap(), response);
 
     let too_many = WorktreeOperationResultV2 {
-        outcome: WorktreeOperationOutcomeV2::UnsupportedOperation,
+        outcome: WorktreeOperationOutcomeV2::Accepted,
         snapshot_revision: 1,
         page_offset: 0,
         worktrees: (0..=MAX_V2_WORKTREES_PER_PAGE).map(worktree).collect(),
@@ -558,6 +561,90 @@ fn t166_collection_cursor_owner_and_offset_binding_fail_closed() {
     )
     .unwrap_err();
     assert_eq!(stale_owner, LocalControlErrorKind::StaleOwnerGeneration);
+}
+
+#[test]
+fn t166_inactive_future_domains_return_typed_unsupported_without_side_effect_path() {
+    let request = ProtocolMessage::new(
+        connection("t166-inactive"),
+        sequence(50),
+        None,
+        generation(35),
+        None,
+        ProtocolPayload::ListWorktrees {
+            request: ListWorktreesV2 {
+                multiplexer_workspace_id: Some(workspace(35)),
+                cursor: None,
+            },
+        },
+    )
+    .unwrap();
+    let response = inactive_v2_domain_response(&request, sequence(51)).unwrap();
+    assert_eq!(
+        response.payload,
+        ProtocolPayload::Error {
+            kind: LocalControlErrorKind::UnsupportedOperation,
+        }
+    );
+    assert_eq!(response.correlation_sequence, Some(sequence(50)));
+    assert_eq!(response.owner_generation_id, Some(generation(35)));
+    validate_response_binding(&request, &response).unwrap();
+}
+
+#[test]
+fn t166_stale_topology_and_history_gap_are_explicit_wire_outcomes() {
+    let stale = ProtocolMessage::new(
+        connection("t166-stale"),
+        sequence(52),
+        None,
+        generation(36),
+        Some(sequence(51)),
+        ProtocolPayload::MultiplexerSnapshot {
+            snapshot: MultiplexerSnapshotV2::MutationResult {
+                result: TopologyMutationResultV2 {
+                    outcome: TopologyMutationOutcomeV2::Rejected {
+                        error: crate::multiplexer::domain::MultiplexerErrorKind::StaleTopologyGeneration,
+                    },
+                    accepted_topology_generation: None,
+                    multiplexer_workspace_id: Some(workspace(36)),
+                    tab_id: None,
+                    pane_id: None,
+                },
+                snapshot: None,
+            },
+        },
+    )
+    .unwrap();
+    assert_eq!(decode_frame(&encode_frame(&stale).unwrap()).unwrap(), stale);
+
+    for payload in [
+        ProtocolPayload::MultiplexerEvent {
+            event: MultiplexerEventV2::HistoryGap {
+                last_known_topology_generation: topology_generation(7),
+            },
+        },
+        ProtocolPayload::AgentObservationEvent {
+            event: AgentObservationEventV2::HistoryGap {
+                last_known_snapshot_revision: 7,
+            },
+        },
+        ProtocolPayload::AttentionEvent {
+            event: AttentionEventV2::HistoryGap {
+                last_known_snapshot_revision: 7,
+            },
+        },
+    ] {
+        let message = ProtocolMessage::new(
+            connection("t166-gap"),
+            sequence(53),
+            None,
+            generation(36),
+            None,
+            payload,
+        )
+        .unwrap();
+        assert_eq!(decode_frame(&encode_frame(&message).unwrap()).unwrap(), message);
+    }
 }
 
 #[test]
