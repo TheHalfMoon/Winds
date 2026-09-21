@@ -944,6 +944,9 @@ fn validate_message(message: &ProtocolMessage) -> ProtocolResult<()> {
         _ => {}
     }
     validate_v2_payload(&message.payload)?;
+    if let Some(owner_generation_id) = message.owner_generation_id {
+        validate_v2_owner_generation_binding(&message.payload, owner_generation_id)?;
+    }
     Ok(())
 }
 
@@ -989,6 +992,7 @@ pub(crate) fn validate_response_binding(
         (None, None) => {}
         (None, Some(_)) => return Err(LocalControlErrorKind::MalformedFrame),
     }
+    validate_v2_response_binding(&request.payload, &response.payload)?;
     Ok(())
 }
 
