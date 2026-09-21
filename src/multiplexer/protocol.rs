@@ -448,8 +448,7 @@ pub(crate) struct WorktreeCursorV2 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ListWorktreesV2 {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) multiplexer_workspace_id: Option<MultiplexerWorkspaceId>,
+    pub(crate) multiplexer_workspace_id: MultiplexerWorkspaceId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) cursor: Option<WorktreeCursorV2>,
 }
@@ -458,13 +457,13 @@ pub(crate) struct ListWorktreesV2 {
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
 pub(crate) enum WorktreeOperationV2 {
     Create {
-        repository_identity: String,
         destination_path: String,
         base_commit_oid: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         new_branch_name: Option<String>,
     },
     Open {
+        git_workspace_id: String,
         canonical_path: String,
     },
     Remove {
@@ -476,6 +475,9 @@ pub(crate) enum WorktreeOperationV2 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ApplyWorktreeOperationV2 {
+    pub(crate) multiplexer_workspace_id: MultiplexerWorkspaceId,
+    pub(crate) repository_identity: String,
+    pub(crate) trust_record_revision: u64,
     pub(crate) operation: WorktreeOperationV2,
 }
 
@@ -493,6 +495,11 @@ pub(crate) enum WorktreeOperationOutcomeV2 {
 #[serde(deny_unknown_fields)]
 pub(crate) struct WorktreeOperationResultV2 {
     pub(crate) outcome: WorktreeOperationOutcomeV2,
+    pub(crate) multiplexer_workspace_id: MultiplexerWorkspaceId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) repository_identity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) git_workspace_id: Option<String>,
     pub(crate) snapshot_revision: u64,
     pub(crate) page_offset: u16,
     pub(crate) worktrees: Vec<WorktreeObservationV2>,
@@ -1162,6 +1169,11 @@ pub(super) fn validate_v2_payload(payload: &ProtocolPayload) -> ProtocolResult<(
             Ok(())
         }
         ProtocolPayload::ApplyWorktreeOperation { request } => {
+            validate_nonempty_text(
+                &request.repository_identity,
+                MAX_V2_REPOSITORY_IDENTITY_BYTES,
+            )?;
+            validate_revision(request.trust_record_revision)?;
             validate_worktree_operation(&request.operation)
         }
         ProtocolPayload::WorktreeOperationResult { result } => validate_worktree_result(result),
@@ -1478,12 +1490,10 @@ fn validate_worktree(worktree: &WorktreeObservationV2) -> ProtocolResult<()> {
 fn validate_worktree_operation(operation: &WorktreeOperationV2) -> ProtocolResult<()> {
     match operation {
         WorktreeOperationV2::Create {
-            repository_identity,
             destination_path,
             base_commit_oid,
             new_branch_name,
         } => {
-            validate_nonempty_text(repository_identity, MAX_V2_REPOSITORY_IDENTITY_BYTES)?;
             validate_nonempty_text(destination_path, MAX_V2_PATH_BYTES)?;
             validate_oid(base_commit_oid)?;
             if let Some(branch) = new_branch_name {
@@ -1491,7 +1501,11 @@ fn validate_worktree_operation(operation: &WorktreeOperationV2) -> ProtocolResul
             }
             Ok(())
         }
-        WorktreeOperationV2::Open { canonical_path } => {
+        WorktreeOperationV2::Open {
+            git_workspace_id,
+            canonical_path,
+        } => {
+            validate_nonempty_text(git_workspace_id, MAX_V2_GIT_WORKSPACE_ID_BYTES)?;
             validate_nonempty_text(canonical_path, MAX_V2_PATH_BYTES)
         }
         WorktreeOperationV2::Remove {
@@ -1506,6 +1520,12 @@ fn validate_worktree_operation(operation: &WorktreeOperationV2) -> ProtocolResul
 
 fn validate_worktree_result(result: &WorktreeOperationResultV2) -> ProtocolResult<()> {
     validate_revision(result.snapshot_revision)?;
+    if let Some(repository_identity) = &result.repository_identity {
+        validate_nonempty_text(repository_identity, MAX_V2_REPOSITORY_IDENTITY_BYTES)?;
+    }
+    if let Some(git_workspace_id) = &result.git_workspace_id {
+        validate_nonempty_text(git_workspace_id, MAX_V2_GIT_WORKSPACE_ID_BYTES)?;
+    }
     if result.worktrees.len() > MAX_V2_WORKTREES_PER_PAGE {
         return Err(LocalControlErrorKind::OversizedFrame);
     }
