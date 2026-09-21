@@ -11,7 +11,7 @@ use crate::persistent_runtime::controller::{
 use crate::persistent_runtime::domain::{
     ClientConnectionId, OwnerGenerationId, RuntimeAlias, RuntimeNamespaceId,
 };
-use crate::persistent_runtime::protocol::ProtocolMessage;
+use crate::persistent_runtime::protocol::{ProtocolMessage, validate_candidate_topology_v2};
 use crate::persistent_runtime::replay::ObserverHandle;
 use crate::persistent_runtime::runtime::{
     PersistentRuntimeShutdownReport, PersistentTerminalAttachment, PersistentTerminalRegistry,
@@ -334,12 +334,17 @@ impl PersistentOwner {
             TopologyGeneration,
         ) -> Result<TopologyGeneration, MultiplexerErrorKind>,
     {
+        let owner_generation_id = self.generation_id;
         self.multiplexer_service.mutate(
             &mut self.store,
             client_connection_id,
             expected_generation,
             now_unix_ms,
-            mutation,
+            |candidate, expected| {
+                let accepted = mutation(candidate, expected)?;
+                validate_candidate_topology_v2(candidate, owner_generation_id)?;
+                Ok(accepted)
+            },
         )
     }
 
