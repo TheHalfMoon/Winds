@@ -255,6 +255,72 @@ fn t166_topology_operation_is_exact_generation_and_target_bound() {
 }
 
 #[test]
+fn t166_response_binding_rejects_topology_target_and_generation_substitution() {
+    let request = ProtocolMessage::new(
+        connection("t166-topology-bind"),
+        sequence(18),
+        None,
+        generation(18),
+        None,
+        ProtocolPayload::ApplyTopologyOperation {
+            request: ApplyTopologyOperationV2 {
+                expected_topology_generation: topology_generation(8),
+                operation: TopologyOperationV2::RenameWorkspace {
+                    multiplexer_workspace_id: workspace(18),
+                    alias: "renamed".to_owned(),
+                },
+            },
+        },
+    )
+    .unwrap();
+
+    let response = |workspace_id, accepted_generation| {
+        ProtocolMessage::new(
+            connection("t166-topology-bind"),
+            sequence(19),
+            None,
+            generation(18),
+            Some(sequence(18)),
+            ProtocolPayload::MultiplexerSnapshot {
+                snapshot: MultiplexerSnapshotV2::MutationResult {
+                    result: TopologyMutationResultV2 {
+                        outcome: TopologyMutationOutcomeV2::Accepted,
+                        accepted_topology_generation: Some(accepted_generation),
+                        multiplexer_workspace_id: Some(workspace_id),
+                        tab_id: None,
+                        pane_id: None,
+                    },
+                    snapshot: None,
+                },
+            },
+        )
+        .unwrap()
+    };
+
+    assert_eq!(
+        validate_response_binding(
+            &request,
+            &response(workspace(19), topology_generation(9))
+        )
+        .unwrap_err(),
+        LocalControlErrorKind::MalformedFrame
+    );
+    assert_eq!(
+        validate_response_binding(
+            &request,
+            &response(workspace(18), topology_generation(10))
+        )
+        .unwrap_err(),
+        LocalControlErrorKind::MalformedFrame
+    );
+    validate_response_binding(
+        &request,
+        &response(workspace(18), topology_generation(9)),
+    )
+    .unwrap();
+}
+
+#[test]
 fn t166_agent_observation_schema_keeps_workspace_domains_unambiguous() {
     let payload = ProtocolPayload::AgentObservationSnapshot {
         snapshot: AgentObservationSnapshotV2 {
@@ -420,6 +486,75 @@ fn t166_typed_worktree_page_is_bounded_and_single_frame_safe() {
         .unwrap_err(),
         LocalControlErrorKind::OversizedFrame
     );
+}
+
+#[test]
+fn t166_paged_collections_reject_duplicate_item_identities() {
+    let owner_generation_id = generation(14);
+    let duplicate_observation = AgentObservationV2 {
+        observation_id: observation(14),
+        family: AgentFamilyV2::Claude,
+        source_class: AgentObservationSourceV2::OwnedProcessMetadata,
+        confidence_class: AgentObservationConfidenceV2::Strong,
+        freshness: AgentObservationFreshnessV2::Current,
+        multiplexer_workspace_id: workspace(14),
+        git_workspace_id: None,
+        tab_id: tab(14),
+        pane_id: pane(14),
+        runtime_namespace_id: None,
+        provider_native_session_id: None,
+        owner_generation_id,
+        observed_unix_ms: 1,
+        structured_evidence_summary: "evidence".to_owned(),
+    };
+    let duplicate_agents = ProtocolMessage::new(
+        connection("t166-duplicate-agent"),
+        sequence(22),
+        None,
+        owner_generation_id,
+        Some(sequence(21)),
+        ProtocolPayload::AgentObservationSnapshot {
+            snapshot: AgentObservationSnapshotV2 {
+                snapshot_revision: 1,
+                page_offset: 0,
+                observations: vec![duplicate_observation.clone(), duplicate_observation],
+                next_cursor: None,
+            },
+        },
+    )
+    .unwrap_err();
+    assert_eq!(duplicate_agents, LocalControlErrorKind::MalformedFrame);
+
+    let duplicate_worktree = WorktreeObservationV2 {
+        git_workspace_id: "duplicate-worktree".to_owned(),
+        repository_identity: "repo".to_owned(),
+        canonical_path: "/tmp/duplicate-worktree".to_owned(),
+        branch: Some("main".to_owned()),
+        head_oid: "a".repeat(40),
+        dirty: false,
+        membership: WorktreeMembershipV2::ExplicitMember,
+    };
+    let duplicate_worktrees = ProtocolMessage::new(
+        connection("t166-duplicate-worktree"),
+        sequence(23),
+        None,
+        owner_generation_id,
+        Some(sequence(21)),
+        ProtocolPayload::WorktreeOperationResult {
+            result: WorktreeOperationResultV2 {
+                outcome: WorktreeOperationOutcomeV2::Accepted,
+                multiplexer_workspace_id: workspace(14),
+                repository_identity: None,
+                git_workspace_id: None,
+                snapshot_revision: 1,
+                page_offset: 0,
+                worktrees: vec![duplicate_worktree.clone(), duplicate_worktree],
+                next_cursor: None,
+            },
+        },
+    )
+    .unwrap_err();
+    assert_eq!(duplicate_worktrees, LocalControlErrorKind::MalformedFrame);
 }
 
 #[test]
@@ -675,7 +810,7 @@ fn t166_collection_cursor_owner_and_offset_binding_fail_closed() {
         None,
         ProtocolPayload::ListAgentObservations {
             request: ListAgentObservationsV2 {
-                multiplexer_workspace_id: workspace(33),
+                multiplexer_workspace_id: Some(workspace(33)),
                 cursor: Some(AgentObservationCursorV2 {
                     owner_generation_id,
                     snapshot_revision: 12,
@@ -715,7 +850,7 @@ fn t166_collection_cursor_owner_and_offset_binding_fail_closed() {
         None,
         ProtocolPayload::ListAgentObservations {
             request: ListAgentObservationsV2 {
-                multiplexer_workspace_id: workspace(33),
+                multiplexer_workspace_id: Some(workspace(33)),
                 cursor: Some(AgentObservationCursorV2 {
                     owner_generation_id: generation(34),
                     snapshot_revision: 12,
@@ -1000,7 +1135,7 @@ fn t166_future_domain_mutation_is_typed_without_runtime_controller_authority() {
 
     let list = v2_message(ProtocolPayload::ListAgentObservations {
         request: ListAgentObservationsV2 {
-            multiplexer_workspace_id: workspace(4),
+            multiplexer_workspace_id: Some(workspace(4)),
             cursor: None,
         },
     });
