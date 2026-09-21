@@ -33,6 +33,7 @@ use crate::persistent_runtime::protocol::{
 };
 use crate::persistent_runtime::protocol::{ProtocolMessage, ProtocolPayload};
 use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 
 fn sequence(value: u64) -> EventSequence {
     EventSequence::new(value).unwrap()
@@ -1245,6 +1246,185 @@ fn t166_future_domain_mutation_is_typed_without_runtime_controller_authority() {
         },
     });
     assert_eq!(worktrees.runtime_namespace_id, None);
+}
+
+struct Spec011V2RoundTripWire {
+    owner_generation_id: OwnerGenerationId,
+    connection_id: ClientConnectionId,
+    sent: Arc<Mutex<Vec<ProtocolMessage>>>,
+    receive: VecDeque<Result<ProtocolMessage, WireError>>,
+}
+
+impl Spec011V2RoundTripWire {
+    fn new(
+        owner_generation_id: OwnerGenerationId,
+    ) -> (Self, Arc<Mutex<Vec<ProtocolMessage>>>) {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        (
+            Self {
+                owner_generation_id,
+                connection_id: connection("t166-spec011-v2"),
+                sent: Arc::clone(&sent),
+                receive: VecDeque::new(),
+            },
+            sent,
+        )
+    }
+
+    fn response_for(&self, request: &ProtocolMessage) -> Result<ProtocolMessage, WireError> {
+        let response_sequence = sequence(request.sequence.get().saturating_add(1_000));
+        let payload = match request.payload {
+            ProtocolPayload::Hello { .. } => ProtocolPayload::HelloAck,
+            ProtocolPayload::AttachObserver | ProtocolPayload::Detach | ProtocolPayload::ReleaseControl => {
+                ProtocolPayload::ControlState {
+                    authority: ClientAuthority::Observer,
+                    controller_client_id: None,
+                }
+            }
+            ProtocolPayload::RequestControl
+            | ProtocolPayload::Input { .. }
+            | ProtocolPayload::Resize { .. }
+            | ProtocolPayload::Interrupt
+            | ProtocolPayload::Stop => ProtocolPayload::ControlState {
+                authority: ClientAuthority::Controller,
+                controller_client_id: Some(self.connection_id.clone()),
+            },
+            _ => return Err(WireError::Protocol(LocalControlErrorKind::UnsupportedOperation)),
+        };
+        ProtocolMessage::new(
+            self.connection_id.clone(),
+            response_sequence,
+            request.runtime_namespace_id,
+            self.owner_generation_id,
+            Some(request.sequence),
+            payload,
+        )
+        .map_err(WireError::Protocol)
+    }
+}
+
+impl LocalControlWire for Spec011V2RoundTripWire {
+    fn send(&mut self, message: &ProtocolMessage) -> Result<(), WireError> {
+        let frame = encode_frame(message).map_err(WireError::Protocol)?;
+        let json = std::str::from_utf8(&frame[4..])
+            .map_err(|_| WireError::Protocol(LocalControlErrorKind::MalformedFrame))?;
+        if !json.contains(r#""protocol_version":2"#) {
+            return Err(WireError::Protocol(LocalControlErrorKind::ProtocolMismatch));
+        }
+        let decoded = decode_frame(&frame).map_err(WireError::Protocol)?;
+        self.sent.lock().unwrap().push(decoded.clone());
+        let response = self.response_for(&decoded)?;
+        let response = decode_frame(
+            &encode_frame(&response).map_err(WireError::Protocol)?,
+        )
+        .map_err(WireError::Protocol)?;
+        self.receive.push_back(Ok(response));
+        Ok(())
+    }
+
+    fn receive(&mut self) -> Result<ProtocolMessage, WireError> {
+        self.receive
+            .pop_front()
+            .unwrap_or_else(|| Err(WireError::Transport("script exhausted".to_owned())))
+    }
+}
+
+#[test]
+fn t166_all_existing_spec011_client_operations_round_trip_under_v2() {
+    let owner_generation_id = generation(48);
+    let runtime_namespace_id = runtime(48);
+    let target = ResolvedRuntimeTarget::exact(runtime_namespace_id);
+    let (wire, sent) = Spec011V2RoundTripWire::new(owner_generation_id);
+    let mut client =
+        RustLocalControlClient::connect_with_wire_for_test(Box::new(wire), Some(owner_generation_id))
+            .unwrap();
+
+    assert!(matches!(
+        client.attach_observer(target).unwrap(),
+        ClientResponseProjection::ControlState {
+            authority: ClientAuthority::Observer,
+            ..
+        }
+    ));
+    assert!(matches!(
+        client.request_control(target).unwrap(),
+        ClientResponseProjection::ControlState {
+            authority: ClientAuthority::Controller,
+            ..
+        }
+    ));
+    assert!(matches!(
+        client.send_input(target, b"v2".to_vec()).unwrap(),
+        ClientResponseProjection::ControlState {
+            authority: ClientAuthority::Controller,
+            ..
+        }
+    ));
+    assert!(matches!(
+        client.resize(target, 120, 40).unwrap(),
+        ClientResponseProjection::ControlState {
+            authority: ClientAuthority::Controller,
+            ..
+        }
+    ));
+    assert!(matches!(
+        client.interrupt(target).unwrap(),
+        ClientResponseProjection::ControlState {
+            authority: ClientAuthority::Controller,
+            ..
+        }
+    ));
+    assert!(matches!(
+        client.release_control(target).unwrap(),
+        ClientResponseProjection::ControlState {
+            authority: ClientAuthority::Observer,
+            ..
+        }
+    ));
+    assert!(matches!(
+        client.request_control(target).unwrap(),
+        ClientResponseProjection::ControlState {
+            authority: ClientAuthority::Controller,
+            ..
+        }
+    ));
+    assert!(matches!(
+        client.stop(target).unwrap(),
+        ClientResponseProjection::ControlState {
+            authority: ClientAuthority::Controller,
+            ..
+        }
+    ));
+    assert!(matches!(
+        client.detach_observer(target).unwrap(),
+        ClientResponseProjection::ControlState {
+            authority: ClientAuthority::Observer,
+            ..
+        }
+    ));
+
+    let sent = sent.lock().unwrap();
+    let kinds = sent.iter().map(ProtocolMessage::kind).collect::<Vec<_>>();
+    assert_eq!(
+        kinds,
+        vec![
+            MessageKind::Hello,
+            MessageKind::AttachObserver,
+            MessageKind::RequestControl,
+            MessageKind::Input,
+            MessageKind::Resize,
+            MessageKind::Interrupt,
+            MessageKind::ReleaseControl,
+            MessageKind::RequestControl,
+            MessageKind::Stop,
+            MessageKind::Detach,
+        ]
+    );
+    assert!(
+        sent[1..]
+            .iter()
+            .all(|message| message.runtime_namespace_id == Some(runtime_namespace_id))
+    );
 }
 
 struct LegacyMismatchWire {
