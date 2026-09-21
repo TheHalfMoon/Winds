@@ -1617,6 +1617,72 @@ pub(super) fn validate_v2_response_binding(
 ) -> ProtocolResult<()> {
     match (request, response) {
         (
+            ProtocolPayload::ListMultiplexerWorkspaces { request },
+            ProtocolPayload::MultiplexerSnapshot { snapshot },
+        ) => match (&request.multiplexer_workspace_id, snapshot) {
+            (None, MultiplexerSnapshotV2::WorkspaceList { .. }) => {}
+            (
+                Some(expected_workspace_id),
+                MultiplexerSnapshotV2::Workspace {
+                    snapshot: workspace_snapshot,
+                },
+            ) if workspace_snapshot.multiplexer_workspace_id == *expected_workspace_id => {}
+            (
+                expected_workspace_id,
+                MultiplexerSnapshotV2::MutationResult { result, snapshot },
+            ) if matches!(result.outcome, TopologyMutationOutcomeV2::Rejected { .. })
+                && result.multiplexer_workspace_id == *expected_workspace_id
+                && snapshot.is_none() => {}
+            _ => return Err(LocalControlErrorKind::MalformedFrame),
+        },
+        (
+            ProtocolPayload::RequestMultiplexerWrite { .. },
+            ProtocolPayload::MultiplexerWriteState { state },
+        ) => match (state.authority, state.error) {
+            (MultiplexerAuthority::MultiplexerWrite, None)
+            | (MultiplexerAuthority::Observer, Some(_)) => {}
+            _ => return Err(LocalControlErrorKind::MalformedFrame),
+        },
+        (
+            ProtocolPayload::ReleaseMultiplexerWrite,
+            ProtocolPayload::MultiplexerWriteState { state },
+        ) if state.authority != MultiplexerAuthority::Observer || state.error.is_some() => {
+            return Err(LocalControlErrorKind::MalformedFrame);
+        }
+        (
+            ProtocolPayload::ApplyTopologyOperation { request },
+            ProtocolPayload::MultiplexerSnapshot {
+                snapshot: MultiplexerSnapshotV2::MutationResult { result, snapshot },
+            },
+        ) => {
+            let (workspace_id, tab_id, pane_id) =
+                topology_operation_target_ids_v2(&request.operation);
+            if result.multiplexer_workspace_id != workspace_id
+                || result.tab_id != tab_id
+                || result.pane_id != pane_id
+            {
+                return Err(LocalControlErrorKind::MalformedFrame);
+            }
+            if let TopologyMutationOutcomeV2::Accepted = result.outcome {
+                let expected_generation = request
+                    .expected_topology_generation
+                    .checked_next()
+                    .map_err(|_| LocalControlErrorKind::MalformedFrame)?;
+                if result.accepted_topology_generation != Some(expected_generation) {
+                    return Err(LocalControlErrorKind::MalformedFrame);
+                }
+            }
+            if let Some(snapshot) = snapshot
+                && Some(snapshot.multiplexer_workspace_id) != workspace_id
+            {
+                return Err(LocalControlErrorKind::MalformedFrame);
+            }
+        }
+        (
+            ProtocolPayload::ApplyTopologyOperation { .. },
+            ProtocolPayload::MultiplexerSnapshot { .. },
+        ) => return Err(LocalControlErrorKind::MalformedFrame),
+        (
             ProtocolPayload::ListAgentObservations { request },
             ProtocolPayload::AgentObservationSnapshot { snapshot },
         ) => {
@@ -1627,14 +1693,26 @@ pub(super) fn validate_v2_response_binding(
             if let Some(cursor) = &request.cursor
                 && cursor.snapshot_revision != snapshot.snapshot_revision
             {
-                return Err(LocalControlErrorKind::StaleOwnerGeneration);
+                return Err(LocalControlErrorKind::MalformedFrame);
+            }
+            if let Some(workspace_id) = request.multiplexer_workspace_id
+                && snapshot
+                    .observations
+                    .iter()
+                    .any(|observation| observation.multiplexer_workspace_id != workspace_id)
+            {
+                return Err(LocalControlErrorKind::MalformedFrame);
             }
         }
         (
             ProtocolPayload::ListWorktrees { request },
             ProtocolPayload::WorktreeOperationResult { result },
         ) => {
-            if result.outcome != WorktreeOperationOutcomeV2::Accepted {
+            if result.outcome != WorktreeOperationOutcomeV2::Accepted
+                || result.multiplexer_workspace_id != request.multiplexer_workspace_id
+                || result.repository_identity.is_some()
+                || result.git_workspace_id.is_some()
+            {
                 return Err(LocalControlErrorKind::MalformedFrame);
             }
             let expected_offset = request.cursor.as_ref().map_or(0, |cursor| cursor.offset);
@@ -1644,14 +1722,41 @@ pub(super) fn validate_v2_response_binding(
             if let Some(cursor) = &request.cursor
                 && cursor.snapshot_revision != result.snapshot_revision
             {
-                return Err(LocalControlErrorKind::StaleOwnerGeneration);
+                return Err(LocalControlErrorKind::MalformedFrame);
             }
         }
         (
-            ProtocolPayload::ApplyWorktreeOperation { .. },
+            ProtocolPayload::ApplyWorktreeOperation { request },
             ProtocolPayload::WorktreeOperationResult { result },
-        ) if result.page_offset != 0 || result.next_cursor.is_some() => {
-            return Err(LocalControlErrorKind::MalformedFrame);
+        ) => {
+            if result.page_offset != 0
+                || result.next_cursor.is_some()
+                || result.multiplexer_workspace_id != request.multiplexer_workspace_id
+                || result.repository_identity.as_deref() != Some(&request.repository_identity)
+            {
+                return Err(LocalControlErrorKind::MalformedFrame);
+            }
+            match &request.operation {
+                WorktreeOperationV2::Create { .. } => match result.outcome {
+                    WorktreeOperationOutcomeV2::Accepted if result.git_workspace_id.is_none() => {
+                        return Err(LocalControlErrorKind::MalformedFrame);
+                    }
+                    WorktreeOperationOutcomeV2::Accepted => {}
+                    _ if result.git_workspace_id.is_some() => {
+                        return Err(LocalControlErrorKind::MalformedFrame);
+                    }
+                    _ => {}
+                },
+                WorktreeOperationV2::Open {
+                    git_workspace_id, ..
+                }
+                | WorktreeOperationV2::Remove {
+                    git_workspace_id, ..
+                } if result.git_workspace_id.as_deref() != Some(git_workspace_id) => {
+                    return Err(LocalControlErrorKind::MalformedFrame);
+                }
+                _ => {}
+            }
         }
         _ => {}
     }
