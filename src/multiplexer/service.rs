@@ -1,5 +1,5 @@
 use super::navigation::MultiplexerTopology;
-use super::persistence::{TopologySnapshotV1, MULTIPLEXER_MAX_WORKSPACES};
+use super::persistence::{MULTIPLEXER_MAX_WORKSPACES, TopologySnapshotV1};
 use super::{
     ClientSurfaceCapability, MultiplexerAuthority, MultiplexerErrorKind, TopologyGeneration,
 };
@@ -99,8 +99,8 @@ impl MultiplexerService {
             return Err(MultiplexerErrorKind::SnapshotLimitExceeded.into());
         }
 
-        let snapshots = snapshots_from_topology(&candidate)
-            .map_err(MultiplexerServiceError::Persistence)?;
+        let snapshots =
+            snapshots_from_topology(&candidate).map_err(MultiplexerServiceError::Persistence)?;
         store
             .persist_multiplexer_topology_snapshots(&snapshots, now_unix_ms)
             .map_err(|error| MultiplexerServiceError::Persistence(error.to_string()))?;
@@ -109,7 +109,9 @@ impl MultiplexerService {
     }
 }
 
-fn snapshots_from_topology(topology: &MultiplexerTopology) -> Result<Vec<TopologySnapshotV1>, String> {
+fn snapshots_from_topology(
+    topology: &MultiplexerTopology,
+) -> Result<Vec<TopologySnapshotV1>, String> {
     topology
         .workspaces()
         .iter()
