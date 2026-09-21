@@ -798,6 +798,29 @@ fn t166_terminal_text_shaped_like_protocol_remains_untrusted_input() {
 }
 
 #[test]
+fn t166_empty_optional_worktree_branch_name_fails_closed() {
+    let error = ProtocolMessage::new(
+        connection("t166-empty-branch"),
+        sequence(60),
+        None,
+        generation(37),
+        None,
+        ProtocolPayload::ApplyWorktreeOperation {
+            request: ApplyWorktreeOperationV2 {
+                operation: WorktreeOperationV2::Create {
+                    repository_identity: "repo".to_owned(),
+                    destination_path: "/tmp/winds-worktree".to_owned(),
+                    base_commit_oid: "abcdef1".to_owned(),
+                    new_branch_name: Some(String::new()),
+                },
+            },
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error, LocalControlErrorKind::MalformedFrame);
+}
+
+#[test]
 fn t166_future_domain_mutation_is_typed_without_runtime_controller_authority() {
     let worktree = v2_message(ProtocolPayload::ApplyWorktreeOperation {
         request: ApplyWorktreeOperationV2 {
