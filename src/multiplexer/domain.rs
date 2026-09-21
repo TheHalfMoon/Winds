@@ -233,3 +233,6 @@ pub(crate) mod navigation;
 
 #[path = "persistence.rs"]
 pub(crate) mod persistence;
+
+#[path = "service.rs"]
+pub(crate) mod service;

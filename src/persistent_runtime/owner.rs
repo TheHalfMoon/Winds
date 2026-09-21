@@ -1,5 +1,10 @@
 use crate::git::shell_profiles::ShellProfile;
 use crate::git::terminal::TerminalSize;
+use crate::multiplexer::domain::navigation::MultiplexerTopology;
+use crate::multiplexer::domain::service::{MultiplexerService, MultiplexerServiceError};
+use crate::multiplexer::domain::{
+    ClientSurfaceCapability, MultiplexerAuthority, MultiplexerErrorKind, TopologyGeneration,
+};
 use crate::persistent_runtime::controller::{
     ControllerDisposition, ControllerRegistry, ControllerStateSnapshot, ControllerTransition,
 };
@@ -161,6 +166,7 @@ pub(crate) struct PersistentOwner {
     startup_phase: OwnerStartupPhase,
     runtime_registry: PersistentTerminalRegistry,
     controller_registry: ControllerRegistry,
+    multiplexer_service: MultiplexerService,
 }
 
 impl PersistentOwner {
@@ -200,6 +206,8 @@ impl PersistentOwner {
         let _phase = OwnerStartupPhase::GenerationCreated;
         let (store, reconciled_runtime_count) =
             reconcile_store(&canonical_home, generation_id, now_unix_ms)?;
+        let multiplexer_service = MultiplexerService::restore(&store)
+            .map_err(|error| OwnerError::Store(format!("{error:?}")))?;
         let _phase = OwnerStartupPhase::Reconciled;
         let listener = match runtime_directory {
             Some(path) => BoundUnixListener::bind(path),
@@ -218,6 +226,7 @@ impl PersistentOwner {
             startup_phase: OwnerStartupPhase::Ready,
             runtime_registry: PersistentTerminalRegistry::new(generation_id),
             controller_registry: ControllerRegistry::new(generation_id),
+            multiplexer_service,
         })
     }
 
@@ -235,6 +244,8 @@ impl PersistentOwner {
         let _phase = OwnerStartupPhase::GenerationCreated;
         let (store, reconciled_runtime_count) =
             reconcile_store(&canonical_home, generation_id, now_unix_ms)?;
+        let multiplexer_service = MultiplexerService::restore(&store)
+            .map_err(|error| OwnerError::Store(format!("{error:?}")))?;
         let _phase = OwnerStartupPhase::Reconciled;
         let server = WindowsNamedPipeServer::bind(generation_id)
             .map_err(|error| OwnerError::Endpoint(format!("{error:?}")))?;
@@ -250,6 +261,7 @@ impl PersistentOwner {
             startup_phase: OwnerStartupPhase::Ready,
             runtime_registry: PersistentTerminalRegistry::new(generation_id),
             controller_registry: ControllerRegistry::new(generation_id),
+            multiplexer_service,
         })
     }
 
@@ -272,6 +284,63 @@ impl PersistentOwner {
 
     pub(crate) fn reconciled_runtime_count(&self) -> usize {
         self.reconciled_runtime_count
+    }
+
+    pub(crate) fn multiplexer_topology(&self) -> &MultiplexerTopology {
+        self.multiplexer_service.topology()
+    }
+
+    pub(crate) fn multiplexer_authority(
+        &self,
+        client_connection_id: &ClientConnectionId,
+    ) -> MultiplexerAuthority {
+        self.multiplexer_service.authority(client_connection_id)
+    }
+
+    pub(crate) fn request_multiplexer_write(
+        &mut self,
+        client_connection_id: ClientConnectionId,
+        capability: ClientSurfaceCapability,
+    ) -> Result<MultiplexerAuthority, MultiplexerErrorKind> {
+        self.multiplexer_service
+            .request_write(client_connection_id, capability)
+    }
+
+    pub(crate) fn release_multiplexer_write(
+        &mut self,
+        client_connection_id: &ClientConnectionId,
+    ) -> MultiplexerAuthority {
+        self.multiplexer_service.release_write(client_connection_id)
+    }
+
+    pub(crate) fn disconnect_multiplexer_client(
+        &mut self,
+        client_connection_id: &ClientConnectionId,
+    ) {
+        self.multiplexer_service
+            .disconnect_client(client_connection_id);
+    }
+
+    pub(crate) fn mutate_multiplexer_topology<F>(
+        &mut self,
+        client_connection_id: &ClientConnectionId,
+        expected_generation: TopologyGeneration,
+        now_unix_ms: i64,
+        mutation: F,
+    ) -> Result<TopologyGeneration, MultiplexerServiceError>
+    where
+        F: FnOnce(
+            &mut MultiplexerTopology,
+            TopologyGeneration,
+        ) -> Result<TopologyGeneration, MultiplexerErrorKind>,
+    {
+        self.multiplexer_service.mutate(
+            &mut self.store,
+            client_connection_id,
+            expected_generation,
+            now_unix_ms,
+            mutation,
+        )
     }
 
     pub(crate) fn ready_unix_ms(&self) -> i64 {
@@ -1076,3 +1145,7 @@ mod t154_controller_owner_tests;
 #[cfg(test)]
 #[path = "../t157_owner_recovery_tests.rs"]
 mod t157_owner_recovery_tests;
+
+#[cfg(test)]
+#[path = "../t165_multiplexer_owner_service_tests.rs"]
+mod t165_multiplexer_owner_service_tests;

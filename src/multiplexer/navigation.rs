@@ -121,6 +121,73 @@ impl MultiplexerTopology {
         }
     }
 
+    pub(crate) fn restore_presentation(
+        generation: TopologyGeneration,
+        workspaces: Vec<WorkspaceState>,
+        focused_workspace_id: Option<MultiplexerWorkspaceId>,
+    ) -> Result<Self, MultiplexerErrorKind> {
+        if workspaces.is_empty() {
+            if focused_workspace_id.is_some() {
+                return Err(MultiplexerErrorKind::UnknownWorkspace);
+            }
+            return Ok(Self {
+                generation,
+                workspaces,
+                focused_workspace_id: None,
+                retired_workspace_ids: BTreeSet::new(),
+                retired_tab_ids: BTreeSet::new(),
+                retired_pane_ids: BTreeSet::new(),
+            });
+        }
+
+        let focused_workspace_id =
+            focused_workspace_id.ok_or(MultiplexerErrorKind::UnknownWorkspace)?;
+        let mut workspace_ids = BTreeSet::new();
+        let mut active_pane_ids = BTreeSet::new();
+        for workspace in &workspaces {
+            if !workspace_ids.insert(workspace.id) {
+                return Err(MultiplexerErrorKind::IdentityReuse);
+            }
+            let mut tab_ids = BTreeSet::new();
+            for tab in &workspace.tabs {
+                if !tab_ids.insert(tab.id) {
+                    return Err(MultiplexerErrorKind::IdentityReuse);
+                }
+                let mut pane_ids = BTreeSet::new();
+                collect_pane_ids(&tab.root, &mut pane_ids);
+                if pane_ids.is_empty() || !pane_ids.contains(&tab.focused_pane_id) {
+                    return Err(MultiplexerErrorKind::UnknownPane);
+                }
+                if tab
+                    .zoomed_pane_id
+                    .is_some_and(|pane_id| !pane_ids.contains(&pane_id))
+                {
+                    return Err(MultiplexerErrorKind::UnknownPane);
+                }
+                for pane_id in pane_ids {
+                    if !active_pane_ids.insert(pane_id) {
+                        return Err(MultiplexerErrorKind::IdentityReuse);
+                    }
+                }
+            }
+            if !tab_ids.contains(&workspace.focused_tab_id) {
+                return Err(MultiplexerErrorKind::UnknownTab);
+            }
+        }
+        if !workspace_ids.contains(&focused_workspace_id) {
+            return Err(MultiplexerErrorKind::UnknownWorkspace);
+        }
+
+        Ok(Self {
+            generation,
+            workspaces,
+            focused_workspace_id: Some(focused_workspace_id),
+            retired_workspace_ids: BTreeSet::new(),
+            retired_tab_ids: BTreeSet::new(),
+            retired_pane_ids: BTreeSet::new(),
+        })
+    }
+
     pub(crate) const fn generation(&self) -> TopologyGeneration {
         self.generation
     }

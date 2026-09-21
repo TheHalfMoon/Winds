@@ -1,6 +1,6 @@
 #![allow(
     dead_code,
-    reason = "Spec 012 T164 persistence substrate; live owner callers land in T165"
+    reason = "Spec 012 T164/T165 bounded persistence and live-owner recovery substrate"
 )]
 
 use super::navigation::{
@@ -138,6 +138,8 @@ pub(crate) struct TopologySnapshotV1 {
     schema_version: u32,
     multiplexer_workspace_id: MultiplexerWorkspaceId,
     alias: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    workspace_ordinal: Option<u16>,
     topology_generation: TopologyGeneration,
     is_focused: bool,
     tabs: Vec<TopologySnapshotTabV1>,
@@ -150,10 +152,37 @@ impl TopologySnapshotV1 {
         topology_generation: TopologyGeneration,
         is_focused: bool,
     ) -> Result<Self, String> {
+        Self::from_workspace_internal(workspace, topology_generation, is_focused, None)
+    }
+
+    pub(crate) fn from_workspace_with_ordinal(
+        workspace: &WorkspaceState,
+        topology_generation: TopologyGeneration,
+        is_focused: bool,
+        workspace_ordinal: usize,
+    ) -> Result<Self, String> {
+        if workspace_ordinal >= MULTIPLEXER_MAX_WORKSPACES {
+            return Err("multiplexer workspace ordinal exceeds the persistence limit".to_owned());
+        }
+        Self::from_workspace_internal(
+            workspace,
+            topology_generation,
+            is_focused,
+            Some(workspace_ordinal as u16),
+        )
+    }
+
+    fn from_workspace_internal(
+        workspace: &WorkspaceState,
+        topology_generation: TopologyGeneration,
+        is_focused: bool,
+        workspace_ordinal: Option<u16>,
+    ) -> Result<Self, String> {
         let snapshot = Self {
             schema_version: MULTIPLEXER_SCHEMA_VERSION,
             multiplexer_workspace_id: workspace.id,
             alias: workspace.alias.clone(),
+            workspace_ordinal,
             topology_generation,
             is_focused,
             tabs: workspace
@@ -181,6 +210,10 @@ impl TopologySnapshotV1 {
         &self.alias
     }
 
+    pub(crate) const fn workspace_ordinal(&self) -> Option<u16> {
+        self.workspace_ordinal
+    }
+
     pub(crate) const fn topology_generation(&self) -> TopologyGeneration {
         self.topology_generation
     }
@@ -197,6 +230,14 @@ impl TopologySnapshotV1 {
             ));
         }
         validate_text_bytes(&self.alias, MULTIPLEXER_MAX_ALIAS_BYTES, "workspace alias")?;
+        if self
+            .workspace_ordinal
+            .is_some_and(|ordinal| usize::from(ordinal) >= MULTIPLEXER_MAX_WORKSPACES)
+        {
+            return Err(
+                "stored multiplexer workspace ordinal is outside the accepted range".to_owned(),
+            );
+        }
         if self.tabs.is_empty() || self.tabs.len() > MULTIPLEXER_MAX_TABS_PER_WORKSPACE {
             return Err("stored topology has an invalid tab count".to_owned());
         }
