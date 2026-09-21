@@ -358,6 +358,9 @@ fn t166_snapshot_rejects_cross_tab_focus_and_zoom_bindings() {
 fn t166_typed_worktree_page_is_bounded_and_single_frame_safe() {
     let result = WorktreeOperationResultV2 {
         outcome: WorktreeOperationOutcomeV2::Accepted,
+        multiplexer_workspace_id: workspace(13),
+        repository_identity: None,
+        git_workspace_id: None,
         snapshot_revision: 1,
         page_offset: 0,
         worktrees: (0..MAX_V2_WORKTREES_PER_PAGE).map(worktree).collect(),
@@ -375,7 +378,7 @@ fn t166_typed_worktree_page_is_bounded_and_single_frame_safe() {
         None,
         ProtocolPayload::ListWorktrees {
             request: ListWorktreesV2 {
-                multiplexer_workspace_id: Some(workspace(13)),
+                multiplexer_workspace_id: workspace(13),
                 cursor: None,
             },
         },
@@ -397,6 +400,9 @@ fn t166_typed_worktree_page_is_bounded_and_single_frame_safe() {
 
     let too_many = WorktreeOperationResultV2 {
         outcome: WorktreeOperationOutcomeV2::Accepted,
+        multiplexer_workspace_id: workspace(13),
+        repository_identity: None,
+        git_workspace_id: None,
         snapshot_revision: 1,
         page_offset: 0,
         worktrees: (0..=MAX_V2_WORKTREES_PER_PAGE).map(worktree).collect(),
@@ -669,7 +675,7 @@ fn t166_collection_cursor_owner_and_offset_binding_fail_closed() {
         None,
         ProtocolPayload::ListAgentObservations {
             request: ListAgentObservationsV2 {
-                multiplexer_workspace_id: Some(workspace(33)),
+                multiplexer_workspace_id: workspace(33),
                 cursor: Some(AgentObservationCursorV2 {
                     owner_generation_id,
                     snapshot_revision: 12,
@@ -709,7 +715,7 @@ fn t166_collection_cursor_owner_and_offset_binding_fail_closed() {
         None,
         ProtocolPayload::ListAgentObservations {
             request: ListAgentObservationsV2 {
-                multiplexer_workspace_id: Some(workspace(33)),
+                multiplexer_workspace_id: workspace(33),
                 cursor: Some(AgentObservationCursorV2 {
                     owner_generation_id: generation(34),
                     snapshot_revision: 12,
@@ -732,7 +738,7 @@ fn t166_inactive_future_domains_return_typed_unsupported_without_side_effect_pat
         None,
         ProtocolPayload::ListWorktrees {
             request: ListWorktreesV2 {
-                multiplexer_workspace_id: Some(workspace(35)),
+                multiplexer_workspace_id: workspace(35),
                 cursor: None,
             },
         },
@@ -792,7 +798,7 @@ fn t166_stale_topology_and_history_gap_are_explicit_wire_outcomes() {
                         error: crate::multiplexer::domain::MultiplexerErrorKind::StaleTopologyGeneration,
                     },
                     accepted_topology_generation: None,
-                    multiplexer_workspace_id: Some(workspace(36)),
+                    multiplexer_workspace_id: workspace(36),
                     tab_id: None,
                     pane_id: None,
                 },
@@ -865,8 +871,10 @@ fn t166_abbreviated_worktree_oid_fails_closed() {
         None,
         ProtocolPayload::ApplyWorktreeOperation {
             request: ApplyWorktreeOperationV2 {
+                multiplexer_workspace_id: workspace(38),
+                repository_identity: "repo".to_owned(),
+                trust_record_revision: 1,
                 operation: WorktreeOperationV2::Create {
-                    repository_identity: "repo".to_owned(),
                     destination_path: "/tmp/winds-worktree".to_owned(),
                     base_commit_oid: "abcdef1".to_owned(),
                     new_branch_name: None,
@@ -879,6 +887,74 @@ fn t166_abbreviated_worktree_oid_fails_closed() {
 }
 
 #[test]
+fn t166_worktree_operation_requires_trust_revision_and_exact_result_target() {
+    let zero_revision = ProtocolMessage::new(
+        connection("t166-zero-trust"),
+        sequence(62),
+        None,
+        generation(39),
+        None,
+        ProtocolPayload::ApplyWorktreeOperation {
+            request: ApplyWorktreeOperationV2 {
+                multiplexer_workspace_id: workspace(39),
+                repository_identity: "repo".to_owned(),
+                trust_record_revision: 0,
+                operation: WorktreeOperationV2::Open {
+                    git_workspace_id: "git-worktree-39".to_owned(),
+                    canonical_path: "/tmp/winds-worktree".to_owned(),
+                },
+            },
+        },
+    )
+    .unwrap_err();
+    assert_eq!(zero_revision, LocalControlErrorKind::MalformedFrame);
+
+    let request = ProtocolMessage::new(
+        connection("t166-worktree-bind"),
+        sequence(63),
+        None,
+        generation(39),
+        None,
+        ProtocolPayload::ApplyWorktreeOperation {
+            request: ApplyWorktreeOperationV2 {
+                multiplexer_workspace_id: workspace(39),
+                repository_identity: "repo".to_owned(),
+                trust_record_revision: 7,
+                operation: WorktreeOperationV2::Open {
+                    git_workspace_id: "git-worktree-39".to_owned(),
+                    canonical_path: "/tmp/winds-worktree".to_owned(),
+                },
+            },
+        },
+    )
+    .unwrap();
+    let wrong_target = ProtocolMessage::new(
+        connection("t166-worktree-bind"),
+        sequence(64),
+        None,
+        generation(39),
+        Some(sequence(63)),
+        ProtocolPayload::WorktreeOperationResult {
+            result: WorktreeOperationResultV2 {
+                outcome: WorktreeOperationOutcomeV2::Accepted,
+                multiplexer_workspace_id: workspace(40),
+                repository_identity: Some("repo".to_owned()),
+                git_workspace_id: Some("git-worktree-39".to_owned()),
+                snapshot_revision: 1,
+                page_offset: 0,
+                worktrees: Vec::new(),
+                next_cursor: None,
+            },
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        validate_response_binding(&request, &wrong_target).unwrap_err(),
+        LocalControlErrorKind::MalformedFrame
+    );
+}
+
+#[test]
 fn t166_empty_optional_worktree_branch_name_fails_closed() {
     let error = ProtocolMessage::new(
         connection("t166-empty-branch"),
@@ -888,10 +964,12 @@ fn t166_empty_optional_worktree_branch_name_fails_closed() {
         None,
         ProtocolPayload::ApplyWorktreeOperation {
             request: ApplyWorktreeOperationV2 {
+                multiplexer_workspace_id: workspace(37),
+                repository_identity: "repo".to_owned(),
+                trust_record_revision: 1,
                 operation: WorktreeOperationV2::Create {
-                    repository_identity: "repo".to_owned(),
                     destination_path: "/tmp/winds-worktree".to_owned(),
-                    base_commit_oid: "abcdef1".to_owned(),
+                    base_commit_oid: "a".repeat(40),
                     new_branch_name: Some(String::new()),
                 },
             },
@@ -905,7 +983,11 @@ fn t166_empty_optional_worktree_branch_name_fails_closed() {
 fn t166_future_domain_mutation_is_typed_without_runtime_controller_authority() {
     let worktree = v2_message(ProtocolPayload::ApplyWorktreeOperation {
         request: ApplyWorktreeOperationV2 {
+            multiplexer_workspace_id: workspace(4),
+            repository_identity: "repo".to_owned(),
+            trust_record_revision: 1,
             operation: WorktreeOperationV2::Open {
+                git_workspace_id: "git-worktree-4".to_owned(),
                 canonical_path: "/tmp/winds-worktree".to_owned(),
             },
         },
@@ -918,7 +1000,7 @@ fn t166_future_domain_mutation_is_typed_without_runtime_controller_authority() {
 
     let list = v2_message(ProtocolPayload::ListAgentObservations {
         request: ListAgentObservationsV2 {
-            multiplexer_workspace_id: Some(workspace(4)),
+            multiplexer_workspace_id: workspace(4),
             cursor: None,
         },
     });
@@ -926,7 +1008,7 @@ fn t166_future_domain_mutation_is_typed_without_runtime_controller_authority() {
 
     let worktrees = v2_message(ProtocolPayload::ListWorktrees {
         request: ListWorktreesV2 {
-            multiplexer_workspace_id: Some(workspace(4)),
+            multiplexer_workspace_id: workspace(4),
             cursor: None,
         },
     });
