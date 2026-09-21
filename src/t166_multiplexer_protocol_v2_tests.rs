@@ -297,6 +297,64 @@ fn t166_agent_observation_schema_keeps_workspace_domains_unambiguous() {
 }
 
 #[test]
+fn t166_snapshot_rejects_cross_tab_focus_and_zoom_bindings() {
+    let base = ProtocolWorkspaceSnapshotV2 {
+        multiplexer_workspace_id: workspace(20),
+        alias: "workspace".to_owned(),
+        topology_generation: topology_generation(1),
+        focused_tab_id: tab(20),
+        tabs: vec![
+            ProtocolTabSnapshotV2 {
+                tab_id: tab(20),
+                alias: "first".to_owned(),
+                root: ProtocolLayoutNodeV2::Pane { pane_id: pane(20) },
+                focused_pane_id: pane(20),
+                zoomed_pane_id: None,
+            },
+            ProtocolTabSnapshotV2 {
+                tab_id: tab(21),
+                alias: "second".to_owned(),
+                root: ProtocolLayoutNodeV2::Pane { pane_id: pane(21) },
+                focused_pane_id: pane(20),
+                zoomed_pane_id: None,
+            },
+        ],
+    };
+    let invalid_focus = ProtocolMessage::new(
+        connection("t166-cross-tab-focus"),
+        sequence(20),
+        None,
+        generation(20),
+        Some(sequence(19)),
+        ProtocolPayload::MultiplexerSnapshot {
+            snapshot: MultiplexerSnapshotV2::Workspace {
+                snapshot: base.clone(),
+            },
+        },
+    )
+    .unwrap_err();
+    assert_eq!(invalid_focus, LocalControlErrorKind::MalformedFrame);
+
+    let mut invalid_zoom = base;
+    invalid_zoom.tabs[1].focused_pane_id = pane(21);
+    invalid_zoom.tabs[1].zoomed_pane_id = Some(pane(20));
+    let invalid_zoom = ProtocolMessage::new(
+        connection("t166-cross-tab-zoom"),
+        sequence(21),
+        None,
+        generation(20),
+        Some(sequence(19)),
+        ProtocolPayload::MultiplexerSnapshot {
+            snapshot: MultiplexerSnapshotV2::Workspace {
+                snapshot: invalid_zoom,
+            },
+        },
+    )
+    .unwrap_err();
+    assert_eq!(invalid_zoom, LocalControlErrorKind::MalformedFrame);
+}
+
+#[test]
 fn t166_typed_worktree_page_is_bounded_and_single_frame_safe() {
     let result = WorktreeOperationResultV2 {
         outcome: WorktreeOperationOutcomeV2::Accepted,
