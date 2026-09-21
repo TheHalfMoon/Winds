@@ -13,10 +13,7 @@ static NEXT_T165_ROOT: AtomicU64 = AtomicU64::new(1);
 
 fn test_root(label: &str) -> PathBuf {
     let id = NEXT_T165_ROOT.fetch_add(1, Ordering::Relaxed);
-    let path = std::env::temp_dir().join(format!(
-        "winds-t165-{label}-{}-{id}",
-        std::process::id()
-    ));
+    let path = std::env::temp_dir().join(format!("winds-t165-{label}-{}-{id}", std::process::id()));
     let _ = fs::remove_dir_all(&path);
     fs::create_dir_all(&path).unwrap();
     path.canonicalize().unwrap()
@@ -88,10 +85,7 @@ fn t165_write_authority_converges_and_failed_requests_do_not_publish_state() {
     );
 
     owner
-        .request_multiplexer_write(
-            first.clone(),
-            ClientSurfaceCapability::ControllingTerminal,
-        )
+        .request_multiplexer_write(first.clone(), ClientSurfaceCapability::ControllingTerminal)
         .unwrap();
     owner
         .request_multiplexer_write(
@@ -138,7 +132,11 @@ fn t165_write_authority_converges_and_failed_requests_do_not_publish_state() {
     assert!(matches!(failed, MultiplexerServiceError::Persistence(_)));
     assert_eq!(owner.multiplexer_topology().generation(), renamed);
     assert_eq!(
-        owner.multiplexer_topology().workspace(workspace(1)).unwrap().alias,
+        owner
+            .multiplexer_topology()
+            .workspace(workspace(1))
+            .unwrap()
+            .alias,
         "durable"
     );
     assert_eq!(
@@ -178,10 +176,7 @@ fn t165_restart_restores_presentation_order_without_write_authority() {
         let mut owner = start_owner(&home, &runtime_one, 40);
         let old_owner_generation = owner.generation_id();
         owner
-            .request_multiplexer_write(
-                client.clone(),
-                ClientSurfaceCapability::ControllingTerminal,
-            )
+            .request_multiplexer_write(client.clone(), ClientSurfaceCapability::ControllingTerminal)
             .unwrap();
 
         let mut generation = owner.multiplexer_topology().generation();
