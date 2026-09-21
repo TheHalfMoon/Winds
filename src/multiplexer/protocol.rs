@@ -658,15 +658,17 @@ fn pane_placement_from_protocol(value: ProtocolPanePlacement) -> PanePlacement {
     }
 }
 
-pub(crate) fn topology_operation_target_ids_v2(
-    operation: &TopologyOperationV2,
-) -> (
+type TopologyOperationTargetIdsV2 = (
     Option<MultiplexerWorkspaceId>,
     Option<TabId>,
     Option<PaneId>,
     Option<TabId>,
     Option<PaneId>,
-) {
+);
+
+pub(crate) fn topology_operation_target_ids_v2(
+    operation: &TopologyOperationV2,
+) -> TopologyOperationTargetIdsV2 {
     match operation {
         TopologyOperationV2::CreateWorkspace {
             multiplexer_workspace_id,
