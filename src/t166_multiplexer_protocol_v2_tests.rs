@@ -1625,7 +1625,12 @@ fn t166_owner_dispatch_preflights_capability_and_applies_exact_topology() {
 
     fn short_runtime_root() -> PathBuf {
         let id = NEXT_T166_DISPATCH_ROOT.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!("w166r{id}"));
+        let base = if cfg!(any(target_os = "linux", target_os = "macos")) {
+            PathBuf::from("/tmp")
+        } else {
+            std::env::temp_dir()
+        };
+        let path = base.join(format!("w166r{id}"));
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).unwrap();
         path.canonicalize().unwrap()
