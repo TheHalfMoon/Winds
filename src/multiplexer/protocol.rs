@@ -532,7 +532,11 @@ pub(crate) struct AttentionSnapshotV2 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
+#[serde(
+    tag = "event_kind",
+    rename_all = "SCREAMING_SNAKE_CASE",
+    deny_unknown_fields
+)]
 pub(crate) enum AttentionEventV2 {
     Upsert {
         snapshot_revision: u64,
@@ -572,10 +576,7 @@ pub(super) fn encode_v2_body(payload: &ProtocolPayload) -> ProtocolResult<Value>
     }
 }
 
-pub(super) fn decode_v2_body(
-    kind: MessageKind,
-    body: Value,
-) -> ProtocolResult<ProtocolPayload> {
+pub(super) fn decode_v2_body(kind: MessageKind, body: Value) -> ProtocolResult<ProtocolPayload> {
     match kind {
         MessageKind::ListMultiplexerWorkspaces => Ok(ProtocolPayload::ListMultiplexerWorkspaces {
             request: from_value(body)?,
@@ -835,9 +836,7 @@ fn validate_topology_operation(operation: &TopologyOperationV2) -> ProtocolResul
         }
         TopologyOperationV2::RenameWorkspace { alias, .. }
         | TopologyOperationV2::CreateTab { alias, .. }
-        | TopologyOperationV2::RenameTab { alias, .. } => {
-            validate_text(alias, MAX_V2_ALIAS_BYTES)
-        }
+        | TopologyOperationV2::RenameTab { alias, .. } => validate_text(alias, MAX_V2_ALIAS_BYTES),
         TopologyOperationV2::MoveWorkspace { new_index, .. } => {
             if usize::from(*new_index) >= MAX_V2_WORKSPACES {
                 Err(LocalControlErrorKind::MalformedFrame)
@@ -853,16 +852,13 @@ fn validate_topology_operation(operation: &TopologyOperationV2) -> ProtocolResul
             }
         }
         TopologyOperationV2::SplitPane {
-            ratio_basis_points,
-            ..
+            ratio_basis_points, ..
         }
         | TopologyOperationV2::MovePane {
-            ratio_basis_points,
-            ..
+            ratio_basis_points, ..
         }
         | TopologyOperationV2::ResizeSplit {
-            ratio_basis_points,
-            ..
+            ratio_basis_points, ..
         } => validate_ratio(*ratio_basis_points),
         TopologyOperationV2::ClearPane {
             presentation_epoch, ..
@@ -885,10 +881,7 @@ fn validate_agent_observation(observation: &AgentObservationV2) -> ProtocolResul
         validate_text(git_workspace_id, MAX_V2_GIT_WORKSPACE_ID_BYTES)?;
     }
     if let Some(provider_native_session_id) = &observation.provider_native_session_id {
-        validate_text(
-            provider_native_session_id,
-            MAX_V2_PROVIDER_SESSION_ID_BYTES,
-        )?;
+        validate_text(provider_native_session_id, MAX_V2_PROVIDER_SESSION_ID_BYTES)?;
     }
     validate_text(
         &observation.structured_evidence_summary,
@@ -926,10 +919,7 @@ fn validate_oid(value: &str) -> ProtocolResult<()> {
 }
 
 fn validate_worktree(worktree: &WorktreeObservationV2) -> ProtocolResult<()> {
-    validate_text(
-        &worktree.git_workspace_id,
-        MAX_V2_GIT_WORKSPACE_ID_BYTES,
-    )?;
+    validate_text(&worktree.git_workspace_id, MAX_V2_GIT_WORKSPACE_ID_BYTES)?;
     validate_text(
         &worktree.repository_identity,
         MAX_V2_REPOSITORY_IDENTITY_BYTES,
