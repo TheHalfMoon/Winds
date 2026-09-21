@@ -1445,7 +1445,7 @@ fn validate_agent_event(event: &AgentObservationEventV2) -> ProtocolResult<()> {
 }
 
 fn validate_oid(value: &str) -> ProtocolResult<()> {
-    if !(7..=64).contains(&value.len())
+    if !matches!(value.len(), 40 | 64)
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
