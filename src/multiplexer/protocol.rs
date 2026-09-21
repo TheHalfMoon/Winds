@@ -375,6 +375,7 @@ pub(crate) struct ListAgentObservationsV2 {
 #[serde(deny_unknown_fields)]
 pub(crate) struct AgentObservationSnapshotV2 {
     pub(crate) snapshot_revision: u64,
+    pub(crate) page_offset: u16,
     pub(crate) observations: Vec<AgentObservationV2>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) next_cursor: Option<AgentObservationCursorV2>,
@@ -477,6 +478,8 @@ pub(crate) enum WorktreeOperationOutcomeV2 {
 #[serde(deny_unknown_fields)]
 pub(crate) struct WorktreeOperationResultV2 {
     pub(crate) outcome: WorktreeOperationOutcomeV2,
+    pub(crate) snapshot_revision: u64,
+    pub(crate) page_offset: u16,
     pub(crate) worktrees: Vec<WorktreeObservationV2>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) next_cursor: Option<WorktreeCursorV2>,
@@ -516,19 +519,9 @@ pub(crate) struct AttentionItemV2 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct AttentionCursorV2 {
-    pub(crate) owner_generation_id: OwnerGenerationId,
-    pub(crate) snapshot_revision: u64,
-    pub(crate) offset: u16,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub(crate) struct AttentionSnapshotV2 {
     pub(crate) snapshot_revision: u64,
     pub(crate) items: Vec<AttentionItemV2>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) next_cursor: Option<AttentionCursorV2>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -654,13 +647,15 @@ pub(super) fn validate_v2_payload(payload: &ProtocolPayload) -> ProtocolResult<(
             for observation in &snapshot.observations {
                 validate_agent_observation(observation)?;
             }
-            if let Some(cursor) = &snapshot.next_cursor {
-                validate_cursor(cursor.snapshot_revision)?;
-                if cursor.snapshot_revision != snapshot.snapshot_revision {
-                    return Err(LocalControlErrorKind::MalformedFrame);
-                }
-            }
-            Ok(())
+            validate_next_offset(
+                snapshot.page_offset,
+                snapshot.observations.len(),
+                snapshot
+                    .next_cursor
+                    .as_ref()
+                    .map(|cursor| (cursor.snapshot_revision, cursor.offset)),
+                snapshot.snapshot_revision,
+            )
         }
         ProtocolPayload::AgentObservationEvent { event } => validate_agent_event(event),
         ProtocolPayload::ListWorktrees { request } => {
@@ -680,12 +675,6 @@ pub(super) fn validate_v2_payload(payload: &ProtocolPayload) -> ProtocolResult<(
             }
             for item in &snapshot.items {
                 validate_attention_item(item)?;
-            }
-            if let Some(cursor) = &snapshot.next_cursor {
-                validate_cursor(cursor.snapshot_revision)?;
-                if cursor.snapshot_revision != snapshot.snapshot_revision {
-                    return Err(LocalControlErrorKind::MalformedFrame);
-                }
             }
             Ok(())
         }
@@ -722,6 +711,29 @@ fn validate_revision(value: u64) -> ProtocolResult<()> {
 
 fn validate_cursor(revision: u64) -> ProtocolResult<()> {
     validate_revision(revision)
+}
+
+fn validate_next_offset(
+    page_offset: u16,
+    item_count: usize,
+    next_cursor: Option<(u64, u16)>,
+    snapshot_revision: u64,
+) -> ProtocolResult<()> {
+    if let Some((cursor_revision, cursor_offset)) = next_cursor {
+        validate_cursor(cursor_revision)?;
+        if cursor_revision != snapshot_revision {
+            return Err(LocalControlErrorKind::MalformedFrame);
+        }
+        let item_count =
+            u16::try_from(item_count).map_err(|_| LocalControlErrorKind::OversizedFrame)?;
+        let expected_offset = page_offset
+            .checked_add(item_count)
+            .ok_or(LocalControlErrorKind::OversizedFrame)?;
+        if cursor_offset != expected_offset {
+            return Err(LocalControlErrorKind::MalformedFrame);
+        }
+    }
+    Ok(())
 }
 
 fn validate_ratio(value: u16) -> ProtocolResult<()> {
@@ -961,14 +973,137 @@ fn validate_worktree_operation(operation: &WorktreeOperationV2) -> ProtocolResul
 }
 
 fn validate_worktree_result(result: &WorktreeOperationResultV2) -> ProtocolResult<()> {
+    validate_revision(result.snapshot_revision)?;
     if result.worktrees.len() > MAX_V2_WORKTREES_PER_PAGE {
         return Err(LocalControlErrorKind::OversizedFrame);
     }
     for worktree in &result.worktrees {
         validate_worktree(worktree)?;
     }
-    if let Some(cursor) = &result.next_cursor {
-        validate_cursor(cursor.snapshot_revision)?;
+    validate_next_offset(
+        result.page_offset,
+        result.worktrees.len(),
+        result
+            .next_cursor
+            .as_ref()
+            .map(|cursor| (cursor.snapshot_revision, cursor.offset)),
+        result.snapshot_revision,
+    )
+}
+
+pub(super) fn validate_v2_owner_generation_binding(
+    payload: &ProtocolPayload,
+    owner_generation_id: OwnerGenerationId,
+) -> ProtocolResult<()> {
+    match payload {
+        ProtocolPayload::ListAgentObservations { request } => {
+            if let Some(cursor) = &request.cursor
+                && cursor.owner_generation_id != owner_generation_id
+            {
+                return Err(LocalControlErrorKind::StaleOwnerGeneration);
+            }
+        }
+        ProtocolPayload::AgentObservationSnapshot { snapshot } => {
+            if snapshot
+                .observations
+                .iter()
+                .any(|observation| observation.owner_generation_id != owner_generation_id)
+            {
+                return Err(LocalControlErrorKind::StaleOwnerGeneration);
+            }
+            if let Some(cursor) = &snapshot.next_cursor
+                && cursor.owner_generation_id != owner_generation_id
+            {
+                return Err(LocalControlErrorKind::StaleOwnerGeneration);
+            }
+        }
+        ProtocolPayload::AgentObservationEvent { event } => {
+            if let AgentObservationEventV2::Upsert { observation, .. } = event
+                && observation.owner_generation_id != owner_generation_id
+            {
+                return Err(LocalControlErrorKind::StaleOwnerGeneration);
+            }
+        }
+        ProtocolPayload::ListWorktrees { request } => {
+            if let Some(cursor) = &request.cursor
+                && cursor.owner_generation_id != owner_generation_id
+            {
+                return Err(LocalControlErrorKind::StaleOwnerGeneration);
+            }
+        }
+        ProtocolPayload::WorktreeOperationResult { result } => {
+            if let Some(cursor) = &result.next_cursor
+                && cursor.owner_generation_id != owner_generation_id
+            {
+                return Err(LocalControlErrorKind::StaleOwnerGeneration);
+            }
+        }
+        ProtocolPayload::AttentionSnapshot { snapshot } => {
+            if snapshot
+                .items
+                .iter()
+                .any(|item| item.owner_generation_id != owner_generation_id)
+            {
+                return Err(LocalControlErrorKind::StaleOwnerGeneration);
+            }
+        }
+        ProtocolPayload::AttentionEvent { event } => {
+            if let AttentionEventV2::Upsert { item, .. } = event
+                && item.owner_generation_id != owner_generation_id
+            {
+                return Err(LocalControlErrorKind::StaleOwnerGeneration);
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+pub(super) fn validate_v2_response_binding(
+    request: &ProtocolPayload,
+    response: &ProtocolPayload,
+) -> ProtocolResult<()> {
+    match (request, response) {
+        (
+            ProtocolPayload::ListAgentObservations { request },
+            ProtocolPayload::AgentObservationSnapshot { snapshot },
+        ) => {
+            let expected_offset = request.cursor.as_ref().map_or(0, |cursor| cursor.offset);
+            if snapshot.page_offset != expected_offset {
+                return Err(LocalControlErrorKind::MalformedFrame);
+            }
+            if let Some(cursor) = &request.cursor
+                && cursor.snapshot_revision != snapshot.snapshot_revision
+            {
+                return Err(LocalControlErrorKind::StaleOwnerGeneration);
+            }
+        }
+        (
+            ProtocolPayload::ListWorktrees { request },
+            ProtocolPayload::WorktreeOperationResult { result },
+        ) => {
+            if result.outcome != WorktreeOperationOutcomeV2::Accepted {
+                return Err(LocalControlErrorKind::MalformedFrame);
+            }
+            let expected_offset = request.cursor.as_ref().map_or(0, |cursor| cursor.offset);
+            if result.page_offset != expected_offset {
+                return Err(LocalControlErrorKind::MalformedFrame);
+            }
+            if let Some(cursor) = &request.cursor
+                && cursor.snapshot_revision != result.snapshot_revision
+            {
+                return Err(LocalControlErrorKind::StaleOwnerGeneration);
+            }
+        }
+        (
+            ProtocolPayload::ApplyWorktreeOperation { .. },
+            ProtocolPayload::WorktreeOperationResult { result },
+        ) => {
+            if result.page_offset != 0 || result.next_cursor.is_some() {
+                return Err(LocalControlErrorKind::MalformedFrame);
+            }
+        }
+        _ => {}
     }
     Ok(())
 }
