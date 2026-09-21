@@ -1,4 +1,8 @@
 use super::*;
+use crate::multiplexer::domain::navigation::{
+    LayoutNode, MultiplexerTopology, SplitAxis as DomainSplitAxis, SplitRatioBps, TabState,
+    WorkspaceState,
+};
 use crate::multiplexer::domain::{
     AgentObservationId, MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration,
 };
@@ -15,14 +19,14 @@ use crate::persistent_runtime::protocol::{
     MAX_V2_AGENT_OBSERVATIONS_PER_PAGE, MAX_V2_ALIAS_BYTES, MAX_V2_ATTENTION_ITEMS_PER_PAGE,
     MAX_V2_BRANCH_BYTES, MAX_V2_DETAIL_BYTES, MAX_V2_EVIDENCE_SUMMARY_BYTES,
     MAX_V2_GIT_WORKSPACE_ID_BYTES, MAX_V2_PATH_BYTES, MAX_V2_PROVIDER_SESSION_ID_BYTES,
-    MAX_V2_REPOSITORY_IDENTITY_BYTES, MAX_V2_TABS_PER_WORKSPACE, MAX_V2_WORKTREES_PER_PAGE,
+    MAX_V2_PANES_PER_TAB, MAX_V2_REPOSITORY_IDENTITY_BYTES, MAX_V2_TABS_PER_WORKSPACE,
+    MAX_V2_WORKTREES_PER_PAGE,
     MessageAuthorityClass, MessageKind, MultiplexerEventV2, MultiplexerSnapshotV2,
     PROTOCOL_VERSION, ProtocolLayoutNodeV2, ProtocolPanePlacement, ProtocolSplitAxis,
     ProtocolTabSnapshotV2, ProtocolWorkspaceSnapshotV2, TopologyMutationOutcomeV2,
     TopologyMutationResultV2, TopologyOperationV2, WorktreeCursorV2, WorktreeMembershipV2,
     WorktreeObservationV2, WorktreeOperationOutcomeV2, WorktreeOperationResultV2,
-    WorktreeOperationV2, decode_frame, encode_frame, inactive_v2_domain_response,
-    validate_response_binding,
+    WorktreeOperationV2, decode_frame, encode_frame, inactive_v2_domain_response, validate_candidate_topology_v2, validate_response_binding,
 };
 use crate::persistent_runtime::protocol::{ProtocolMessage, ProtocolPayload};
 use std::collections::VecDeque;
@@ -391,6 +395,51 @@ fn max_agent_observation(index: u16, owner_generation_id: OwnerGenerationId) -> 
     }
 }
 
+fn domain_pane_chain(start: u16, count: u16) -> LayoutNode {
+    let mut node = LayoutNode::Pane(pane_index(start));
+    for offset in 1..count {
+        node = LayoutNode::Split {
+            axis: DomainSplitAxis::Horizontal,
+            ratio_bps: SplitRatioBps::new(5_000).unwrap(),
+            first: Box::new(node),
+            second: Box::new(LayoutNode::Pane(pane_index(start + offset))),
+        };
+    }
+    node
+}
+
+fn topology_with_panes(tab_counts: &[u16]) -> MultiplexerTopology {
+    let workspace_id = workspace(40);
+    let mut next_pane = 1_u16;
+    let tabs = tab_counts
+        .iter()
+        .enumerate()
+        .map(|(index, pane_count)| {
+            let first_pane = next_pane;
+            let tab_state = TabState {
+                id: tab_index(index as u16 + 1),
+                alias: String::new(),
+                root: domain_pane_chain(first_pane, *pane_count),
+                focused_pane_id: pane_index(first_pane),
+                zoomed_pane_id: None,
+            };
+            next_pane += *pane_count;
+            tab_state
+        })
+        .collect::<Vec<_>>();
+    MultiplexerTopology::restore_presentation(
+        topology_generation(1),
+        vec![WorkspaceState {
+            id: workspace_id,
+            alias: String::new(),
+            focused_tab_id: tab_index(1),
+            tabs,
+        }],
+        Some(workspace_id),
+    )
+    .unwrap()
+}
+
 fn pane_chain(start: u16, count: u16) -> ProtocolLayoutNodeV2 {
     let mut node = ProtocolLayoutNodeV2::Pane {
         pane_id: pane_index(start),
@@ -406,6 +455,29 @@ fn pane_chain(start: u16, count: u16) -> ProtocolLayoutNodeV2 {
         };
     }
     node
+}
+
+#[test]
+fn t166_owner_preflight_accepts_256_panes_and_rejects_257() {
+    let accepted = topology_with_panes(&[
+        MAX_V2_PANES_PER_TAB as u16,
+        MAX_V2_PANES_PER_TAB as u16,
+        MAX_V2_PANES_PER_TAB as u16,
+        MAX_V2_PANES_PER_TAB as u16,
+    ]);
+    validate_candidate_topology_v2(&accepted, generation(40)).unwrap();
+
+    let rejected = topology_with_panes(&[
+        MAX_V2_PANES_PER_TAB as u16,
+        MAX_V2_PANES_PER_TAB as u16,
+        MAX_V2_PANES_PER_TAB as u16,
+        MAX_V2_PANES_PER_TAB as u16,
+        1,
+    ]);
+    assert_eq!(
+        validate_candidate_topology_v2(&rejected, generation(40)),
+        Err(crate::multiplexer::domain::MultiplexerErrorKind::SnapshotLimitExceeded)
+    );
 }
 
 #[test]
