@@ -1148,8 +1148,12 @@ pub(super) fn validate_v2_payload(payload: &ProtocolPayload) -> ProtocolResult<(
             if snapshot.observations.len() > MAX_V2_AGENT_OBSERVATIONS_PER_PAGE {
                 return Err(LocalControlErrorKind::OversizedFrame);
             }
+            let mut observation_ids = BTreeSet::new();
             for observation in &snapshot.observations {
                 validate_agent_observation(observation)?;
+                if !observation_ids.insert(observation.observation_id) {
+                    return Err(LocalControlErrorKind::MalformedFrame);
+                }
             }
             validate_next_offset(
                 snapshot.page_offset,
@@ -1529,8 +1533,12 @@ fn validate_worktree_result(result: &WorktreeOperationResultV2) -> ProtocolResul
     if result.worktrees.len() > MAX_V2_WORKTREES_PER_PAGE {
         return Err(LocalControlErrorKind::OversizedFrame);
     }
+    let mut git_workspace_ids = BTreeSet::new();
     for worktree in &result.worktrees {
         validate_worktree(worktree)?;
+        if !git_workspace_ids.insert(worktree.git_workspace_id.as_str()) {
+            return Err(LocalControlErrorKind::MalformedFrame);
+        }
     }
     validate_next_offset(
         result.page_offset,
