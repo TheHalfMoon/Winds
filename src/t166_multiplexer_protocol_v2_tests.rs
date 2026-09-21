@@ -106,7 +106,10 @@ fn v2_message(payload: ProtocolPayload) -> ProtocolMessage {
 
 fn worktree(index: usize) -> WorktreeObservationV2 {
     WorktreeObservationV2 {
-        git_workspace_id: format!("git-{index:03}-{}", "g".repeat(240)),
+        git_workspace_id: format!(
+            "{index:03}{}",
+            "g".repeat(MAX_V2_GIT_WORKSPACE_ID_BYTES.saturating_sub(3))
+        ),
         repository_identity: "r".repeat(MAX_V2_REPOSITORY_IDENTITY_BYTES),
         canonical_path: format!("/{}", "p".repeat(MAX_V2_PATH_BYTES - 1)),
         branch: Some("b".repeat(MAX_V2_BRANCH_BYTES)),
@@ -295,6 +298,20 @@ fn t166_typed_worktree_page_is_bounded_and_single_frame_safe() {
             offset: MAX_V2_WORKTREES_PER_PAGE as u16,
         }),
     };
+    let request = ProtocolMessage::new(
+        connection("t166-client"),
+        sequence(7),
+        None,
+        generation(13),
+        None,
+        ProtocolPayload::ListWorktrees {
+            request: ListWorktreesV2 {
+                multiplexer_workspace_id: Some(workspace(13)),
+                cursor: None,
+            },
+        },
+    )
+    .unwrap();
     let response = ProtocolMessage::new(
         connection("t166-client"),
         sequence(14),
@@ -304,6 +321,7 @@ fn t166_typed_worktree_page_is_bounded_and_single_frame_safe() {
         ProtocolPayload::WorktreeOperationResult { result },
     )
     .unwrap();
+    validate_response_binding(&request, &response).unwrap();
     let frame = encode_frame(&response).unwrap();
     assert!(frame.len() <= MAX_CONTROL_FRAME_BYTES);
     assert_eq!(decode_frame(&frame).unwrap(), response);
