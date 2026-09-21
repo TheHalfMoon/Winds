@@ -1273,7 +1273,7 @@ impl Spec011V2RoundTripWire {
 
     fn response_for(&self, request: &ProtocolMessage) -> Result<ProtocolMessage, WireError> {
         let response_sequence = sequence(request.sequence.get().saturating_add(1_000));
-        let payload = match request.payload {
+        let payload = match &request.payload {
             ProtocolPayload::Hello { .. } => ProtocolPayload::HelloAck,
             ProtocolPayload::AttachObserver | ProtocolPayload::Detach | ProtocolPayload::ReleaseControl => {
                 ProtocolPayload::ControlState {
