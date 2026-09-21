@@ -17,7 +17,7 @@ This failure remains negative canonical evidence. It is not relabelled, retried,
 
 ## Repair scope
 
-The repair changes only `src/t063_soak_tests.rs`.
+The behavioral repair changes only `src/t063_soak_tests.rs`; this document records the repair provenance.
 
 - Production terminal, ConPTY, multiplexer, owner, persistence, protocol, UI, detector, Git/worktree, and authority behavior are unchanged.
 - The default T063 output-marker wait remains 10 seconds.
