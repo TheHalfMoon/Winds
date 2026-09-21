@@ -695,8 +695,16 @@ fn from_value<T: for<'de> Deserialize<'de>>(value: Value) -> ProtocolResult<T> {
 #[serde(deny_unknown_fields)]
 struct EmptyV2 {}
 
-fn validate_text(value: &str, max_bytes: usize) -> ProtocolResult<()> {
-    if value.is_empty() || value.len() > max_bytes {
+fn validate_bounded_text(value: &str, max_bytes: usize) -> ProtocolResult<()> {
+    if value.len() > max_bytes || value.contains('\0') {
+        return Err(LocalControlErrorKind::MalformedFrame);
+    }
+    Ok(())
+}
+
+fn validate_nonempty_text(value: &str, max_bytes: usize) -> ProtocolResult<()> {
+    validate_bounded_text(value, max_bytes)?;
+    if value.is_empty() {
         return Err(LocalControlErrorKind::MalformedFrame);
     }
     Ok(())
@@ -768,7 +776,7 @@ fn validate_layout_node(
 }
 
 fn validate_workspace_snapshot(snapshot: &ProtocolWorkspaceSnapshotV2) -> ProtocolResult<()> {
-    validate_text(&snapshot.alias, MAX_V2_ALIAS_BYTES)?;
+    validate_bounded_text(&snapshot.alias, MAX_V2_ALIAS_BYTES)?;
     if snapshot.tabs.is_empty() || snapshot.tabs.len() > MAX_V2_TABS_PER_WORKSPACE {
         return Err(LocalControlErrorKind::MalformedFrame);
     }
@@ -779,7 +787,7 @@ fn validate_workspace_snapshot(snapshot: &ProtocolWorkspaceSnapshotV2) -> Protoc
         if !tab_ids.insert(tab.tab_id) {
             return Err(LocalControlErrorKind::MalformedFrame);
         }
-        validate_text(&tab.alias, MAX_V2_ALIAS_BYTES)?;
+        validate_bounded_text(&tab.alias, MAX_V2_ALIAS_BYTES)?;
         let before = pane_ids.len();
         validate_layout_node(&tab.root, &mut pane_ids)?;
         if pane_ids.len() == before || !pane_ids.contains(&tab.focused_pane_id) {
@@ -808,7 +816,7 @@ fn validate_snapshot(snapshot: &MultiplexerSnapshotV2) -> ProtocolResult<()> {
                 if !ids.insert(workspace.multiplexer_workspace_id) {
                     return Err(LocalControlErrorKind::MalformedFrame);
                 }
-                validate_text(&workspace.alias, MAX_V2_ALIAS_BYTES)?;
+                validate_bounded_text(&workspace.alias, MAX_V2_ALIAS_BYTES)?;
             }
             Ok(())
         }
@@ -843,12 +851,12 @@ fn validate_topology_operation(operation: &TopologyOperationV2) -> ProtocolResul
             first_tab_alias,
             ..
         } => {
-            validate_text(alias, MAX_V2_ALIAS_BYTES)?;
-            validate_text(first_tab_alias, MAX_V2_ALIAS_BYTES)
+            validate_bounded_text(alias, MAX_V2_ALIAS_BYTES)?;
+            validate_bounded_text(first_tab_alias, MAX_V2_ALIAS_BYTES)
         }
         TopologyOperationV2::RenameWorkspace { alias, .. }
         | TopologyOperationV2::CreateTab { alias, .. }
-        | TopologyOperationV2::RenameTab { alias, .. } => validate_text(alias, MAX_V2_ALIAS_BYTES),
+        | TopologyOperationV2::RenameTab { alias, .. } => validate_bounded_text(alias, MAX_V2_ALIAS_BYTES),
         TopologyOperationV2::MoveWorkspace { new_index, .. } => {
             if usize::from(*new_index) >= MAX_V2_WORKSPACES {
                 Err(LocalControlErrorKind::MalformedFrame)
@@ -890,12 +898,12 @@ fn validate_multiplexer_event(event: &MultiplexerEventV2) -> ProtocolResult<()> 
 
 fn validate_agent_observation(observation: &AgentObservationV2) -> ProtocolResult<()> {
     if let Some(git_workspace_id) = &observation.git_workspace_id {
-        validate_text(git_workspace_id, MAX_V2_GIT_WORKSPACE_ID_BYTES)?;
+        validate_nonempty_text(git_workspace_id, MAX_V2_GIT_WORKSPACE_ID_BYTES)?;
     }
     if let Some(provider_native_session_id) = &observation.provider_native_session_id {
-        validate_text(provider_native_session_id, MAX_V2_PROVIDER_SESSION_ID_BYTES)?;
+        validate_nonempty_text(provider_native_session_id, MAX_V2_PROVIDER_SESSION_ID_BYTES)?;
     }
-    validate_text(
+    validate_bounded_text(
         &observation.structured_evidence_summary,
         MAX_V2_EVIDENCE_SUMMARY_BYTES,
     )
@@ -931,14 +939,14 @@ fn validate_oid(value: &str) -> ProtocolResult<()> {
 }
 
 fn validate_worktree(worktree: &WorktreeObservationV2) -> ProtocolResult<()> {
-    validate_text(&worktree.git_workspace_id, MAX_V2_GIT_WORKSPACE_ID_BYTES)?;
-    validate_text(
+    validate_nonempty_text(&worktree.git_workspace_id, MAX_V2_GIT_WORKSPACE_ID_BYTES)?;
+    validate_nonempty_text(
         &worktree.repository_identity,
         MAX_V2_REPOSITORY_IDENTITY_BYTES,
     )?;
-    validate_text(&worktree.canonical_path, MAX_V2_PATH_BYTES)?;
+    validate_nonempty_text(&worktree.canonical_path, MAX_V2_PATH_BYTES)?;
     if let Some(branch) = &worktree.branch {
-        validate_text(branch, MAX_V2_BRANCH_BYTES)?;
+        validate_nonempty_text(branch, MAX_V2_BRANCH_BYTES)?;
     }
     validate_oid(&worktree.head_oid)
 }
@@ -951,8 +959,8 @@ fn validate_worktree_operation(operation: &WorktreeOperationV2) -> ProtocolResul
             base_commit_oid,
             new_branch_name,
         } => {
-            validate_text(repository_identity, MAX_V2_REPOSITORY_IDENTITY_BYTES)?;
-            validate_text(destination_path, MAX_V2_PATH_BYTES)?;
+            validate_nonempty_text(repository_identity, MAX_V2_REPOSITORY_IDENTITY_BYTES)?;
+            validate_nonempty_text(destination_path, MAX_V2_PATH_BYTES)?;
             validate_oid(base_commit_oid)?;
             if let Some(branch) = new_branch_name {
                 validate_text(branch, MAX_V2_BRANCH_BYTES)?;
@@ -960,14 +968,14 @@ fn validate_worktree_operation(operation: &WorktreeOperationV2) -> ProtocolResul
             Ok(())
         }
         WorktreeOperationV2::Open { canonical_path } => {
-            validate_text(canonical_path, MAX_V2_PATH_BYTES)
+            validate_nonempty_text(canonical_path, MAX_V2_PATH_BYTES)
         }
         WorktreeOperationV2::Remove {
             git_workspace_id,
             canonical_path,
         } => {
-            validate_text(git_workspace_id, MAX_V2_GIT_WORKSPACE_ID_BYTES)?;
-            validate_text(canonical_path, MAX_V2_PATH_BYTES)
+            validate_nonempty_text(git_workspace_id, MAX_V2_GIT_WORKSPACE_ID_BYTES)?;
+            validate_nonempty_text(canonical_path, MAX_V2_PATH_BYTES)
         }
     }
 }
@@ -1109,9 +1117,9 @@ pub(super) fn validate_v2_response_binding(
 }
 
 fn validate_attention_item(item: &AttentionItemV2) -> ProtocolResult<()> {
-    validate_text(&item.source_domain, MAX_V2_DETAIL_BYTES)?;
-    validate_text(&item.source_event_id, MAX_V2_DETAIL_BYTES)?;
-    validate_text(&item.detail, MAX_V2_DETAIL_BYTES)
+    validate_nonempty_text(&item.source_domain, MAX_V2_DETAIL_BYTES)?;
+    validate_nonempty_text(&item.source_event_id, MAX_V2_DETAIL_BYTES)?;
+    validate_bounded_text(&item.detail, MAX_V2_DETAIL_BYTES)
 }
 
 fn validate_attention_event(event: &AttentionEventV2) -> ProtocolResult<()> {
@@ -1130,8 +1138,8 @@ fn validate_attention_event(event: &AttentionEventV2) -> ProtocolResult<()> {
             ..
         } => {
             validate_revision(*snapshot_revision)?;
-            validate_text(source_domain, MAX_V2_DETAIL_BYTES)?;
-            validate_text(source_event_id, MAX_V2_DETAIL_BYTES)
+            validate_nonempty_text(source_domain, MAX_V2_DETAIL_BYTES)?;
+            validate_nonempty_text(source_event_id, MAX_V2_DETAIL_BYTES)
         }
         AttentionEventV2::HistoryGap {
             last_known_snapshot_revision,
