@@ -587,11 +587,7 @@ fn active_close_and_windows_child_resize_guard() {
         // ConPTY soak. Keep the exact child-observed marker mandatory, but give this
         // subprocess-only proof a bounded window that does not turn timing load into
         // a false product failure.
-        output.wait_for_with_timeout(
-            expected.as_bytes(),
-            GUARD_CYCLE,
-            Duration::from_secs(30),
-        );
+        output.wait_for_with_timeout(expected.as_bytes(), GUARD_CYCLE, Duration::from_secs(30));
         assert_eq!(
             execution.try_wait().unwrap(),
             None,
