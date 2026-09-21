@@ -649,13 +649,28 @@ pub(crate) fn validate_candidate_topology_v2(
     let mut aggregate_panes = 0_usize;
     let mut summaries = Vec::with_capacity(topology.workspaces().len());
     for workspace in topology.workspaces() {
-        let workspace_panes = workspace
-            .tabs
-            .iter()
-            .try_fold(0_usize, |count, tab| {
-                count.checked_add(layout_pane_count(&tab.root))
-            })
-            .ok_or(MultiplexerErrorKind::SnapshotLimitExceeded)?;
+        if workspace.alias.len() > MAX_V2_ALIAS_BYTES
+            || workspace.alias.contains('\0')
+            || workspace.tabs.is_empty()
+            || workspace.tabs.len() > MAX_V2_TABS_PER_WORKSPACE
+        {
+            return Err(MultiplexerErrorKind::SnapshotLimitExceeded);
+        }
+
+        let mut workspace_panes = 0_usize;
+        for tab in &workspace.tabs {
+            if tab.alias.len() > MAX_V2_ALIAS_BYTES || tab.alias.contains('\0') {
+                return Err(MultiplexerErrorKind::SnapshotLimitExceeded);
+            }
+            let tab_panes = layout_pane_count(&tab.root);
+            if tab_panes == 0 || tab_panes > MAX_V2_PANES_PER_TAB {
+                return Err(MultiplexerErrorKind::SnapshotLimitExceeded);
+            }
+            workspace_panes = workspace_panes
+                .checked_add(tab_panes)
+                .ok_or(MultiplexerErrorKind::SnapshotLimitExceeded)?;
+        }
+
         aggregate_panes = aggregate_panes
             .checked_add(workspace_panes)
             .ok_or(MultiplexerErrorKind::SnapshotLimitExceeded)?;
