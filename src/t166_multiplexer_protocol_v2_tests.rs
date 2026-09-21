@@ -52,7 +52,7 @@ fn topology_generation(value: u64) -> TopologyGeneration {
 }
 
 fn connection(value: &str) -> ClientConnectionId {
-    ClientConnectionId::new(value.to_owned()).unwrap()
+    ClientConnectionId::new(value).unwrap()
 }
 
 fn framed_json(json: &str) -> Vec<u8> {
