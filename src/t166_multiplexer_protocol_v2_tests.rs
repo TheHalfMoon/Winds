@@ -1515,6 +1515,14 @@ fn t166_owner_dispatch_preflights_capability_and_applies_exact_topology() {
         path.canonicalize().unwrap()
     }
 
+    fn short_runtime_root() -> PathBuf {
+        let id = NEXT_T166_DISPATCH_ROOT.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("w166r{id}"));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        path.canonicalize().unwrap()
+    }
+
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn start_owner(home: &Path, runtime_root: &Path) -> PersistentOwner {
         let runtime_directory = runtime_root.join("r");
@@ -1529,7 +1537,7 @@ fn t166_owner_dispatch_preflights_capability_and_applies_exact_topology() {
     }
 
     let home = test_root("dispatch-home");
-    let runtime_root = test_root("dispatch-runtime");
+    let runtime_root = short_runtime_root();
     let mut owner = start_owner(&home, &runtime_root);
     let client = connection("t166-owner-dispatch");
 
