@@ -1,10 +1,17 @@
-use super::{MessageKind, ProtocolPayload, ProtocolResult};
+use super::{
+    MAX_CONTROL_FRAME_BYTES, MessageKind, ProtocolMessage, ProtocolPayload, ProtocolResult,
+    encode_frame,
+};
+use crate::multiplexer::domain::navigation::{
+    LayoutNode, MultiplexerTopology, SplitAxis, WorkspaceState,
+};
 use crate::multiplexer::domain::{
     AgentObservationId, LayoutTemplateId, MultiplexerAuthority, MultiplexerErrorKind,
     MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration,
 };
 use crate::persistent_runtime::domain::{
-    LocalControlErrorKind, OwnerGenerationId, RuntimeNamespaceId,
+    ClientConnectionId, EventSequence, LocalControlErrorKind, OwnerGenerationId,
+    RuntimeNamespaceId,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -12,7 +19,8 @@ use std::collections::BTreeSet;
 
 pub(crate) const MAX_V2_WORKSPACES: usize = 32;
 pub(crate) const MAX_V2_TABS_PER_WORKSPACE: usize = 32;
-pub(crate) const MAX_V2_PANES_PER_WORKSPACE: usize = 256;
+pub(crate) const MAX_V2_PANES_PER_TAB: usize = 64;
+pub(crate) const MAX_V2_AGGREGATE_PANES: usize = 256;
 pub(crate) const MAX_V2_AGENT_OBSERVATIONS_PER_PAGE: usize = 128;
 pub(crate) const MAX_V2_WORKTREES_PER_PAGE: usize = 48;
 pub(crate) const MAX_V2_ATTENTION_ITEMS_PER_PAGE: usize = 128;
@@ -547,6 +555,139 @@ pub(crate) enum AttentionEventV2 {
     },
 }
 
+fn protocol_layout_node(node: &LayoutNode) -> ProtocolLayoutNodeV2 {
+    match node {
+        LayoutNode::Pane(pane_id) => ProtocolLayoutNodeV2::Pane { pane_id: *pane_id },
+        LayoutNode::Split {
+            axis,
+            ratio_bps,
+            first,
+            second,
+        } => ProtocolLayoutNodeV2::Split {
+            axis: match axis {
+                SplitAxis::Horizontal => ProtocolSplitAxis::Horizontal,
+                SplitAxis::Vertical => ProtocolSplitAxis::Vertical,
+            },
+            ratio_basis_points: ratio_bps.get(),
+            first: Box::new(protocol_layout_node(first)),
+            second: Box::new(protocol_layout_node(second)),
+        },
+    }
+}
+
+fn protocol_workspace_snapshot(
+    workspace: &WorkspaceState,
+    topology_generation: TopologyGeneration,
+) -> ProtocolWorkspaceSnapshotV2 {
+    ProtocolWorkspaceSnapshotV2 {
+        multiplexer_workspace_id: workspace.id,
+        alias: workspace.alias.clone(),
+        topology_generation,
+        focused_tab_id: workspace.focused_tab_id,
+        tabs: workspace
+            .tabs
+            .iter()
+            .map(|tab| ProtocolTabSnapshotV2 {
+                tab_id: tab.id,
+                alias: tab.alias.clone(),
+                root: protocol_layout_node(&tab.root),
+                focused_pane_id: tab.focused_pane_id,
+                zoomed_pane_id: tab.zoomed_pane_id,
+            })
+            .collect(),
+    }
+}
+
+fn layout_pane_count(node: &LayoutNode) -> usize {
+    match node {
+        LayoutNode::Pane(_) => 1,
+        LayoutNode::Split { first, second, .. } => {
+            layout_pane_count(first).saturating_add(layout_pane_count(second))
+        }
+    }
+}
+
+fn exact_snapshot_frame_with_worst_case_envelope(
+    owner_generation_id: OwnerGenerationId,
+    snapshot: MultiplexerSnapshotV2,
+) -> Result<Vec<u8>, MultiplexerErrorKind> {
+    const MAX_CONNECTION_ID_BYTES: usize = 128;
+    let connection_id = ClientConnectionId::new(&"c".repeat(MAX_CONNECTION_ID_BYTES))
+        .map_err(|_| MultiplexerErrorKind::OutcomeUnknown)?;
+    let sequence =
+        EventSequence::new(u64::MAX).map_err(|_| MultiplexerErrorKind::OutcomeUnknown)?;
+    let message = ProtocolMessage::new(
+        connection_id,
+        sequence,
+        None,
+        owner_generation_id,
+        Some(sequence),
+        ProtocolPayload::MultiplexerSnapshot { snapshot },
+    )
+    .map_err(|error| match error {
+        LocalControlErrorKind::OversizedFrame => MultiplexerErrorKind::SnapshotLimitExceeded,
+        _ => MultiplexerErrorKind::OutcomeUnknown,
+    })?;
+    let frame = encode_frame(&message).map_err(|error| match error {
+        LocalControlErrorKind::OversizedFrame => MultiplexerErrorKind::SnapshotLimitExceeded,
+        _ => MultiplexerErrorKind::OutcomeUnknown,
+    })?;
+    if frame.len() > MAX_CONTROL_FRAME_BYTES {
+        return Err(MultiplexerErrorKind::SnapshotLimitExceeded);
+    }
+    Ok(frame)
+}
+
+pub(crate) fn validate_candidate_topology_v2(
+    topology: &MultiplexerTopology,
+    owner_generation_id: OwnerGenerationId,
+) -> Result<(), MultiplexerErrorKind> {
+    if topology.workspaces().len() > MAX_V2_WORKSPACES {
+        return Err(MultiplexerErrorKind::SnapshotLimitExceeded);
+    }
+
+    let mut aggregate_panes = 0_usize;
+    let mut summaries = Vec::with_capacity(topology.workspaces().len());
+    for workspace in topology.workspaces() {
+        let workspace_panes = workspace
+            .tabs
+            .iter()
+            .try_fold(0_usize, |count, tab| {
+                count.checked_add(layout_pane_count(&tab.root))
+            })
+            .ok_or(MultiplexerErrorKind::SnapshotLimitExceeded)?;
+        aggregate_panes = aggregate_panes
+            .checked_add(workspace_panes)
+            .ok_or(MultiplexerErrorKind::SnapshotLimitExceeded)?;
+        if aggregate_panes > MAX_V2_AGGREGATE_PANES {
+            return Err(MultiplexerErrorKind::SnapshotLimitExceeded);
+        }
+
+        summaries.push(ProtocolWorkspaceSummaryV2 {
+            multiplexer_workspace_id: workspace.id,
+            alias: workspace.alias.clone(),
+            topology_generation: topology.generation(),
+            is_focused: topology.focused_workspace_id() == Some(workspace.id),
+        });
+
+        exact_snapshot_frame_with_worst_case_envelope(
+            owner_generation_id,
+            MultiplexerSnapshotV2::Workspace {
+                snapshot: protocol_workspace_snapshot(workspace, topology.generation()),
+            },
+        )?;
+    }
+
+    exact_snapshot_frame_with_worst_case_envelope(
+        owner_generation_id,
+        MultiplexerSnapshotV2::WorkspaceList {
+            topology_generation: topology.generation(),
+            workspaces: summaries,
+        },
+    )?;
+    Ok(())
+}
+
 pub(super) fn encode_v2_body(payload: &ProtocolPayload) -> ProtocolResult<Value> {
     match payload {
         ProtocolPayload::ListMultiplexerWorkspaces { request } => to_value(request),
@@ -757,7 +898,7 @@ fn validate_layout_node(
 ) -> ProtocolResult<()> {
     match node {
         ProtocolLayoutNodeV2::Pane { pane_id } => {
-            if !pane_ids.insert(*pane_id) || pane_ids.len() > MAX_V2_PANES_PER_WORKSPACE {
+            if !pane_ids.insert(*pane_id) {
                 return Err(LocalControlErrorKind::MalformedFrame);
             }
         }
@@ -790,7 +931,12 @@ fn validate_workspace_snapshot(snapshot: &ProtocolWorkspaceSnapshotV2) -> Protoc
         validate_bounded_text(&tab.alias, MAX_V2_ALIAS_BYTES)?;
         let before = pane_ids.len();
         validate_layout_node(&tab.root, &mut pane_ids)?;
-        if pane_ids.len() == before || !pane_ids.contains(&tab.focused_pane_id) {
+        let tab_pane_count = pane_ids.len().saturating_sub(before);
+        if tab_pane_count == 0
+            || tab_pane_count > MAX_V2_PANES_PER_TAB
+            || pane_ids.len() > MAX_V2_AGGREGATE_PANES
+            || !pane_ids.contains(&tab.focused_pane_id)
+        {
             return Err(LocalControlErrorKind::MalformedFrame);
         }
         if let Some(zoomed) = tab.zoomed_pane_id
