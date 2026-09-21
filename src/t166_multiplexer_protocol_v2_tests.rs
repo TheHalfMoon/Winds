@@ -8,13 +8,18 @@ use crate::persistent_runtime::domain::{
 use crate::persistent_runtime::protocol::{
     AgentFamilyV2, AgentObservationConfidenceV2, AgentObservationCursorV2,
     AgentObservationFreshnessV2, AgentObservationSnapshotV2, AgentObservationSourceV2,
-    AgentObservationV2, ApplyTopologyOperationV2, ApplyWorktreeOperationV2,
-    LEGACY_PROTOCOL_VERSION, ListAgentObservationsV2, ListWorktreesV2, MAX_CONTROL_FRAME_BYTES,
-    MAX_INBOUND_CONTROL_FRAME_BYTES, MAX_V2_BRANCH_BYTES, MAX_V2_PATH_BYTES,
-    MAX_V2_REPOSITORY_IDENTITY_BYTES, MAX_V2_WORKTREES_PER_PAGE, MessageAuthorityClass,
-    MessageKind, PROTOCOL_VERSION, ProtocolPanePlacement, ProtocolSplitAxis, TopologyOperationV2,
-    WorktreeCursorV2, WorktreeMembershipV2, WorktreeObservationV2, WorktreeOperationOutcomeV2,
-    WorktreeOperationResultV2, WorktreeOperationV2, decode_frame, encode_frame,
+    AgentObservationV2, ApplyTopologyOperationV2, ApplyWorktreeOperationV2, AttentionItemV2,
+    AttentionKindV2, AttentionSnapshotV2, LEGACY_PROTOCOL_VERSION, ListAgentObservationsV2,
+    ListWorktreesV2, MAX_CONTROL_FRAME_BYTES, MAX_INBOUND_CONTROL_FRAME_BYTES,
+    MAX_V2_AGENT_OBSERVATIONS_PER_PAGE, MAX_V2_ALIAS_BYTES, MAX_V2_ATTENTION_ITEMS_PER_PAGE,
+    MAX_V2_BRANCH_BYTES, MAX_V2_DETAIL_BYTES, MAX_V2_EVIDENCE_SUMMARY_BYTES,
+    MAX_V2_GIT_WORKSPACE_ID_BYTES, MAX_V2_PATH_BYTES, MAX_V2_PROVIDER_SESSION_ID_BYTES,
+    MAX_V2_REPOSITORY_IDENTITY_BYTES, MAX_V2_TABS_PER_WORKSPACE, MAX_V2_WORKTREES_PER_PAGE,
+    MessageAuthorityClass, MessageKind, MultiplexerSnapshotV2, PROTOCOL_VERSION,
+    ProtocolLayoutNodeV2, ProtocolPanePlacement, ProtocolSplitAxis, ProtocolTabSnapshotV2,
+    ProtocolWorkspaceSnapshotV2, TopologyOperationV2, WorktreeCursorV2, WorktreeMembershipV2,
+    WorktreeObservationV2, WorktreeOperationOutcomeV2, WorktreeOperationResultV2,
+    WorktreeOperationV2, decode_frame, encode_frame, validate_response_binding,
 };
 use crate::persistent_runtime::protocol::{ProtocolMessage, ProtocolPayload};
 use std::collections::VecDeque;
@@ -41,6 +46,27 @@ fn tab(byte: u8) -> TabId {
 
 fn pane(byte: u8) -> PaneId {
     PaneId::from_entropy_bytes([byte; 16]).unwrap()
+}
+
+fn pane_index(value: u16) -> PaneId {
+    let mut bytes = [0_u8; 16];
+    bytes[..2].copy_from_slice(&value.to_be_bytes());
+    bytes[15] = 1;
+    PaneId::from_entropy_bytes(bytes).unwrap()
+}
+
+fn tab_index(value: u16) -> TabId {
+    let mut bytes = [0_u8; 16];
+    bytes[..2].copy_from_slice(&value.to_be_bytes());
+    bytes[15] = 2;
+    TabId::from_entropy_bytes(bytes).unwrap()
+}
+
+fn observation_index(value: u16) -> AgentObservationId {
+    let mut bytes = [0_u8; 16];
+    bytes[..2].copy_from_slice(&value.to_be_bytes());
+    bytes[15] = 3;
+    AgentObservationId::from_entropy_bytes(bytes).unwrap()
 }
 
 fn observation(byte: u8) -> AgentObservationId {
@@ -216,6 +242,7 @@ fn t166_agent_observation_schema_keeps_workspace_domains_unambiguous() {
     let payload = ProtocolPayload::AgentObservationSnapshot {
         snapshot: AgentObservationSnapshotV2 {
             snapshot_revision: 1,
+            page_offset: 0,
             observations: vec![AgentObservationV2 {
                 observation_id: observation(7),
                 family: AgentFamilyV2::Claude,
@@ -256,6 +283,8 @@ fn t166_agent_observation_schema_keeps_workspace_domains_unambiguous() {
 fn t166_typed_worktree_page_is_bounded_and_single_frame_safe() {
     let result = WorktreeOperationResultV2 {
         outcome: WorktreeOperationOutcomeV2::UnsupportedOperation,
+        snapshot_revision: 1,
+        page_offset: 0,
         worktrees: (0..MAX_V2_WORKTREES_PER_PAGE).map(worktree).collect(),
         next_cursor: Some(WorktreeCursorV2 {
             owner_generation_id: generation(13),
@@ -278,6 +307,8 @@ fn t166_typed_worktree_page_is_bounded_and_single_frame_safe() {
 
     let too_many = WorktreeOperationResultV2 {
         outcome: WorktreeOperationOutcomeV2::UnsupportedOperation,
+        snapshot_revision: 1,
+        page_offset: 0,
         worktrees: (0..=MAX_V2_WORKTREES_PER_PAGE).map(worktree).collect(),
         next_cursor: None,
     };
@@ -306,6 +337,7 @@ fn t166_cursor_revision_mismatch_fails_closed() {
         ProtocolPayload::AgentObservationSnapshot {
             snapshot: AgentObservationSnapshotV2 {
                 snapshot_revision: 10,
+                page_offset: 0,
                 observations: Vec::new(),
                 next_cursor: Some(AgentObservationCursorV2 {
                     owner_generation_id: generation(15),
@@ -317,6 +349,215 @@ fn t166_cursor_revision_mismatch_fails_closed() {
     )
     .unwrap_err();
     assert_eq!(error, LocalControlErrorKind::MalformedFrame);
+}
+
+fn max_agent_observation(index: u16, owner_generation_id: OwnerGenerationId) -> AgentObservationV2 {
+    AgentObservationV2 {
+        observation_id: observation_index(index),
+        family: AgentFamilyV2::Claude,
+        source_class: AgentObservationSourceV2::ProviderStructuredMetadata,
+        confidence_class: AgentObservationConfidenceV2::Strong,
+        freshness: AgentObservationFreshnessV2::Current,
+        multiplexer_workspace_id: workspace(22),
+        git_workspace_id: Some("g".repeat(MAX_V2_GIT_WORKSPACE_ID_BYTES)),
+        tab_id: tab(23),
+        pane_id: pane_index(index.saturating_add(1)),
+        runtime_namespace_id: Some(runtime(24)),
+        provider_native_session_id: Some("s".repeat(MAX_V2_PROVIDER_SESSION_ID_BYTES)),
+        owner_generation_id,
+        observed_unix_ms: i64::MAX,
+        structured_evidence_summary: "e".repeat(MAX_V2_EVIDENCE_SUMMARY_BYTES),
+    }
+}
+
+fn pane_chain(start: u16, count: u16) -> ProtocolLayoutNodeV2 {
+    let mut node = ProtocolLayoutNodeV2::Pane {
+        pane_id: pane_index(start),
+    };
+    for offset in 1..count {
+        node = ProtocolLayoutNodeV2::Split {
+            axis: ProtocolSplitAxis::Horizontal,
+            ratio_basis_points: 5_000,
+            first: Box::new(node),
+            second: Box::new(ProtocolLayoutNodeV2::Pane {
+                pane_id: pane_index(start + offset),
+            }),
+        };
+    }
+    node
+}
+
+#[test]
+fn t166_max_topology_snapshot_fits_single_frame_without_truncation() {
+    let panes_per_tab = 8_u16;
+    let tabs = (0..MAX_V2_TABS_PER_WORKSPACE as u16)
+        .map(|index| {
+            let first_pane = index * panes_per_tab + 1;
+            ProtocolTabSnapshotV2 {
+                tab_id: tab_index(index + 1),
+                alias: "a".repeat(MAX_V2_ALIAS_BYTES),
+                root: pane_chain(first_pane, panes_per_tab),
+                focused_pane_id: pane_index(first_pane),
+                zoomed_pane_id: Some(pane_index(first_pane + panes_per_tab - 1)),
+            }
+        })
+        .collect::<Vec<_>>();
+    let message = ProtocolMessage::new(
+        connection("t166-max-topology"),
+        sequence(30),
+        None,
+        generation(30),
+        Some(sequence(29)),
+        ProtocolPayload::MultiplexerSnapshot {
+            snapshot: MultiplexerSnapshotV2::Workspace {
+                snapshot: ProtocolWorkspaceSnapshotV2 {
+                    multiplexer_workspace_id: workspace(30),
+                    alias: "w".repeat(MAX_V2_ALIAS_BYTES),
+                    topology_generation: topology_generation(30),
+                    focused_tab_id: tab_index(1),
+                    tabs,
+                },
+            },
+        },
+    )
+    .unwrap();
+    let frame = encode_frame(&message).unwrap();
+    assert!(frame.len() <= MAX_CONTROL_FRAME_BYTES);
+    assert_eq!(decode_frame(&frame).unwrap(), message);
+}
+
+#[test]
+fn t166_max_agent_page_fits_and_next_cursor_is_exact() {
+    let owner_generation_id = generation(31);
+    let observations = (0..MAX_V2_AGENT_OBSERVATIONS_PER_PAGE as u16)
+        .map(|index| max_agent_observation(index + 1, owner_generation_id))
+        .collect::<Vec<_>>();
+    let message = ProtocolMessage::new(
+        connection("t166-max-agent"),
+        sequence(31),
+        None,
+        owner_generation_id,
+        Some(sequence(30)),
+        ProtocolPayload::AgentObservationSnapshot {
+            snapshot: AgentObservationSnapshotV2 {
+                snapshot_revision: 9,
+                page_offset: 0,
+                observations,
+                next_cursor: Some(AgentObservationCursorV2 {
+                    owner_generation_id,
+                    snapshot_revision: 9,
+                    offset: MAX_V2_AGENT_OBSERVATIONS_PER_PAGE as u16,
+                }),
+            },
+        },
+    )
+    .unwrap();
+    let frame = encode_frame(&message).unwrap();
+    assert!(frame.len() <= MAX_CONTROL_FRAME_BYTES);
+    assert_eq!(decode_frame(&frame).unwrap(), message);
+}
+
+#[test]
+fn t166_max_attention_snapshot_is_single_frame_and_owner_bound() {
+    let owner_generation_id = generation(32);
+    let items = (0..MAX_V2_ATTENTION_ITEMS_PER_PAGE)
+        .map(|index| AttentionItemV2 {
+            source_domain: "d".repeat(MAX_V2_DETAIL_BYTES),
+            source_event_id: format!(
+                "{index:03}{}",
+                "e".repeat(MAX_V2_DETAIL_BYTES.saturating_sub(3))
+            ),
+            kind: AttentionKindV2::ExplicitAgentAttention,
+            multiplexer_workspace_id: workspace(32),
+            tab_id: Some(tab(32)),
+            pane_id: Some(pane(32)),
+            runtime_namespace_id: Some(runtime(32)),
+            owner_generation_id,
+            detail: "x".repeat(MAX_V2_DETAIL_BYTES),
+            stale: false,
+        })
+        .collect::<Vec<_>>();
+    let message = ProtocolMessage::new(
+        connection("t166-max-attention"),
+        sequence(32),
+        None,
+        owner_generation_id,
+        None,
+        ProtocolPayload::AttentionSnapshot {
+            snapshot: AttentionSnapshotV2 {
+                snapshot_revision: 11,
+                items,
+            },
+        },
+    )
+    .unwrap();
+    let frame = encode_frame(&message).unwrap();
+    assert!(frame.len() <= MAX_CONTROL_FRAME_BYTES);
+    assert_eq!(decode_frame(&frame).unwrap(), message);
+}
+
+#[test]
+fn t166_collection_cursor_owner_and_offset_binding_fail_closed() {
+    let owner_generation_id = generation(33);
+    let request = ProtocolMessage::new(
+        connection("t166-page"),
+        sequence(40),
+        None,
+        owner_generation_id,
+        None,
+        ProtocolPayload::ListAgentObservations {
+            request: ListAgentObservationsV2 {
+                multiplexer_workspace_id: Some(workspace(33)),
+                cursor: Some(AgentObservationCursorV2 {
+                    owner_generation_id,
+                    snapshot_revision: 12,
+                    offset: 64,
+                }),
+            },
+        },
+    )
+    .unwrap();
+
+    let wrong_offset = ProtocolMessage::new(
+        connection("t166-page"),
+        sequence(41),
+        None,
+        owner_generation_id,
+        Some(sequence(40)),
+        ProtocolPayload::AgentObservationSnapshot {
+            snapshot: AgentObservationSnapshotV2 {
+                snapshot_revision: 12,
+                page_offset: 63,
+                observations: Vec::new(),
+                next_cursor: None,
+            },
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        validate_response_binding(&request, &wrong_offset).unwrap_err(),
+        LocalControlErrorKind::MalformedFrame
+    );
+
+    let stale_owner = ProtocolMessage::new(
+        connection("t166-page"),
+        sequence(42),
+        None,
+        owner_generation_id,
+        None,
+        ProtocolPayload::ListAgentObservations {
+            request: ListAgentObservationsV2 {
+                multiplexer_workspace_id: Some(workspace(33)),
+                cursor: Some(AgentObservationCursorV2 {
+                    owner_generation_id: generation(34),
+                    snapshot_revision: 12,
+                    offset: 64,
+                }),
+            },
+        },
+    )
+    .unwrap_err();
+    assert_eq!(stale_owner, LocalControlErrorKind::StaleOwnerGeneration);
 }
 
 #[test]
