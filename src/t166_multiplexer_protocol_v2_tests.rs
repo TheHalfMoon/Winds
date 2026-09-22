@@ -28,7 +28,7 @@ use crate::persistent_runtime::protocol::{
     TopologyOperationV2, WorktreeCursorV2, WorktreeMembershipV2, WorktreeObservationV2,
     WorktreeOperationOutcomeV2, WorktreeOperationResultV2, WorktreeOperationV2,
     apply_topology_operation_v2, decode_frame, encode_frame, inactive_v2_domain_response,
-    multiplexer_snapshot_for_request_v2, validate_candidate_topology_v2,
+    is_legacy_protocol_frame, multiplexer_snapshot_for_request_v2, validate_candidate_topology_v2,
     validate_owner_v2_handshake, validate_response_binding,
 };
 use crate::persistent_runtime::protocol::{ProtocolMessage, ProtocolPayload};
@@ -161,6 +161,89 @@ fn t166_exact_v2_handshake_preserves_legacy_fixture_without_downgrade() {
         decode_frame(&legacy_ping).unwrap_err(),
         LocalControlErrorKind::ProtocolMismatch
     );
+}
+
+/// The exact owner response a live protocol-v1 owner returns for a v2 HELLO: a typed
+/// protocol-mismatch error correlated to the rejected request.
+fn owner_protocol_mismatch_response() -> ProtocolMessage {
+    ProtocolMessage::new(
+        connection("legacy-owner"),
+        sequence(9),
+        None,
+        generation(2),
+        Some(sequence(8)),
+        ProtocolPayload::Error {
+            kind: LocalControlErrorKind::ProtocolMismatch,
+        },
+    )
+    .unwrap()
+}
+
+/// Re-encodes `message` at the legacy wire version, reproducing the exact frame shape a
+/// still-running protocol-v1 owner emits: the shared envelope schema carrying
+/// `protocol_version: 1`.
+fn reencode_at_legacy_version(message: &ProtocolMessage) -> Vec<u8> {
+    let frame = encode_frame(message).unwrap();
+    let json = std::str::from_utf8(&frame[4..]).unwrap().replacen(
+        &format!(r#""protocol_version":{PROTOCOL_VERSION}"#),
+        &format!(r#""protocol_version":{LEGACY_PROTOCOL_VERSION}"#),
+        1,
+    );
+    framed_json(&json)
+}
+
+#[test]
+fn t166_live_v1_owner_wire_frame_derives_blocked_legacy_owner_before_downgrade() {
+    let legacy_owner_response = reencode_at_legacy_version(&owner_protocol_mismatch_response());
+
+    // A live v1 owner answer is decoded as a protocol mismatch on the v2 client...
+    assert_eq!(
+        decode_frame(&legacy_owner_response).unwrap_err(),
+        LocalControlErrorKind::ProtocolMismatch
+    );
+    // ...and that mismatch is attributed to a live legacy owner, not to a malformed peer.
+    assert!(is_legacy_protocol_frame(&legacy_owner_response));
+    assert!(matches!(
+        decode_platform_frame(&legacy_owner_response),
+        Err(WireError::LegacyProtocol)
+    ));
+    assert_eq!(
+        map_wire_error(WireError::LegacyProtocol),
+        LocalControlClientError::BlockedLegacyOwner
+    );
+
+    // The preserved v1 HELLO fixture still resolves through the decoder itself, so it is
+    // never misattributed to legacy-owner blocking.
+    let legacy_hello =
+        encode_frame(&ProtocolMessage::hello(sequence(2), 1, 1, None).unwrap()).unwrap();
+    assert!(is_legacy_protocol_frame(&legacy_hello));
+    assert!(decode_platform_frame(&legacy_hello).is_ok());
+}
+
+#[test]
+fn t166_legacy_owner_detection_is_limited_to_structurally_valid_legacy_frames() {
+    // A current-version frame is never reported as legacy, and it decodes normally.
+    let current = encode_frame(&owner_protocol_mismatch_response()).unwrap();
+    assert!(!is_legacy_protocol_frame(&current));
+    assert!(decode_platform_frame(&current).is_ok());
+
+    // Every structurally invalid shape stays a malformed/oversized transport concern
+    // rather than being promoted to a legacy-owner block.
+    assert!(!is_legacy_protocol_frame(&[]));
+    assert!(!is_legacy_protocol_frame(&4_u32.to_le_bytes()));
+
+    let mut truncated_payload = 32_u32.to_le_bytes().to_vec();
+    truncated_payload.extend_from_slice(br#"{"protocol_version":1}"#);
+    assert!(!is_legacy_protocol_frame(&truncated_payload));
+
+    let mut lying_length = 4_096_u32.to_le_bytes().to_vec();
+    lying_length.extend_from_slice(br#"{"protocol_version":1}"#);
+    assert!(!is_legacy_protocol_frame(&lying_length));
+
+    assert!(!is_legacy_protocol_frame(&framed_json("not-json")));
+    assert!(!is_legacy_protocol_frame(&framed_json(
+        r#"{"protocol_version":3,"message_kind":"PING"}"#
+    )));
 }
 
 #[test]
