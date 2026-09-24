@@ -268,7 +268,8 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 - `src/persistent_runtime/protocol.rs`;
 - `src/persistent_runtime/client.rs` only for the protocol-v2 handshake/version transition, explicit legacy-owner block mapping, and regression preservation of existing Spec 011 runtime-control operations;
 - new `src/multiplexer/protocol.rs` if separation reduces coupling;
-- `src/persistent_runtime/owner.rs` only for typed dispatch;
+- `src/persistent_runtime/owner.rs` only for typed dispatch and servicing the already-bound private endpoint;
+- `src/persistent_runtime/transport/unix.rs` and `src/persistent_runtime/transport/windows.rs` only for narrowly additive authenticated accept/session lifecycle support required to service that existing endpoint on Linux, macOS, and native Windows, with no endpoint, dependency, listener type, or security-boundary change;
 - focused `src/t166_multiplexer_protocol_v2_tests.rs`;
 - no topology projection cache/client UX beyond the minimum version transition; no desktop/TUI, Git mutation, detector, dependency, network/public RPC;
 
@@ -286,10 +287,12 @@ Canonical acceptance and successful post-merge verification of this Tasks file a
 - event loss/gap explicitly marks client projection stale and requires fresh subscription + authoritative snapshot;
 - buffered events are not blindly replayed over a newer snapshot;
 - `MULTIPLEXER_SNAPSHOT` exact encoded frame <=262144 bytes including 4-byte prefix; JSON <=262140 bytes; all variable fields bounded;
+- the existing bound private endpoint is serviced through the existing same-user POSIX/Windows transport boundary; T166 transport changes are limited to bounded session lifecycle, disconnect cleanup, and next-client readiness and may not introduce another listener/server/daemon or weaken principal, endpoint-ownership, DACL/mode, frame, or connection checks;
 - `SNAPSHOT_LIMIT_EXCEEDED` rejects before generation/persistence/publication with no truncation;
 
 **Acceptance**:
 - v1/v2 mismatch in both directions, live-v1 owner blocking, and same-revision owner/client v2 regression fixtures;
+- a real private-endpoint integration fixture proves v2 HELLO, existing Spec 011 runtime-control round trips, topology list/read/write-state dispatch, disconnect cleanup, and next-client readiness separately on each directly exercised native Linux, macOS, and native-Windows platform;
 - every existing Spec 011 runtime-control client operation still round-trips under v2 before T166 can close;
 - malformed/oversized/truncated/unknown-kind, unsupported-not-yet-authorized-domain, stale-generation, replay/duplicate fixtures;
 - encoded maximum-size boundary tests prove total-frame accounting;
