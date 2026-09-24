@@ -1,6 +1,6 @@
 use super::{
-    MAX_CONTROL_FRAME_BYTES, MessageKind, ProtocolMessage, ProtocolPayload, ProtocolResult,
-    encode_frame,
+    MAX_CONTROL_FRAME_BYTES, MessageDirection, MessageKind, ProtocolMessage, ProtocolPayload,
+    ProtocolResult, encode_frame,
 };
 use crate::multiplexer::domain::navigation::{
     LayoutNode, MultiplexerTopology, PanePlacement, SplitAxis, SplitRatioBps, WorkspaceState,
@@ -393,6 +393,8 @@ pub(crate) struct ListAgentObservationsV2 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AgentObservationSnapshotV2 {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) filter_multiplexer_workspace_id: Option<MultiplexerWorkspaceId>,
     pub(crate) snapshot_revision: u64,
     pub(crate) page_offset: u16,
     pub(crate) observations: Vec<AgentObservationV2>,
@@ -504,11 +506,20 @@ pub(crate) struct WorktreeOperationResultV2 {
     pub(crate) repository_identity: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) git_workspace_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) operation_target: Option<WorktreeOperationTargetV2>,
     pub(crate) snapshot_revision: u64,
     pub(crate) page_offset: u16,
     pub(crate) worktrees: Vec<WorktreeObservationV2>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) next_cursor: Option<WorktreeCursorV2>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WorktreeOperationTargetV2 {
+    pub(crate) operation: WorktreeOperationV2,
+    pub(crate) trust_record_revision: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -567,10 +578,60 @@ pub(crate) enum AttentionEventV2 {
         source_event_id: String,
         kind: AttentionKindV2,
         multiplexer_workspace_id: MultiplexerWorkspaceId,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        tab_id: Option<TabId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pane_id: Option<PaneId>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        runtime_namespace_id: Option<RuntimeNamespaceId>,
+        owner_generation_id: OwnerGenerationId,
     },
     HistoryGap {
         last_known_snapshot_revision: u64,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub(crate) enum MultiplexerSubscriptionStreamV2 {
+    Topology,
+    AgentObservations,
+    Attention,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SubscribeMultiplexerEventsV2 {
+    pub(crate) stream: MultiplexerSubscriptionStreamV2,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) multiplexer_workspace_id: Option<MultiplexerWorkspaceId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    tag = "stream",
+    rename_all = "SCREAMING_SNAKE_CASE",
+    deny_unknown_fields
+)]
+pub(crate) enum MultiplexerSubscriptionBoundaryV2 {
+    Topology {
+        topology_generation: TopologyGeneration,
+    },
+    AgentObservations {
+        snapshot_revision: u64,
+    },
+    Attention {
+        snapshot_revision: u64,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct MultiplexerEventSubscriptionAckV2 {
+    pub(crate) stream: MultiplexerSubscriptionStreamV2,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) multiplexer_workspace_id: Option<MultiplexerWorkspaceId>,
+    pub(crate) boundary: MultiplexerSubscriptionBoundaryV2,
 }
 
 fn protocol_layout_node(node: &LayoutNode) -> ProtocolLayoutNodeV2 {
@@ -1086,6 +1147,8 @@ pub(super) fn encode_v2_body(payload: &ProtocolPayload) -> ProtocolResult<Value>
         ProtocolPayload::MultiplexerWriteState { state } => to_value(state),
         ProtocolPayload::ApplyTopologyOperation { request } => to_value(request),
         ProtocolPayload::MultiplexerEvent { event } => to_value(event),
+        ProtocolPayload::SubscribeMultiplexerEvents { request } => to_value(request),
+        ProtocolPayload::MultiplexerEventSubscriptionAck { ack } => to_value(ack),
         ProtocolPayload::ListAgentObservations { request } => to_value(request),
         ProtocolPayload::AgentObservationSnapshot { snapshot } => to_value(snapshot),
         ProtocolPayload::AgentObservationEvent { event } => to_value(event),
@@ -1122,6 +1185,16 @@ pub(super) fn decode_v2_body(kind: MessageKind, body: Value) -> ProtocolResult<P
         MessageKind::MultiplexerEvent => Ok(ProtocolPayload::MultiplexerEvent {
             event: from_value(body)?,
         }),
+        MessageKind::SubscribeMultiplexerEvents => {
+            Ok(ProtocolPayload::SubscribeMultiplexerEvents {
+                request: from_value(body)?,
+            })
+        }
+        MessageKind::MultiplexerEventSubscriptionAck => {
+            Ok(ProtocolPayload::MultiplexerEventSubscriptionAck {
+                ack: from_value(body)?,
+            })
+        }
         MessageKind::ListAgentObservations => Ok(ProtocolPayload::ListAgentObservations {
             request: from_value(body)?,
         }),
@@ -1153,8 +1226,10 @@ pub(super) fn decode_v2_body(kind: MessageKind, body: Value) -> ProtocolResult<P
 pub(super) fn validate_v2_payload(payload: &ProtocolPayload) -> ProtocolResult<()> {
     match payload {
         ProtocolPayload::ListMultiplexerWorkspaces { .. }
+        | ProtocolPayload::SubscribeMultiplexerEvents { .. }
         | ProtocolPayload::RequestMultiplexerWrite { .. }
         | ProtocolPayload::ReleaseMultiplexerWrite => Ok(()),
+        ProtocolPayload::MultiplexerEventSubscriptionAck { ack } => validate_subscription_ack(ack),
         ProtocolPayload::MultiplexerWriteState { state } => {
             if state.authority == MultiplexerAuthority::MultiplexerWrite && state.error.is_some() {
                 return Err(LocalControlErrorKind::MalformedFrame);
@@ -1263,6 +1338,24 @@ fn validate_cursor(revision: u64) -> ProtocolResult<()> {
     validate_revision(revision)
 }
 
+fn validate_subscription_ack(ack: &MultiplexerEventSubscriptionAckV2) -> ProtocolResult<()> {
+    match (ack.stream, &ack.boundary) {
+        (
+            MultiplexerSubscriptionStreamV2::Topology,
+            MultiplexerSubscriptionBoundaryV2::Topology { .. },
+        ) => Ok(()),
+        (
+            MultiplexerSubscriptionStreamV2::AgentObservations,
+            MultiplexerSubscriptionBoundaryV2::AgentObservations { snapshot_revision },
+        )
+        | (
+            MultiplexerSubscriptionStreamV2::Attention,
+            MultiplexerSubscriptionBoundaryV2::Attention { snapshot_revision },
+        ) => validate_revision(*snapshot_revision),
+        _ => Err(LocalControlErrorKind::MalformedFrame),
+    }
+}
+
 fn validate_next_offset(
     page_offset: u16,
     item_count: usize,
@@ -1271,7 +1364,7 @@ fn validate_next_offset(
 ) -> ProtocolResult<()> {
     if let Some((cursor_revision, cursor_offset)) = next_cursor {
         validate_cursor(cursor_revision)?;
-        if cursor_revision != snapshot_revision {
+        if cursor_revision != snapshot_revision || item_count == 0 {
             return Err(LocalControlErrorKind::MalformedFrame);
         }
         let item_count =
@@ -1572,6 +1665,10 @@ fn validate_worktree_result(result: &WorktreeOperationResultV2) -> ProtocolResul
     if let Some(git_workspace_id) = &result.git_workspace_id {
         validate_nonempty_text(git_workspace_id, MAX_V2_GIT_WORKSPACE_ID_BYTES)?;
     }
+    if let Some(operation_target) = &result.operation_target {
+        validate_revision(operation_target.trust_record_revision)?;
+        validate_worktree_operation(&operation_target.operation)?;
+    }
     if result.worktrees.len() > MAX_V2_WORKTREES_PER_PAGE {
         return Err(LocalControlErrorKind::OversizedFrame);
     }
@@ -1649,13 +1746,20 @@ pub(super) fn validate_v2_owner_generation_binding(
                 return Err(LocalControlErrorKind::StaleOwnerGeneration);
             }
         }
-        ProtocolPayload::AttentionEvent { event } => {
-            if let AttentionEventV2::Upsert { item, .. } = event
-                && item.owner_generation_id != owner_generation_id
+        ProtocolPayload::AttentionEvent { event } => match event {
+            AttentionEventV2::Upsert { item, .. }
+                if item.owner_generation_id != owner_generation_id =>
             {
                 return Err(LocalControlErrorKind::StaleOwnerGeneration);
             }
-        }
+            AttentionEventV2::Removed {
+                owner_generation_id: item_owner_generation_id,
+                ..
+            } if *item_owner_generation_id != owner_generation_id => {
+                return Err(LocalControlErrorKind::StaleOwnerGeneration);
+            }
+            _ => {}
+        },
         _ => {}
     }
     Ok(())
@@ -1666,6 +1770,31 @@ pub(super) fn validate_v2_response_binding(
     response: &ProtocolPayload,
 ) -> ProtocolResult<()> {
     match (request, response) {
+        (
+            ProtocolPayload::SubscribeMultiplexerEvents { request },
+            ProtocolPayload::MultiplexerEventSubscriptionAck { ack },
+        ) => {
+            if ack.stream != request.stream
+                || ack.multiplexer_workspace_id != request.multiplexer_workspace_id
+            {
+                return Err(LocalControlErrorKind::MalformedFrame);
+            }
+            match (request.stream, &ack.boundary) {
+                (
+                    MultiplexerSubscriptionStreamV2::Topology,
+                    MultiplexerSubscriptionBoundaryV2::Topology { .. },
+                )
+                | (
+                    MultiplexerSubscriptionStreamV2::AgentObservations,
+                    MultiplexerSubscriptionBoundaryV2::AgentObservations { .. },
+                )
+                | (
+                    MultiplexerSubscriptionStreamV2::Attention,
+                    MultiplexerSubscriptionBoundaryV2::Attention { .. },
+                ) => {}
+                _ => return Err(LocalControlErrorKind::MalformedFrame),
+            }
+        }
         (
             ProtocolPayload::ListMultiplexerWorkspaces { request },
             ProtocolPayload::MultiplexerSnapshot { snapshot },
@@ -1740,6 +1869,9 @@ pub(super) fn validate_v2_response_binding(
             if snapshot.page_offset != expected_offset {
                 return Err(LocalControlErrorKind::MalformedFrame);
             }
+            if snapshot.filter_multiplexer_workspace_id != request.multiplexer_workspace_id {
+                return Err(LocalControlErrorKind::MalformedFrame);
+            }
             if let Some(cursor) = &request.cursor
                 && cursor.snapshot_revision != snapshot.snapshot_revision
             {
@@ -1762,6 +1894,7 @@ pub(super) fn validate_v2_response_binding(
                 || result.multiplexer_workspace_id != request.multiplexer_workspace_id
                 || result.repository_identity.is_some()
                 || result.git_workspace_id.is_some()
+                || result.operation_target.is_some()
             {
                 return Err(LocalControlErrorKind::MalformedFrame);
             }
@@ -1784,6 +1917,10 @@ pub(super) fn validate_v2_response_binding(
                 || result.multiplexer_workspace_id != request.multiplexer_workspace_id
                 || result.repository_identity.as_deref()
                     != Some(request.repository_identity.as_str())
+                || result.operation_target.as_ref().is_none_or(|target| {
+                    target.operation != request.operation
+                        || target.trust_record_revision != request.trust_record_revision
+                })
             {
                 return Err(LocalControlErrorKind::MalformedFrame);
             }
@@ -1842,5 +1979,101 @@ fn validate_attention_event(event: &AttentionEventV2) -> ProtocolResult<()> {
         AttentionEventV2::HistoryGap {
             last_known_snapshot_revision,
         } => validate_revision(*last_known_snapshot_revision),
+    }
+}
+
+pub(crate) fn validate_multiplexer_subscription_event_binding(
+    expected_connection_id: &ClientConnectionId,
+    expected_owner_generation_id: OwnerGenerationId,
+    subscription: &SubscribeMultiplexerEventsV2,
+    event: &ProtocolMessage,
+) -> ProtocolResult<()> {
+    if event.direction() != MessageDirection::OwnerToClient
+        || event.runtime_namespace_id.is_some()
+        || event.correlation_sequence.is_some()
+    {
+        return Err(LocalControlErrorKind::MalformedFrame);
+    }
+    if event.connection_id.as_ref() != Some(expected_connection_id) {
+        return Err(LocalControlErrorKind::MalformedFrame);
+    }
+    if event.owner_generation_id != Some(expected_owner_generation_id) {
+        return Err(LocalControlErrorKind::StaleOwnerGeneration);
+    }
+
+    let workspace_matches = |actual: MultiplexerWorkspaceId| {
+        subscription
+            .multiplexer_workspace_id
+            .is_none_or(|expected| expected == actual)
+    };
+    match (subscription.stream, &event.payload) {
+        (
+            MultiplexerSubscriptionStreamV2::Topology,
+            ProtocolPayload::MultiplexerEvent {
+                event:
+                    MultiplexerEventV2::TopologyChanged {
+                        multiplexer_workspace_id,
+                        ..
+                    },
+            }
+            | ProtocolPayload::MultiplexerEvent {
+                event:
+                    MultiplexerEventV2::PaneCleared {
+                        multiplexer_workspace_id,
+                        ..
+                    },
+            },
+        ) if workspace_matches(*multiplexer_workspace_id) => Ok(()),
+        (
+            MultiplexerSubscriptionStreamV2::Topology,
+            ProtocolPayload::MultiplexerEvent {
+                event: MultiplexerEventV2::HistoryGap { .. },
+            },
+        ) => Ok(()),
+        (
+            MultiplexerSubscriptionStreamV2::AgentObservations,
+            ProtocolPayload::AgentObservationEvent {
+                event: AgentObservationEventV2::Upsert { observation, .. },
+            },
+        ) if workspace_matches(observation.multiplexer_workspace_id) => Ok(()),
+        (
+            MultiplexerSubscriptionStreamV2::AgentObservations,
+            ProtocolPayload::AgentObservationEvent {
+                event:
+                    AgentObservationEventV2::Removed {
+                        multiplexer_workspace_id,
+                        ..
+                    },
+            },
+        ) if workspace_matches(*multiplexer_workspace_id) => Ok(()),
+        (
+            MultiplexerSubscriptionStreamV2::AgentObservations,
+            ProtocolPayload::AgentObservationEvent {
+                event: AgentObservationEventV2::HistoryGap { .. },
+            },
+        ) => Ok(()),
+        (
+            MultiplexerSubscriptionStreamV2::Attention,
+            ProtocolPayload::AttentionEvent {
+                event: AttentionEventV2::Upsert { item, .. },
+            },
+        ) if workspace_matches(item.multiplexer_workspace_id) => Ok(()),
+        (
+            MultiplexerSubscriptionStreamV2::Attention,
+            ProtocolPayload::AttentionEvent {
+                event:
+                    AttentionEventV2::Removed {
+                        multiplexer_workspace_id,
+                        ..
+                    },
+            },
+        ) if workspace_matches(*multiplexer_workspace_id) => Ok(()),
+        (
+            MultiplexerSubscriptionStreamV2::Attention,
+            ProtocolPayload::AttentionEvent {
+                event: AttentionEventV2::HistoryGap { .. },
+            },
+        ) => Ok(()),
+        _ => Err(LocalControlErrorKind::MalformedFrame),
     }
 }

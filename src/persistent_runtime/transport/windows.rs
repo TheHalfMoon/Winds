@@ -3,12 +3,15 @@ use crate::persistent_runtime::peer::{
     WindowsUserSid, current_process_user_sid, require_same_user_named_pipe_client,
     validate_pipe_owner_and_dacl,
 };
+use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::mem::size_of;
 use std::ptr::{null, null_mut};
+use std::thread;
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED,
-    GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
+    CloseHandle, ERROR_ACCESS_DENIED, ERROR_BROKEN_PIPE, ERROR_FILE_NOT_FOUND, ERROR_NO_DATA,
+    ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, GENERIC_READ, GENERIC_WRITE,
+    GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
@@ -22,14 +25,15 @@ use windows_sys::Win32::Storage::FileSystem::{
     ReadFile, WriteFile,
 };
 use windows_sys::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_BYTE,
-    PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
+    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_NOWAIT, PIPE_READMODE_BYTE,
+    PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
 };
 
 const PIPE_PREFIX: &str = r"\\.\pipe\winds-runtime-v1";
 const MAX_PIPE_NAME_UTF16_UNITS: usize = 240;
 const MAX_SECURITY_DESCRIPTOR_UTF16_UNITS: usize = 1024;
 const PIPE_BUFFER_BYTES: u32 = 64 * 1024;
+const MAX_CONTROL_PREFETCH_BYTES: usize = 256 * 1024;
 const IDENTITY_ENTROPY_BYTES: usize = 16;
 const PEER_PROOF_MARKER: [u8; 4] = *b"WNP1";
 
@@ -176,6 +180,9 @@ pub(crate) struct WindowsNamedPipeServer {
     pipe_name: String,
     user_sid: WindowsUserSid,
     connected: bool,
+    peer_marker: [u8; PEER_PROOF_MARKER.len()],
+    peer_marker_read: usize,
+    prefetched: VecDeque<u8>,
 }
 
 impl WindowsNamedPipeServer {
@@ -198,7 +205,7 @@ impl WindowsNamedPipeServer {
             CreateNamedPipeW(
                 pipe_name_wide.as_ptr(),
                 PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
-                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_NOWAIT | PIPE_REJECT_REMOTE_CLIENTS,
                 1,
                 PIPE_BUFFER_BYTES,
                 PIPE_BUFFER_BYTES,
@@ -217,6 +224,9 @@ impl WindowsNamedPipeServer {
             pipe_name,
             user_sid,
             connected: false,
+            peer_marker: [0; PEER_PROOF_MARKER.len()],
+            peer_marker_read: 0,
+            prefetched: VecDeque::new(),
         })
     }
 
@@ -229,49 +239,138 @@ impl WindowsNamedPipeServer {
     }
 
     pub(crate) fn accept_same_user(&mut self) -> Result<(), WindowsTransportError> {
+        loop {
+            if self.try_accept_same_user()? {
+                return Ok(());
+            }
+            thread::yield_now();
+        }
+    }
+
+    pub(crate) fn try_accept_same_user(&mut self) -> Result<bool, WindowsTransportError> {
         if self.connected {
+            if self.peer_marker_read < PEER_PROOF_MARKER.len() {
+                return self.read_peer_marker();
+            }
             return Err(WindowsTransportError::PipeAlreadyConnected);
         }
-        // SAFETY: handle is a valid named-pipe server handle and synchronous connect passes null OVERLAPPED.
+
         let connected = unsafe { ConnectNamedPipe(self.handle.raw(), null_mut()) };
         if connected == 0 {
             let error = last_error_code();
+            if error == ERROR_PIPE_NOT_CONNECTED {
+                return Ok(false);
+            }
             if error != ERROR_PIPE_CONNECTED {
                 return Err(WindowsTransportError::Win32(error));
             }
         }
-        let mut marker = [0_u8; PEER_PROOF_MARKER.len()];
-        if let Err(error) = read_exact_handle(self.handle.raw(), &mut marker) {
-            // SAFETY: a client is connected at this point; disconnect is best-effort on failure.
-            let _ = unsafe { DisconnectNamedPipe(self.handle.raw()) };
-            return Err(error);
+        self.connected = true;
+        self.peer_marker = [0; PEER_PROOF_MARKER.len()];
+        self.peer_marker_read = 0;
+        self.prefetched.clear();
+        self.read_peer_marker()
+    }
+
+    fn read_peer_marker(&mut self) -> Result<bool, WindowsTransportError> {
+        let mut chunk = [0_u8; 256];
+        let read = read_some_handle(self.handle.raw(), &mut chunk)?;
+        if read == 0 {
+            return Ok(false);
         }
-        if marker != PEER_PROOF_MARKER {
-            // SAFETY: a client is connected at this point; disconnect is best-effort on refusal.
-            let _ = unsafe { DisconnectNamedPipe(self.handle.raw()) };
+        let mut cursor = 0;
+        while cursor < read && self.peer_marker_read < PEER_PROOF_MARKER.len() {
+            self.peer_marker[self.peer_marker_read] = chunk[cursor];
+            self.peer_marker_read += 1;
+            cursor += 1;
+        }
+        self.prefetched.extend(&chunk[cursor..read]);
+        if self.prefetched.len() > MAX_CONTROL_PREFETCH_BYTES {
+            self.disconnect_connected()?;
+            return Err(WindowsTransportError::PeerProofMarkerMismatch);
+        }
+        if self.peer_marker_read < PEER_PROOF_MARKER.len() {
+            return Ok(false);
+        }
+        if self.peer_marker != PEER_PROOF_MARKER {
+            self.disconnect_connected()?;
             return Err(WindowsTransportError::PeerProofMarkerMismatch);
         }
         if let Err(error) = require_same_user_named_pipe_client(self.handle.raw(), &self.user_sid) {
-            // SAFETY: a client is connected at this point; disconnect is best-effort on denial.
-            let _ = unsafe { DisconnectNamedPipe(self.handle.raw()) };
+            self.disconnect_connected()?;
             return Err(error);
         }
-        self.connected = true;
-        Ok(())
+        Ok(true)
     }
 
     pub(crate) fn read_exact(&self, buffer: &mut [u8]) -> Result<(), WindowsTransportError> {
-        if !self.connected {
+        if !self.connected || self.peer_marker_read != PEER_PROOF_MARKER.len() {
             return Err(WindowsTransportError::PipeNotConnected);
         }
-        read_exact_handle(self.handle.raw(), buffer)
+        let mut offset = 0;
+        while offset < buffer.len() {
+            match self.try_read_some(&mut buffer[offset..])? {
+                0 => thread::yield_now(),
+                read => offset += read,
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn try_read_some(&self, buffer: &mut [u8]) -> Result<usize, WindowsTransportError> {
+        if !self.connected || self.peer_marker_read != PEER_PROOF_MARKER.len() {
+            return Err(WindowsTransportError::PipeNotConnected);
+        }
+        read_some_handle(self.handle.raw(), buffer)
+    }
+
+    pub(crate) fn take_prefetched(&mut self, buffer: &mut [u8]) -> usize {
+        let count = buffer.len().min(self.prefetched.len());
+        for target in &mut buffer[..count] {
+            *target = self
+                .prefetched
+                .pop_front()
+                .expect("bounded prefetch length checked");
+        }
+        count
     }
 
     pub(crate) fn write_all(&self, buffer: &[u8]) -> Result<(), WindowsTransportError> {
-        if !self.connected {
+        if !self.connected || self.peer_marker_read != PEER_PROOF_MARKER.len() {
             return Err(WindowsTransportError::PipeNotConnected);
         }
-        write_all_handle(self.handle.raw(), buffer)
+        let mut offset = 0;
+        while offset < buffer.len() {
+            match self.try_write_some(&buffer[offset..])? {
+                0 => thread::yield_now(),
+                written => offset += written,
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn try_write_some(&self, buffer: &[u8]) -> Result<usize, WindowsTransportError> {
+        if !self.connected || self.peer_marker_read != PEER_PROOF_MARKER.len() {
+            return Err(WindowsTransportError::PipeNotConnected);
+        }
+        write_some_handle(self.handle.raw(), buffer)
+    }
+
+    pub(crate) fn disconnect_connected(&mut self) -> Result<(), WindowsTransportError> {
+        if !self.connected {
+            return Ok(());
+        }
+        // SAFETY: the handle is live and the owner service performs only nonblocking operations.
+        let disconnected = unsafe { DisconnectNamedPipe(self.handle.raw()) };
+        let error = last_error_code();
+        self.connected = false;
+        self.peer_marker = [0; PEER_PROOF_MARKER.len()];
+        self.peer_marker_read = 0;
+        self.prefetched.clear();
+        if disconnected == 0 && error != ERROR_PIPE_NOT_CONNECTED {
+            return Err(WindowsTransportError::Win32(error));
+        }
+        self.validate_effective_security()
     }
 }
 
@@ -339,6 +438,53 @@ impl WindowsNamedPipeClient {
     pub(crate) fn write_all(&self, buffer: &[u8]) -> Result<(), WindowsTransportError> {
         write_all_handle(self.handle.raw(), buffer)
     }
+}
+
+fn read_some_handle(handle: HANDLE, buffer: &mut [u8]) -> Result<usize, WindowsTransportError> {
+    let mut read = 0_u32;
+    // SAFETY: buffer is writable and the size is bounded by the caller-provided slice length.
+    if unsafe {
+        ReadFile(
+            handle,
+            buffer.as_mut_ptr(),
+            u32::try_from(buffer.len()).unwrap_or(u32::MAX),
+            &mut read,
+            null_mut(),
+        )
+    } == 0
+    {
+        return match last_error_code() {
+            ERROR_NO_DATA | ERROR_PIPE_NOT_CONNECTED => Ok(0),
+            ERROR_BROKEN_PIPE => Err(WindowsTransportError::PipeClosed),
+            error => Err(WindowsTransportError::Win32(error)),
+        };
+    }
+    Ok(read as usize)
+}
+
+fn write_some_handle(handle: HANDLE, buffer: &[u8]) -> Result<usize, WindowsTransportError> {
+    if buffer.is_empty() {
+        return Ok(0);
+    }
+    let mut written = 0_u32;
+    // SAFETY: buffer is readable and the size is bounded by the caller-provided slice length.
+    if unsafe {
+        WriteFile(
+            handle,
+            buffer.as_ptr(),
+            u32::try_from(buffer.len()).unwrap_or(u32::MAX),
+            &mut written,
+            null_mut(),
+        )
+    } == 0
+    {
+        return match last_error_code() {
+            ERROR_NO_DATA | ERROR_PIPE_NOT_CONNECTED => Ok(0),
+            ERROR_BROKEN_PIPE => Err(WindowsTransportError::PipeClosed),
+            error => Err(WindowsTransportError::Win32(error)),
+        };
+    }
+    Ok(written as usize)
 }
 
 fn read_exact_handle(handle: HANDLE, buffer: &mut [u8]) -> Result<(), WindowsTransportError> {

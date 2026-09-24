@@ -3,6 +3,7 @@ use crate::persistent_runtime::peer::{current_effective_uid, require_same_user_p
 use crate::persistent_runtime::transport::PosixTransportError;
 use std::env;
 use std::fs::{self, DirBuilder, File, FileType, Metadata, OpenOptions, Permissions};
+use std::io::ErrorKind;
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
@@ -81,6 +82,9 @@ impl BoundUnixListener {
         prepare_endpoint_for_bind(&endpoint_path)?;
 
         let listener = UnixListener::bind(&endpoint_path).map_err(PosixTransportError::from)?;
+        listener
+            .set_nonblocking(true)
+            .map_err(PosixTransportError::from)?;
         let initial_metadata =
             fs::symlink_metadata(&endpoint_path).map_err(PosixTransportError::from)?;
         if !initial_metadata.file_type().is_socket()
@@ -111,9 +115,26 @@ impl BoundUnixListener {
     }
 
     pub(crate) fn accept_same_user(&self) -> Result<UnixStream, PosixTransportError> {
-        let (stream, _) = self.listener.accept().map_err(PosixTransportError::from)?;
-        require_same_user_peer(&stream)?;
-        Ok(stream)
+        loop {
+            if let Some(stream) = self.try_accept_same_user()? {
+                return Ok(stream);
+            }
+            std::thread::yield_now();
+        }
+    }
+
+    pub(crate) fn try_accept_same_user(&self) -> Result<Option<UnixStream>, PosixTransportError> {
+        match self.listener.accept() {
+            Ok((stream, _)) => {
+                require_same_user_peer(&stream)?;
+                stream
+                    .set_nonblocking(true)
+                    .map_err(PosixTransportError::from)?;
+                Ok(Some(stream))
+            }
+            Err(error) if error.kind() == ErrorKind::WouldBlock => Ok(None),
+            Err(error) => Err(PosixTransportError::from(error)),
+        }
     }
 }
 

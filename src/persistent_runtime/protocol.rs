@@ -49,6 +49,8 @@ pub(crate) enum MessageKind {
     MultiplexerWriteState,
     ApplyTopologyOperation,
     MultiplexerEvent,
+    SubscribeMultiplexerEvents,
+    MultiplexerEventSubscriptionAck,
     ListAgentObservations,
     AgentObservationSnapshot,
     AgentObservationEvent,
@@ -90,7 +92,10 @@ impl MessageKind {
             | Self::OutputEvent
             | Self::HistoryGap
             | Self::OwnerStatus => MessageAuthorityClass::ConnectionObserverSafe,
-            Self::HelloAck | Self::Error | Self::ControlState => {
+            Self::HelloAck
+            | Self::Error
+            | Self::ControlState
+            | Self::MultiplexerEventSubscriptionAck => {
                 MessageAuthorityClass::OwnerToClientStateOnly
             }
             Self::RequestControl => MessageAuthorityClass::BoundedAuthorityTransition,
@@ -101,6 +106,7 @@ impl MessageKind {
             Self::ListMultiplexerWorkspaces
             | Self::MultiplexerSnapshot
             | Self::MultiplexerEvent
+            | Self::SubscribeMultiplexerEvents
             | Self::ListAgentObservations
             | Self::AgentObservationSnapshot
             | Self::AgentObservationEvent
@@ -133,6 +139,7 @@ impl MessageKind {
             | Self::RequestMultiplexerWrite
             | Self::ReleaseMultiplexerWrite
             | Self::ApplyTopologyOperation
+            | Self::SubscribeMultiplexerEvents
             | Self::ListAgentObservations
             | Self::ListWorktrees
             | Self::ApplyWorktreeOperation => MessageDirection::ClientToOwner,
@@ -147,6 +154,7 @@ impl MessageKind {
             | Self::ControlState
             | Self::MultiplexerSnapshot
             | Self::MultiplexerWriteState
+            | Self::MultiplexerEventSubscriptionAck
             | Self::MultiplexerEvent
             | Self::AgentObservationSnapshot
             | Self::AgentObservationEvent
@@ -183,6 +191,8 @@ impl MessageKind {
             | Self::MultiplexerWriteState
             | Self::ApplyTopologyOperation
             | Self::MultiplexerEvent
+            | Self::SubscribeMultiplexerEvents
+            | Self::MultiplexerEventSubscriptionAck
             | Self::ListAgentObservations
             | Self::AgentObservationSnapshot
             | Self::AgentObservationEvent
@@ -220,7 +230,8 @@ impl MessageKind {
                 | Self::MultiplexerSnapshot
                 | Self::MultiplexerWriteState
                 | Self::AgentObservationSnapshot
-                | Self::WorktreeOperationResult => CorrelationRequirement::Required,
+                | Self::WorktreeOperationResult
+                | Self::MultiplexerEventSubscriptionAck => CorrelationRequirement::Required,
                 Self::RuntimeEvent
                 | Self::OutputEvent
                 | Self::HistoryGap
@@ -314,6 +325,12 @@ pub(crate) enum ProtocolPayload {
     MultiplexerEvent {
         event: MultiplexerEventV2,
     },
+    SubscribeMultiplexerEvents {
+        request: SubscribeMultiplexerEventsV2,
+    },
+    MultiplexerEventSubscriptionAck {
+        ack: MultiplexerEventSubscriptionAckV2,
+    },
     ListAgentObservations {
         request: ListAgentObservationsV2,
     },
@@ -370,6 +387,10 @@ impl ProtocolPayload {
             Self::MultiplexerWriteState { .. } => MessageKind::MultiplexerWriteState,
             Self::ApplyTopologyOperation { .. } => MessageKind::ApplyTopologyOperation,
             Self::MultiplexerEvent { .. } => MessageKind::MultiplexerEvent,
+            Self::SubscribeMultiplexerEvents { .. } => MessageKind::SubscribeMultiplexerEvents,
+            Self::MultiplexerEventSubscriptionAck { .. } => {
+                MessageKind::MultiplexerEventSubscriptionAck
+            }
             Self::ListAgentObservations { .. } => MessageKind::ListAgentObservations,
             Self::AgentObservationSnapshot { .. } => MessageKind::AgentObservationSnapshot,
             Self::AgentObservationEvent { .. } => MessageKind::AgentObservationEvent,
@@ -1019,7 +1040,8 @@ pub(crate) fn inactive_v2_domain_response(
     response_sequence: EventSequence,
 ) -> ProtocolResult<ProtocolMessage> {
     let inactive = match &request.payload {
-        ProtocolPayload::ListAgentObservations { .. }
+        ProtocolPayload::SubscribeMultiplexerEvents { .. }
+        | ProtocolPayload::ListAgentObservations { .. }
         | ProtocolPayload::ListWorktrees { .. }
         | ProtocolPayload::ApplyWorktreeOperation { .. } => true,
         ProtocolPayload::ApplyTopologyOperation { request } => matches!(
@@ -1078,6 +1100,10 @@ fn response_kind_is_valid_for_request(request: MessageKind, response: MessageKin
             | (
                 MessageKind::ApplyTopologyOperation,
                 MessageKind::MultiplexerSnapshot
+            )
+            | (
+                MessageKind::SubscribeMultiplexerEvents,
+                MessageKind::MultiplexerEventSubscriptionAck
             )
             | (
                 MessageKind::ListAgentObservations,

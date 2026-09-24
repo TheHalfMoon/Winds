@@ -9,25 +9,27 @@ use crate::persistent_runtime::controller::{
     ControllerDisposition, ControllerRegistry, ControllerStateSnapshot, ControllerTransition,
 };
 use crate::persistent_runtime::domain::{
-    ClientConnectionId, EventSequence, LocalControlErrorKind, OwnerGenerationId, RuntimeAlias,
-    RuntimeNamespaceId,
+    ClientAuthority, ClientConnectionId, EventSequence, LocalControlErrorKind, OwnerGenerationId,
+    RuntimeAlias, RuntimeNamespaceId,
 };
 use crate::persistent_runtime::protocol::{
-    MultiplexerSnapshotV2, MultiplexerWriteStateV2, ProtocolMessage, ProtocolPayload,
-    ProtocolResult, RequestSequenceGuard, TopologyMutationOutcomeV2, TopologyMutationResultV2,
-    apply_topology_operation_v2, inactive_v2_domain_response, multiplexer_snapshot_for_request_v2,
+    MAX_CONTROL_FRAME_BYTES, MultiplexerSnapshotV2, MultiplexerWriteStateV2, ProtocolMessage,
+    ProtocolPayload, ProtocolResult, RequestSequenceGuard, TopologyMutationOutcomeV2,
+    TopologyMutationResultV2, apply_topology_operation_v2, decode_frame, encode_frame,
+    inactive_v2_domain_response, multiplexer_snapshot_for_request_v2,
     topology_operation_target_ids_v2, validate_candidate_topology_v2, validate_owner_v2_handshake,
 };
 use crate::persistent_runtime::replay::ObserverHandle;
 use crate::persistent_runtime::runtime::{
     PersistentRuntimeShutdownReport, PersistentTerminalAttachment, PersistentTerminalRegistry,
-    PersistentTerminalSnapshot,
+    PersistentTerminalRuntimeError, PersistentTerminalSnapshot,
 };
 use crate::store::Store;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;
 use std::fmt;
 use std::fs;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -107,6 +109,77 @@ pub(crate) enum OwnerStartupPhase {
     Ready,
 }
 
+const OWNER_SESSION_HANDSHAKE_TIMEOUT_MS: u64 = 5_000;
+const OWNER_SESSION_IDLE_TIMEOUT_MS: u64 = 300_000;
+const OWNER_SERVICE_TICK_MS: u64 = 10;
+const OWNER_OUTBOUND_FRAME_LIMIT: usize = 2 * MAX_CONTROL_FRAME_BYTES;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OwnerReadStatus {
+    Pending,
+    Closed,
+}
+
+struct OwnerConnectionSession {
+    connection_id: ClientConnectionId,
+    request_guard: RequestSequenceGuard,
+    next_response_sequence: u64,
+    observers: BTreeMap<RuntimeNamespaceId, ObserverHandle>,
+    inbound: Vec<u8>,
+    outbound: VecDeque<u8>,
+    outbound_bytes: usize,
+    hello_accepted: bool,
+    last_activity_monotonic_ms: u64,
+}
+
+impl OwnerConnectionSession {
+    fn new(
+        connection_id: ClientConnectionId,
+        generation_id: OwnerGenerationId,
+        now_monotonic_ms: u64,
+    ) -> Self {
+        Self {
+            request_guard: RequestSequenceGuard::new(connection_id.clone(), generation_id),
+            connection_id,
+            next_response_sequence: 1,
+            observers: BTreeMap::new(),
+            inbound: Vec::new(),
+            outbound: VecDeque::new(),
+            outbound_bytes: 0,
+            hello_accepted: false,
+            last_activity_monotonic_ms: now_monotonic_ms,
+        }
+    }
+
+    fn next_sequence(&mut self) -> ProtocolResult<EventSequence> {
+        let value = self.next_response_sequence;
+        self.next_response_sequence = self
+            .next_response_sequence
+            .checked_add(1)
+            .ok_or(LocalControlErrorKind::MalformedFrame)?;
+        EventSequence::new(value).map_err(|_| LocalControlErrorKind::MalformedFrame)
+    }
+
+    fn queue_frame(&mut self, frame: &[u8]) -> ProtocolResult<()> {
+        let new_total = self
+            .outbound_bytes
+            .checked_add(frame.len())
+            .ok_or(LocalControlErrorKind::OversizedFrame)?;
+        if new_total > OWNER_OUTBOUND_FRAME_LIMIT {
+            return Err(LocalControlErrorKind::SlowClientBackpressure);
+        }
+        self.outbound.extend(frame.iter().copied());
+        self.outbound_bytes = new_total;
+        Ok(())
+    }
+
+    fn consume_outbound(&mut self, count: usize) {
+        let count = count.min(self.outbound.len());
+        self.outbound.drain(..count);
+        self.outbound_bytes = self.outbound_bytes.saturating_sub(count);
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct OwnerActivity {
     connected_clients: usize,
@@ -166,7 +239,11 @@ pub(crate) struct PersistentOwner {
     _singleton: OwnerSingleton,
     generation_id: OwnerGenerationId,
     store: Store,
-    _endpoint: OwnerEndpoint,
+    endpoint: OwnerEndpoint,
+    session: Option<OwnerConnectionSession>,
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    active_stream: Option<std::os::unix::net::UnixStream>,
+    next_connection_serial: u64,
     activity: OwnerActivity,
     reconciled_runtime_count: usize,
     ready_unix_ms: i64,
@@ -227,7 +304,11 @@ impl PersistentOwner {
             _singleton: singleton,
             generation_id,
             store,
-            _endpoint: OwnerEndpoint::Posix(listener),
+            endpoint: OwnerEndpoint::Posix(listener),
+            session: None,
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            active_stream: None,
+            next_connection_serial: 1,
             activity: OwnerActivity::new(0),
             reconciled_runtime_count,
             ready_unix_ms: now_unix_ms,
@@ -263,7 +344,9 @@ impl PersistentOwner {
             _singleton: singleton,
             generation_id,
             store,
-            _endpoint: OwnerEndpoint::Windows(server),
+            endpoint: OwnerEndpoint::Windows(server),
+            session: None,
+            next_connection_serial: 1,
             activity: OwnerActivity::new(0),
             reconciled_runtime_count,
             ready_unix_ms: now_unix_ms,
@@ -507,7 +590,8 @@ impl PersistentOwner {
                     snapshot: MultiplexerSnapshotV2::MutationResult { result, snapshot },
                 }
             }
-            ProtocolPayload::ListAgentObservations { .. }
+            ProtocolPayload::SubscribeMultiplexerEvents { .. }
+            | ProtocolPayload::ListAgentObservations { .. }
             | ProtocolPayload::ListWorktrees { .. }
             | ProtocolPayload::ApplyWorktreeOperation { .. } => {
                 return inactive_v2_domain_response(request, response_sequence);
@@ -523,6 +607,20 @@ impl PersistentOwner {
             Some(request.sequence),
             payload,
         )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn service_endpoint_once_for_test(
+        &mut self,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> OwnerResult<()> {
+        self.service_endpoint_once(now_unix_ms, now_monotonic_ms)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_active_session_for_test(&self) -> bool {
+        self.session.is_some()
     }
 
     pub(crate) fn ready_unix_ms(&self) -> i64 {
@@ -1003,6 +1101,609 @@ impl PersistentOwner {
             )
             .map_err(|error| OwnerError::Runtime(error.to_string()))
     }
+    fn service_endpoint_once(
+        &mut self,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> OwnerResult<()> {
+        self.flush_session()?;
+        self.pump_session_events()?;
+        if self.session.is_none() {
+            if self.try_accept_endpoint(now_monotonic_ms)? {
+                let serial = self.next_connection_serial;
+                self.next_connection_serial =
+                    self.next_connection_serial.checked_add(1).ok_or_else(|| {
+                        OwnerError::Endpoint("connection identity exhausted".to_owned())
+                    })?;
+                let connection_id =
+                    ClientConnectionId::new(&format!("owner-{}-{serial:016x}", self.generation_id))
+                        .map_err(|error| OwnerError::Endpoint(error))?;
+                self.session = Some(OwnerConnectionSession::new(
+                    connection_id,
+                    self.generation_id,
+                    now_monotonic_ms,
+                ));
+                self.activity.client_connected();
+            }
+            return Ok(());
+        }
+
+        let result = self.service_active_session(now_unix_ms, now_monotonic_ms);
+        if let Err(error) = result {
+            self.disconnect_session(now_unix_ms, now_monotonic_ms, &error.to_string())?;
+            return Ok(());
+        }
+        if self
+            .session
+            .as_ref()
+            .is_some_and(|session| !session.hello_accepted)
+            && self.session.as_ref().is_some_and(|session| {
+                now_monotonic_ms.saturating_sub(session.last_activity_monotonic_ms)
+                    >= OWNER_SESSION_HANDSHAKE_TIMEOUT_MS
+            })
+        {
+            self.disconnect_session(now_unix_ms, now_monotonic_ms, "HELLO timeout")?;
+        } else if self.session.as_ref().is_some_and(|session| {
+            now_monotonic_ms.saturating_sub(session.last_activity_monotonic_ms)
+                >= OWNER_SESSION_IDLE_TIMEOUT_MS
+        }) {
+            self.disconnect_session(now_unix_ms, now_monotonic_ms, "session timeout")?;
+        }
+        Ok(())
+    }
+
+    fn service_active_session(
+        &mut self,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> OwnerResult<()> {
+        self.flush_session()?;
+        let Some(session) = self.session.as_mut() else {
+            return Ok(());
+        };
+        if matches!(self.read_session(session)?, OwnerReadStatus::Closed) {
+            return Err(OwnerError::Endpoint("peer disconnected".to_owned()));
+        }
+        while let Some(request) = take_protocol_frame(&mut session.inbound)
+            .map_err(|error| OwnerError::Endpoint(format!("{error:?}")))?
+        {
+            self.dispatch_session_request(session, request, now_unix_ms, now_monotonic_ms)?;
+        }
+        Ok(())
+    }
+
+    fn dispatch_session_request(
+        &mut self,
+        session: &mut OwnerConnectionSession,
+        request: ProtocolMessage,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> OwnerResult<()> {
+        if !session.hello_accepted {
+            if !matches!(&request.payload, ProtocolPayload::Hello { .. }) {
+                return Err(OwnerError::Endpoint("HELLO must be first".to_owned()));
+            }
+            validate_owner_v2_handshake(&request)
+                .map_err(|error| OwnerError::Endpoint(format!("{error:?}")))?;
+            if let ProtocolPayload::Hello {
+                expected_owner_generation_id: Some(expected),
+                ..
+            } = &request.payload
+                && *expected != self.generation_id
+            {
+                return Err(OwnerError::Endpoint(
+                    "HELLO expected a stale owner generation".to_owned(),
+                ));
+            }
+            let response_sequence = session
+                .next_sequence()
+                .map_err(|error| OwnerError::Endpoint(format!("{error:?}")))?;
+            let response = ProtocolMessage::new(
+                session.connection_id.clone(),
+                response_sequence,
+                None,
+                self.generation_id,
+                Some(request.sequence),
+                ProtocolPayload::HelloAck,
+            )
+            .map_err(|error| OwnerError::Endpoint(format!("{error:?}")))?;
+            self.queue_session_message(session, response)?;
+            session.hello_accepted = true;
+            session.last_activity_monotonic_ms = now_monotonic_ms;
+            return Ok(());
+        }
+
+        let response_sequence = session
+            .next_sequence()
+            .map_err(|error| OwnerError::Endpoint(format!("{error:?}")))?;
+        let response = match self.dispatch_authenticated_request(
+            session,
+            &request,
+            response_sequence,
+            now_unix_ms,
+            now_monotonic_ms,
+        ) {
+            Ok(response) => response,
+            Err(kind) => ProtocolMessage::new(
+                session.connection_id.clone(),
+                response_sequence,
+                request.runtime_namespace_id,
+                self.generation_id,
+                Some(request.sequence),
+                ProtocolPayload::Error { kind },
+            )
+            .map_err(|error| OwnerError::Endpoint(format!("{error:?}")))?,
+        };
+        self.queue_session_message(session, response)?;
+        session.last_activity_monotonic_ms = now_monotonic_ms;
+        Ok(())
+    }
+
+    fn queue_session_message(
+        &self,
+        session: &mut OwnerConnectionSession,
+        message: ProtocolMessage,
+    ) -> OwnerResult<()> {
+        let frame =
+            encode_frame(&message).map_err(|error| OwnerError::Endpoint(format!("{error:?}")))?;
+        session
+            .queue_frame(&frame)
+            .map_err(|error| OwnerError::Endpoint(format!("{error:?}")))
+    }
+
+    fn dispatch_authenticated_request(
+        &mut self,
+        session: &mut OwnerConnectionSession,
+        request: &ProtocolMessage,
+        response_sequence: EventSequence,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> ProtocolResult<ProtocolMessage> {
+        let connection_id = session.connection_id.clone();
+        session.request_guard.accept(request)?;
+        match &request.payload {
+            ProtocolPayload::Ping => {
+                self.respond_simple(request, response_sequence, ProtocolPayload::Pong)
+            }
+            ProtocolPayload::ListMultiplexerWorkspaces { .. }
+            | ProtocolPayload::RequestMultiplexerWrite { .. }
+            | ProtocolPayload::ReleaseMultiplexerWrite
+            | ProtocolPayload::ApplyTopologyOperation { .. }
+            | ProtocolPayload::SubscribeMultiplexerEvents { .. }
+            | ProtocolPayload::ListAgentObservations { .. }
+            | ProtocolPayload::ListWorktrees { .. }
+            | ProtocolPayload::ApplyWorktreeOperation { .. } => {
+                session.request_guard.accept(request)?;
+                self.dispatch_multiplexer_protocol_v2(
+                    connection_id,
+                    request,
+                    response_sequence,
+                    now_unix_ms,
+                )
+            }
+            ProtocolPayload::AttachObserver => {
+                session.request_guard.accept(request)?;
+                let runtime_id = request
+                    .runtime_namespace_id
+                    .ok_or(LocalControlErrorKind::MalformedFrame)?;
+                let attachment = self
+                    .runtime_registry
+                    .attachment_for_runtime(runtime_id)
+                    .map_err(map_runtime_protocol_error)?;
+                let snapshot = self
+                    .terminal_runtime_snapshot(&attachment, now_unix_ms, now_monotonic_ms)
+                    .map_err(map_owner_protocol_error)?;
+                let handle = self
+                    .attach_terminal_observer(connection_id, runtime_id)
+                    .map_err(map_owner_protocol_error)?;
+                self.fill_terminal_observer_queue(&handle)
+                    .map_err(map_owner_protocol_error)?;
+                let replay_events = self.drain_terminal_observer(&handle)?;
+                session.observers.insert(runtime_id, handle);
+                for event in replay_events {
+                    self.queue_session_message(session, event)?;
+                }
+                self.respond_runtime(
+                    request,
+                    response_sequence,
+                    ProtocolPayload::RuntimeSnapshot {
+                        truth: snapshot.truth,
+                    },
+                )
+            }
+            ProtocolPayload::ListRuntimes => {
+                session.request_guard.accept(request)?;
+                self.dispatch_list_runtimes(
+                    request,
+                    response_sequence,
+                    now_unix_ms,
+                    now_monotonic_ms,
+                )
+            }
+            ProtocolPayload::Detach
+            | ProtocolPayload::RequestControl
+            | ProtocolPayload::ReleaseControl => {
+                session.request_guard.accept(request)?;
+                self.dispatch_control_request(
+                    session,
+                    request,
+                    response_sequence,
+                    now_unix_ms,
+                    now_monotonic_ms,
+                )
+            }
+            ProtocolPayload::Input { .. }
+            | ProtocolPayload::Resize { .. }
+            | ProtocolPayload::Interrupt
+            | ProtocolPayload::Stop => {
+                session.request_guard.accept(request)?;
+                self.dispatch_runtime_mutation(
+                    session,
+                    request,
+                    response_sequence,
+                    now_unix_ms,
+                    now_monotonic_ms,
+                )
+            }
+            _ => Err(LocalControlErrorKind::UnsupportedOperation),
+        }
+    }
+
+    fn respond_simple(
+        &self,
+        request: &ProtocolMessage,
+        response_sequence: EventSequence,
+        payload: ProtocolPayload,
+    ) -> ProtocolResult<ProtocolMessage> {
+        ProtocolMessage::new(
+            request
+                .connection_id
+                .clone()
+                .ok_or(LocalControlErrorKind::MalformedFrame)?,
+            response_sequence,
+            request.runtime_namespace_id,
+            self.generation_id,
+            Some(request.sequence),
+            payload,
+        )
+    }
+
+    fn respond_runtime(
+        &self,
+        request: &ProtocolMessage,
+        response_sequence: EventSequence,
+        payload: ProtocolPayload,
+    ) -> ProtocolResult<ProtocolMessage> {
+        self.respond_simple(request, response_sequence, payload)
+    }
+
+    fn dispatch_control_request(
+        &mut self,
+        session: &mut OwnerConnectionSession,
+        request: &ProtocolMessage,
+        response_sequence: EventSequence,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> ProtocolResult<ProtocolMessage> {
+        let connection_id = session.connection_id.clone();
+        let runtime_id = request
+            .runtime_namespace_id
+            .ok_or(LocalControlErrorKind::MalformedFrame)?;
+        let state = match request.payload {
+            ProtocolPayload::Detach => {
+                if let Some(handle) = session.observers.remove(&runtime_id) {
+                    self.detach_terminal_observer(&handle)
+                        .map_err(map_owner_protocol_error)?;
+                }
+                self.terminal_control_state(
+                    &connection_id,
+                    runtime_id,
+                    now_unix_ms,
+                    now_monotonic_ms,
+                )
+            }
+            ProtocolPayload::RequestControl => {
+                let current = self.terminal_control_state(
+                    &connection_id,
+                    runtime_id,
+                    now_unix_ms,
+                    now_monotonic_ms,
+                )?;
+                if current.authority == ClientAuthority::Controller {
+                    self.renew_terminal_control(
+                        &connection_id,
+                        runtime_id,
+                        now_unix_ms,
+                        now_monotonic_ms,
+                    )
+                } else {
+                    self.request_terminal_control(
+                        connection_id.clone(),
+                        runtime_id,
+                        now_unix_ms,
+                        now_monotonic_ms,
+                    )
+                }
+            }
+            ProtocolPayload::ReleaseControl => self.release_terminal_control(
+                &connection_id,
+                runtime_id,
+                now_unix_ms,
+                now_monotonic_ms,
+            ),
+            _ => return Err(LocalControlErrorKind::UnsupportedOperation),
+        }
+        .map_err(map_owner_protocol_error)?;
+        self.respond_runtime(
+            request,
+            response_sequence,
+            ProtocolPayload::ControlState {
+                authority: state.authority,
+                controller_client_id: state.controller_client_id,
+            },
+        )
+    }
+
+    fn dispatch_runtime_mutation(
+        &mut self,
+        session: &mut OwnerConnectionSession,
+        request: &ProtocolMessage,
+        response_sequence: EventSequence,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> ProtocolResult<ProtocolMessage> {
+        let connection_id = session.connection_id.clone();
+        let runtime_id = request
+            .runtime_namespace_id
+            .ok_or(LocalControlErrorKind::MalformedFrame)?;
+        match &request.payload {
+            ProtocolPayload::Input { data } => self.controller_send_terminal_input(
+                &connection_id,
+                runtime_id,
+                data,
+                now_unix_ms,
+                now_monotonic_ms,
+            ),
+            ProtocolPayload::Resize { columns, rows } => self.controller_resize_terminal(
+                &connection_id,
+                runtime_id,
+                TerminalSize {
+                    rows: *rows,
+                    cols: *columns,
+                },
+                now_unix_ms,
+                now_monotonic_ms,
+            ),
+            ProtocolPayload::Interrupt => self.controller_interrupt_terminal(
+                &connection_id,
+                runtime_id,
+                now_unix_ms,
+                now_monotonic_ms,
+            ),
+            ProtocolPayload::Stop => {
+                self.controller_stop_terminal(
+                    &connection_id,
+                    runtime_id,
+                    now_unix_ms,
+                    now_monotonic_ms,
+                )?;
+                return self.respond_runtime(
+                    request,
+                    response_sequence,
+                    ProtocolPayload::ControlState {
+                        authority: ClientAuthority::Observer,
+                        controller_client_id: None,
+                    },
+                );
+            }
+            _ => return Err(LocalControlErrorKind::UnsupportedOperation),
+        }
+        .map_err(map_owner_protocol_error)?;
+        self.respond_runtime(
+            request,
+            response_sequence,
+            ProtocolPayload::ControlState {
+                authority: ClientAuthority::Controller,
+                controller_client_id: Some(connection_id),
+            },
+        )
+    }
+
+    fn dispatch_list_runtimes(
+        &mut self,
+        request: &ProtocolMessage,
+        response_sequence: EventSequence,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> ProtocolResult<ProtocolMessage> {
+        let runtime_ids = self.runtime_registry.runtime_ids();
+        if runtime_ids.len() != 1 {
+            return Err(LocalControlErrorKind::UnsupportedOperation);
+        }
+        let attachment = self
+            .runtime_registry
+            .attachment_for_runtime(runtime_ids[0])
+            .map_err(map_runtime_protocol_error)?;
+        let snapshot = self
+            .terminal_runtime_snapshot(&attachment, now_unix_ms, now_monotonic_ms)
+            .map_err(map_owner_protocol_error)?;
+        self.respond_runtime(
+            request,
+            response_sequence,
+            ProtocolPayload::RuntimeSnapshot {
+                truth: snapshot.truth,
+            },
+        )
+    }
+
+    fn pump_session_events(&mut self) -> OwnerResult<()> {
+        let Some(session) = self.session.as_mut() else {
+            return Ok(());
+        };
+        let handles = session.observers.values().cloned().collect::<Vec<_>>();
+        for handle in handles {
+            if let Err(error) = self.fill_terminal_observer_queue(&handle) {
+                if error.to_string().contains("slow-client") {
+                    return Err(OwnerError::Endpoint("observer backpressure".to_owned()));
+                }
+                return Err(error);
+            }
+            for event in self.drain_terminal_observer(&handle)? {
+                self.queue_session_message(session, event)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn disconnect_session(
+        &mut self,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+        _reason: &str,
+    ) -> OwnerResult<()> {
+        let Some(session) = self.session.take() else {
+            return Ok(());
+        };
+        for handle in session.observers.values() {
+            let _ = self.detach_terminal_observer(handle);
+        }
+        self.disconnect_terminal_controller(&session.connection_id, now_unix_ms, now_monotonic_ms)?;
+        self.disconnect_multiplexer_client(&session.connection_id);
+        self.activity.client_disconnected(now_monotonic_ms)?;
+        self.disconnect_endpoint()
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn try_accept_endpoint(&mut self, _now_monotonic_ms: u64) -> OwnerResult<bool> {
+        let accepted = match &self.endpoint {
+            OwnerEndpoint::Posix(listener) => listener
+                .try_accept_same_user()
+                .map_err(|error| OwnerError::Endpoint(format!("{error:?}")))?,
+        };
+        if let Some(stream) = accepted {
+            self.active_stream = Some(stream);
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn read_session(
+        &mut self,
+        session: &mut OwnerConnectionSession,
+    ) -> OwnerResult<OwnerReadStatus> {
+        let Some(stream) = self.active_stream.as_mut() else {
+            return Err(OwnerError::Endpoint(
+                "accepted Unix stream is missing".to_owned(),
+            ));
+        };
+        let mut chunk = [0_u8; 64 * 1024];
+        let read = match stream.read(&mut chunk) {
+            Ok(0) => return Ok(OwnerReadStatus::Closed),
+            Ok(read) => read,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                session.last_activity_monotonic_ms = session.last_activity_monotonic_ms;
+                return Ok(OwnerReadStatus::Pending);
+            }
+            Err(error) => return Err(OwnerError::Endpoint(error.to_string())),
+        };
+        append_inbound(session, &chunk[..read])?;
+        Ok(OwnerReadStatus::Pending)
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn flush_session(&mut self) -> OwnerResult<()> {
+        let Some(session) = self.session.as_mut() else {
+            return Ok(());
+        };
+        while !session.outbound.is_empty() {
+            let Some(stream) = self.active_stream.as_mut() else {
+                return Err(OwnerError::Endpoint(
+                    "accepted Unix stream is missing".to_owned(),
+                ));
+            };
+            let (front, _) = session.outbound.as_slices();
+            let writable = front.len().min(64 * 1024);
+            match stream.write(&front[..writable]) {
+                Ok(0) => return Err(OwnerError::Endpoint("Unix peer stopped reading".to_owned())),
+                Ok(written) => session.consume_outbound(written),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(error) => return Err(OwnerError::Endpoint(error.to_string())),
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn disconnect_endpoint(&mut self) -> OwnerResult<()> {
+        self.active_stream = None;
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn try_accept_endpoint(&mut self, _now_monotonic_ms: u64) -> OwnerResult<bool> {
+        match &mut self.endpoint {
+            OwnerEndpoint::Windows(server) => server
+                .try_accept_same_user()
+                .map_err(|error| OwnerError::Endpoint(format!("{error:?}"))),
+        }
+    }
+
+    #[cfg(windows)]
+    fn read_session(
+        &mut self,
+        session: &mut OwnerConnectionSession,
+    ) -> OwnerResult<OwnerReadStatus> {
+        let mut chunk = [0_u8; 64 * 1024];
+        let read = match &mut self.endpoint {
+            OwnerEndpoint::Windows(server) => {
+                let prefetched = server.take_prefetched(&mut chunk);
+                if prefetched == 0 {
+                    server
+                        .try_read_some(&mut chunk)
+                        .map_err(|error| OwnerError::Endpoint(format!("{error:?}")))?
+                } else {
+                    prefetched
+                }
+            }
+        };
+        if read == 0 {
+            return Ok(OwnerReadStatus::Pending);
+        }
+        append_inbound(session, &chunk[..read])?;
+        Ok(OwnerReadStatus::Pending)
+    }
+
+    #[cfg(windows)]
+    fn flush_session(&mut self) -> OwnerResult<()> {
+        let Some(session) = self.session.as_mut() else {
+            return Ok(());
+        };
+        while !session.outbound.is_empty() {
+            let (front, _) = session.outbound.as_slices();
+            let writable = front.len().min(64 * 1024);
+            let written = match &self.endpoint {
+                OwnerEndpoint::Windows(server) => server
+                    .try_write_some(&front[..writable])
+                    .map_err(|error| OwnerError::Endpoint(format!("{error:?}")))?,
+            };
+            if written == 0 {
+                break;
+            }
+            session.consume_outbound(written);
+        }
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    fn disconnect_endpoint(&mut self) -> OwnerResult<()> {
+        match &mut self.endpoint {
+            OwnerEndpoint::Windows(server) => server
+                .disconnect_connected()
+                .map_err(|error| OwnerError::Endpoint(format!("{error:?}"))),
+        }
+    }
 
     pub(crate) fn shutdown_terminal_runtimes(
         &mut self,
@@ -1021,6 +1722,77 @@ impl PersistentOwner {
 
     pub(crate) fn should_exit(&self, now_monotonic_ms: u64) -> bool {
         self.activity.should_exit(now_monotonic_ms)
+    }
+}
+
+fn append_inbound(session: &mut OwnerConnectionSession, bytes: &[u8]) -> OwnerResult<()> {
+    if session.inbound.len().saturating_add(bytes.len()) > MAX_CONTROL_FRAME_BYTES {
+        return Err(OwnerError::Endpoint(
+            "inbound frame buffer exceeded".to_owned(),
+        ));
+    }
+    session.inbound.extend_from_slice(bytes);
+    Ok(())
+}
+
+fn take_protocol_frame(inbound: &mut Vec<u8>) -> ProtocolResult<Option<ProtocolMessage>> {
+    if inbound.len() < 4 {
+        return Ok(None);
+    }
+    let claimed = u32::from_le_bytes(
+        inbound[..4]
+            .try_into()
+            .map_err(|_| LocalControlErrorKind::MalformedFrame)?,
+    ) as usize;
+    if claimed == 0 {
+        return Err(LocalControlErrorKind::MalformedFrame);
+    }
+    if claimed > MAX_CONTROL_FRAME_BYTES - 4 {
+        return Err(LocalControlErrorKind::OversizedFrame);
+    }
+    if inbound.len() < claimed + 4 {
+        return Ok(None);
+    }
+    let frame = inbound.drain(..claimed + 4).collect::<Vec<_>>();
+    decode_frame(&frame).map(Some)
+}
+
+fn map_runtime_protocol_error(error: PersistentTerminalRuntimeError) -> LocalControlErrorKind {
+    match error {
+        PersistentTerminalRuntimeError::UnknownRuntime => LocalControlErrorKind::UnknownRuntime,
+        PersistentTerminalRuntimeError::StaleOwnerGeneration => {
+            LocalControlErrorKind::StaleOwnerGeneration
+        }
+        PersistentTerminalRuntimeError::RuntimeNotLive => LocalControlErrorKind::OwnershipLost,
+        PersistentTerminalRuntimeError::Replay(message) if message.contains("slow-client") => {
+            LocalControlErrorKind::SlowClientBackpressure
+        }
+        PersistentTerminalRuntimeError::Replay(_) => LocalControlErrorKind::OutcomeUnknown,
+        PersistentTerminalRuntimeError::OutputGap => LocalControlErrorKind::OutcomeUnknown,
+        PersistentTerminalRuntimeError::Terminal(_)
+        | PersistentTerminalRuntimeError::Store(_)
+        | PersistentTerminalRuntimeError::Entropy(_)
+        | PersistentTerminalRuntimeError::RuntimeNamespaceCollision => {
+            LocalControlErrorKind::OutcomeUnknown
+        }
+    }
+}
+
+fn map_owner_protocol_error(error: OwnerError) -> LocalControlErrorKind {
+    match error {
+        OwnerError::Runtime(message) => {
+            if message.contains("unknown") {
+                LocalControlErrorKind::UnknownRuntime
+            } else if message.contains("active controller") {
+                LocalControlErrorKind::ControllerConflict
+            } else if message.contains("slow-client") || message.contains("backpressure") {
+                LocalControlErrorKind::SlowClientBackpressure
+            } else {
+                LocalControlErrorKind::OutcomeUnknown
+            }
+        }
+        OwnerError::Endpoint(_) | OwnerError::Store(_) => LocalControlErrorKind::OutcomeUnknown,
+        _ => LocalControlErrorKind::MalformedFrame,
     }
 }
 
@@ -1072,12 +1844,15 @@ pub(crate) fn run_internal_owner(home: &Path) -> OwnerResult<()> {
     let mut owner = PersistentOwner::start(home, system_unix_ms()?)?;
     let monotonic_origin = Instant::now();
     loop {
+        let now_unix_ms = system_unix_ms()?;
         let now_monotonic_ms = monotonic_elapsed_ms(monotonic_origin);
-        owner.poll_terminal_runtimes(system_unix_ms()?, now_monotonic_ms)?;
+        owner.poll_terminal_runtimes(now_unix_ms, now_monotonic_ms)?;
+        owner.service_endpoint_once(now_unix_ms, now_monotonic_ms)?;
         if owner.should_exit(now_monotonic_ms) {
+            owner.disconnect_session(now_unix_ms, now_monotonic_ms, "owner exit")?;
             return Ok(());
         }
-        thread::sleep(Duration::from_millis(OWNER_POLL_INTERVAL_MS));
+        thread::sleep(Duration::from_millis(OWNER_SERVICE_TICK_MS));
     }
 }
 

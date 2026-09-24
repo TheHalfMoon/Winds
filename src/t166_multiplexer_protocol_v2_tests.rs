@@ -21,15 +21,18 @@ use crate::persistent_runtime::protocol::{
     MAX_V2_EVIDENCE_SUMMARY_BYTES, MAX_V2_GIT_WORKSPACE_ID_BYTES, MAX_V2_PANES_PER_TAB,
     MAX_V2_PATH_BYTES, MAX_V2_PROVIDER_SESSION_ID_BYTES, MAX_V2_REPOSITORY_IDENTITY_BYTES,
     MAX_V2_TABS_PER_WORKSPACE, MAX_V2_WORKSPACES, MAX_V2_WORKTREES_PER_PAGE, MessageAuthorityClass,
-    MessageKind, MultiplexerEventV2, MultiplexerSnapshotV2, MultiplexerWriteStateV2,
+    MessageKind, MultiplexerEventSubscriptionAckV2, MultiplexerEventV2, MultiplexerSnapshotV2,
+    MultiplexerSubscriptionBoundaryV2, MultiplexerSubscriptionStreamV2, MultiplexerWriteStateV2,
     PROTOCOL_VERSION, ProtocolLayoutNodeV2, ProtocolPanePlacement, ProtocolSplitAxis,
     ProtocolTabSnapshotV2, ProtocolWorkspaceSnapshotV2, ProtocolWorkspaceSummaryV2,
-    RequestMultiplexerWriteV2, TopologyMutationOutcomeV2, TopologyMutationResultV2,
-    TopologyOperationV2, WorktreeCursorV2, WorktreeMembershipV2, WorktreeObservationV2,
-    WorktreeOperationOutcomeV2, WorktreeOperationResultV2, WorktreeOperationV2,
-    apply_topology_operation_v2, decode_frame, encode_frame, inactive_v2_domain_response,
-    is_legacy_protocol_frame, multiplexer_snapshot_for_request_v2, validate_candidate_topology_v2,
-    validate_owner_v2_handshake, validate_response_binding,
+    RequestMultiplexerWriteV2, SubscribeMultiplexerEventsV2, TopologyMutationOutcomeV2,
+    TopologyMutationResultV2, TopologyOperationV2, WorktreeCursorV2, WorktreeMembershipV2,
+    WorktreeObservationV2, WorktreeOperationOutcomeV2, WorktreeOperationResultV2,
+    WorktreeOperationTargetV2, WorktreeOperationV2, apply_topology_operation_v2, decode_frame,
+    encode_frame, inactive_v2_domain_response, is_legacy_protocol_frame,
+    multiplexer_snapshot_for_request_v2, validate_candidate_topology_v2,
+    validate_multiplexer_subscription_event_binding, validate_owner_v2_handshake,
+    validate_response_binding,
 };
 use crate::persistent_runtime::protocol::{ProtocolMessage, ProtocolPayload};
 use std::collections::VecDeque;
@@ -281,6 +284,8 @@ fn t166_closed_v2_message_vocabulary_has_no_generic_rpc_method() {
         MessageKind::MultiplexerWriteState,
         MessageKind::ApplyTopologyOperation,
         MessageKind::MultiplexerEvent,
+        MessageKind::SubscribeMultiplexerEvents,
+        MessageKind::MultiplexerEventSubscriptionAck,
         MessageKind::ListAgentObservations,
         MessageKind::AgentObservationSnapshot,
         MessageKind::AgentObservationEvent,
@@ -299,6 +304,8 @@ fn t166_closed_v2_message_vocabulary_has_no_generic_rpc_method() {
         "MULTIPLEXER_WRITE_STATE",
         "APPLY_TOPOLOGY_OPERATION",
         "MULTIPLEXER_EVENT",
+        "SUBSCRIBE_MULTIPLEXER_EVENTS",
+        "MULTIPLEXER_EVENT_SUBSCRIPTION_ACK",
         "LIST_AGENT_OBSERVATIONS",
         "AGENT_OBSERVATION_SNAPSHOT",
         "AGENT_OBSERVATION_EVENT",
@@ -513,6 +520,7 @@ fn t166_response_binding_preserves_complete_multi_target_ids() {
 fn t166_agent_observation_schema_keeps_workspace_domains_unambiguous() {
     let payload = ProtocolPayload::AgentObservationSnapshot {
         snapshot: AgentObservationSnapshotV2 {
+            filter_multiplexer_workspace_id: None,
             snapshot_revision: 1,
             page_offset: 0,
             observations: vec![AgentObservationV2 {
@@ -676,6 +684,7 @@ fn t166_typed_worktree_page_is_bounded_and_single_frame_safe() {
         multiplexer_workspace_id: workspace(13),
         repository_identity: None,
         git_workspace_id: None,
+        operation_target: None,
         snapshot_revision: 1,
         page_offset: 0,
         worktrees: (0..MAX_V2_WORKTREES_PER_PAGE).map(worktree).collect(),
@@ -718,6 +727,7 @@ fn t166_typed_worktree_page_is_bounded_and_single_frame_safe() {
         multiplexer_workspace_id: workspace(13),
         repository_identity: None,
         git_workspace_id: None,
+        operation_target: None,
         snapshot_revision: 1,
         page_offset: 0,
         worktrees: (0..=MAX_V2_WORKTREES_PER_PAGE).map(worktree).collect(),
@@ -747,6 +757,7 @@ fn t166_agent_observation_rejects_negative_observation_time() {
         Some(sequence(25)),
         ProtocolPayload::AgentObservationSnapshot {
             snapshot: AgentObservationSnapshotV2 {
+                filter_multiplexer_workspace_id: None,
                 snapshot_revision: 1,
                 page_offset: 0,
                 observations: vec![AgentObservationV2 {
@@ -800,6 +811,7 @@ fn t166_paged_collections_reject_duplicate_item_identities() {
         Some(sequence(21)),
         ProtocolPayload::AgentObservationSnapshot {
             snapshot: AgentObservationSnapshotV2 {
+                filter_multiplexer_workspace_id: None,
                 snapshot_revision: 1,
                 page_offset: 0,
                 observations: vec![duplicate_observation.clone(), duplicate_observation],
@@ -831,6 +843,7 @@ fn t166_paged_collections_reject_duplicate_item_identities() {
                 multiplexer_workspace_id: workspace(14),
                 repository_identity: None,
                 git_workspace_id: None,
+                operation_target: None,
                 snapshot_revision: 1,
                 page_offset: 0,
                 worktrees: vec![duplicate_worktree.clone(), duplicate_worktree],
@@ -852,6 +865,7 @@ fn t166_cursor_revision_mismatch_fails_closed() {
         Some(sequence(7)),
         ProtocolPayload::AgentObservationSnapshot {
             snapshot: AgentObservationSnapshotV2 {
+                filter_multiplexer_workspace_id: None,
                 snapshot_revision: 10,
                 page_offset: 0,
                 observations: Vec::new(),
@@ -1028,6 +1042,7 @@ fn t166_max_agent_page_fits_and_next_cursor_is_exact() {
         Some(sequence(30)),
         ProtocolPayload::AgentObservationSnapshot {
             snapshot: AgentObservationSnapshotV2 {
+                filter_multiplexer_workspace_id: None,
                 snapshot_revision: 9,
                 page_offset: 0,
                 observations,
@@ -1114,6 +1129,7 @@ fn t166_collection_cursor_owner_and_offset_binding_fail_closed() {
         Some(sequence(40)),
         ProtocolPayload::AgentObservationSnapshot {
             snapshot: AgentObservationSnapshotV2 {
+                filter_multiplexer_workspace_id: None,
                 snapshot_revision: 12,
                 page_offset: 63,
                 observations: Vec::new(),
@@ -1146,6 +1162,75 @@ fn t166_collection_cursor_owner_and_offset_binding_fail_closed() {
     )
     .unwrap_err();
     assert_eq!(stale_owner, LocalControlErrorKind::StaleOwnerGeneration);
+}
+
+#[test]
+fn t166_empty_page_cursor_must_be_absent_and_nonempty_cursor_must_advance() {
+    let owner_generation_id = generation(34);
+    let empty = ProtocolMessage::new(
+        connection("t166-empty-terminal"),
+        sequence(42),
+        None,
+        owner_generation_id,
+        Some(sequence(40)),
+        ProtocolPayload::AgentObservationSnapshot {
+            snapshot: AgentObservationSnapshotV2 {
+                filter_multiplexer_workspace_id: None,
+                snapshot_revision: 12,
+                page_offset: 64,
+                observations: Vec::new(),
+                next_cursor: None,
+            },
+        },
+    )
+    .unwrap();
+    assert_eq!(decode_frame(&encode_frame(&empty).unwrap()).unwrap(), empty);
+
+    let empty_with_cursor = ProtocolMessage::new(
+        connection("t166-empty-cursor"),
+        sequence(43),
+        None,
+        owner_generation_id,
+        Some(sequence(40)),
+        ProtocolPayload::AgentObservationSnapshot {
+            snapshot: AgentObservationSnapshotV2 {
+                filter_multiplexer_workspace_id: None,
+                snapshot_revision: 12,
+                page_offset: 64,
+                observations: Vec::new(),
+                next_cursor: Some(AgentObservationCursorV2 {
+                    owner_generation_id,
+                    snapshot_revision: 12,
+                    offset: 64,
+                }),
+            },
+        },
+    )
+    .unwrap_err();
+    assert_eq!(empty_with_cursor, LocalControlErrorKind::MalformedFrame);
+
+    let nonadvancing = ProtocolMessage::new(
+        connection("t166-nonadvancing"),
+        sequence(44),
+        None,
+        owner_generation_id,
+        Some(sequence(40)),
+        ProtocolPayload::AgentObservationSnapshot {
+            snapshot: AgentObservationSnapshotV2 {
+                filter_multiplexer_workspace_id: Some(workspace(33)),
+                snapshot_revision: 12,
+                page_offset: 64,
+                observations: vec![max_agent_observation(1, owner_generation_id)],
+                next_cursor: Some(AgentObservationCursorV2 {
+                    owner_generation_id,
+                    snapshot_revision: 12,
+                    offset: 64,
+                }),
+            },
+        },
+    )
+    .unwrap_err();
+    assert_eq!(nonadvancing, LocalControlErrorKind::MalformedFrame);
 }
 
 #[test]
@@ -1282,6 +1367,63 @@ fn t166_terminal_text_shaped_like_protocol_remains_untrusted_input() {
     let decoded = decode_frame(&encode_frame(&message).unwrap()).unwrap();
     assert_eq!(decoded.payload, ProtocolPayload::Input { data: suspicious });
 }
+#[test]
+fn t166_subscription_ack_is_closed_exact_bound_and_inactive() {
+    let owner_generation_id = generation(37);
+    for (stream, boundary) in [
+        (
+            MultiplexerSubscriptionStreamV2::Topology,
+            MultiplexerSubscriptionBoundaryV2::Topology {
+                topology_generation: topology_generation(3),
+            },
+        ),
+        (
+            MultiplexerSubscriptionStreamV2::AgentObservations,
+            MultiplexerSubscriptionBoundaryV2::AgentObservations {
+                snapshot_revision: 4,
+            },
+        ),
+        (
+            MultiplexerSubscriptionStreamV2::Attention,
+            MultiplexerSubscriptionBoundaryV2::Attention {
+                snapshot_revision: 5,
+            },
+        ),
+    ] {
+        let request = ProtocolMessage::new(
+            connection("t166-subscribe"),
+            sequence(100),
+            None,
+            owner_generation_id,
+            None,
+            ProtocolPayload::SubscribeMultiplexerEvents {
+                request: SubscribeMultiplexerEventsV2 {
+                    stream,
+                    multiplexer_workspace_id: Some(workspace(37)),
+                },
+            },
+        )
+        .unwrap();
+        let response = ProtocolMessage::new(
+            connection("t166-subscribe"),
+            sequence(101),
+            None,
+            owner_generation_id,
+            Some(sequence(100)),
+            ProtocolPayload::MultiplexerEventSubscriptionAck {
+                ack: MultiplexerEventSubscriptionAckV2 {
+                    stream,
+                    multiplexer_workspace_id: Some(workspace(37)),
+                    boundary,
+                },
+            },
+        )
+        .unwrap();
+        validate_response_binding(&request, &response).unwrap();
+        let unsupported = inactive_v2_domain_response(&request, sequence(102)).unwrap();
+        validate_response_binding(&request, &unsupported).unwrap();
+    }
+}
 
 #[test]
 fn t166_abbreviated_worktree_oid_fails_closed() {
@@ -1362,6 +1504,13 @@ fn t166_worktree_operation_requires_trust_revision_and_exact_result_target() {
                 multiplexer_workspace_id: workspace(40),
                 repository_identity: Some("repo".to_owned()),
                 git_workspace_id: Some("git-worktree-39".to_owned()),
+                operation_target: Some(WorktreeOperationTargetV2 {
+                    operation: WorktreeOperationV2::Open {
+                        git_workspace_id: "git-worktree-39".to_owned(),
+                        canonical_path: "/tmp/winds-worktree".to_owned(),
+                    },
+                    trust_record_revision: 7,
+                }),
                 snapshot_revision: 1,
                 page_offset: 0,
                 worktrees: Vec::new(),
@@ -1435,6 +1584,187 @@ fn t166_future_domain_mutation_is_typed_without_runtime_controller_authority() {
         },
     });
     assert_eq!(worktrees.runtime_namespace_id, None);
+}
+
+#[test]
+fn t166_schema_freeze_repaired_bindings_fail_closed() {
+    let owner_generation_id = generation(41);
+    let agent_request = ProtocolMessage::new(
+        connection("t166-filter"),
+        sequence(120),
+        None,
+        owner_generation_id,
+        None,
+        ProtocolPayload::ListAgentObservations {
+            request: ListAgentObservationsV2 {
+                multiplexer_workspace_id: Some(workspace(41)),
+                cursor: None,
+            },
+        },
+    )
+    .unwrap();
+    let filtered_empty = ProtocolMessage::new(
+        connection("t166-filter"),
+        sequence(121),
+        None,
+        owner_generation_id,
+        Some(sequence(120)),
+        ProtocolPayload::AgentObservationSnapshot {
+            snapshot: AgentObservationSnapshotV2 {
+                filter_multiplexer_workspace_id: Some(workspace(41)),
+                snapshot_revision: 1,
+                page_offset: 0,
+                observations: Vec::new(),
+                next_cursor: None,
+            },
+        },
+    )
+    .unwrap();
+    validate_response_binding(&agent_request, &filtered_empty).unwrap();
+    let undeclared_filter = ProtocolMessage::new(
+        connection("t166-filter"),
+        sequence(122),
+        None,
+        owner_generation_id,
+        Some(sequence(120)),
+        ProtocolPayload::AgentObservationSnapshot {
+            snapshot: AgentObservationSnapshotV2 {
+                filter_multiplexer_workspace_id: None,
+                snapshot_revision: 1,
+                page_offset: 0,
+                observations: Vec::new(),
+                next_cursor: None,
+            },
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        validate_response_binding(&agent_request, &undeclared_filter).unwrap_err(),
+        LocalControlErrorKind::MalformedFrame
+    );
+
+    let attention_removed = ProtocolMessage::new(
+        connection("t166-attention-remove"),
+        sequence(123),
+        None,
+        owner_generation_id,
+        None,
+        ProtocolPayload::AttentionEvent {
+            event: AttentionEventV2::Removed {
+                snapshot_revision: 2,
+                source_domain: "worktree".to_owned(),
+                source_event_id: "event-41".to_owned(),
+                kind: AttentionKindV2::WorktreeTrustRequired,
+                multiplexer_workspace_id: workspace(41),
+                tab_id: Some(tab(41)),
+                pane_id: Some(pane(41)),
+                runtime_namespace_id: Some(runtime(41)),
+                owner_generation_id,
+            },
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        decode_frame(&encode_frame(&attention_removed).unwrap()).unwrap(),
+        attention_removed
+    );
+
+    let operation = WorktreeOperationV2::Open {
+        git_workspace_id: "git-41".to_owned(),
+        canonical_path: "/tmp/git-41".to_owned(),
+    };
+    let worktree_request = ProtocolMessage::new(
+        connection("t166-worktree-target"),
+        sequence(124),
+        None,
+        owner_generation_id,
+        None,
+        ProtocolPayload::ApplyWorktreeOperation {
+            request: ApplyWorktreeOperationV2 {
+                multiplexer_workspace_id: workspace(41),
+                repository_identity: "repo-41".to_owned(),
+                trust_record_revision: 7,
+                operation: operation.clone(),
+            },
+        },
+    )
+    .unwrap();
+    let exact_worktree_result = |operation: WorktreeOperationV2, trust| {
+        ProtocolMessage::new(
+            connection("t166-worktree-target"),
+            sequence(125),
+            None,
+            owner_generation_id,
+            Some(sequence(124)),
+            ProtocolPayload::WorktreeOperationResult {
+                result: WorktreeOperationResultV2 {
+                    outcome: WorktreeOperationOutcomeV2::Accepted,
+                    multiplexer_workspace_id: workspace(41),
+                    repository_identity: Some("repo-41".to_owned()),
+                    git_workspace_id: Some("git-41".to_owned()),
+                    operation_target: Some(WorktreeOperationTargetV2 {
+                        operation,
+                        trust_record_revision: trust,
+                    }),
+                    snapshot_revision: 1,
+                    page_offset: 0,
+                    worktrees: Vec::new(),
+                    next_cursor: None,
+                },
+            },
+        )
+        .unwrap()
+    };
+    validate_response_binding(
+        &worktree_request,
+        &exact_worktree_result(operation.clone(), 7),
+    )
+    .unwrap();
+
+    assert_eq!(
+        validate_response_binding(
+            &worktree_request,
+            &exact_worktree_result(
+                WorktreeOperationV2::Open {
+                    git_workspace_id: "git-41".to_owned(),
+                    canonical_path: "/tmp/substituted".to_owned(),
+                },
+                7,
+            ),
+        )
+        .unwrap_err(),
+        LocalControlErrorKind::MalformedFrame
+    );
+    assert_eq!(
+        validate_response_binding(&worktree_request, &exact_worktree_result(operation, 8),)
+            .unwrap_err(),
+        LocalControlErrorKind::MalformedFrame
+    );
+
+    let subscription = SubscribeMultiplexerEventsV2 {
+        stream: MultiplexerSubscriptionStreamV2::Attention,
+        multiplexer_workspace_id: Some(workspace(41)),
+    };
+    validate_multiplexer_subscription_event_binding(
+        &connection("t166-attention-remove"),
+        owner_generation_id,
+        &subscription,
+        &attention_removed,
+    )
+    .unwrap();
+    assert_eq!(
+        validate_multiplexer_subscription_event_binding(
+            &connection("t166-attention-remove"),
+            owner_generation_id,
+            &SubscribeMultiplexerEventsV2 {
+                stream: MultiplexerSubscriptionStreamV2::Attention,
+                multiplexer_workspace_id: Some(workspace(42)),
+            },
+            &attention_removed,
+        )
+        .unwrap_err(),
+        LocalControlErrorKind::MalformedFrame
+    );
 }
 
 struct Spec011V2RoundTripWire {
@@ -1858,4 +2188,276 @@ fn t166_owner_dispatch_preflights_capability_and_applies_exact_topology() {
     drop(owner);
     let _ = fs::remove_dir_all(home);
     let _ = fs::remove_dir_all(runtime_root);
+}
+
+#[cfg(test)]
+mod real_endpoint_tests {
+    use super::*;
+    use crate::git::shell_profiles::{ShellProfile, discover_native_shell_profiles};
+    use crate::git::terminal::TerminalSize;
+    use crate::git::workspace_inventory::WorkspaceEnvironmentInventory;
+    use crate::persistent_runtime::client::{
+        ClientResponseProjection, ResolvedRuntimeTarget, RustLocalControlClient,
+    };
+    use crate::persistent_runtime::domain::{ClientAuthority, RuntimeAlias};
+    use crate::persistent_runtime::owner::PersistentOwner;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    static NEXT_ROOT: AtomicU64 = AtomicU64::new(1);
+
+    fn root(label: &str) -> PathBuf {
+        let serial = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "winds-t166-real-{label}-{}-{serial}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        path.canonicalize().unwrap()
+    }
+
+    fn short_root() -> PathBuf {
+        let serial = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
+        let base = if cfg!(windows) {
+            std::env::temp_dir()
+        } else {
+            PathBuf::from("/tmp")
+        };
+        let path = base.join(format!("w166r{serial}"));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        path.canonicalize().unwrap()
+    }
+
+    fn shell_profile(cwd: &Path) -> ShellProfile {
+        let candidate = if cfg!(windows) {
+            std::env::var("COMSPEC").expect("Windows CI must provide COMSPEC")
+        } else {
+            "/bin/sh".to_owned()
+        };
+        let inventory = WorkspaceEnvironmentInventory {
+            host_os: std::env::consts::OS.to_owned(),
+            host_arch: std::env::consts::ARCH.to_owned(),
+            canonical_worktree_root: cwd.to_string_lossy().into_owned(),
+            git_common_dir: cwd.to_string_lossy().into_owned(),
+            shell_candidates: vec![candidate.clone()],
+            detected_manifests: Vec::new(),
+        };
+        discover_native_shell_profiles(&inventory)
+            .unwrap()
+            .into_iter()
+            .find(|profile| profile.executable == candidate)
+            .unwrap()
+    }
+
+    fn start_owner(home: &Path, runtime_root: &Path, now: i64) -> PersistentOwner {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            let runtime_directory = runtime_root.join("r");
+            crate::persistent_runtime::transport::unix::prepare_runtime_directory(
+                &runtime_directory,
+            )
+            .unwrap();
+            PersistentOwner::start_for_test(home, &runtime_directory, now).unwrap()
+        }
+        #[cfg(windows)]
+        {
+            PersistentOwner::start(home, now).unwrap()
+        }
+    }
+
+    fn connect_client(
+        runtime_root: &Path,
+        generation: OwnerGenerationId,
+    ) -> RustLocalControlClient {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            RustLocalControlClient::connect_runtime_directory_for_test(
+                &runtime_root.join("r"),
+                Some(generation),
+            )
+            .unwrap()
+        }
+        #[cfg(windows)]
+        {
+            RustLocalControlClient::connect(None, Some(generation)).unwrap()
+        }
+    }
+
+    #[test]
+    fn t166_real_private_endpoint_preserves_spec011_and_v2_then_allows_next_client() {
+        let home = root("home");
+        let runtime_root = short_root();
+        let mut owner = start_owner(&home, &runtime_root, 100);
+        let attachment = owner
+            .start_terminal_runtime(
+                RuntimeAlias::new("t166-real").unwrap(),
+                &shell_profile(&home),
+                &home,
+                TerminalSize { rows: 24, cols: 80 },
+                101,
+                0,
+            )
+            .unwrap();
+        let runtime_id = attachment.runtime_namespace_id();
+        let generation = owner.generation_id();
+        let done = Arc::new(AtomicBool::new(false));
+        let done_for_thread = Arc::clone(&done);
+        let client_runtime_root = runtime_root.clone();
+
+        let client_thread = thread::spawn(move || {
+            let mut client = connect_client(&client_runtime_root, generation);
+            let target = ResolvedRuntimeTarget::exact(runtime_id);
+            assert!(matches!(
+                client.attach_observer(target).unwrap(),
+                ClientResponseProjection::RuntimeSnapshot { .. }
+            ));
+            assert!(matches!(
+                client.request_control(target).unwrap(),
+                ClientResponseProjection::ControlState {
+                    authority: ClientAuthority::Controller,
+                    ..
+                }
+            ));
+            for result in [
+                client
+                    .send_input(target, b"printf ready\n".to_vec())
+                    .unwrap(),
+                client.resize(target, 100, 30).unwrap(),
+                client.interrupt(target).unwrap(),
+            ] {
+                assert!(matches!(
+                    result,
+                    ClientResponseProjection::ControlState {
+                        authority: ClientAuthority::Controller,
+                        ..
+                    }
+                ));
+            }
+            assert!(matches!(
+                client.release_control(target).unwrap(),
+                ClientResponseProjection::ControlState {
+                    authority: ClientAuthority::Observer,
+                    ..
+                }
+            ));
+            assert!(matches!(
+                client.request_control(target).unwrap(),
+                ClientResponseProjection::ControlState {
+                    authority: ClientAuthority::Controller,
+                    ..
+                }
+            ));
+            assert!(matches!(
+                client.stop(target).unwrap(),
+                ClientResponseProjection::ControlState {
+                    authority: ClientAuthority::Observer,
+                    ..
+                }
+            ));
+            let _ = client.detach_observer(target);
+            client
+                .transact(
+                    None,
+                    ProtocolPayload::ListMultiplexerWorkspaces {
+                        request: ListMultiplexerWorkspacesV2 {
+                            multiplexer_workspace_id: None,
+                        },
+                    },
+                    false,
+                )
+                .unwrap();
+            client
+                .transact(
+                    None,
+                    ProtocolPayload::RequestMultiplexerWrite {
+                        request: RequestMultiplexerWriteV2 {
+                            client_surface_capability: ClientSurfaceCapability::ControllingTerminal,
+                        },
+                    },
+                    false,
+                )
+                .unwrap();
+            client
+                .transact(
+                    None,
+                    ProtocolPayload::ApplyTopologyOperation {
+                        request: ApplyTopologyOperationV2 {
+                            expected_topology_generation: topology_generation(1),
+                            operation: TopologyOperationV2::CreateWorkspace {
+                                multiplexer_workspace_id: workspace(201),
+                                alias: "real-endpoint".to_owned(),
+                                first_tab_id: tab(201),
+                                first_tab_alias: "main".to_owned(),
+                                first_pane_id: pane(201),
+                            },
+                        },
+                    },
+                    false,
+                )
+                .unwrap();
+            done_for_thread.store(true, Ordering::Release);
+        });
+
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !done.load(Ordering::Acquire) && Instant::now() < deadline {
+            owner.service_endpoint_once_for_test(102, 1).unwrap();
+            owner.poll_terminal_runtimes(102, 1).unwrap();
+            thread::sleep(Duration::from_millis(2));
+        }
+        client_thread.join().unwrap();
+        assert!(done.load(Ordering::Acquire));
+        for _ in 0..100 {
+            owner.service_endpoint_once_for_test(103, 2).unwrap();
+            if !owner.has_active_session_for_test() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+        assert!(!owner.has_active_session_for_test());
+        assert!(
+            owner
+                .terminal_control_state(&connection("unrelated"), runtime_id, 104, 3,)
+                .is_err()
+        );
+        drop(owner);
+        let _ = fs::remove_dir_all(home);
+        let _ = fs::remove_dir_all(runtime_root);
+
+        let home = root("next");
+        let runtime_root = short_root();
+        let mut owner = start_owner(&home, &runtime_root, 200);
+        let generation = owner.generation_id();
+        let connected = Arc::new(AtomicBool::new(false));
+        let connected_for_thread = Arc::clone(&connected);
+        let second_runtime_root = runtime_root.clone();
+        let second = thread::spawn(move || {
+            let client = connect_client(&second_runtime_root, generation);
+            assert_eq!(client.owner_generation_id(), generation);
+            connected_for_thread.store(true, Ordering::Release);
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !connected.load(Ordering::Acquire) && Instant::now() < deadline {
+            owner.service_endpoint_once_for_test(201, 4).unwrap();
+            thread::sleep(Duration::from_millis(2));
+        }
+        second.join().unwrap();
+        assert!(connected.load(Ordering::Acquire));
+        for _ in 0..100 {
+            owner.service_endpoint_once_for_test(202, 5).unwrap();
+            if !owner.has_active_session_for_test() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+        assert!(!owner.has_active_session_for_test());
+        drop(owner);
+        let _ = fs::remove_dir_all(home);
+        let _ = fs::remove_dir_all(runtime_root);
+    }
 }
