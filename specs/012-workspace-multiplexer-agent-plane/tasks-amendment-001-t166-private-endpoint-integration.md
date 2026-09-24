@@ -1,6 +1,6 @@
 # Spec 012 Tasks Amendment 001 — T166 Existing Private-Endpoint Integration
 
-Status: CANDIDATE UNTIL GUARDED LANDING
+Status: CLOSED_CANONICAL
 
 Authority basis: Winds Constitution 1.1.0, canonical Spec 012 Plan decisions AD-012-08 through AD-012-10, and canonical T166 purpose/acceptance requirements.
 
@@ -40,18 +40,28 @@ The corrected T166 candidate must prove separately through each directly exercis
 
 Candidate movement invalidates stale exact-candidate evidence. This governance amendment is canonical only after its exact two-file candidate passes repository quality, author correctness/safety/governance/evidence-integrity review, Ponytail review, fresh independent exact-head review with zero material findings/threads, immediate pre-landing identity/scope/mergeability reconciliation, guarded expected-head merge, and successful post-merge verification. The eight corrected-T166 proof obligations above remain T166 closeout conditions and do not block canonicalization of this amendment.
 
-## Authority state
-
-Before guarded landing:
+## Canonical closeout
 
 ```text
-SPEC_012_TASKS_AMENDMENT_001=IN_QUALIFICATION
-T166_TRANSPORT_PATH_CORRECTION=NOT_CANONICAL
-T166_IMPLEMENTATION=BLOCKED_UNTIL_AMENDMENT_AND_T165_CLOSEOUT
-T167..T185=BLOCKED_BY_PREDECESSOR
+AMENDMENT_PR=257
+BASE=3e637403accadc0f446d596f4411c5c9da371e89
+HEAD=4923438bf1e72bea58b65789eceee2d111ec0a6c
+HEAD_TREE=35e129e3f62b8e5bf870dd4bb846f26e1821d9f2
+MERGE=e1ec61317a8875194eb0011793a475d35346d216
+MERGE_TREE=35e129e3f62b8e5bf870dd4bb846f26e1821d9f2
+MERGE_PARENT_1=3e637403accadc0f446d596f4411c5c9da371e89
+MERGE_PARENT_2=4923438bf1e72bea58b65789eceee2d111ec0a6c
+MERGE_GITHUB_VERIFICATION=VERIFIED_VALID
+PR_QUALITY_RUN=36018345674 SUCCESS
+POST_MERGE_PUSH_RUN=36019373941 SUCCESS
+CHANGED_PATHS=2
+UNRESOLVED_MATERIAL_THREADS=0 https://github.com/TheHalfMoon/Winds/pull/257#issuecomment-5817144404
+PRE_MERGE_INDEPENDENT_REVIEW_TRANSCRIPTS=https://gist.github.com/TheHalfMoon/360791d14986f8eb2163ebae34b56668
+JEV=TypeSafe jev-1.13.0 PASS https://gist.github.com/TheHalfMoon/3dc33007eddb4624ebeed2d93b21b6b4
+ALIBABA_OPEN_CODE_REVIEW=v1.12.9 EXACT_RANGE_RULES_RESOLVED https://gist.github.com/TheHalfMoon/3dc33007eddb4624ebeed2d93b21b6b4
 ```
 
-After guarded landing and successful post-merge verification:
+## Authority state
 
 ```text
 SPEC_012_TASKS_AMENDMENT_001=CLOSED_CANONICAL
