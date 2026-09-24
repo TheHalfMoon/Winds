@@ -1117,7 +1117,7 @@ impl PersistentOwner {
                     })?;
                 let connection_id =
                     ClientConnectionId::new(&format!("owner-{}-{serial:016x}", self.generation_id))
-                        .map_err(|error| OwnerError::Endpoint(error))?;
+                        .map_err(OwnerError::Endpoint)?;
                 self.session = Some(OwnerConnectionSession::new(
                     connection_id,
                     self.generation_id,
@@ -1622,7 +1622,6 @@ impl PersistentOwner {
             Ok(0) => return Ok(OwnerReadStatus::Closed),
             Ok(read) => read,
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                session.last_activity_monotonic_ms = session.last_activity_monotonic_ms;
                 return Ok(OwnerReadStatus::Pending);
             }
             Err(error) => return Err(OwnerError::Endpoint(error.to_string())),
