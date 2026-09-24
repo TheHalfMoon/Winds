@@ -38,7 +38,7 @@ The corrected T166 candidate must prove separately through each directly exercis
 7. runtime polling and bounded replay/gap behavior continue while the endpoint is serviced;
 8. all applicable exact-head Linux, macOS, and native-Windows checks pass.
 
-Candidate movement invalidates stale exact-candidate evidence. This amendment is canonical only after the exact final candidate is reconciled to the two paths named above, every applicable repository acceptance and independent-review gate in `tasks.md` succeeds with zero unresolved material findings/threads, and the guarded merge plus post-merge verification required by that gate succeed.
+Candidate movement invalidates stale exact-candidate evidence. This governance amendment is canonical only after its exact two-file candidate passes repository quality, author correctness/safety/governance/evidence-integrity review, Ponytail review, fresh independent exact-head review with zero material findings/threads, immediate pre-landing identity/scope/mergeability reconciliation, guarded expected-head merge, and successful post-merge verification. The eight corrected-T166 proof obligations above remain T166 closeout conditions and do not block canonicalization of this amendment.
 
 ## Authority state
 
