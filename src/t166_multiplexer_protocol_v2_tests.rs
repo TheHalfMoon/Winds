@@ -15,7 +15,7 @@ use crate::persistent_runtime::protocol::{
     AgentObservationFreshnessV2, AgentObservationSnapshotV2, AgentObservationSourceV2,
     AgentObservationV2, ApplyTopologyOperationV2, ApplyWorktreeOperationV2, AttentionEventV2,
     AttentionItemV2, AttentionKindV2, AttentionSnapshotV2, LEGACY_PROTOCOL_VERSION,
-    ListAgentObservationsV2, ListWorktreesV2, MAX_CONTROL_FRAME_BYTES,
+    ListAgentObservationsV2, ListMultiplexerWorkspacesV2, ListWorktreesV2, MAX_CONTROL_FRAME_BYTES,
     MAX_INBOUND_CONTROL_FRAME_BYTES, MAX_V2_AGENT_OBSERVATIONS_PER_PAGE, MAX_V2_ALIAS_BYTES,
     MAX_V2_ATTENTION_ITEMS_PER_PAGE, MAX_V2_BRANCH_BYTES, MAX_V2_DETAIL_BYTES,
     MAX_V2_EVIDENCE_SUMMARY_BYTES, MAX_V2_GIT_WORKSPACE_ID_BYTES, MAX_V2_PANES_PER_TAB,

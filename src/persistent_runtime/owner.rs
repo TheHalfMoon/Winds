@@ -1158,18 +1158,27 @@ impl PersistentOwner {
         now_monotonic_ms: u64,
     ) -> OwnerResult<()> {
         self.flush_session()?;
-        let Some(session) = self.session.as_mut() else {
+        let Some(mut session) = self.session.take() else {
             return Ok(());
         };
-        if matches!(self.read_session(session)?, OwnerReadStatus::Closed) {
-            return Err(OwnerError::Endpoint("peer disconnected".to_owned()));
-        }
-        while let Some(request) = take_protocol_frame(&mut session.inbound)
-            .map_err(|error| OwnerError::Endpoint(format!("{error:?}")))?
-        {
-            self.dispatch_session_request(session, request, now_unix_ms, now_monotonic_ms)?;
-        }
-        Ok(())
+        let result = (|| {
+            if matches!(self.read_session(&mut session)?, OwnerReadStatus::Closed) {
+                return Err(OwnerError::Endpoint("peer disconnected".to_owned()));
+            }
+            while let Some(request) = take_protocol_frame(&mut session.inbound)
+                .map_err(|error| OwnerError::Endpoint(format!("{error:?}")))?
+            {
+                self.dispatch_session_request(
+                    &mut session,
+                    request,
+                    now_unix_ms,
+                    now_monotonic_ms,
+                )?;
+            }
+            Ok(())
+        })();
+        self.session = Some(session);
+        result
     }
 
     fn dispatch_session_request(
@@ -1298,10 +1307,13 @@ impl PersistentOwner {
                     .map_err(map_owner_protocol_error)?;
                 self.fill_terminal_observer_queue(&handle)
                     .map_err(map_owner_protocol_error)?;
-                let replay_events = self.drain_terminal_observer(&handle)?;
+                let replay_events = self
+                    .drain_terminal_observer(&handle)
+                    .map_err(map_owner_protocol_error)?;
                 session.observers.insert(runtime_id, handle);
                 for event in replay_events {
-                    self.queue_session_message(session, event)?;
+                    self.queue_session_message(session, event)
+                        .map_err(map_owner_protocol_error)?;
                 }
                 self.respond_runtime(
                     request,
@@ -1403,12 +1415,14 @@ impl PersistentOwner {
                 )
             }
             ProtocolPayload::RequestControl => {
-                let current = self.terminal_control_state(
-                    &connection_id,
-                    runtime_id,
-                    now_unix_ms,
-                    now_monotonic_ms,
-                )?;
+                let current = self
+                    .terminal_control_state(
+                        &connection_id,
+                        runtime_id,
+                        now_unix_ms,
+                        now_monotonic_ms,
+                    )
+                    .map_err(map_owner_protocol_error)?;
                 if current.authority == ClientAuthority::Controller {
                     self.renew_terminal_control(
                         &connection_id,
@@ -1486,7 +1500,8 @@ impl PersistentOwner {
                     runtime_id,
                     now_unix_ms,
                     now_monotonic_ms,
-                )?;
+                )
+                .map_err(map_owner_protocol_error)?;
                 return self.respond_runtime(
                     request,
                     response_sequence,
@@ -1537,22 +1552,26 @@ impl PersistentOwner {
     }
 
     fn pump_session_events(&mut self) -> OwnerResult<()> {
-        let Some(session) = self.session.as_mut() else {
+        let Some(mut session) = self.session.take() else {
             return Ok(());
         };
-        let handles = session.observers.values().cloned().collect::<Vec<_>>();
-        for handle in handles {
-            if let Err(error) = self.fill_terminal_observer_queue(&handle) {
-                if error.to_string().contains("slow-client") {
-                    return Err(OwnerError::Endpoint("observer backpressure".to_owned()));
+        let result = (|| {
+            let handles = session.observers.values().cloned().collect::<Vec<_>>();
+            for handle in handles {
+                if let Err(error) = self.fill_terminal_observer_queue(&handle) {
+                    if error.to_string().contains("slow-client") {
+                        return Err(OwnerError::Endpoint("observer backpressure".to_owned()));
+                    }
+                    return Err(error);
                 }
-                return Err(error);
+                for event in self.drain_terminal_observer(&handle)? {
+                    self.queue_session_message(&mut session, event)?;
+                }
             }
-            for event in self.drain_terminal_observer(&handle)? {
-                self.queue_session_message(session, event)?;
-            }
-        }
-        Ok(())
+            Ok(())
+        })();
+        self.session = Some(session);
+        result
     }
 
     fn disconnect_session(
