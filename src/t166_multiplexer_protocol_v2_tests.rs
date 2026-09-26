@@ -2333,7 +2333,6 @@ mod real_endpoint_tests {
                     .send_input(target, b"printf ready\n".to_vec())
                     .unwrap(),
                 client.resize(target, 100, 30).unwrap(),
-                client.interrupt(target).unwrap(),
             ] {
                 assert!(matches!(
                     result,
@@ -2343,6 +2342,18 @@ mod real_endpoint_tests {
                     }
                 ));
             }
+
+            // Spec 011 deliberately keeps native-Windows interrupt unsupported and
+            // fail-closed. T152 qualifies that platform contract directly, so this
+            // real-endpoint integration must not require a successful Windows interrupt.
+            #[cfg(not(windows))]
+            assert!(matches!(
+                client.interrupt(target).unwrap(),
+                ClientResponseProjection::ControlState {
+                    authority: ClientAuthority::Controller,
+                    ..
+                }
+            ));
             assert!(matches!(
                 client.release_control(target).unwrap(),
                 ClientResponseProjection::ControlState {
