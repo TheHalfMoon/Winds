@@ -2196,9 +2196,10 @@ mod real_endpoint_tests {
     use crate::git::shell_profiles::{ShellProfile, discover_native_shell_profiles};
     use crate::git::terminal::TerminalSize;
     use crate::git::workspace_inventory::WorkspaceEnvironmentInventory;
+    #[cfg(windows)]
+    use crate::persistent_runtime::client::LocalControlClientError;
     use crate::persistent_runtime::client::{
-        ClientResponseProjection, LocalControlClientError, ResolvedRuntimeTarget,
-        RustLocalControlClient,
+        ClientResponseProjection, ResolvedRuntimeTarget, RustLocalControlClient,
     };
     use crate::persistent_runtime::domain::{ClientAuthority, RuntimeAlias};
     use crate::persistent_runtime::owner::PersistentOwner;
