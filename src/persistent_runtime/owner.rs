@@ -3,7 +3,8 @@ use crate::git::terminal::TerminalSize;
 use crate::multiplexer::domain::navigation::MultiplexerTopology;
 use crate::multiplexer::domain::service::{MultiplexerService, MultiplexerServiceError};
 use crate::multiplexer::domain::{
-    ClientSurfaceCapability, MultiplexerAuthority, MultiplexerErrorKind, TopologyGeneration,
+    ClientSurfaceCapability, MultiplexerAuthority, MultiplexerErrorKind, MultiplexerWorkspaceId,
+    TopologyGeneration,
 };
 use crate::persistent_runtime::controller::{
     ControllerDisposition, ControllerRegistry, ControllerStateSnapshot, ControllerTransition,
@@ -13,11 +14,13 @@ use crate::persistent_runtime::domain::{
     RuntimeAlias, RuntimeNamespaceId,
 };
 use crate::persistent_runtime::protocol::{
-    MAX_CONTROL_FRAME_BYTES, MultiplexerSnapshotV2, MultiplexerWriteStateV2, ProtocolMessage,
-    ProtocolPayload, ProtocolResult, RequestSequenceGuard, TopologyMutationOutcomeV2,
-    TopologyMutationResultV2, apply_topology_operation_v2, decode_frame, encode_frame,
-    inactive_v2_domain_response, multiplexer_snapshot_for_request_v2,
-    topology_operation_target_ids_v2, validate_candidate_topology_v2, validate_owner_v2_handshake,
+    MAX_CONTROL_FRAME_BYTES, MultiplexerEventSubscriptionAckV2, MultiplexerEventV2,
+    MultiplexerSnapshotV2, MultiplexerSubscriptionBoundaryV2, MultiplexerSubscriptionStreamV2,
+    MultiplexerWriteStateV2, ProtocolMessage, ProtocolPayload, ProtocolResult,
+    RequestSequenceGuard, TopologyMutationOutcomeV2, TopologyMutationResultV2,
+    apply_topology_operation_v2, decode_frame, encode_frame, inactive_v2_domain_response,
+    multiplexer_snapshot_for_request_v2, topology_operation_target_ids_v2,
+    validate_candidate_topology_v2, validate_owner_v2_handshake,
 };
 use crate::persistent_runtime::replay::ObserverHandle;
 use crate::persistent_runtime::runtime::{
@@ -121,11 +124,18 @@ enum OwnerReadStatus {
     Closed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TopologySubscriptionState {
+    multiplexer_workspace_id: Option<MultiplexerWorkspaceId>,
+    last_topology_generation: TopologyGeneration,
+}
+
 struct OwnerConnectionSession {
     connection_id: ClientConnectionId,
     request_guard: RequestSequenceGuard,
     next_response_sequence: u64,
     observers: BTreeMap<RuntimeNamespaceId, ObserverHandle>,
+    topology_subscription: Option<TopologySubscriptionState>,
     inbound: Vec<u8>,
     outbound: VecDeque<u8>,
     outbound_bytes: usize,
@@ -144,6 +154,7 @@ impl OwnerConnectionSession {
             connection_id,
             next_response_sequence: 1,
             observers: BTreeMap::new(),
+            topology_subscription: None,
             inbound: Vec::new(),
             outbound: VecDeque::new(),
             outbound_bytes: 0,
@@ -1102,6 +1113,7 @@ impl PersistentOwner {
             )
             .map_err(|error| OwnerError::Runtime(error.to_string()))
     }
+
     fn service_endpoint_once(
         &mut self,
         now_unix_ms: i64,
@@ -1244,7 +1256,8 @@ impl PersistentOwner {
             )
             .map_err(|error| OwnerError::Endpoint(format!("{error:?}")))?,
         };
-        self.queue_session_message(session, response)?;
+        self.queue_session_message(session, response.clone())?;
+        self.queue_topology_event_after_response(session, &request, &response)?;
         session.last_activity_monotonic_ms = now_monotonic_ms;
         Ok(())
     }
@@ -1261,6 +1274,148 @@ impl PersistentOwner {
             .map_err(|error| OwnerError::Endpoint(format!("{error:?}")))
     }
 
+    fn dispatch_topology_subscription(
+        &self,
+        session: &mut OwnerConnectionSession,
+        request: &ProtocolMessage,
+        response_sequence: EventSequence,
+    ) -> ProtocolResult<ProtocolMessage> {
+        let ProtocolPayload::SubscribeMultiplexerEvents {
+            request: subscription,
+        } = &request.payload
+        else {
+            return Err(LocalControlErrorKind::UnsupportedOperation);
+        };
+        if subscription.stream != MultiplexerSubscriptionStreamV2::Topology {
+            return Err(LocalControlErrorKind::UnsupportedOperation);
+        }
+
+        let topology_generation = self.multiplexer_topology().generation();
+        session.topology_subscription = Some(TopologySubscriptionState {
+            multiplexer_workspace_id: subscription.multiplexer_workspace_id,
+            last_topology_generation: topology_generation,
+        });
+        self.respond_simple(
+            request,
+            response_sequence,
+            ProtocolPayload::MultiplexerEventSubscriptionAck {
+                ack: MultiplexerEventSubscriptionAckV2 {
+                    stream: MultiplexerSubscriptionStreamV2::Topology,
+                    multiplexer_workspace_id: subscription.multiplexer_workspace_id,
+                    boundary: MultiplexerSubscriptionBoundaryV2::Topology {
+                        topology_generation,
+                    },
+                },
+            },
+        )
+    }
+
+    fn queue_topology_event_after_response(
+        &self,
+        session: &mut OwnerConnectionSession,
+        request: &ProtocolMessage,
+        response: &ProtocolMessage,
+    ) -> OwnerResult<()> {
+        if !matches!(request.payload, ProtocolPayload::ApplyTopologyOperation { .. }) {
+            return Ok(());
+        }
+        let ProtocolPayload::MultiplexerSnapshot {
+            snapshot: MultiplexerSnapshotV2::MutationResult { result, .. },
+        } = &response.payload
+        else {
+            return Ok(());
+        };
+        if result.outcome != TopologyMutationOutcomeV2::Accepted {
+            return Ok(());
+        }
+        let Some(accepted_generation) = result.accepted_topology_generation else {
+            return Err(OwnerError::Endpoint(
+                "accepted topology mutation omitted generation".to_owned(),
+            ));
+        };
+        let Some(subscription) = session.topology_subscription else {
+            return Ok(());
+        };
+
+        let expected = subscription
+            .last_topology_generation
+            .checked_next()
+            .map_err(|error| OwnerError::Endpoint(format!("{error:?}")))?;
+        if accepted_generation != expected {
+            let event = MultiplexerEventV2::HistoryGap {
+                last_known_topology_generation: subscription.last_topology_generation,
+            };
+            session.topology_subscription = None;
+            return self.queue_topology_event(session, event);
+        }
+
+        if let Some(state) = session.topology_subscription.as_mut() {
+            state.last_topology_generation = accepted_generation;
+        }
+        let Some(workspace_id) = result.multiplexer_workspace_id else {
+            session.topology_subscription = None;
+            return self.queue_topology_event(
+                session,
+                MultiplexerEventV2::HistoryGap {
+                    last_known_topology_generation: subscription.last_topology_generation,
+                },
+            );
+        };
+        if subscription
+            .multiplexer_workspace_id
+            .is_some_and(|expected_workspace_id| expected_workspace_id != workspace_id)
+        {
+            return Ok(());
+        }
+        self.queue_topology_event(
+            session,
+            MultiplexerEventV2::TopologyChanged {
+                multiplexer_workspace_id: workspace_id,
+                topology_generation: accepted_generation,
+            },
+        )
+    }
+
+    fn queue_topology_event(
+        &self,
+        session: &mut OwnerConnectionSession,
+        event: MultiplexerEventV2,
+    ) -> OwnerResult<()> {
+        let sequence = session
+            .next_sequence()
+            .map_err(|error| OwnerError::Endpoint(format!("{error:?}")))?;
+        let message = ProtocolMessage::new(
+            session.connection_id.clone(),
+            sequence,
+            None,
+            self.generation_id,
+            None,
+            ProtocolPayload::MultiplexerEvent { event },
+        )
+        .map_err(|error| OwnerError::Endpoint(format!("{error:?}")))?;
+        self.queue_session_message(session, message)
+    }
+
+    fn pump_topology_subscription_gap(
+        &self,
+        session: &mut OwnerConnectionSession,
+    ) -> OwnerResult<()> {
+        let Some(subscription) = session.topology_subscription else {
+            return Ok(());
+        };
+        let current_generation = self.multiplexer_topology().generation();
+        if current_generation == subscription.last_topology_generation {
+            return Ok(());
+        }
+        session.topology_subscription = None;
+        self.queue_topology_event(
+            session,
+            MultiplexerEventV2::HistoryGap {
+                last_known_topology_generation: subscription.last_topology_generation,
+            },
+        )
+    }
+
     fn dispatch_authenticated_request(
         &mut self,
         session: &mut OwnerConnectionSession,
@@ -1275,11 +1430,13 @@ impl PersistentOwner {
             ProtocolPayload::Ping => {
                 self.respond_simple(request, response_sequence, ProtocolPayload::Pong)
             }
+            ProtocolPayload::SubscribeMultiplexerEvents { .. } => {
+                self.dispatch_topology_subscription(session, request, response_sequence)
+            }
             ProtocolPayload::ListMultiplexerWorkspaces { .. }
             | ProtocolPayload::RequestMultiplexerWrite { .. }
             | ProtocolPayload::ReleaseMultiplexerWrite
             | ProtocolPayload::ApplyTopologyOperation { .. }
-            | ProtocolPayload::SubscribeMultiplexerEvents { .. }
             | ProtocolPayload::ListAgentObservations { .. }
             | ProtocolPayload::ListWorktrees { .. }
             | ProtocolPayload::ApplyWorktreeOperation { .. } => self
@@ -1557,6 +1714,7 @@ impl PersistentOwner {
                     self.queue_session_message(&mut session, event)?;
                 }
             }
+            self.pump_topology_subscription_gap(&mut session)?;
             Ok(())
         })();
         self.session = Some(session);
