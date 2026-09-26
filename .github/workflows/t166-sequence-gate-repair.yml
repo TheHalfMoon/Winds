@@ -18,17 +18,17 @@ jobs:
           ref: impl/spec-012-t166-protocol-v2
           fetch-depth: 0
 
-      - name: Repair duplicate request sequence gating
+      - name: Repair request sequence gating and endpoint fixture
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path('src/persistent_runtime/owner.rs')
-          source = path.read_text(encoding='utf-8')
-          start = source.index('    fn dispatch_authenticated_request(')
-          end = source.index('\n    fn ', start + 1)
-          segment = source[start:end]
+          owner_path = Path('src/persistent_runtime/owner.rs')
+          owner = owner_path.read_text(encoding='utf-8')
+          start = owner.index('    fn dispatch_authenticated_request(')
+          end = owner.index('\n    fn ', start + 1)
+          segment = owner[start:end]
           gate = 'session.request_guard.accept(request)?;'
 
           if segment.count(gate) != 6:
@@ -38,8 +38,17 @@ jobs:
           if repaired.count(gate) != 1:
               raise SystemExit(f'expected exactly one request gate after repair, found {repaired.count(gate)}')
 
-          source = source[:start] + repaired + source[end:]
-          path.write_text(source, encoding='utf-8')
+          owner = owner[:start] + repaired + owner[end:]
+          owner_path.write_text(owner, encoding='utf-8')
+
+          test_path = Path('src/t166_multiplexer_protocol_v2_tests.rs')
+          tests = test_path.read_text(encoding='utf-8')
+          old = '''        assert!(\n            owner\n                .terminal_control_state(&connection("unrelated"), runtime_id, 104, 3,)\n                .is_err()\n        );\n'''
+          new = '''        let unrelated_state = owner\n            .terminal_control_state(&connection("unrelated"), runtime_id, 104, 3)\n            .unwrap();\n        assert_eq!(unrelated_state.authority, ClientAuthority::Observer);\n        assert!(unrelated_state.controller_client_id.is_none());\n'''
+          if tests.count(old) != 1:
+              raise SystemExit(f'expected exactly one stale unrelated-control assertion, found {tests.count(old)}')
+          tests = tests.replace(old, new, 1)
+          test_path.write_text(tests, encoding='utf-8')
           PY
 
       - name: Format and verify focused regression
@@ -55,7 +64,7 @@ jobs:
           git rm .github/workflows/t166-sequence-gate-repair.yml
           git config user.name 'Winds Automation'
           git config user.email 'actions@users.noreply.github.com'
-          git add src/persistent_runtime/owner.rs
+          git add src/persistent_runtime/owner.rs src/t166_multiplexer_protocol_v2_tests.rs
           git diff --cached --check
-          git commit -m 'fix(t166): sequence-gate owner requests exactly once'
+          git commit -m 'fix(t166): repair request gating and endpoint fixture'
           git push origin HEAD:impl/spec-012-t166-protocol-v2
