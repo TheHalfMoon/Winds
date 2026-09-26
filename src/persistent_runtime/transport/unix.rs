@@ -117,6 +117,9 @@ impl BoundUnixListener {
     pub(crate) fn accept_same_user(&self) -> Result<UnixStream, PosixTransportError> {
         loop {
             if let Some(stream) = self.try_accept_same_user()? {
+                stream
+                    .set_nonblocking(false)
+                    .map_err(PosixTransportError::from)?;
                 return Ok(stream);
             }
             std::thread::yield_now();

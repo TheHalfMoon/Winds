@@ -29,6 +29,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::error::Error;
 use std::fmt;
 use std::fs;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::thread;
