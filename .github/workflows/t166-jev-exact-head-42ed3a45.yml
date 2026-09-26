@@ -1,0 +1,92 @@
+name: T166 Jev Exact Head 42ed3a45
+
+on:
+  push:
+    branches:
+      - review/t166-jev-42ed3a45
+
+permissions:
+  contents: read
+
+env:
+  BASE_SHA: 1f96d38aa614ae40c8c8af011e215b624ae38a87
+  HEAD_SHA: 42ed3a4571595cb8038dd56fead175c6413e722b
+  JEV_REVIEW_SHA: 31f89602797fb7bea007f8a480bf368bf564954e
+  COTRA_ADAPTER_COMMIT: f743ca8923756b7d89f009a9994286a27c80245f
+  COTRA_ADAPTER_BLOB: c4a144f4b6ee064986c291c637b6390e58ed3601
+
+jobs:
+  jev-review:
+    name: Jev Semantic Review
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+
+      - name: Require TypeSafe credential
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${TYPESAFE_API_KEY:-}" ]; then
+            echo "::error::TYPESAFE_API_KEY is not configured for Winds GitHub Actions; Jev review is UNPROVEN."
+            exit 1
+          fi
+
+      - name: Fetch exact T166 candidate as Git data only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git cat-file -e "$BASE_SHA^{commit}"
+          git fetch --no-tags origin refs/heads/impl/spec-012-t166-protocol-v2
+          test "$(git rev-parse FETCH_HEAD)" = "$HEAD_SHA"
+          git cat-file -e "$HEAD_SHA^{commit}"
+          test "$(git merge-base "$BASE_SHA" "$HEAD_SHA")" = "$BASE_SHA"
+          git diff --check "$BASE_SHA" "$HEAD_SHA"
+          test "$(git rev-parse HEAD)" != "$HEAD_SHA"
+
+      - name: Install pinned Jev Review
+        shell: bash
+        run: |
+          set -euo pipefail
+          JEV_DIR="$RUNNER_TEMP/jev-review"
+          git clone https://github.com/devagrawal09/jev-review.git "$JEV_DIR"
+          git -C "$JEV_DIR" checkout --detach "$JEV_REVIEW_SHA"
+          npm --prefix "$JEV_DIR" ci
+
+      - name: Fetch and verify pinned exact-diff adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          ADAPTER="$RUNNER_TEMP/jev-exact-diff.mjs"
+          curl --fail --location --silent --show-error \
+            "https://raw.githubusercontent.com/TheHalfMoon/Cotra/$COTRA_ADAPTER_COMMIT/.github/scripts/jev-exact-diff.mjs" \
+            --output "$ADAPTER"
+          test "$(git hash-object "$ADAPTER")" = "$COTRA_ADAPTER_BLOB"
+          node --check "$ADAPTER"
+
+      - name: Run genuine Jev exact-diff review
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          JEV_DIR="$RUNNER_TEMP/jev-review"
+          ADAPTER="$RUNNER_TEMP/jev-exact-diff.mjs"
+          node "$ADAPTER" "$BASE_SHA" "$HEAD_SHA" "$GITHUB_WORKSPACE" "$JEV_DIR" | tee jev-review.json
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: t166-jev-review-42ed3a45
+          path: jev-review.json
+          if-no-files-found: warn
+          retention-days: 14
