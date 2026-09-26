@@ -1792,6 +1792,8 @@ fn map_owner_protocol_error(error: OwnerError) -> LocalControlErrorKind {
                 LocalControlErrorKind::UnknownRuntime
             } else if message.contains("active controller") {
                 LocalControlErrorKind::ControllerConflict
+            } else if message.contains("interrupt is unsupported on native Windows") {
+                LocalControlErrorKind::UnsupportedPlatform
             } else if message.contains("slow-client") || message.contains("backpressure") {
                 LocalControlErrorKind::SlowClientBackpressure
             } else {

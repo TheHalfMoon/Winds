@@ -2197,7 +2197,8 @@ mod real_endpoint_tests {
     use crate::git::terminal::TerminalSize;
     use crate::git::workspace_inventory::WorkspaceEnvironmentInventory;
     use crate::persistent_runtime::client::{
-        ClientResponseProjection, ResolvedRuntimeTarget, RustLocalControlClient,
+        ClientResponseProjection, LocalControlClientError, ResolvedRuntimeTarget,
+        RustLocalControlClient,
     };
     use crate::persistent_runtime::domain::{ClientAuthority, RuntimeAlias};
     use crate::persistent_runtime::owner::PersistentOwner;
@@ -2344,8 +2345,13 @@ mod real_endpoint_tests {
             }
 
             // Spec 011 deliberately keeps native-Windows interrupt unsupported and
-            // fail-closed. T152 qualifies that platform contract directly, so this
-            // real-endpoint integration must not require a successful Windows interrupt.
+            // fail-closed. T166 must still prove that operation round-trips through the
+            // real v2 endpoint as a known platform result without poisoning the session.
+            #[cfg(windows)]
+            assert_eq!(
+                client.interrupt(target).unwrap_err(),
+                LocalControlClientError::Protocol(LocalControlErrorKind::UnsupportedPlatform)
+            );
             #[cfg(not(windows))]
             assert!(matches!(
                 client.interrupt(target).unwrap(),
