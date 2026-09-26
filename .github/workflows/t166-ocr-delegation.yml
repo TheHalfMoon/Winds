@@ -1,0 +1,50 @@
+name: t166-ocr-delegation
+
+on:
+  push:
+    branches:
+      - review/t166-ocr-c3e15605
+
+permissions:
+  contents: read
+
+jobs:
+  ocr:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout exact T166 candidate
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: c3e156058cefc06f1563587796bcd16c04252227
+          fetch-depth: 0
+
+      - name: Install Alibaba Open Code Review
+        shell: bash
+        run: |
+          npm install --global @alibaba-group/open-code-review@1.12.9
+          ocr --version
+
+      - name: Resolve exact review range and rules
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE=1f96d38aa614ae40c8c8af011e215b624ae38a87
+          HEAD=c3e156058cefc06f1563587796bcd16c04252227
+          git rev-parse "$BASE"
+          git rev-parse "$HEAD"
+          git merge-base "$BASE" "$HEAD"
+          ocr delegate preview --format json --from "$BASE" --to "$HEAD" | tee /tmp/ocr-preview.json
+          ocr delegate rule --format json \
+            src/multiplexer/protocol.rs \
+            src/persistent_runtime/client.rs \
+            src/persistent_runtime/owner.rs \
+            src/persistent_runtime/protocol.rs \
+            src/persistent_runtime/transport/unix.rs \
+            src/persistent_runtime/transport/windows.rs \
+            src/t166_multiplexer_protocol_v2_tests.rs | tee /tmp/ocr-rules.json
+
+      - name: Verify exact candidate diff is readable
+        shell: bash
+        run: |
+          git diff --check 1f96d38aa614ae40c8c8af011e215b624ae38a87..c3e156058cefc06f1563587796bcd16c04252227
+          git diff --stat 1f96d38aa614ae40c8c8af011e215b624ae38a87..c3e156058cefc06f1563587796bcd16c04252227
