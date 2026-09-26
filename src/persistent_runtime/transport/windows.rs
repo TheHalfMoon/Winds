@@ -10,8 +10,8 @@ use std::ptr::{null, null_mut};
 use std::thread;
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_ACCESS_DENIED, ERROR_BROKEN_PIPE, ERROR_FILE_NOT_FOUND, ERROR_NO_DATA,
-    ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, GENERIC_READ, GENERIC_WRITE,
-    GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
+    ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, ERROR_PIPE_LISTENING, ERROR_PIPE_NOT_CONNECTED,
+    GENERIC_READ, GENERIC_WRITE, GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
@@ -258,7 +258,7 @@ impl WindowsNamedPipeServer {
         let connected = unsafe { ConnectNamedPipe(self.handle.raw(), null_mut()) };
         if connected == 0 {
             let error = last_error_code();
-            if error == ERROR_PIPE_NOT_CONNECTED {
+            if matches!(error, ERROR_PIPE_LISTENING | ERROR_PIPE_NOT_CONNECTED) {
                 return Ok(false);
             }
             if error != ERROR_PIPE_CONNECTED {
