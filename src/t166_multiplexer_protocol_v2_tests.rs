@@ -2043,7 +2043,7 @@ fn t166_owner_dispatch_preflights_capability_and_applies_exact_topology() {
         } else {
             std::env::temp_dir()
         };
-        let path = base.join(format!("w166r{id}"));
+        let path = base.join(format!("w166r{:x}-{id}", std::process::id()));
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).unwrap();
         path.canonicalize().unwrap()
