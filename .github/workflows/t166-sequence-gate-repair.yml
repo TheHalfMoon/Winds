@@ -1,0 +1,61 @@
+name: t166-sequence-gate-repair
+
+on:
+  push:
+    branches:
+      - impl/spec-012-t166-protocol-v2
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.event.head_commit.message == 'chore: stage t166 sequence gate repair'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout target branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: impl/spec-012-t166-protocol-v2
+          fetch-depth: 0
+
+      - name: Repair duplicate request sequence gating
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/persistent_runtime/owner.rs')
+          source = path.read_text(encoding='utf-8')
+          start = source.index('    fn dispatch_authenticated_request(')
+          end = source.index('\n    fn ', start + 1)
+          segment = source[start:end]
+          gate = 'session.request_guard.accept(request)?;'
+
+          if segment.count(gate) != 6:
+              raise SystemExit(f'expected 6 request gates in dispatch_authenticated_request, found {segment.count(gate)}')
+
+          repaired = segment.replace('            session.request_guard.accept(request)?;\n', '')
+          if repaired.count(gate) != 1:
+              raise SystemExit(f'expected exactly one request gate after repair, found {repaired.count(gate)}')
+
+          source = source[:start] + repaired + source[end:]
+          path.write_text(source, encoding='utf-8')
+          PY
+
+      - name: Verify formatting and focused regression
+        shell: bash
+        run: |
+          cargo fmt --all -- --check
+          cargo test --locked t166_real_private_endpoint_preserves_spec011_and_v2_then_allows_next_client -- --nocapture
+
+      - name: Commit forward-only repair
+        shell: bash
+        run: |
+          git rm .github/workflows/t166-sequence-gate-repair.yml
+          git config user.name 'Winds Automation'
+          git config user.email 'actions@users.noreply.github.com'
+          git add src/persistent_runtime/owner.rs
+          git diff --cached --check
+          git commit -m 'fix(t166): sequence-gate owner requests exactly once'
+          git push origin HEAD:impl/spec-012-t166-protocol-v2
