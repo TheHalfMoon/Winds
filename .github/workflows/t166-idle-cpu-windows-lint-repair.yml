@@ -1,0 +1,78 @@
+name: t166-idle-cpu-windows-lint-repair
+
+on:
+  push:
+    branches:
+      - repair/t166-idle-cpu-windows-lint-9d77b78
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact T166 implementation branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: impl/spec-012-t166-protocol-v2
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify exact input head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "9d77b78f0cac1d673a3794e45615680b3cfd97d4"
+
+      - name: Repair idle polling cadence and Windows-only unused parameters
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          owner = Path("src/persistent_runtime/owner.rs")
+          text = owner.read_text()
+          old = "const OWNER_SERVICE_TICK_MS: u64 = 10;\n"
+          new = "const OWNER_SERVICE_TICK_MS: u64 = 50;\n"
+          if text.count(old) != 1:
+              raise SystemExit(f"expected one owner tick target, found {text.count(old)}")
+          owner.write_text(text.replace(old, new, 1))
+
+          tests = Path("src/t166_multiplexer_protocol_v2_tests.rs")
+          text = tests.read_text()
+          start_old = '''    fn start_owner(home: &Path, runtime_root: &Path, now: i64) -> PersistentOwner {\n        #[cfg(any(target_os = "linux", target_os = "macos"))]\n'''
+          start_new = '''    fn start_owner(home: &Path, runtime_root: &Path, now: i64) -> PersistentOwner {\n        #[cfg(windows)]\n        let _ = runtime_root;\n        #[cfg(any(target_os = "linux", target_os = "macos"))]\n'''
+          connect_old = '''    fn connect_client(\n        runtime_root: &Path,\n        generation: OwnerGenerationId,\n    ) -> RustLocalControlClient {\n        #[cfg(any(target_os = "linux", target_os = "macos"))]\n'''
+          connect_new = '''    fn connect_client(\n        runtime_root: &Path,\n        generation: OwnerGenerationId,\n    ) -> RustLocalControlClient {\n        #[cfg(windows)]\n        let _ = runtime_root;\n        #[cfg(any(target_os = "linux", target_os = "macos"))]\n'''
+          if text.count(start_old) != 1:
+              raise SystemExit(f"expected one start_owner target, found {text.count(start_old)}")
+          if text.count(connect_old) != 1:
+              raise SystemExit(f"expected one connect_client target, found {text.count(connect_old)}")
+          text = text.replace(start_old, start_new, 1).replace(connect_old, connect_new, 1)
+          tests.write_text(text)
+          PY
+          git diff --check
+          git diff -- src/persistent_runtime/owner.rs src/t166_multiplexer_protocol_v2_tests.rs
+
+      - name: Qualify Linux-focused behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy
+          cargo fmt --all -- --check
+          cargo clippy --locked --bin winds --tests -- -D warnings
+          cargo test --locked --all-features t166_owner_dispatch_preflights_capability_and_applies_exact_topology
+          cargo test --locked --all-features t155_real_unix_private_endpoint_performs_same_user_generation_handshake
+          cargo test --locked --all-features t166_real_private_endpoint_preserves_spec011_and_v2_then_allows_next_client
+
+      - name: Commit and push forward-only repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "TheHalfMoon"
+          git config user.email "alshehriofficial@gmail.com"
+          git add src/persistent_runtime/owner.rs src/t166_multiplexer_protocol_v2_tests.rs
+          git commit -m "fix(t166): bound idle endpoint polling"
+          git push origin HEAD:impl/spec-012-t166-protocol-v2
