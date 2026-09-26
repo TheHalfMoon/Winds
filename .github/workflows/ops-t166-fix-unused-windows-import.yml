@@ -34,20 +34,15 @@ jobs:
 
           path = Path("src/t166_multiplexer_protocol_v2_tests.rs")
           text = path.read_text()
-          old = """    use crate::persistent_runtime::client::{
-              ClientResponseProjection, LocalControlClientError, ResolvedRuntimeTarget,
-              RustLocalControlClient,
-          };
-          """
-          new = """    use crate::persistent_runtime::client::{
-              ClientResponseProjection, ResolvedRuntimeTarget, RustLocalControlClient,
-          };
-          #[cfg(windows)]
-          use crate::persistent_runtime::client::LocalControlClientError;
-          """
-          if text.count(old) != 1:
-              raise SystemExit("expected exact import block once")
-          path.write_text(text.replace(old, new, 1))
+          token = "LocalControlClientError, "
+          if text.count(token) != 1:
+              raise SystemExit("expected LocalControlClientError import token exactly once")
+          text = text.replace(token, "", 1)
+          anchor = "    use crate::persistent_runtime::domain::{ClientAuthority, RuntimeAlias};"
+          if text.count(anchor) != 1:
+              raise SystemExit("expected persistent-runtime domain import anchor exactly once")
+          insertion = "    #[cfg(windows)]\n    use crate::persistent_runtime::client::LocalControlClientError;\n" + anchor
+          path.write_text(text.replace(anchor, insertion, 1))
           PY
 
       - name: Format and verify bounded diff
