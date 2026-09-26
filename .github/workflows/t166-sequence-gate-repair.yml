@@ -42,9 +42,10 @@ jobs:
           path.write_text(source, encoding='utf-8')
           PY
 
-      - name: Verify formatting and focused regression
+      - name: Format and verify focused regression
         shell: bash
         run: |
+          cargo fmt --all
           cargo fmt --all -- --check
           cargo test --locked t166_real_private_endpoint_preserves_spec011_and_v2_then_allows_next_client -- --nocapture
 
