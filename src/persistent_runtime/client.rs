@@ -1,7 +1,7 @@
 #[path = "../multiplexer/projection.rs"]
 mod topology_projection;
-pub(crate) use topology_projection::TopologyProjectionFreshness;
 use topology_projection::TopologyProjection;
+pub(crate) use topology_projection::TopologyProjectionFreshness;
 
 use crate::multiplexer::domain::{
     MultiplexerErrorKind, MultiplexerWorkspaceId, TopologyGeneration,
@@ -11,12 +11,12 @@ use crate::persistent_runtime::domain::{
     RuntimeAlias, RuntimeLifecycleEvent, RuntimeNamespaceId, RuntimeTruth,
 };
 use crate::persistent_runtime::protocol::{
-    ListMultiplexerWorkspacesV2, MAX_INBOUND_CONTROL_FRAME_BYTES, MessageKind,
-    MultiplexerEventV2, MultiplexerSnapshotV2, MultiplexerSubscriptionStreamV2,
-    MutationOutcomeTracker, PROTOCOL_VERSION, ProtocolMessage, ProtocolPayload,
-    SubscribeMultiplexerEventsV2, TopologyMutationOutcomeV2, decode_frame, encode_frame,
-    is_legacy_protocol_frame, validate_event_binding,
-    validate_multiplexer_subscription_event_binding, validate_response_binding,
+    ListMultiplexerWorkspacesV2, MAX_INBOUND_CONTROL_FRAME_BYTES, MessageKind, MultiplexerEventV2,
+    MultiplexerSnapshotV2, MultiplexerSubscriptionStreamV2, MutationOutcomeTracker,
+    PROTOCOL_VERSION, ProtocolMessage, ProtocolPayload, SubscribeMultiplexerEventsV2,
+    TopologyMutationOutcomeV2, decode_frame, encode_frame, is_legacy_protocol_frame,
+    validate_event_binding, validate_multiplexer_subscription_event_binding,
+    validate_response_binding,
 };
 use std::collections::{BTreeSet, VecDeque};
 use std::error::Error;
@@ -401,9 +401,9 @@ impl RustLocalControlClient {
                     TopologyMutationOutcomeV2::Rejected { error } => {
                         Err(LocalControlClientError::Multiplexer(error))
                     }
-                    TopologyMutationOutcomeV2::Accepted => Err(
-                        LocalControlClientError::Protocol(LocalControlErrorKind::MalformedFrame),
-                    ),
+                    TopologyMutationOutcomeV2::Accepted => Err(LocalControlClientError::Protocol(
+                        LocalControlErrorKind::MalformedFrame,
+                    )),
                 },
                 _ => Ok(snapshot),
             },
@@ -450,12 +450,9 @@ impl RustLocalControlClient {
     pub(crate) fn refresh_subscribed_topology_projection(
         &mut self,
     ) -> ClientResult<MultiplexerSnapshotV2> {
-        let filter = self
-            .topology_projection
-            .subscription_filter()
-            .ok_or(LocalControlClientError::Protocol(
-                LocalControlErrorKind::UnsupportedOperation,
-            ))?;
+        let filter = self.topology_projection.subscription_filter().ok_or(
+            LocalControlClientError::Protocol(LocalControlErrorKind::UnsupportedOperation),
+        )?;
         let snapshot = self.list_topology_snapshot(filter)?;
         self.topology_projection
             .accept_snapshot(&snapshot)
@@ -778,13 +775,9 @@ impl RustLocalControlClient {
             event: topology_event,
         } = &event.payload
         {
-            let subscription = self
-                .topology_projection
-                .subscription()
-                .cloned()
-                .ok_or(LocalControlClientError::Protocol(
-                    LocalControlErrorKind::UnsupportedOperation,
-                ))?;
+            let subscription = self.topology_projection.subscription().cloned().ok_or(
+                LocalControlClientError::Protocol(LocalControlErrorKind::UnsupportedOperation),
+            )?;
             validate_multiplexer_subscription_event_binding(
                 &self.connection_id,
                 self.owner_generation_id,
