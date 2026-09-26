@@ -1,0 +1,63 @@
+name: t166-test-isolation-repair
+
+on:
+  push:
+    branches:
+      - repair/t166-test-isolation-4798a755
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact T166 implementation branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: impl/spec-012-t166-protocol-v2
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify exact input head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "4798a75581ca8afc3469eabff1031aa9e92c9ad1"
+
+      - name: Repair cross-process test endpoint isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("src/t166_multiplexer_protocol_v2_tests.rs")
+          text = path.read_text()
+          old = '        let path = base.join(format!("w166r{id}"));\n'
+          new = '        let path = base.join(format!("w166r{:x}-{id}", std::process::id()));\n'
+          if text.count(old) != 1:
+              raise SystemExit(f"expected exactly one target, found {text.count(old)}")
+          path.write_text(text.replace(old, new, 1))
+          PY
+          git diff --check
+          git diff -- src/t166_multiplexer_protocol_v2_tests.rs
+
+      - name: Qualify focused regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.97.1 --profile minimal --component rustfmt
+          cargo fmt --all -- --check
+          cargo test --locked --all-features t166_owner_dispatch_preflights_capability_and_applies_exact_topology
+          cargo test --locked --all-features t155_real_unix_private_endpoint_performs_same_user_generation_handshake
+          cargo test --locked --all-features t166_real_private_endpoint_preserves_spec011_and_v2_then_allows_next_client
+
+      - name: Commit and push forward-only repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "TheHalfMoon"
+          git config user.email "alshehriofficial@gmail.com"
+          git add src/t166_multiplexer_protocol_v2_tests.rs
+          git commit -m "test(t166): isolate dispatch endpoint per process"
+          git push origin HEAD:impl/spec-012-t166-protocol-v2
