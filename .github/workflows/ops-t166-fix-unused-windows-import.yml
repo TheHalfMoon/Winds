@@ -26,8 +26,10 @@ jobs:
           test "$(git rev-parse HEAD)" = "b2ec9706d68463b417aab8b25fe1cd021b233353"
 
       - name: Gate Windows-only test import
-        shell: python
+        shell: bash
         run: |
+          set -euo pipefail
+          python - <<'PY'
           from pathlib import Path
 
           path = Path("src/t166_multiplexer_protocol_v2_tests.rs")
@@ -36,16 +38,17 @@ jobs:
               ClientResponseProjection, LocalControlClientError, ResolvedRuntimeTarget,
               RustLocalControlClient,
           };
-"""
+          """
           new = """    use crate::persistent_runtime::client::{
               ClientResponseProjection, ResolvedRuntimeTarget, RustLocalControlClient,
           };
           #[cfg(windows)]
           use crate::persistent_runtime::client::LocalControlClientError;
-"""
+          """
           if text.count(old) != 1:
               raise SystemExit("expected exact import block once")
           path.write_text(text.replace(old, new, 1))
+          PY
 
       - name: Format and verify bounded diff
         shell: bash
