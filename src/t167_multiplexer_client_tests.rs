@@ -5,8 +5,8 @@ use crate::persistent_runtime::domain::{
 };
 use crate::persistent_runtime::protocol::{
     MultiplexerEventSubscriptionAckV2, MultiplexerEventV2, MultiplexerSnapshotV2,
-    MultiplexerSubscriptionBoundaryV2, MultiplexerSubscriptionStreamV2,
-    ProtocolWorkspaceSummaryV2, SubscribeMultiplexerEventsV2,
+    MultiplexerSubscriptionBoundaryV2, MultiplexerSubscriptionStreamV2, ProtocolWorkspaceSummaryV2,
+    SubscribeMultiplexerEventsV2,
 };
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -73,7 +73,9 @@ fn t167_projection_requires_snapshot_after_subscription_and_after_event() {
     );
     assert!(projection.trusted_snapshot().is_none());
 
-    projection.accept_snapshot(&workspace_list_snapshot(1)).unwrap();
+    projection
+        .accept_snapshot(&workspace_list_snapshot(1))
+        .unwrap();
     assert_eq!(projection.freshness(), TopologyProjectionFreshness::Current);
     assert!(projection.trusted_snapshot().is_some());
 
@@ -89,7 +91,9 @@ fn t167_projection_requires_snapshot_after_subscription_and_after_event() {
     );
     assert!(projection.trusted_snapshot().is_none());
 
-    projection.accept_snapshot(&workspace_list_snapshot(2)).unwrap();
+    projection
+        .accept_snapshot(&workspace_list_snapshot(2))
+        .unwrap();
     assert_eq!(projection.freshness(), TopologyProjectionFreshness::Current);
 }
 
@@ -100,7 +104,9 @@ fn t167_gap_and_unfiltered_generation_discontinuity_require_resubscribe() {
     projection
         .accept_subscription_ack(&subscription, &topology_ack(None, 3))
         .unwrap();
-    projection.accept_snapshot(&workspace_list_snapshot(3)).unwrap();
+    projection
+        .accept_snapshot(&workspace_list_snapshot(3))
+        .unwrap();
 
     projection
         .accept_event(&MultiplexerEventV2::TopologyChanged {
@@ -122,7 +128,9 @@ fn t167_gap_and_unfiltered_generation_discontinuity_require_resubscribe() {
     projection
         .accept_subscription_ack(&subscription, &topology_ack(None, 5))
         .unwrap();
-    projection.accept_snapshot(&workspace_list_snapshot(5)).unwrap();
+    projection
+        .accept_snapshot(&workspace_list_snapshot(5))
+        .unwrap();
     projection
         .accept_event(&MultiplexerEventV2::HistoryGap {
             last_known_topology_generation: topology_generation(5),
@@ -163,7 +171,9 @@ fn t167_reconnect_reset_clears_subscription_and_cache_authority() {
     projection
         .accept_subscription_ack(&subscription, &topology_ack(None, 9))
         .unwrap();
-    projection.accept_snapshot(&workspace_list_snapshot(9)).unwrap();
+    projection
+        .accept_snapshot(&workspace_list_snapshot(9))
+        .unwrap();
     assert!(projection.trusted_snapshot().is_some());
 
     projection.reset_for_connection(generation(4));
@@ -239,7 +249,10 @@ fn t167_read_only_refresh_never_requests_multiplexer_write() {
         RustLocalControlClient::connect_with_wire_for_test(Box::new(wire), None).unwrap();
 
     let snapshot = client.refresh_topology_projection(None).unwrap();
-    assert!(matches!(snapshot, MultiplexerSnapshotV2::WorkspaceList { .. }));
+    assert!(matches!(
+        snapshot,
+        MultiplexerSnapshotV2::WorkspaceList { .. }
+    ));
     assert_eq!(
         client.topology_projection_freshness(),
         TopologyProjectionFreshness::Current
