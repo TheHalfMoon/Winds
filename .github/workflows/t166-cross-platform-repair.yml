@@ -1,0 +1,63 @@
+name: t166-cross-platform-repair
+
+on:
+  push:
+    branches:
+      - repair/t166-cross-platform-c3e15605
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: c3e156058cefc06f1563587796bcd16c04252227
+          fetch-depth: 0
+
+      - name: Apply cross-platform compatibility repairs
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          owner_path = Path('src/persistent_runtime/owner.rs')
+          owner = owner_path.read_text(encoding='utf-8')
+          old_import = 'use std::io::{Read, Write};\n'
+          new_import = '#[cfg(any(target_os = "linux", target_os = "macos"))]\nuse std::io::{Read, Write};\n'
+          if owner.count(old_import) != 1:
+              raise SystemExit(f'expected one owner io import, found {owner.count(old_import)}')
+          owner = owner.replace(old_import, new_import, 1)
+          owner_path.write_text(owner, encoding='utf-8')
+
+          unix_path = Path('src/persistent_runtime/transport/unix.rs')
+          unix = unix_path.read_text(encoding='utf-8')
+          old_accept = '''            if let Some(stream) = self.try_accept_same_user()? {\n                return Ok(stream);\n            }\n'''
+          new_accept = '''            if let Some(stream) = self.try_accept_same_user()? {\n                stream\n                    .set_nonblocking(false)\n                    .map_err(PosixTransportError::from)?;\n                return Ok(stream);\n            }\n'''
+          if unix.count(old_accept) != 1:
+              raise SystemExit(f'expected one blocking accept compatibility path, found {unix.count(old_accept)}')
+          unix = unix.replace(old_accept, new_accept, 1)
+          unix_path.write_text(unix, encoding='utf-8')
+          PY
+
+      - name: Format and run focused regressions
+        shell: bash
+        run: |
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo test --locked t155_real_unix_private_endpoint_performs_same_user_generation_handshake -- --nocapture
+          cargo test --locked t166_real_private_endpoint_preserves_spec011_and_v2_then_allows_next_client -- --nocapture
+          cargo clippy --locked --bin winds --tests -- -D warnings
+
+      - name: Commit repair onto exact candidate and advance PR branch
+        shell: bash
+        run: |
+          git config user.name 'Winds Automation'
+          git config user.email 'actions@users.noreply.github.com'
+          git add src/persistent_runtime/owner.rs src/persistent_runtime/transport/unix.rs
+          git diff --cached --check
+          git commit -m 'fix(t166): preserve blocking Unix accept and gate Unix io imports'
+          git push origin HEAD:impl/spec-012-t166-protocol-v2
