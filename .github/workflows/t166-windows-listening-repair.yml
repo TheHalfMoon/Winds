@@ -1,0 +1,61 @@
+name: t166-windows-listening-repair
+
+on:
+  push:
+    branches:
+      - repair/t166-windows-listening-008f6b2
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: 008f6b269a8af91932e800d710ce782406688ebb
+          fetch-depth: 0
+
+      - name: Repair Windows nonblocking listen state
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/persistent_runtime/transport/windows.rs')
+          source = path.read_text(encoding='utf-8')
+
+          old_import = '''    CloseHandle, ERROR_ACCESS_DENIED, ERROR_BROKEN_PIPE, ERROR_FILE_NOT_FOUND, ERROR_NO_DATA,\n    ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, ERROR_PIPE_NOT_CONNECTED, GENERIC_READ, GENERIC_WRITE,\n'''
+          new_import = '''    CloseHandle, ERROR_ACCESS_DENIED, ERROR_BROKEN_PIPE, ERROR_FILE_NOT_FOUND, ERROR_NO_DATA,\n    ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, ERROR_PIPE_LISTENING, ERROR_PIPE_NOT_CONNECTED,\n    GENERIC_READ, GENERIC_WRITE,\n'''
+          if source.count(old_import) != 1:
+              raise SystemExit(f'expected one Windows Foundation import block, found {source.count(old_import)}')
+          source = source.replace(old_import, new_import, 1)
+
+          old_state = '''            if error == ERROR_PIPE_NOT_CONNECTED {\n                return Ok(false);\n            }\n            if error != ERROR_PIPE_CONNECTED {\n'''
+          new_state = '''            if matches!(error, ERROR_PIPE_LISTENING | ERROR_PIPE_NOT_CONNECTED) {\n                return Ok(false);\n            }\n            if error != ERROR_PIPE_CONNECTED {\n'''
+          if source.count(old_state) != 1:
+              raise SystemExit(f'expected one nonblocking ConnectNamedPipe state branch, found {source.count(old_state)}')
+          source = source.replace(old_state, new_state, 1)
+
+          path.write_text(source, encoding='utf-8')
+          PY
+
+      - name: Format and validate unaffected host build
+        shell: bash
+        run: |
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo clippy --locked --bin winds --tests -- -D warnings
+          git diff --check
+
+      - name: Commit exact repair and advance PR branch
+        shell: bash
+        run: |
+          git config user.name 'Winds Automation'
+          git config user.email 'actions@users.noreply.github.com'
+          git add src/persistent_runtime/transport/windows.rs
+          git diff --cached --check
+          git commit -m 'fix(t166): treat Windows pipe listening as pending accept'
+          git push origin HEAD:impl/spec-012-t166-protocol-v2
