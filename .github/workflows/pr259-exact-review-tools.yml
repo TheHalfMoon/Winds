@@ -1,0 +1,140 @@
+name: pr259-exact-review-tools
+
+on:
+  push:
+    branches:
+      - review/pr259-exact-tools
+
+permissions:
+  contents: read
+
+jobs:
+  exact-review-tools:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      REVIEW_BASE: 7fb9761874e03608fc7d47a9174dd9c27f4a0537
+      REVIEW_HEAD: 7213c69c86bcebf81154fe9bbe113656abe46db9
+      REVIEW_PATH: specs/012-workspace-multiplexer-agent-plane/tasks-amendment-002-t167-topology-subscription-activation.md
+    steps:
+      - name: Checkout exact candidate with history
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.REVIEW_HEAD }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact candidate identity and scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$REVIEW_HEAD"
+          test "$(git merge-base "$REVIEW_BASE" "$REVIEW_HEAD")" = "$REVIEW_BASE"
+          test "$(git rev-list --count "$REVIEW_BASE..$REVIEW_HEAD")" = "2"
+          test "$(git rev-list --count "$REVIEW_HEAD..$REVIEW_BASE")" = "0"
+          mapfile -t changed < <(git diff --name-only "$REVIEW_BASE..$REVIEW_HEAD")
+          test "${#changed[@]}" = "1"
+          test "${changed[0]}" = "$REVIEW_PATH"
+          git diff --check "$REVIEW_BASE..$REVIEW_HEAD"
+          git diff --no-ext-diff --unified=80 "$REVIEW_BASE..$REVIEW_HEAD" -- "$REVIEW_PATH" > /tmp/pr259-exact.diff
+          test -s /tmp/pr259-exact.diff
+
+      - name: Install Alibaba Open Code Review v1.12.9
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -fLsS https://open-codereview.ai/install.sh -o /tmp/ocr-install.sh
+          OCR_VERSION=v1.12.9 OCR_INSTALL_DIR="$HOME/.local/bin" sh /tmp/ocr-install.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/ocr" version
+
+      - name: Alibaba Open Code Review exact-range preview/accounting
+        shell: bash
+        run: |
+          set -euo pipefail
+          ocr review --preview --from "$REVIEW_BASE" --to "$REVIEW_HEAD" --format json | tee /tmp/ocr-pr259.json
+          test -s /tmp/ocr-pr259.json
+          {
+            echo '## Alibaba Open Code Review v1.12.9 exact-range preview'
+            echo
+            echo '```json'
+            cat /tmp/ocr-pr259.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install Jev CLI v0.3.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -fLsS https://github.com/okooo5km/jev/releases/download/v0.3.2/install.sh -o /tmp/jev-install.sh
+          sh /tmp/jev-install.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/jev" --version
+
+      - name: Run genuine Jev exact-head governance review
+        shell: bash
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TYPESAFE_API_KEY:-}" ]; then
+            echo '::error::TYPESAFE_API_KEY is not configured for this repository; genuine Jev review cannot run.'
+            exit 3
+          fi
+          cat > /tmp/pr259-jev-spec.json <<'JSON'
+          {
+            "description": "Exact-head governance review for Winds Spec 012 Amendment 002",
+            "model": "jev-1.13.0",
+            "questions": {
+              "narrow_owner_activation": {
+                "type": "noul",
+                "instructions": "Is this amendment narrowly limited to the minimum owner-side topology subscription activation needed by T167?",
+                "criteria": {
+                  "true": "Only the already-frozen Topology subscription is activated in owner.rs, with unrelated paths and domains explicitly prohibited.",
+                  "false": "The amendment materially broadens authority, opens unrelated paths/domains, or changes protocol schema/framing."
+                }
+              },
+              "protocol_v2_immutability": {
+                "type": "noul",
+                "instructions": "Does the amendment preserve the frozen T166 protocol-v2 message kinds, payload schemas, framing, cursors, and frame ceiling?",
+                "criteria": {
+                  "true": "All protocol-v2 wire-schema and framing changes remain explicitly unauthorized.",
+                  "false": "The amendment permits or ambiguously enables an in-place protocol-v2 wire change."
+                }
+              },
+              "authority_separation": {
+                "type": "noul",
+                "instructions": "Does the amendment preserve read-only subscription semantics without implicitly granting MultiplexerWrite or Runtime Controller authority?",
+                "criteria": {
+                  "true": "Subscription remains presentation/read authority and writer/controller authority stay explicit and separate.",
+                  "false": "Subscription can implicitly create or reconstruct writer/controller authority."
+                }
+              },
+              "fail_closed_scope_growth": {
+                "type": "noul",
+                "instructions": "Does the amendment fail closed if safe T167 implementation later proves another production path or authority is necessary?",
+                "criteria": {
+                  "true": "It explicitly requires a separate accepted amendment before any additional path or authority can be used.",
+                  "false": "It allows implicit scope expansion or leaves additional-path authority ambiguous."
+                }
+              },
+              "qualification_integrity": {
+                "type": "noul",
+                "instructions": "Does the amendment require exact-head Jev and Alibaba Open Code Review evidence without allowing unavailable tools or stale predecessor evidence to be relabelled as PASS?",
+                "criteria": {
+                  "true": "Exact-head tool execution is mandatory and unavailable/stale evidence remains non-passing.",
+                  "false": "The amendment permits skipped, inferred, stale, or fabricated reviewer evidence to qualify the candidate."
+                }
+              }
+            }
+          }
+          JSON
+          jev run /tmp/pr259-jev-spec.json --state @/tmp/pr259-exact.diff --provider typesafe --model jev-1.13.0 --json | tee /tmp/jev-pr259.json
+          test -s /tmp/jev-pr259.json
+          {
+            echo '## Jev v0.3.2 / TypeSafe jev-1.13.0 exact-head review'
+            echo
+            echo '```json'
+            cat /tmp/jev-pr259.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
