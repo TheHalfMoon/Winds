@@ -2256,6 +2256,8 @@ mod real_endpoint_tests {
     }
 
     fn start_owner(home: &Path, runtime_root: &Path, now: i64) -> PersistentOwner {
+        #[cfg(windows)]
+        let _ = runtime_root;
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let runtime_directory = runtime_root.join("r");
@@ -2275,6 +2277,8 @@ mod real_endpoint_tests {
         runtime_root: &Path,
         generation: OwnerGenerationId,
     ) -> RustLocalControlClient {
+        #[cfg(windows)]
+        let _ = runtime_root;
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             RustLocalControlClient::connect_runtime_directory_for_test(

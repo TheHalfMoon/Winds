@@ -112,7 +112,7 @@ pub(crate) enum OwnerStartupPhase {
 
 const OWNER_SESSION_HANDSHAKE_TIMEOUT_MS: u64 = 5_000;
 const OWNER_SESSION_IDLE_TIMEOUT_MS: u64 = 300_000;
-const OWNER_SERVICE_TICK_MS: u64 = 10;
+const OWNER_SERVICE_TICK_MS: u64 = 50;
 const OWNER_OUTBOUND_FRAME_LIMIT: usize = 2 * MAX_CONTROL_FRAME_BYTES;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
