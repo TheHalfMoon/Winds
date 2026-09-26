@@ -52,7 +52,19 @@ The corrected T167 candidate must prove:
 9. existing Spec 011 runtime-control behavior and T166 protocol-v2 wire schema remain unchanged;
 10. all applicable exact-head repository and native-platform checks pass.
 
-Candidate movement invalidates stale exact-candidate evidence. This governance amendment is canonical only after exact-head repository quality, author correctness/safety/governance/evidence-integrity review, Ponytail/YAGNI review, genuine Jev review where available, Alibaba Open Code Review delegation/rule accounting where applicable, fresh independent exact-head review with zero unresolved material findings/threads, immediate pre-landing identity/scope/mergeability reconciliation, guarded expected-head normal merge, and successful post-merge verification.
+Candidate movement invalidates stale exact-candidate evidence. This governance amendment is canonical only after all of the following complete on the exact final head:
+
+- repository quality;
+- author correctness/safety/governance/evidence-integrity review;
+- Ponytail/YAGNI review;
+- **genuine Jev review** bound to the exact candidate; if Jev cannot actually execute, the amendment remains blocked and no PASS may be inferred or fabricated;
+- **Alibaba Open Code Review exact-head delegation/rule accounting**; if the Markdown path is classified `unsupported_ext`, that truthful tool result is recorded and the document receives explicit manual exact-head review, but the OCR invocation itself must actually run;
+- fresh independent exact-head review with zero unresolved material findings/threads;
+- immediate pre-landing identity/scope/mergeability reconciliation;
+- guarded expected-head normal merge;
+- successful post-merge verification.
+
+No unavailable reviewer or tool is relabelled as PASS, and no predecessor Jev/OCR result qualifies a moved candidate.
 
 ## Authority state before landing
 
