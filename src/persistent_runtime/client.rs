@@ -1,11 +1,22 @@
+#[path = "../multiplexer/projection.rs"]
+mod topology_projection;
+pub(crate) use topology_projection::TopologyProjectionFreshness;
+use topology_projection::TopologyProjection;
+
+use crate::multiplexer::domain::{
+    MultiplexerErrorKind, MultiplexerWorkspaceId, TopologyGeneration,
+};
 use crate::persistent_runtime::domain::{
     ClientAuthority, ClientConnectionId, EventSequence, LocalControlErrorKind, OwnerGenerationId,
     RuntimeAlias, RuntimeLifecycleEvent, RuntimeNamespaceId, RuntimeTruth,
 };
 use crate::persistent_runtime::protocol::{
-    MAX_INBOUND_CONTROL_FRAME_BYTES, MessageKind, MutationOutcomeTracker, PROTOCOL_VERSION,
-    ProtocolMessage, ProtocolPayload, decode_frame, encode_frame, is_legacy_protocol_frame,
-    validate_event_binding, validate_response_binding,
+    ListMultiplexerWorkspacesV2, MAX_INBOUND_CONTROL_FRAME_BYTES, MessageKind,
+    MultiplexerEventV2, MultiplexerSnapshotV2, MultiplexerSubscriptionStreamV2,
+    MutationOutcomeTracker, PROTOCOL_VERSION, ProtocolMessage, ProtocolPayload,
+    SubscribeMultiplexerEventsV2, TopologyMutationOutcomeV2, decode_frame, encode_frame,
+    is_legacy_protocol_frame, validate_event_binding,
+    validate_multiplexer_subscription_event_binding, validate_response_binding,
 };
 use std::collections::{BTreeSet, VecDeque};
 use std::error::Error;
@@ -19,6 +30,7 @@ pub(crate) type ClientResult<T> = Result<T, LocalControlClientError>;
 pub(crate) enum LocalControlClientError {
     Transport(String),
     Protocol(LocalControlErrorKind),
+    Multiplexer(MultiplexerErrorKind),
     ProtocolMismatch,
     BlockedLegacyOwner,
     StaleOwnerGeneration,
@@ -38,6 +50,7 @@ impl fmt::Display for LocalControlClientError {
         match self {
             Self::Transport(message) => write!(formatter, "local-control transport failed: {message}"),
             Self::Protocol(kind) => write!(formatter, "local-control protocol failed: {kind:?}"),
+            Self::Multiplexer(kind) => write!(formatter, "multiplexer operation failed: {kind:?}"),
             Self::ProtocolMismatch => formatter.write_str("local-control protocol version mismatch"),
             Self::BlockedLegacyOwner => formatter.write_str(
                 "local-control owner is live on legacy protocol v1; v2 owner-backed features are blocked until the legacy owner is explicitly quiesced",
@@ -176,6 +189,9 @@ pub(crate) enum ClientEventProjection {
     },
     OwnerStatus {
         ready: bool,
+    },
+    MultiplexerTopology {
+        event: MultiplexerEventV2,
     },
 }
 
@@ -318,6 +334,7 @@ pub(crate) struct RustLocalControlClient {
     next_sequence: u64,
     mutation_outcomes: MutationOutcomeTracker,
     attached_runtimes: BTreeSet<RuntimeNamespaceId>,
+    topology_projection: TopologyProjection,
     pending_events: VecDeque<ProtocolMessage>,
     pending_event_bytes: usize,
 }
@@ -348,9 +365,102 @@ impl RustLocalControlClient {
         self.pending_event_bytes
     }
 
+    pub(crate) fn topology_projection_freshness(&self) -> TopologyProjectionFreshness {
+        self.topology_projection.freshness()
+    }
+
+    pub(crate) fn topology_observed_generation(&self) -> Option<TopologyGeneration> {
+        self.topology_projection.observed_generation()
+    }
+
+    pub(crate) fn trusted_topology_snapshot(&self) -> Option<&MultiplexerSnapshotV2> {
+        self.topology_projection.trusted_snapshot()
+    }
+
     pub(crate) fn reconnect(&mut self) -> ClientResult<()> {
         let wire = PlatformWire::connect_default(Some(self.owner_generation_id))?;
         self.replace_after_handshake(Box::new(wire))
+    }
+
+    pub(crate) fn list_topology_snapshot(
+        &mut self,
+        multiplexer_workspace_id: Option<MultiplexerWorkspaceId>,
+    ) -> ClientResult<MultiplexerSnapshotV2> {
+        let (_, response) = self.transact(
+            None,
+            ProtocolPayload::ListMultiplexerWorkspaces {
+                request: ListMultiplexerWorkspacesV2 {
+                    multiplexer_workspace_id,
+                },
+            },
+            false,
+        )?;
+        match response.payload {
+            ProtocolPayload::MultiplexerSnapshot { snapshot } => match &snapshot {
+                MultiplexerSnapshotV2::MutationResult { result, .. } => match result.outcome {
+                    TopologyMutationOutcomeV2::Rejected { error } => {
+                        Err(LocalControlClientError::Multiplexer(error))
+                    }
+                    TopologyMutationOutcomeV2::Accepted => Err(
+                        LocalControlClientError::Protocol(LocalControlErrorKind::MalformedFrame),
+                    ),
+                },
+                _ => Ok(snapshot),
+            },
+            _ => Err(LocalControlClientError::UnexpectedResponse(response.kind())),
+        }
+    }
+
+    pub(crate) fn subscribe_topology(
+        &mut self,
+        multiplexer_workspace_id: Option<MultiplexerWorkspaceId>,
+    ) -> ClientResult<TopologyGeneration> {
+        let subscription = SubscribeMultiplexerEventsV2 {
+            stream: MultiplexerSubscriptionStreamV2::Topology,
+            multiplexer_workspace_id,
+        };
+        let (_, response) = self.transact(
+            None,
+            ProtocolPayload::SubscribeMultiplexerEvents {
+                request: subscription.clone(),
+            },
+            false,
+        )?;
+        match response.payload {
+            ProtocolPayload::MultiplexerEventSubscriptionAck { ack } => self
+                .topology_projection
+                .accept_subscription_ack(&subscription, &ack)
+                .map_err(map_protocol_error),
+            _ => Err(LocalControlClientError::UnexpectedResponse(response.kind())),
+        }
+    }
+
+    pub(crate) fn refresh_topology_projection(
+        &mut self,
+        multiplexer_workspace_id: Option<MultiplexerWorkspaceId>,
+    ) -> ClientResult<MultiplexerSnapshotV2> {
+        self.subscribe_topology(multiplexer_workspace_id)?;
+        let snapshot = self.list_topology_snapshot(multiplexer_workspace_id)?;
+        self.topology_projection
+            .accept_snapshot(&snapshot)
+            .map_err(map_protocol_error)?;
+        Ok(snapshot)
+    }
+
+    pub(crate) fn refresh_subscribed_topology_projection(
+        &mut self,
+    ) -> ClientResult<MultiplexerSnapshotV2> {
+        let filter = self
+            .topology_projection
+            .subscription_filter()
+            .ok_or(LocalControlClientError::Protocol(
+                LocalControlErrorKind::UnsupportedOperation,
+            ))?;
+        let snapshot = self.list_topology_snapshot(filter)?;
+        self.topology_projection
+            .accept_snapshot(&snapshot)
+            .map_err(map_protocol_error)?;
+        Ok(snapshot)
     }
 
     pub(crate) fn attach_observer(
@@ -517,6 +627,7 @@ impl RustLocalControlClient {
             next_sequence: 2,
             mutation_outcomes: MutationOutcomeTracker::new(),
             attached_runtimes: BTreeSet::new(),
+            topology_projection: TopologyProjection::new(owner_generation_id),
             pending_events: VecDeque::new(),
             pending_event_bytes: 0,
         })
@@ -531,6 +642,8 @@ impl RustLocalControlClient {
         self.connection_id = replacement.connection_id;
         self.next_sequence = replacement.next_sequence;
         self.attached_runtimes.clear();
+        self.topology_projection
+            .reset_for_connection(self.owner_generation_id);
         self.pending_events.clear();
         self.pending_event_bytes = 0;
         Ok(())
@@ -661,24 +774,61 @@ impl RustLocalControlClient {
     }
 
     fn queue_event(&mut self, event: ProtocolMessage) -> ClientResult<()> {
-        match event.runtime_namespace_id {
-            Some(runtime_namespace_id) => {
-                if !self.attached_runtimes.contains(&runtime_namespace_id) {
-                    return Err(LocalControlClientError::Protocol(
-                        LocalControlErrorKind::UnknownRuntime,
-                    ));
-                }
-                validate_event_binding(
-                    &self.connection_id,
-                    self.owner_generation_id,
-                    Some(runtime_namespace_id),
-                    &event,
-                )
+        if let ProtocolPayload::MultiplexerEvent {
+            event: topology_event,
+        } = &event.payload
+        {
+            let subscription = self
+                .topology_projection
+                .subscription()
+                .cloned()
+                .ok_or(LocalControlClientError::Protocol(
+                    LocalControlErrorKind::UnsupportedOperation,
+                ))?;
+            validate_multiplexer_subscription_event_binding(
+                &self.connection_id,
+                self.owner_generation_id,
+                &subscription,
+                &event,
+            )
+            .map_err(map_protocol_error)?;
+            self.topology_projection
+                .accept_event(topology_event)
                 .map_err(map_protocol_error)?;
-            }
-            None => {
-                validate_event_binding(&self.connection_id, self.owner_generation_id, None, &event)
+        } else {
+            match event.runtime_namespace_id {
+                Some(runtime_namespace_id) => {
+                    if !self.attached_runtimes.contains(&runtime_namespace_id) {
+                        return Err(LocalControlClientError::Protocol(
+                            LocalControlErrorKind::UnknownRuntime,
+                        ));
+                    }
+                    validate_event_binding(
+                        &self.connection_id,
+                        self.owner_generation_id,
+                        Some(runtime_namespace_id),
+                        &event,
+                    )
                     .map_err(map_protocol_error)?;
+                }
+                None => {
+                    validate_event_binding(
+                        &self.connection_id,
+                        self.owner_generation_id,
+                        None,
+                        &event,
+                    )
+                    .map_err(map_protocol_error)?;
+                    if matches!(
+                        event.payload,
+                        ProtocolPayload::AgentObservationEvent { .. }
+                            | ProtocolPayload::AttentionEvent { .. }
+                    ) {
+                        return Err(LocalControlClientError::Protocol(
+                            LocalControlErrorKind::UnsupportedOperation,
+                        ));
+                    }
+                }
             }
         }
         let frame_bytes = encode_frame(&event).map_err(map_protocol_error)?.len();
@@ -792,6 +942,9 @@ fn project_event(message: ProtocolMessage) -> ClientResult<ClientEventProjection
             last_dropped_sequence,
         }),
         ProtocolPayload::OwnerStatus { ready } => Ok(ClientEventProjection::OwnerStatus { ready }),
+        ProtocolPayload::MultiplexerEvent { event } => {
+            Ok(ClientEventProjection::MultiplexerTopology { event })
+        }
         _ => Err(LocalControlClientError::UnexpectedResponse(message.kind())),
     }
 }
@@ -807,3 +960,7 @@ mod t157_client_recovery_tests;
 #[cfg(test)]
 #[path = "../t166_multiplexer_protocol_v2_tests.rs"]
 mod t166_multiplexer_protocol_v2_tests;
+
+#[cfg(test)]
+#[path = "../t167_multiplexer_client_tests.rs"]
+mod t167_multiplexer_client_tests;
