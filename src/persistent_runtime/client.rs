@@ -4,8 +4,8 @@ use crate::persistent_runtime::domain::{
 };
 use crate::persistent_runtime::protocol::{
     MAX_INBOUND_CONTROL_FRAME_BYTES, MessageKind, MutationOutcomeTracker, PROTOCOL_VERSION,
-    ProtocolMessage, ProtocolPayload, decode_frame, encode_frame, validate_event_binding,
-    validate_response_binding,
+    ProtocolMessage, ProtocolPayload, decode_frame, encode_frame, is_legacy_protocol_frame,
+    validate_event_binding, validate_response_binding,
 };
 use std::collections::{BTreeSet, VecDeque};
 use std::error::Error;
@@ -20,6 +20,7 @@ pub(crate) enum LocalControlClientError {
     Transport(String),
     Protocol(LocalControlErrorKind),
     ProtocolMismatch,
+    BlockedLegacyOwner,
     StaleOwnerGeneration,
     RemoteEndpointRejected,
     ExpectedOwnerGenerationRequired,
@@ -38,6 +39,9 @@ impl fmt::Display for LocalControlClientError {
             Self::Transport(message) => write!(formatter, "local-control transport failed: {message}"),
             Self::Protocol(kind) => write!(formatter, "local-control protocol failed: {kind:?}"),
             Self::ProtocolMismatch => formatter.write_str("local-control protocol version mismatch"),
+            Self::BlockedLegacyOwner => formatter.write_str(
+                "local-control owner is live on legacy protocol v1; v2 owner-backed features are blocked until the legacy owner is explicitly quiesced",
+            ),
             Self::StaleOwnerGeneration => {
                 formatter.write_str("local-control owner generation is stale or mismatched")
             }
@@ -179,6 +183,7 @@ pub(crate) enum ClientEventProjection {
 enum WireError {
     Transport(String),
     Protocol(LocalControlErrorKind),
+    LegacyProtocol,
 }
 
 trait LocalControlWire {
@@ -240,7 +245,7 @@ impl LocalControlWire for PlatformWire {
         let mut frame = Vec::with_capacity(4 + claimed);
         frame.extend_from_slice(&length_bytes);
         frame.extend_from_slice(&payload);
-        decode_frame(&frame).map_err(WireError::Protocol)
+        decode_platform_frame(&frame)
     }
 }
 
@@ -293,7 +298,16 @@ impl LocalControlWire for PlatformWire {
         let mut frame = Vec::with_capacity(4 + claimed);
         frame.extend_from_slice(&length_bytes);
         frame.extend_from_slice(&payload);
-        decode_frame(&frame).map_err(WireError::Protocol)
+        decode_platform_frame(&frame)
+    }
+}
+
+fn decode_platform_frame(frame: &[u8]) -> Result<ProtocolMessage, WireError> {
+    match decode_frame(frame) {
+        Err(LocalControlErrorKind::ProtocolMismatch) if is_legacy_protocol_frame(frame) => {
+            Err(WireError::LegacyProtocol)
+        }
+        result => result.map_err(WireError::Protocol),
     }
 }
 
@@ -723,6 +737,7 @@ fn map_wire_error(error: WireError) -> LocalControlClientError {
     match error {
         WireError::Transport(message) => LocalControlClientError::Transport(message),
         WireError::Protocol(kind) => map_protocol_error(kind),
+        WireError::LegacyProtocol => LocalControlClientError::BlockedLegacyOwner,
     }
 }
 
@@ -788,3 +803,7 @@ mod t155_local_control_client_tests;
 #[cfg(test)]
 #[path = "../t157_client_recovery_tests.rs"]
 mod t157_client_recovery_tests;
+
+#[cfg(test)]
+#[path = "../t166_multiplexer_protocol_v2_tests.rs"]
+mod t166_multiplexer_protocol_v2_tests;

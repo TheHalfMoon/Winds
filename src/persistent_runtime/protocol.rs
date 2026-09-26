@@ -6,8 +6,14 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::{Read, Write};
 
-pub(crate) const PROTOCOL_VERSION: u16 = 1;
-pub(crate) const MAX_INBOUND_CONTROL_FRAME_BYTES: usize = 256 * 1024;
+#[path = "../multiplexer/protocol.rs"]
+mod multiplexer_v2;
+pub(crate) use multiplexer_v2::*;
+
+pub(crate) const LEGACY_PROTOCOL_VERSION: u16 = 1;
+pub(crate) const PROTOCOL_VERSION: u16 = 2;
+pub(crate) const MAX_CONTROL_FRAME_BYTES: usize = 256 * 1024;
+pub(crate) const MAX_INBOUND_CONTROL_FRAME_BYTES: usize = MAX_CONTROL_FRAME_BYTES - 4;
 pub(crate) const MAX_OUTPUT_EVENT_CHUNK_BYTES: usize = 64 * 1024;
 pub(crate) const MAX_INPUT_BYTES: usize = 16 * 1024;
 
@@ -36,6 +42,23 @@ pub(crate) enum MessageKind {
     Resize,
     Interrupt,
     Stop,
+    ListMultiplexerWorkspaces,
+    MultiplexerSnapshot,
+    RequestMultiplexerWrite,
+    ReleaseMultiplexerWrite,
+    MultiplexerWriteState,
+    ApplyTopologyOperation,
+    MultiplexerEvent,
+    SubscribeMultiplexerEvents,
+    MultiplexerEventSubscriptionAck,
+    ListAgentObservations,
+    AgentObservationSnapshot,
+    AgentObservationEvent,
+    ListWorktrees,
+    ApplyWorktreeOperation,
+    WorktreeOperationResult,
+    AttentionSnapshot,
+    AttentionEvent,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +74,8 @@ pub(crate) enum MessageAuthorityClass {
     BoundedAuthorityTransition,
     ActiveControllerRevocation,
     ControllerOnly,
+    MultiplexerWriteOnly,
+    FutureDomainMutation,
 }
 
 impl MessageKind {
@@ -67,7 +92,10 @@ impl MessageKind {
             | Self::OutputEvent
             | Self::HistoryGap
             | Self::OwnerStatus => MessageAuthorityClass::ConnectionObserverSafe,
-            Self::HelloAck | Self::Error | Self::ControlState => {
+            Self::HelloAck
+            | Self::Error
+            | Self::ControlState
+            | Self::MultiplexerEventSubscriptionAck => {
                 MessageAuthorityClass::OwnerToClientStateOnly
             }
             Self::RequestControl => MessageAuthorityClass::BoundedAuthorityTransition,
@@ -75,6 +103,22 @@ impl MessageKind {
             Self::Input | Self::Resize | Self::Interrupt | Self::Stop => {
                 MessageAuthorityClass::ControllerOnly
             }
+            Self::ListMultiplexerWorkspaces
+            | Self::MultiplexerSnapshot
+            | Self::MultiplexerEvent
+            | Self::SubscribeMultiplexerEvents
+            | Self::ListAgentObservations
+            | Self::AgentObservationSnapshot
+            | Self::AgentObservationEvent
+            | Self::ListWorktrees
+            | Self::WorktreeOperationResult
+            | Self::AttentionSnapshot
+            | Self::AttentionEvent => MessageAuthorityClass::ConnectionObserverSafe,
+            Self::RequestMultiplexerWrite => MessageAuthorityClass::BoundedAuthorityTransition,
+            Self::ReleaseMultiplexerWrite => MessageAuthorityClass::ActiveControllerRevocation,
+            Self::MultiplexerWriteState => MessageAuthorityClass::OwnerToClientStateOnly,
+            Self::ApplyTopologyOperation => MessageAuthorityClass::MultiplexerWriteOnly,
+            Self::ApplyWorktreeOperation => MessageAuthorityClass::FutureDomainMutation,
         }
     }
 
@@ -90,7 +134,15 @@ impl MessageKind {
             | Self::Input
             | Self::Resize
             | Self::Interrupt
-            | Self::Stop => MessageDirection::ClientToOwner,
+            | Self::Stop
+            | Self::ListMultiplexerWorkspaces
+            | Self::RequestMultiplexerWrite
+            | Self::ReleaseMultiplexerWrite
+            | Self::ApplyTopologyOperation
+            | Self::SubscribeMultiplexerEvents
+            | Self::ListAgentObservations
+            | Self::ListWorktrees
+            | Self::ApplyWorktreeOperation => MessageDirection::ClientToOwner,
             Self::HelloAck
             | Self::Pong
             | Self::RuntimeSnapshot
@@ -99,7 +151,16 @@ impl MessageKind {
             | Self::HistoryGap
             | Self::OwnerStatus
             | Self::Error
-            | Self::ControlState => MessageDirection::OwnerToClient,
+            | Self::ControlState
+            | Self::MultiplexerSnapshot
+            | Self::MultiplexerWriteState
+            | Self::MultiplexerEventSubscriptionAck
+            | Self::MultiplexerEvent
+            | Self::AgentObservationSnapshot
+            | Self::AgentObservationEvent
+            | Self::WorktreeOperationResult
+            | Self::AttentionSnapshot
+            | Self::AttentionEvent => MessageDirection::OwnerToClient,
         }
     }
 
@@ -122,7 +183,24 @@ impl MessageKind {
             | Self::Ping
             | Self::Pong
             | Self::ListRuntimes
-            | Self::OwnerStatus => RuntimeBinding::Forbidden,
+            | Self::OwnerStatus
+            | Self::ListMultiplexerWorkspaces
+            | Self::MultiplexerSnapshot
+            | Self::RequestMultiplexerWrite
+            | Self::ReleaseMultiplexerWrite
+            | Self::MultiplexerWriteState
+            | Self::ApplyTopologyOperation
+            | Self::MultiplexerEvent
+            | Self::SubscribeMultiplexerEvents
+            | Self::MultiplexerEventSubscriptionAck
+            | Self::ListAgentObservations
+            | Self::AgentObservationSnapshot
+            | Self::AgentObservationEvent
+            | Self::ListWorktrees
+            | Self::ApplyWorktreeOperation
+            | Self::WorktreeOperationResult
+            | Self::AttentionSnapshot
+            | Self::AttentionEvent => RuntimeBinding::Forbidden,
             Self::Error => RuntimeBinding::Optional,
             Self::RuntimeSnapshot
             | Self::AttachObserver
@@ -148,10 +226,20 @@ impl MessageKind {
                 | Self::Pong
                 | Self::RuntimeSnapshot
                 | Self::Error
-                | Self::ControlState => CorrelationRequirement::Required,
-                Self::RuntimeEvent | Self::OutputEvent | Self::HistoryGap | Self::OwnerStatus => {
-                    CorrelationRequirement::Forbidden
-                }
+                | Self::ControlState
+                | Self::MultiplexerSnapshot
+                | Self::MultiplexerWriteState
+                | Self::AgentObservationSnapshot
+                | Self::WorktreeOperationResult
+                | Self::MultiplexerEventSubscriptionAck => CorrelationRequirement::Required,
+                Self::RuntimeEvent
+                | Self::OutputEvent
+                | Self::HistoryGap
+                | Self::OwnerStatus
+                | Self::MultiplexerEvent
+                | Self::AgentObservationEvent
+                | Self::AttentionSnapshot
+                | Self::AttentionEvent => CorrelationRequirement::Forbidden,
                 _ => CorrelationRequirement::Forbidden,
             },
         }
@@ -218,6 +306,55 @@ pub(crate) enum ProtocolPayload {
     },
     Interrupt,
     Stop,
+    ListMultiplexerWorkspaces {
+        request: ListMultiplexerWorkspacesV2,
+    },
+    MultiplexerSnapshot {
+        snapshot: MultiplexerSnapshotV2,
+    },
+    RequestMultiplexerWrite {
+        request: RequestMultiplexerWriteV2,
+    },
+    ReleaseMultiplexerWrite,
+    MultiplexerWriteState {
+        state: MultiplexerWriteStateV2,
+    },
+    ApplyTopologyOperation {
+        request: ApplyTopologyOperationV2,
+    },
+    MultiplexerEvent {
+        event: MultiplexerEventV2,
+    },
+    SubscribeMultiplexerEvents {
+        request: SubscribeMultiplexerEventsV2,
+    },
+    MultiplexerEventSubscriptionAck {
+        ack: MultiplexerEventSubscriptionAckV2,
+    },
+    ListAgentObservations {
+        request: ListAgentObservationsV2,
+    },
+    AgentObservationSnapshot {
+        snapshot: AgentObservationSnapshotV2,
+    },
+    AgentObservationEvent {
+        event: AgentObservationEventV2,
+    },
+    ListWorktrees {
+        request: ListWorktreesV2,
+    },
+    ApplyWorktreeOperation {
+        request: ApplyWorktreeOperationV2,
+    },
+    WorktreeOperationResult {
+        result: WorktreeOperationResultV2,
+    },
+    AttentionSnapshot {
+        snapshot: AttentionSnapshotV2,
+    },
+    AttentionEvent {
+        event: AttentionEventV2,
+    },
 }
 
 impl ProtocolPayload {
@@ -243,6 +380,25 @@ impl ProtocolPayload {
             Self::Resize { .. } => MessageKind::Resize,
             Self::Interrupt => MessageKind::Interrupt,
             Self::Stop => MessageKind::Stop,
+            Self::ListMultiplexerWorkspaces { .. } => MessageKind::ListMultiplexerWorkspaces,
+            Self::MultiplexerSnapshot { .. } => MessageKind::MultiplexerSnapshot,
+            Self::RequestMultiplexerWrite { .. } => MessageKind::RequestMultiplexerWrite,
+            Self::ReleaseMultiplexerWrite => MessageKind::ReleaseMultiplexerWrite,
+            Self::MultiplexerWriteState { .. } => MessageKind::MultiplexerWriteState,
+            Self::ApplyTopologyOperation { .. } => MessageKind::ApplyTopologyOperation,
+            Self::MultiplexerEvent { .. } => MessageKind::MultiplexerEvent,
+            Self::SubscribeMultiplexerEvents { .. } => MessageKind::SubscribeMultiplexerEvents,
+            Self::MultiplexerEventSubscriptionAck { .. } => {
+                MessageKind::MultiplexerEventSubscriptionAck
+            }
+            Self::ListAgentObservations { .. } => MessageKind::ListAgentObservations,
+            Self::AgentObservationSnapshot { .. } => MessageKind::AgentObservationSnapshot,
+            Self::AgentObservationEvent { .. } => MessageKind::AgentObservationEvent,
+            Self::ListWorktrees { .. } => MessageKind::ListWorktrees,
+            Self::ApplyWorktreeOperation { .. } => MessageKind::ApplyWorktreeOperation,
+            Self::WorktreeOperationResult { .. } => MessageKind::WorktreeOperationResult,
+            Self::AttentionSnapshot { .. } => MessageKind::AttentionSnapshot,
+            Self::AttentionEvent { .. } => MessageKind::AttentionEvent,
         }
     }
 }
@@ -406,7 +562,7 @@ pub(crate) fn encode_frame(message: &ProtocolMessage) -> ProtocolResult<Vec<u8>>
     validate_message(message)?;
     let body = encode_body(&message.payload)?;
     let envelope = WireEnvelope {
-        protocol_version: PROTOCOL_VERSION,
+        protocol_version: message_wire_version(message)?,
         message_kind: message.kind(),
         connection_id: message.connection_id.clone(),
         sequence: message.sequence,
@@ -449,6 +605,23 @@ pub(crate) fn decode_frame(frame: &[u8]) -> ProtocolResult<ProtocolMessage> {
     Ok(message)
 }
 
+pub(crate) fn is_legacy_protocol_frame(frame: &[u8]) -> bool {
+    if frame.len() < 5 {
+        return false;
+    }
+    let mut length_bytes = [0_u8; 4];
+    length_bytes.copy_from_slice(&frame[..4]);
+    let claimed = u32::from_le_bytes(length_bytes) as usize;
+    if claimed == 0
+        || claimed > MAX_INBOUND_CONTROL_FRAME_BYTES
+        || frame.len() != claimed.saturating_add(4)
+    {
+        return false;
+    }
+    serde_json::from_slice::<ProtocolVersionProbe>(&frame[4..])
+        .is_ok_and(|probe| probe.protocol_version == LEGACY_PROTOCOL_VERSION)
+}
+
 pub(crate) fn read_frame<R: Read>(reader: &mut R) -> ProtocolResult<ProtocolMessage> {
     let mut length_bytes = [0_u8; 4];
     reader
@@ -473,7 +646,10 @@ pub(crate) fn read_frame<R: Read>(reader: &mut R) -> ProtocolResult<ProtocolMess
 fn decode_payload(text: &str) -> ProtocolResult<ProtocolMessage> {
     let probe: ProtocolVersionProbe =
         serde_json::from_str(text).map_err(|_| LocalControlErrorKind::MalformedFrame)?;
-    if probe.protocol_version != PROTOCOL_VERSION {
+    if !matches!(
+        probe.protocol_version,
+        LEGACY_PROTOCOL_VERSION | PROTOCOL_VERSION
+    ) {
         return Err(LocalControlErrorKind::ProtocolMismatch);
     }
 
@@ -489,7 +665,41 @@ fn decode_payload(text: &str) -> ProtocolResult<ProtocolMessage> {
         payload,
     };
     validate_message(&message)?;
+
+    if let ProtocolPayload::Hello {
+        minimum_protocol_version,
+        maximum_protocol_version,
+        ..
+    } = &message.payload
+    {
+        if minimum_protocol_version != maximum_protocol_version
+            || *minimum_protocol_version != probe.protocol_version
+        {
+            return Err(LocalControlErrorKind::ProtocolMismatch);
+        }
+    } else if probe.protocol_version != PROTOCOL_VERSION {
+        return Err(LocalControlErrorKind::ProtocolMismatch);
+    }
     Ok(message)
+}
+
+fn message_wire_version(message: &ProtocolMessage) -> ProtocolResult<u16> {
+    match &message.payload {
+        ProtocolPayload::Hello {
+            minimum_protocol_version,
+            maximum_protocol_version,
+            ..
+        } if minimum_protocol_version == maximum_protocol_version
+            && matches!(
+                *minimum_protocol_version,
+                LEGACY_PROTOCOL_VERSION | PROTOCOL_VERSION
+            ) =>
+        {
+            Ok(*minimum_protocol_version)
+        }
+        ProtocolPayload::Hello { .. } => Err(LocalControlErrorKind::ProtocolMismatch),
+        _ => Ok(PROTOCOL_VERSION),
+    }
 }
 
 fn encode_body(payload: &ProtocolPayload) -> ProtocolResult<Value> {
@@ -545,6 +755,7 @@ fn encode_body(payload: &ProtocolPayload) -> ProtocolResult<Value> {
             columns: *columns,
             rows: *rows,
         }),
+        _ => encode_v2_body(payload),
     }
 }
 
@@ -617,6 +828,7 @@ fn decode_body(kind: MessageKind, body: Value) -> ProtocolResult<ProtocolPayload
         }
         MessageKind::Interrupt => from_empty(body).map(|_| ProtocolPayload::Interrupt),
         MessageKind::Stop => from_empty(body).map(|_| ProtocolPayload::Stop),
+        _ => decode_v2_body(kind, body),
     }
 }
 
@@ -700,10 +912,11 @@ fn validate_message(message: &ProtocolMessage) -> ProtocolResult<()> {
             maximum_protocol_version,
             ..
         } => {
-            if *minimum_protocol_version == 0
-                || minimum_protocol_version > maximum_protocol_version
-                || PROTOCOL_VERSION < *minimum_protocol_version
-                || PROTOCOL_VERSION > *maximum_protocol_version
+            if minimum_protocol_version != maximum_protocol_version
+                || !matches!(
+                    *minimum_protocol_version,
+                    LEGACY_PROTOCOL_VERSION | PROTOCOL_VERSION
+                )
             {
                 return Err(LocalControlErrorKind::ProtocolMismatch);
             }
@@ -753,6 +966,10 @@ fn validate_message(message: &ProtocolMessage) -> ProtocolResult<()> {
         }
         _ => {}
     }
+    validate_v2_payload(&message.payload)?;
+    if let Some(owner_generation_id) = message.owner_generation_id {
+        validate_v2_owner_generation_binding(&message.payload, owner_generation_id)?;
+    }
     Ok(())
 }
 
@@ -798,7 +1015,66 @@ pub(crate) fn validate_response_binding(
         (None, None) => {}
         (None, Some(_)) => return Err(LocalControlErrorKind::MalformedFrame),
     }
+    validate_v2_response_binding(&request.payload, &response.payload)?;
     Ok(())
+}
+
+pub(crate) fn validate_owner_v2_handshake(request: &ProtocolMessage) -> ProtocolResult<()> {
+    match &request.payload {
+        ProtocolPayload::Hello {
+            minimum_protocol_version,
+            maximum_protocol_version,
+            ..
+        } if *minimum_protocol_version == PROTOCOL_VERSION
+            && *maximum_protocol_version == PROTOCOL_VERSION =>
+        {
+            Ok(())
+        }
+        ProtocolPayload::Hello { .. } => Err(LocalControlErrorKind::ProtocolMismatch),
+        _ => Err(LocalControlErrorKind::MalformedFrame),
+    }
+}
+
+pub(crate) fn inactive_v2_domain_response(
+    request: &ProtocolMessage,
+    response_sequence: EventSequence,
+) -> ProtocolResult<ProtocolMessage> {
+    let inactive = match &request.payload {
+        ProtocolPayload::SubscribeMultiplexerEvents { .. }
+        | ProtocolPayload::ListAgentObservations { .. }
+        | ProtocolPayload::ListWorktrees { .. }
+        | ProtocolPayload::ApplyWorktreeOperation { .. } => true,
+        ProtocolPayload::ApplyTopologyOperation { request } => matches!(
+            request.operation,
+            TopologyOperationV2::ClearPane { .. }
+                | TopologyOperationV2::ApplyLayoutTemplate { .. }
+                | TopologyOperationV2::ClosePane {
+                    policy: ProtocolPaneClosePolicy::StopRuntimeThenClose,
+                    ..
+                }
+        ),
+        _ => false,
+    };
+    if !inactive {
+        return Err(LocalControlErrorKind::UnsupportedOperation);
+    }
+    let connection_id = request
+        .connection_id
+        .clone()
+        .ok_or(LocalControlErrorKind::MalformedFrame)?;
+    let owner_generation_id = request
+        .owner_generation_id
+        .ok_or(LocalControlErrorKind::MalformedFrame)?;
+    ProtocolMessage::new(
+        connection_id,
+        response_sequence,
+        None,
+        owner_generation_id,
+        Some(request.sequence),
+        ProtocolPayload::Error {
+            kind: LocalControlErrorKind::UnsupportedOperation,
+        },
+    )
 }
 
 fn response_kind_is_valid_for_request(request: MessageKind, response: MessageKind) -> bool {
@@ -809,6 +1085,38 @@ fn response_kind_is_valid_for_request(request: MessageKind, response: MessageKin
         (request, response),
         (MessageKind::Hello, MessageKind::HelloAck)
             | (MessageKind::Ping, MessageKind::Pong)
+            | (
+                MessageKind::ListMultiplexerWorkspaces,
+                MessageKind::MultiplexerSnapshot
+            )
+            | (
+                MessageKind::RequestMultiplexerWrite,
+                MessageKind::MultiplexerWriteState
+            )
+            | (
+                MessageKind::ReleaseMultiplexerWrite,
+                MessageKind::MultiplexerWriteState
+            )
+            | (
+                MessageKind::ApplyTopologyOperation,
+                MessageKind::MultiplexerSnapshot
+            )
+            | (
+                MessageKind::SubscribeMultiplexerEvents,
+                MessageKind::MultiplexerEventSubscriptionAck
+            )
+            | (
+                MessageKind::ListAgentObservations,
+                MessageKind::AgentObservationSnapshot
+            )
+            | (
+                MessageKind::ListWorktrees,
+                MessageKind::WorktreeOperationResult
+            )
+            | (
+                MessageKind::ApplyWorktreeOperation,
+                MessageKind::WorktreeOperationResult
+            )
             | (MessageKind::ListRuntimes, MessageKind::RuntimeSnapshot)
             | (MessageKind::AttachObserver, MessageKind::RuntimeSnapshot)
             | (MessageKind::AttachObserver, MessageKind::ControlState)
