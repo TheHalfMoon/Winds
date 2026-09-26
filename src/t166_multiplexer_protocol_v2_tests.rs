@@ -2420,11 +2420,11 @@ mod real_endpoint_tests {
             thread::sleep(Duration::from_millis(2));
         }
         assert!(!owner.has_active_session_for_test());
-        assert!(
-            owner
-                .terminal_control_state(&connection("unrelated"), runtime_id, 104, 3,)
-                .is_err()
-        );
+        let unrelated_state = owner
+            .terminal_control_state(&connection("unrelated"), runtime_id, 104, 3)
+            .unwrap();
+        assert_eq!(unrelated_state.authority, ClientAuthority::Observer);
+        assert!(unrelated_state.controller_client_id.is_none());
         drop(owner);
         let _ = fs::remove_dir_all(home);
         let _ = fs::remove_dir_all(runtime_root);

@@ -1281,17 +1281,14 @@ impl PersistentOwner {
             | ProtocolPayload::SubscribeMultiplexerEvents { .. }
             | ProtocolPayload::ListAgentObservations { .. }
             | ProtocolPayload::ListWorktrees { .. }
-            | ProtocolPayload::ApplyWorktreeOperation { .. } => {
-                session.request_guard.accept(request)?;
-                self.dispatch_multiplexer_protocol_v2(
+            | ProtocolPayload::ApplyWorktreeOperation { .. } => self
+                .dispatch_multiplexer_protocol_v2(
                     connection_id,
                     request,
                     response_sequence,
                     now_unix_ms,
-                )
-            }
+                ),
             ProtocolPayload::AttachObserver => {
-                session.request_guard.accept(request)?;
                 let runtime_id = request
                     .runtime_namespace_id
                     .ok_or(LocalControlErrorKind::MalformedFrame)?;
@@ -1323,40 +1320,31 @@ impl PersistentOwner {
                     },
                 )
             }
-            ProtocolPayload::ListRuntimes => {
-                session.request_guard.accept(request)?;
-                self.dispatch_list_runtimes(
-                    request,
-                    response_sequence,
-                    now_unix_ms,
-                    now_monotonic_ms,
-                )
-            }
+            ProtocolPayload::ListRuntimes => self.dispatch_list_runtimes(
+                request,
+                response_sequence,
+                now_unix_ms,
+                now_monotonic_ms,
+            ),
             ProtocolPayload::Detach
             | ProtocolPayload::RequestControl
-            | ProtocolPayload::ReleaseControl => {
-                session.request_guard.accept(request)?;
-                self.dispatch_control_request(
-                    session,
-                    request,
-                    response_sequence,
-                    now_unix_ms,
-                    now_monotonic_ms,
-                )
-            }
+            | ProtocolPayload::ReleaseControl => self.dispatch_control_request(
+                session,
+                request,
+                response_sequence,
+                now_unix_ms,
+                now_monotonic_ms,
+            ),
             ProtocolPayload::Input { .. }
             | ProtocolPayload::Resize { .. }
             | ProtocolPayload::Interrupt
-            | ProtocolPayload::Stop => {
-                session.request_guard.accept(request)?;
-                self.dispatch_runtime_mutation(
-                    session,
-                    request,
-                    response_sequence,
-                    now_unix_ms,
-                    now_monotonic_ms,
-                )
-            }
+            | ProtocolPayload::Stop => self.dispatch_runtime_mutation(
+                session,
+                request,
+                response_sequence,
+                now_unix_ms,
+                now_monotonic_ms,
+            ),
             _ => Err(LocalControlErrorKind::UnsupportedOperation),
         }
     }
