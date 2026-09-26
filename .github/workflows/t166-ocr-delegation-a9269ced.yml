@@ -1,0 +1,54 @@
+name: t166-ocr-delegation-a9269ced
+
+on:
+  push:
+    branches:
+      - review/t166-ocr-a9269ced
+
+permissions:
+  contents: read
+
+jobs:
+  ocr-delegation:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact T166 candidate
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: a9269ced1ab38072d2af1b36a529d534936b4ecd
+          fetch-depth: 0
+
+      - name: Verify exact candidate and base
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "a9269ced1ab38072d2af1b36a529d534936b4ecd"
+          git cat-file -e 1f96d38aa614ae40c8c8af011e215b624ae38a87^{commit}
+          test "$(git merge-base 1f96d38aa614ae40c8c8af011e215b624ae38a87 HEAD)" = "1f96d38aa614ae40c8c8af011e215b624ae38a87"
+          git diff --check 1f96d38aa614ae40c8c8af011e215b624ae38a87 HEAD
+
+      - name: Install Alibaba Open Code Review
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g @alibaba-group/open-code-review@1.12.9
+          ocr version
+
+      - name: OCR delegation preview
+        shell: bash
+        run: |
+          set -euo pipefail
+          ocr delegate preview --format json --from 1f96d38aa614ae40c8c8af011e215b624ae38a87 --to a9269ced1ab38072d2af1b36a529d534936b4ecd | tee /tmp/ocr-preview.json
+
+      - name: OCR resolved rules for every changed file
+        shell: bash
+        run: |
+          set -euo pipefail
+          ocr delegate rule --format json \
+            src/multiplexer/protocol.rs \
+            src/persistent_runtime/client.rs \
+            src/persistent_runtime/owner.rs \
+            src/persistent_runtime/protocol.rs \
+            src/persistent_runtime/transport/unix.rs \
+            src/persistent_runtime/transport/windows.rs \
+            src/t166_multiplexer_protocol_v2_tests.rs | tee /tmp/ocr-rules.json
