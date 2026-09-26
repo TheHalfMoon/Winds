@@ -113,10 +113,9 @@ impl TopologyProjection {
                     ..
                 },
             ) => *topology_generation,
-            (
-                Some(expected_workspace_id),
-                MultiplexerSnapshotV2::Workspace { snapshot },
-            ) if snapshot.multiplexer_workspace_id == expected_workspace_id => {
+            (Some(expected_workspace_id), MultiplexerSnapshotV2::Workspace { snapshot })
+                if snapshot.multiplexer_workspace_id == expected_workspace_id =>
+            {
                 snapshot.topology_generation
             }
             _ => return Err(LocalControlErrorKind::MalformedFrame),
