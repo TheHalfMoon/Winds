@@ -1,0 +1,54 @@
+name: t167-ocr-delegation-5d71621d
+
+on:
+  push:
+    branches:
+      - review/t167-ocr-5d71621d
+
+permissions:
+  contents: read
+
+jobs:
+  ocr-delegation:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact T167 candidate
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: 5d71621d99dc2e75a5fe25c393e9e2b8b4b2a5e0
+          fetch-depth: 0
+
+      - name: Verify exact candidate and base
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "5d71621d99dc2e75a5fe25c393e9e2b8b4b2a5e0"
+          git cat-file -e c9c85e75fa066049f62a7f3ab2ccfcc70bf98e6d^{commit}
+          test "$(git merge-base c9c85e75fa066049f62a7f3ab2ccfcc70bf98e6d HEAD)" = "c9c85e75fa066049f62a7f3ab2ccfcc70bf98e6d"
+          test "$(git rev-list --count c9c85e75fa066049f62a7f3ab2ccfcc70bf98e6d..HEAD)" = "11"
+          test "$(git rev-list --count HEAD..c9c85e75fa066049f62a7f3ab2ccfcc70bf98e6d)" = "0"
+          test "$(git diff --name-only c9c85e75fa066049f62a7f3ab2ccfcc70bf98e6d HEAD | sort | tr '\n' ' ')" = "src/multiplexer/projection.rs src/persistent_runtime/client.rs src/persistent_runtime/owner.rs src/t167_multiplexer_client_tests.rs "
+          git diff --check c9c85e75fa066049f62a7f3ab2ccfcc70bf98e6d HEAD
+
+      - name: Install Alibaba Open Code Review
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g @alibaba-group/open-code-review@1.12.9
+          ocr version
+
+      - name: OCR delegation preview
+        shell: bash
+        run: |
+          set -euo pipefail
+          ocr delegate preview --format json --from c9c85e75fa066049f62a7f3ab2ccfcc70bf98e6d --to 5d71621d99dc2e75a5fe25c393e9e2b8b4b2a5e0 | tee /tmp/ocr-preview.json
+
+      - name: OCR resolved rules for every changed file
+        shell: bash
+        run: |
+          set -euo pipefail
+          ocr delegate rule --format json \
+            src/multiplexer/projection.rs \
+            src/persistent_runtime/client.rs \
+            src/persistent_runtime/owner.rs \
+            src/t167_multiplexer_client_tests.rs | tee /tmp/ocr-rules.json
