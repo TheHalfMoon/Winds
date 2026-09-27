@@ -34,6 +34,7 @@ jobs:
       EXPECTED_IMAGE_OS: ubuntu24
       REFERENCE_IMAGE_VERSION_A: 20260831.293.1
       REFERENCE_IMAGE_VERSION_B: 20260907.300.1
+      REFERENCE_IMAGE_VERSION_C: 20260920.314.1
       EXPECTED_RUNNER_OS: Linux
       EXPECTED_RUNNER_ARCH: X64
 
@@ -59,10 +60,10 @@ jobs:
           test "${RUNNER_ARCH:-}" = "$EXPECTED_RUNNER_ARCH"
           test "${ImageOS:-}" = "$EXPECTED_IMAGE_OS"
           case "${ImageVersion:-}" in
-            "$REFERENCE_IMAGE_VERSION_A"|"$REFERENCE_IMAGE_VERSION_B") ;;
+            "$REFERENCE_IMAGE_VERSION_A"|"$REFERENCE_IMAGE_VERSION_B"|"$REFERENCE_IMAGE_VERSION_C") ;;
             *)
-              printf 'Pinned T097 runner image outside finite cohort: accepted=%s,%s observed=%s\n' \
-                "$REFERENCE_IMAGE_VERSION_A" "$REFERENCE_IMAGE_VERSION_B" "${ImageVersion:-UNSET}" >&2
+              printf 'Pinned T097 runner image outside finite cohort: accepted=%s,%s,%s observed=%s\n' \
+                "$REFERENCE_IMAGE_VERSION_A" "$REFERENCE_IMAGE_VERSION_B" "$REFERENCE_IMAGE_VERSION_C" "${ImageVersion:-UNSET}" >&2
               exit 1
               ;;
           esac
