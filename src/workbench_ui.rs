@@ -630,11 +630,29 @@ fn resize_selected(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CanonicalTopologyBoundIntent {
+    intent: crate::persistent_runtime::protocol::ApplyTopologyOperationV2,
+}
+
+impl CanonicalTopologyBoundIntent {
+    fn new(intent: crate::persistent_runtime::protocol::ApplyTopologyOperationV2) -> Self {
+        Self { intent }
+    }
+
+    pub(crate) fn into_intent(
+        self,
+    ) -> crate::persistent_runtime::protocol::ApplyTopologyOperationV2 {
+        self.intent
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CanonicalTopologyPaneHitRegion {
     pub(crate) multiplexer_workspace_id: crate::multiplexer::domain::MultiplexerWorkspaceId,
     pub(crate) tab_id: crate::multiplexer::domain::TabId,
     pub(crate) pane_id: crate::multiplexer::domain::PaneId,
+    pub(crate) topology_generation: crate::multiplexer::domain::TopologyGeneration,
     pub(crate) column: u16,
     pub(crate) row: u16,
     pub(crate) width: u16,
@@ -661,19 +679,20 @@ pub(crate) fn canonical_topology_text(
         .map(|lines| lines.join("\n"))
 }
 
-pub(crate) fn canonical_topology_search_focus_intent(
+pub(crate) fn canonical_topology_bind_search_focus_intent(
     client: &crate::persistent_runtime::client::RustLocalControlClient,
     query: &str,
-) -> Option<crate::persistent_runtime::protocol::ApplyTopologyOperationV2> {
-    client.tui_topology_find_focus_intent(query)
+) -> Option<CanonicalTopologyBoundIntent> {
+    client
+        .tui_topology_find_focus_intent(query)
+        .map(CanonicalTopologyBoundIntent::new)
 }
 
-pub(crate) fn canonical_topology_pointer_focus_intent(
-    client: &crate::persistent_runtime::client::RustLocalControlClient,
+pub(crate) fn canonical_topology_bind_pointer_focus_intent(
     hit_regions: &[CanonicalTopologyPaneHitRegion],
     column: u16,
     row: u16,
-) -> Option<crate::persistent_runtime::protocol::ApplyTopologyOperationV2> {
+) -> Option<CanonicalTopologyBoundIntent> {
     let mut matches = hit_regions
         .iter()
         .copied()
@@ -682,11 +701,89 @@ pub(crate) fn canonical_topology_pointer_focus_intent(
     if matches.next().is_some() {
         return None;
     }
-    client.tui_topology_focus_pane_intent(
-        target.multiplexer_workspace_id,
-        target.tab_id,
-        target.pane_id,
-    )
+    Some(CanonicalTopologyBoundIntent::new(
+        crate::persistent_runtime::protocol::ApplyTopologyOperationV2 {
+            expected_topology_generation: target.topology_generation,
+            operation: crate::persistent_runtime::protocol::TopologyOperationV2::FocusPane {
+                multiplexer_workspace_id: target.multiplexer_workspace_id,
+                tab_id: target.tab_id,
+                pane_id: target.pane_id,
+            },
+        },
+    ))
+}
+
+#[cfg(test)]
+mod t168_workbench_topology_binding_tests {
+    use super::*;
+    use crate::multiplexer::domain::{MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration};
+    use crate::persistent_runtime::protocol::TopologyOperationV2;
+
+    fn workspace_id(byte: u8) -> MultiplexerWorkspaceId {
+        MultiplexerWorkspaceId::from_entropy_bytes([byte; 16]).expect("valid workspace id")
+    }
+
+    fn tab_id(byte: u8) -> TabId {
+        TabId::from_entropy_bytes([byte; 16]).expect("valid tab id")
+    }
+
+    fn pane_id(byte: u8) -> PaneId {
+        PaneId::from_entropy_bytes([byte; 16]).expect("valid pane id")
+    }
+
+    #[test]
+    fn t168_workbench_pointer_binding_retains_presented_generation() {
+        let workspace_id = workspace_id(1);
+        let tab_id = tab_id(2);
+        let pane_id = pane_id(3);
+        let presented_generation = TopologyGeneration::new(7).expect("valid generation");
+        let hit_regions = [CanonicalTopologyPaneHitRegion {
+            multiplexer_workspace_id: workspace_id,
+            tab_id,
+            pane_id,
+            topology_generation: presented_generation,
+            column: 10,
+            row: 0,
+            width: 10,
+            height: 10,
+        }];
+
+        let intent = canonical_topology_bind_pointer_focus_intent(&hit_regions, 12, 3)
+            .expect("presented exact target should bind")
+            .into_intent();
+        assert_eq!(intent.expected_topology_generation, presented_generation);
+        assert_eq!(
+            intent.operation,
+            TopologyOperationV2::FocusPane {
+                multiplexer_workspace_id: workspace_id,
+                tab_id,
+                pane_id,
+            }
+        );
+        assert_ne!(
+            intent.expected_topology_generation,
+            TopologyGeneration::new(8).expect("valid generation")
+        );
+    }
+
+    #[test]
+    fn t168_workbench_pointer_binding_fails_closed_on_overlapping_regions() {
+        let first = CanonicalTopologyPaneHitRegion {
+            multiplexer_workspace_id: workspace_id(1),
+            tab_id: tab_id(2),
+            pane_id: pane_id(3),
+            topology_generation: TopologyGeneration::new(7).expect("valid generation"),
+            column: 0,
+            row: 0,
+            width: 20,
+            height: 10,
+        };
+        let second = CanonicalTopologyPaneHitRegion {
+            pane_id: pane_id(4),
+            ..first
+        };
+        assert!(canonical_topology_bind_pointer_focus_intent(&[first, second], 5, 5).is_none());
+    }
 }
 
 #[cfg(test)]
