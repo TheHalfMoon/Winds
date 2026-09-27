@@ -1316,7 +1316,10 @@ impl PersistentOwner {
         request: &ProtocolMessage,
         response: &ProtocolMessage,
     ) -> OwnerResult<()> {
-        if !matches!(request.payload, ProtocolPayload::ApplyTopologyOperation { .. }) {
+        if !matches!(
+            request.payload,
+            ProtocolPayload::ApplyTopologyOperation { .. }
+        ) {
             return Ok(());
         }
         let ProtocolPayload::MultiplexerSnapshot {
