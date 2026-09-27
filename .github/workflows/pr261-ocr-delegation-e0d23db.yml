@@ -1,0 +1,54 @@
+name: pr261-ocr-delegation-e0d23db
+
+on:
+  push:
+    branches:
+      - review/pr261-ocr-e0d23db
+
+permissions:
+  contents: read
+
+env:
+  REVIEW_BASE: 5b43efd05b9199a1a34ccb1528ae200fdcce79d4
+  REVIEW_HEAD: e0d23dbc5cb5bd53dd61ab9e8f52b05868265c9b
+
+jobs:
+  ocr-delegation:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact PR261 candidate
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: e0d23dbc5cb5bd53dd61ab9e8f52b05868265c9b
+          fetch-depth: 0
+
+      - name: Verify exact candidate and base
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$REVIEW_HEAD"
+          git cat-file -e "$REVIEW_BASE^{commit}"
+          test "$(git merge-base "$REVIEW_BASE" "$REVIEW_HEAD")" = "$REVIEW_BASE"
+          test "$(git rev-list --count "$REVIEW_BASE..$REVIEW_HEAD")" = "1"
+          test "$(git rev-list --count "$REVIEW_HEAD..$REVIEW_BASE")" = "0"
+          test "$(git diff --name-only "$REVIEW_BASE..$REVIEW_HEAD" | sort | tr '\n' ' ')" = "specs/012-workspace-multiplexer-agent-plane/tasks-amendment-002-t167-topology-subscription-activation.md "
+          git diff --check "$REVIEW_BASE..$REVIEW_HEAD"
+
+      - name: Install Alibaba Open Code Review
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g @alibaba-group/open-code-review@1.12.9
+          ocr version
+
+      - name: Alibaba Open Code Review exact-range preview accounting
+        shell: bash
+        run: |
+          set -euo pipefail
+          ocr review --preview --from "$REVIEW_BASE" --to "$REVIEW_HEAD" --format json | tee /tmp/ocr-pr261-preview.json
+
+      - name: Alibaba Open Code Review delegate preview accounting
+        shell: bash
+        run: |
+          set -euo pipefail
+          ocr delegate preview --format json --from "$REVIEW_BASE" --to "$REVIEW_HEAD" | tee /tmp/ocr-pr261-delegate.json
