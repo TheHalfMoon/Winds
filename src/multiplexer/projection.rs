@@ -1,4 +1,6 @@
-use crate::multiplexer::domain::{MultiplexerWorkspaceId, TopologyGeneration};
+use crate::multiplexer::domain::{
+    MultiplexerErrorKind, MultiplexerWorkspaceId, TopologyGeneration,
+};
 use crate::persistent_runtime::domain::{LocalControlErrorKind, OwnerGenerationId};
 use crate::persistent_runtime::protocol::{
     MultiplexerEventSubscriptionAckV2, MultiplexerEventV2, MultiplexerSnapshotV2,
@@ -12,6 +14,12 @@ pub(crate) enum TopologyProjectionFreshness {
     NeedsSnapshot,
     Current,
     NeedsResubscribe,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TopologyProjectionError {
+    Protocol(LocalControlErrorKind),
+    Multiplexer(MultiplexerErrorKind),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,18 +80,22 @@ impl TopologyProjection {
         &mut self,
         request: &SubscribeMultiplexerEventsV2,
         ack: &MultiplexerEventSubscriptionAckV2,
-    ) -> Result<TopologyGeneration, LocalControlErrorKind> {
+    ) -> Result<TopologyGeneration, TopologyProjectionError> {
         if request.stream != MultiplexerSubscriptionStreamV2::Topology
             || ack.stream != MultiplexerSubscriptionStreamV2::Topology
             || ack.multiplexer_workspace_id != request.multiplexer_workspace_id
         {
-            return Err(LocalControlErrorKind::UnsupportedOperation);
+            return Err(TopologyProjectionError::Protocol(
+                LocalControlErrorKind::UnsupportedOperation,
+            ));
         }
         let MultiplexerSubscriptionBoundaryV2::Topology {
             topology_generation,
         } = ack.boundary
         else {
-            return Err(LocalControlErrorKind::MalformedFrame);
+            return Err(TopologyProjectionError::Protocol(
+                LocalControlErrorKind::MalformedFrame,
+            ));
         };
 
         self.subscription = Some(request.clone());
@@ -97,14 +109,18 @@ impl TopologyProjection {
     pub(crate) fn accept_snapshot(
         &mut self,
         snapshot: &MultiplexerSnapshotV2,
-    ) -> Result<TopologyGeneration, LocalControlErrorKind> {
+    ) -> Result<TopologyGeneration, TopologyProjectionError> {
         if self.freshness == TopologyProjectionFreshness::NeedsResubscribe {
-            return Err(LocalControlErrorKind::StaleTopologyGeneration);
+            return Err(TopologyProjectionError::Multiplexer(
+                MultiplexerErrorKind::StaleTopologyGeneration,
+            ));
         }
         let subscription = self
             .subscription
             .as_ref()
-            .ok_or(LocalControlErrorKind::UnsupportedOperation)?;
+            .ok_or(TopologyProjectionError::Protocol(
+                LocalControlErrorKind::UnsupportedOperation,
+            ))?;
         let generation = match (subscription.multiplexer_workspace_id, snapshot) {
             (
                 None,
@@ -118,17 +134,25 @@ impl TopologyProjection {
             {
                 snapshot.topology_generation
             }
-            _ => return Err(LocalControlErrorKind::MalformedFrame),
+            _ => {
+                return Err(TopologyProjectionError::Protocol(
+                    LocalControlErrorKind::MalformedFrame,
+                ));
+            }
         };
 
         let boundary = self
             .subscription_boundary
-            .ok_or(LocalControlErrorKind::MalformedFrame)?;
+            .ok_or(TopologyProjectionError::Protocol(
+                LocalControlErrorKind::MalformedFrame,
+            ))?;
         let observed = self.observed_generation.unwrap_or(boundary);
         if generation < boundary || generation < observed {
             self.trusted_snapshot = None;
             self.freshness = TopologyProjectionFreshness::NeedsResubscribe;
-            return Err(LocalControlErrorKind::StaleTopologyGeneration);
+            return Err(TopologyProjectionError::Multiplexer(
+                MultiplexerErrorKind::StaleTopologyGeneration,
+            ));
         }
 
         self.observed_generation = Some(generation);
@@ -140,13 +164,17 @@ impl TopologyProjection {
     pub(crate) fn accept_event(
         &mut self,
         event: &MultiplexerEventV2,
-    ) -> Result<(), LocalControlErrorKind> {
+    ) -> Result<(), TopologyProjectionError> {
         let subscription = self
             .subscription
             .as_ref()
-            .ok_or(LocalControlErrorKind::UnsupportedOperation)?;
+            .ok_or(TopologyProjectionError::Protocol(
+                LocalControlErrorKind::UnsupportedOperation,
+            ))?;
         if self.freshness == TopologyProjectionFreshness::NeedsResubscribe {
-            return Err(LocalControlErrorKind::StaleTopologyGeneration);
+            return Err(TopologyProjectionError::Multiplexer(
+                MultiplexerErrorKind::StaleTopologyGeneration,
+            ));
         }
 
         let (workspace_id, generation) = match event {
@@ -173,21 +201,29 @@ impl TopologyProjection {
             (subscription.multiplexer_workspace_id, workspace_id)
             && expected != actual
         {
-            return Err(LocalControlErrorKind::MalformedFrame);
+            return Err(TopologyProjectionError::Protocol(
+                LocalControlErrorKind::MalformedFrame,
+            ));
         }
-        let generation = generation.ok_or(LocalControlErrorKind::MalformedFrame)?;
+        let generation = generation.ok_or(TopologyProjectionError::Protocol(
+            LocalControlErrorKind::MalformedFrame,
+        ))?;
         let previous = self
             .observed_generation
             .or(self.subscription_boundary)
-            .ok_or(LocalControlErrorKind::MalformedFrame)?;
+            .ok_or(TopologyProjectionError::Protocol(
+                LocalControlErrorKind::MalformedFrame,
+            ))?;
         if generation <= previous {
-            return Err(LocalControlErrorKind::StaleTopologyGeneration);
+            return Err(TopologyProjectionError::Multiplexer(
+                MultiplexerErrorKind::StaleTopologyGeneration,
+            ));
         }
 
         if subscription.multiplexer_workspace_id.is_none() {
-            let expected = previous
-                .checked_next()
-                .map_err(|_| LocalControlErrorKind::MalformedFrame)?;
+            let expected = previous.checked_next().map_err(|_| {
+                TopologyProjectionError::Protocol(LocalControlErrorKind::MalformedFrame)
+            })?;
             if generation != expected {
                 self.observed_generation = Some(generation);
                 self.trusted_snapshot = None;

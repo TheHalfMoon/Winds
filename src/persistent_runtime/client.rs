@@ -1,7 +1,7 @@
 #[path = "../multiplexer/projection.rs"]
 mod topology_projection;
-use topology_projection::TopologyProjection;
 pub(crate) use topology_projection::TopologyProjectionFreshness;
+use topology_projection::{TopologyProjection, TopologyProjectionError};
 
 use crate::multiplexer::domain::{
     MultiplexerErrorKind, MultiplexerWorkspaceId, TopologyGeneration,
@@ -11,7 +11,7 @@ use crate::persistent_runtime::domain::{
     RuntimeAlias, RuntimeLifecycleEvent, RuntimeNamespaceId, RuntimeTruth,
 };
 use crate::persistent_runtime::protocol::{
-    ListMultiplexerWorkspacesV2, MAX_INBOUND_CONTROL_FRAME_BYTES, MessageKind, MultiplexerEventV2,
+    ListMultiplexerWorkspacesV2, MAX_INBOUND_CONTROL_FRAME_BYTES, MessageKind,
     MultiplexerSnapshotV2, MultiplexerSubscriptionStreamV2, MutationOutcomeTracker,
     PROTOCOL_VERSION, ProtocolMessage, ProtocolPayload, SubscribeMultiplexerEventsV2,
     TopologyMutationOutcomeV2, decode_frame, encode_frame, is_legacy_protocol_frame,
@@ -96,6 +96,13 @@ fn map_protocol_error(kind: LocalControlErrorKind) -> LocalControlClientError {
             LocalControlClientError::StaleOwnerGeneration
         }
         other => LocalControlClientError::Protocol(other),
+    }
+}
+
+fn map_topology_projection_error(error: TopologyProjectionError) -> LocalControlClientError {
+    match error {
+        TopologyProjectionError::Protocol(kind) => map_protocol_error(kind),
+        TopologyProjectionError::Multiplexer(kind) => LocalControlClientError::Multiplexer(kind),
     }
 }
 
@@ -189,9 +196,6 @@ pub(crate) enum ClientEventProjection {
     },
     OwnerStatus {
         ready: bool,
-    },
-    MultiplexerTopology {
-        event: MultiplexerEventV2,
     },
 }
 
@@ -430,7 +434,7 @@ impl RustLocalControlClient {
             ProtocolPayload::MultiplexerEventSubscriptionAck { ack } => self
                 .topology_projection
                 .accept_subscription_ack(&subscription, &ack)
-                .map_err(map_protocol_error),
+                .map_err(map_topology_projection_error),
             _ => Err(LocalControlClientError::UnexpectedResponse(response.kind())),
         }
     }
@@ -443,7 +447,7 @@ impl RustLocalControlClient {
         let snapshot = self.list_topology_snapshot(multiplexer_workspace_id)?;
         self.topology_projection
             .accept_snapshot(&snapshot)
-            .map_err(map_protocol_error)?;
+            .map_err(map_topology_projection_error)?;
         Ok(snapshot)
     }
 
@@ -456,7 +460,7 @@ impl RustLocalControlClient {
         let snapshot = self.list_topology_snapshot(filter)?;
         self.topology_projection
             .accept_snapshot(&snapshot)
-            .map_err(map_protocol_error)?;
+            .map_err(map_topology_projection_error)?;
         Ok(snapshot)
     }
 
@@ -787,7 +791,8 @@ impl RustLocalControlClient {
             .map_err(map_protocol_error)?;
             self.topology_projection
                 .accept_event(topology_event)
-                .map_err(map_protocol_error)?;
+                .map_err(map_topology_projection_error)?;
+            return Ok(());
         } else {
             match event.runtime_namespace_id {
                 Some(runtime_namespace_id) => {
@@ -935,9 +940,6 @@ fn project_event(message: ProtocolMessage) -> ClientResult<ClientEventProjection
             last_dropped_sequence,
         }),
         ProtocolPayload::OwnerStatus { ready } => Ok(ClientEventProjection::OwnerStatus { ready }),
-        ProtocolPayload::MultiplexerEvent { event } => {
-            Ok(ClientEventProjection::MultiplexerTopology { event })
-        }
         _ => Err(LocalControlClientError::UnexpectedResponse(message.kind())),
     }
 }

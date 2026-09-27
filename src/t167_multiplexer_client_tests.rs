@@ -1,5 +1,7 @@
 use super::*;
-use crate::multiplexer::domain::{MultiplexerWorkspaceId, TopologyGeneration};
+use crate::multiplexer::domain::{
+    MultiplexerErrorKind, MultiplexerWorkspaceId, TopologyGeneration,
+};
 use crate::persistent_runtime::domain::{
     ClientConnectionId, EventSequence, LocalControlErrorKind, OwnerGenerationId,
 };
@@ -122,7 +124,7 @@ fn t167_gap_and_unfiltered_generation_discontinuity_require_resubscribe() {
         projection
             .accept_snapshot(&workspace_list_snapshot(5))
             .unwrap_err(),
-        LocalControlErrorKind::StaleTopologyGeneration
+        TopologyProjectionError::Multiplexer(MultiplexerErrorKind::StaleTopologyGeneration)
     );
 
     projection
@@ -160,7 +162,7 @@ fn t167_workspace_filter_rejects_different_workspace_event() {
                 topology_generation: topology_generation(8),
             })
             .unwrap_err(),
-        LocalControlErrorKind::MalformedFrame
+        TopologyProjectionError::Protocol(LocalControlErrorKind::MalformedFrame)
     );
 }
 
