@@ -1,0 +1,151 @@
+name: T168 Exact Review
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/t168-exact-review.yml"
+
+permissions:
+  contents: read
+
+env:
+  TARGET_REPO: TheHalfMoon/Winds
+  BASE_SHA: 4d43b3d031ad651cccd3f32349ee6c67ce9ce305
+  HEAD_SHA: e5329578221ac77f062c7b7f07e86477498f9a5c
+
+jobs:
+  alibaba-ocr:
+    name: Alibaba Open Code Review exact range
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      OCR_BIN: /tmp/opencodereview
+      OCR_OUT: /tmp/ocr-output
+      OCR_URL: https://github.com/alibaba/open-code-review/releases/download/v1.12.9/opencodereview-linux-amd64
+      OCR_SHA256: 9105c7081b8362a1cb0167f1ddfd1437e147a0e3c9a5af89c03c8859a5b0f0e8
+    steps:
+      - name: Fetch exact Winds range as data
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init /tmp/winds-target
+          git -C /tmp/winds-target remote add origin "https://github.com/${TARGET_REPO}.git"
+          git -C /tmp/winds-target fetch --no-tags origin "$BASE_SHA" "$HEAD_SHA"
+          git -C /tmp/winds-target cat-file -e "$BASE_SHA^{commit}"
+          git -C /tmp/winds-target cat-file -e "$HEAD_SHA^{commit}"
+          test "$(git -C /tmp/winds-target merge-base "$BASE_SHA" "$HEAD_SHA")" = "$BASE_SHA"
+          git -C /tmp/winds-target diff --check "$BASE_SHA" "$HEAD_SHA"
+      - name: Install checksum-pinned Alibaba Open Code Review
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error "$OCR_URL" --output "$OCR_BIN"
+          echo "$OCR_SHA256  $OCR_BIN" | sha256sum --check --status
+          chmod 700 "$OCR_BIN"
+          mkdir -m 700 "$OCR_OUT"
+          "$OCR_BIN" --version
+      - name: Run exact-range delegation and rules
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd /tmp/winds-target
+          "$OCR_BIN" delegate preview --format json --from "$BASE_SHA" --to "$HEAD_SHA" | tee "$OCR_OUT/preview.json"
+          python3 - <<'PY'
+          import json, os, subprocess
+          out = os.environ['OCR_OUT']
+          with open(out + '/preview.json', encoding='utf-8') as f:
+              preview = json.load(f)
+          if preview.get('from') != os.environ['BASE_SHA'] or preview.get('to') != os.environ['HEAD_SHA']:
+              raise SystemExit('OCR preview range mismatch')
+          files=[]
+          for entry in preview.get('reviewable_files', []):
+              path = entry.get('path') if isinstance(entry, dict) else entry
+              if isinstance(path, str) and path:
+                  files.append(path)
+          rules={'groups': []}
+          if files:
+              cp=subprocess.run([os.environ['OCR_BIN'],'delegate','rule','--format','json','--',*files],check=True,text=True,stdout=subprocess.PIPE)
+              rules=json.loads(cp.stdout)
+          evidence={
+              'tool':'@alibaba-group/open-code-review@1.12.9',
+              'base_sha':os.environ['BASE_SHA'],
+              'head_sha':os.environ['HEAD_SHA'],
+              'reviewable_count':preview.get('reviewable_count'),
+              'excluded_count':preview.get('excluded_count'),
+              'reviewable_files':files,
+              'rule_groups':len(rules.get('groups',[])),
+          }
+          with open(out + '/rules.json','w',encoding='utf-8') as f: json.dump(rules,f,indent=2,sort_keys=True)
+          with open(out + '/evidence.json','w',encoding='utf-8') as f: json.dump(evidence,f,indent=2,sort_keys=True)
+          print(json.dumps(evidence, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: t168-alibaba-ocr-${{ env.HEAD_SHA }}
+          path: /tmp/ocr-output
+          if-no-files-found: warn
+          retention-days: 14
+
+  jev-review:
+    name: Jev exact range
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      JEV_REVIEW_SHA: 31f89602797fb7bea007f8a480bf368bf564954e
+    steps:
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+      - name: Require genuine TypeSafe credential
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${TYPESAFE_API_KEY:-}" ]; then
+            echo "::error::TYPESAFE_API_KEY is not configured for Winds GitHub Actions; Jev review is UNPROVEN."
+            exit 1
+          fi
+      - name: Fetch exact Winds range as data
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init /tmp/winds-target
+          git -C /tmp/winds-target remote add origin "https://github.com/${TARGET_REPO}.git"
+          git -C /tmp/winds-target fetch --no-tags origin "$BASE_SHA" "$HEAD_SHA"
+          git -C /tmp/winds-target cat-file -e "$BASE_SHA^{commit}"
+          git -C /tmp/winds-target cat-file -e "$HEAD_SHA^{commit}"
+          test "$(git -C /tmp/winds-target merge-base "$BASE_SHA" "$HEAD_SHA")" = "$BASE_SHA"
+          git -C /tmp/winds-target diff --check "$BASE_SHA" "$HEAD_SHA"
+      - name: Install pinned Jev Review
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone https://github.com/devagrawal09/jev-review.git /tmp/jev-review
+          git -C /tmp/jev-review checkout --detach "$JEV_REVIEW_SHA"
+          npm --prefix /tmp/jev-review ci
+      - name: Fetch base-controlled exact-diff adapter
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error \
+            https://raw.githubusercontent.com/TheHalfMoon/Cotra/main/.github/scripts/jev-exact-diff.mjs \
+            --output /tmp/jev-exact-diff.mjs
+          node --check /tmp/jev-exact-diff.mjs
+      - name: Run genuine Jev exact-diff review
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd /tmp/winds-target
+          node /tmp/jev-exact-diff.mjs "$BASE_SHA" "$HEAD_SHA" /tmp/winds-target /tmp/jev-review | tee /tmp/jev-review.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: t168-jev-${{ env.HEAD_SHA }}
+          path: /tmp/jev-review.json
+          if-no-files-found: warn
+          retention-days: 14
