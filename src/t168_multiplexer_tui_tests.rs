@@ -92,13 +92,7 @@ fn detailed_snapshot(topology_generation: u64) -> MultiplexerSnapshotV2 {
                 pane(21),
                 Some(pane(22)),
             ),
-            tab_snapshot(
-                second_tab,
-                "logs",
-                pane_node(pane(23)),
-                pane(23),
-                None,
-            ),
+            tab_snapshot(second_tab, "logs", pane_node(pane(23)), pane(23), None),
         ],
     )
 }
@@ -410,8 +404,16 @@ fn t168_large_topology_and_accessibility_rendering_are_deterministic() {
     assert!(first[0].contains("reduced_motion=true"));
     assert!(first[0].contains("high_contrast=true"));
     assert!(first[0].contains("scaled_text=true"));
-    assert!(first.iter().any(|line| line.contains(&workspace_id.to_string())));
-    assert!(first.iter().any(|line| line.contains(&focused_tab_id.to_string())));
+    assert!(
+        first
+            .iter()
+            .any(|line| line.contains(&workspace_id.to_string()))
+    );
+    assert!(
+        first
+            .iter()
+            .any(|line| line.contains(&focused_tab_id.to_string()))
+    );
 
     let TuiTopologyFindResolution::Ambiguous(matches) = tui.find("duplicate-tab-label") else {
         panic!("large duplicate-label topology must remain explicit ambiguity");

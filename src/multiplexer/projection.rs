@@ -462,7 +462,9 @@ impl TuiTopologyProjection {
                     rows,
                 })
             }
-            MultiplexerSnapshotV2::Workspace { snapshot } => Self::from_workspace_snapshot(snapshot),
+            MultiplexerSnapshotV2::Workspace { snapshot } => {
+                Self::from_workspace_snapshot(snapshot)
+            }
             MultiplexerSnapshotV2::MutationResult { .. } => {
                 Err(TuiTopologyProjectionError::UnsupportedSnapshot)
             }
@@ -575,16 +577,11 @@ impl TuiTopologyProjection {
             .rows
             .iter()
             .filter_map(|row| {
-                topology_match_rank(&query, row).map(|rank| {
-                    (rank, row.target.stable_key(), row.target)
-                })
+                topology_match_rank(&query, row)
+                    .map(|rank| (rank, row.target.stable_key(), row.target))
             })
             .collect();
-        matches.sort_by(|left, right| {
-            left.0
-                .cmp(&right.0)
-                .then_with(|| left.1.cmp(&right.1))
-        });
+        matches.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
         let Some(best_rank) = matches.first().map(|item| item.0) else {
             return TuiTopologyFindResolution::NotFound;
         };
@@ -644,7 +641,8 @@ impl TuiTopologyProjection {
                 first_tab_alias,
                 first_pane_id,
             } => {
-                if self.contains_workspace(multiplexer_workspace_id) || self.contains_pane(first_pane_id)
+                if self.contains_workspace(multiplexer_workspace_id)
+                    || self.contains_pane(first_pane_id)
                 {
                     return Err(TuiTopologyProjectionError::IdentityCollision);
                 }
@@ -863,10 +861,7 @@ impl TuiTopologyProjection {
         })
     }
 
-    pub(crate) fn render_lines(
-        &self,
-        accessibility: TuiTopologyAccessibility,
-    ) -> Vec<String> {
+    pub(crate) fn render_lines(&self, accessibility: TuiTopologyAccessibility) -> Vec<String> {
         let mut lines = Vec::with_capacity(self.rows.len().saturating_add(1));
         lines.push(format!(
             "TOPOLOGY generation={} authority={} reduced_motion={} high_contrast={} scaled_text={}",
@@ -926,10 +921,7 @@ impl TuiTopologyProjection {
         })
     }
 
-    fn require_target(
-        &self,
-        target: TuiTopologyTarget,
-    ) -> Result<(), TuiTopologyProjectionError> {
+    fn require_target(&self, target: TuiTopologyTarget) -> Result<(), TuiTopologyProjectionError> {
         self.contains_target(target)
             .then_some(())
             .ok_or(TuiTopologyProjectionError::UnknownTarget)
