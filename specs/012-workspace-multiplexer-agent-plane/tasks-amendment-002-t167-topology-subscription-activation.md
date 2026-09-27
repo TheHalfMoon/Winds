@@ -1,6 +1,6 @@
 # Spec 012 Tasks Amendment 002 — T167 Topology Subscription Activation
 
-Status: CANDIDATE
+Status: CLOSED_CANONICAL
 
 Authority basis: Winds Constitution 1.1.0, canonical Spec 012 Plan event-loss/recovery decisions, canonical T166 protocol-v2 contract, and canonical T167 purpose/acceptance requirements.
 
@@ -66,15 +66,66 @@ Candidate movement invalidates stale exact-candidate evidence. This governance a
 
 No unavailable reviewer or tool is relabelled as PASS, and no predecessor Jev/OCR result qualifies a moved candidate.
 
-## Authority state before landing
+## Canonical closeout
 
 ```text
-SPEC_012_TASKS_AMENDMENT_002=CANDIDATE
-T166=CLOSED_CANONICAL_BY_MERGE_AND_POST_MERGE_VERIFICATION
-T167=AUTHORIZED_BY_PREDECESSOR_BUT_BLOCKED_ON_PATH_CORRECTION
-T168..T185=BLOCKED_BY_PREDECESSOR
+AMENDMENT_PR=259
+BASE=7fb9761874e03608fc7d47a9174dd9c27f4a0537
+HEAD=7213c69c86bcebf81154fe9bbe113656abe46db9
+HEAD_TREE=8c52c91774bf1fc80277f4058b54c2c628100781
+MERGE=c9c85e75fa066049f62a7f3ab2ccfcc70bf98e6d
+MERGE_TREE=8c52c91774bf1fc80277f4058b54c2c628100781
+MERGE_PARENT_1=7fb9761874e03608fc7d47a9174dd9c27f4a0537
+MERGE_PARENT_2=7213c69c86bcebf81154fe9bbe113656abe46db9
+MERGE_GITHUB_VERIFICATION=VERIFIED_VALID
+PR_QUALITY_RUN=36254396434 SUCCESS
+POST_MERGE_PUSH_RUN=36255400257 SUCCESS
+CHANGED_PATHS=1
+UNRESOLVED_MATERIAL_THREADS=0
+JEV=TypeSafe Jev pin 31f89602797fb7bea007f8a480bf368bf564954e exact range 7fb97618..7213c69c expected_hunks=1 reviewed_hunks=1 findings=0 blocking_findings=0 coverage=COMPLETE status=PASSED executor_run=TheHalfMoon/Cotra 36255268563 job 108440735965
+JEV_IN_REPO_ATTEMPT=Winds run 36254996057 Jev step FAILED with TYPESAFE_API_KEY_NOT_CONFIGURED and is superseded by the pinned review-only executor above; it is never relabelled as PASS
+ALIBABA_OPEN_CODE_REVIEW=v1.12.9 exact-range preview on Winds run 36254996057 job 108439976387 reviewable_count=0 excluded_count=1 exclude_reason=unsupported_ext for the sole Markdown path, followed by explicit manual exact-head Markdown review
+```
 
-T167_OWNER_TOPOLOGY_SUBSCRIPTION_ACTIVATION=NOT_YET_AUTHORIZED_PENDING_AMENDMENT_LANDING
+The amendment was canonically landed by merge `c9c85e75fa066049f62a7f3ab2ccfcc70bf98e6d`, and the activated contract was then implemented and closed by T167 below.
+
+## Canonical T167 closeout
+
+```text
+T167_PR=260
+BASE=c9c85e75fa066049f62a7f3ab2ccfcc70bf98e6d
+HEAD=5d71621d99dc2e75a5fe25c393e9e2b8b4b2a5e0
+HEAD_TREE=cbd1d30e619e3248bdbdaf796573afd1683a0fb7
+MERGE_BASE=c9c85e75fa066049f62a7f3ab2ccfcc70bf98e6d
+AHEAD_BY=11
+BEHIND_BY=0
+CHANGED_PATHS=4 src/multiplexer/projection.rs src/persistent_runtime/client.rs src/persistent_runtime/owner.rs src/t167_multiplexer_client_tests.rs
+PR_EXACT_HEAD_RUNS=quality 36295258131, t159-performance 36295258127, t160-native-platform 36295258146, t141-desktop-security 36295258075, t142-native-platform 36295258193, windows-terminal 36295258148, release-candidate 36295258145; all SUCCESS
+JEV=TypeSafe Jev pin 31f89602797fb7bea007f8a480bf368bf564954e exact range c9c85e75..5d71621d expected_hunks=21 reviewed_hunks=21 findings=0 blocking_findings=0 coverage=COMPLETE status=PASSED executor_run=TheHalfMoon/Cotra 36295313567 job 108552961724
+ALIBABA_OPEN_CODE_REVIEW=v1.12.9 delegation accounting on Winds run 36295289244 job 108552897352 reviewable_count=4 excluded_count=0 with resolved rules for every changed Rust path
+INDEPENDENT_EXACT_HEAD_REVIEW=https://github.com/TheHalfMoon/Winds/pull/260#pullrequestreview-5328876532 material_findings=0
+UNRESOLVED_REVIEW_THREADS=0
+MERGE=5b43efd05b9199a1a34ccb1528ae200fdcce79d4
+MERGE_TREE=cbd1d30e619e3248bdbdaf796573afd1683a0fb7
+MERGE_PARENT_1=c9c85e75fa066049f62a7f3ab2ccfcc70bf98e6d
+MERGE_PARENT_2=5d71621d99dc2e75a5fe25c393e9e2b8b4b2a5e0
+MERGE_GITHUB_VERIFICATION=VERIFIED_VALID
+POST_MERGE_PUSH_RUNS_ON_5b43efd=quality 36303066333, t159-performance 36303066311, t160-native-platform 36303066318, t141-desktop-security 36303066331, t142-native-platform 36303066324, windows-terminal 36303066327; six actually-triggered workflows, all SUCCESS
+POST_MERGE_FAILURES=0
+```
+
+No post-merge workflow beyond the six actually triggered by the canonical merge was required, and none of the six failed.
+
+## Authority state
+
+```text
+SPEC_012_TASKS_AMENDMENT_002=CLOSED_CANONICAL
+T166=CLOSED_CANONICAL_BY_MERGE_AND_POST_MERGE_VERIFICATION
+T167=CLOSED_CANONICAL_BY_MERGE_AND_POST_MERGE_VERIFICATION
+T168=AUTHORIZED
+T169..T185=BLOCKED_BY_PREDECESSOR
+
+T167_OWNER_TOPOLOGY_SUBSCRIPTION_ACTIVATION=LANDED_CANONICAL
 PROTOCOL_V2_SCHEMA_CHANGE_AUTHORIZED=NO
 AGENT_OBSERVATION_STREAM_ACTIVATION_AUTHORIZED=NO
 ATTENTION_STREAM_ACTIVATION_AUTHORIZED=NO
@@ -84,4 +135,4 @@ PLUGIN_RUNTIME_AUTHORIZED=NO
 AUTOMATIC_LANDING_AUTHORIZED=NO
 ```
 
-Canonical landing of this amendment authorizes only the narrow T167 owner-side topology-subscription activation described above. It does not authorize T168 or any later task.
+Canonical landing of this amendment authorized only the narrow T167 owner-side topology-subscription activation described above, and that activation is now landed. T168 is authorized solely by canonical T167 closeout under the Tasks dependency order; this amendment grants no protocol-v2 schema change, no non-topology stream activation, and no authority beyond the T168 task text.
