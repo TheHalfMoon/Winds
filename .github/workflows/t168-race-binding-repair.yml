@@ -1,0 +1,271 @@
+name: T168 Race Binding Repair
+
+on:
+  push:
+    branches:
+      - impl/spec-012-t168-tui-topology
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: impl/spec-012-t168-tui-topology
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify branch and base ancestry
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = "impl/spec-012-t168-tui-topology"
+          git fetch origin main
+          test "$(git merge-base origin/main HEAD)" = "$(git rev-parse origin/main)"
+
+      - name: Bind topology actions to the presented generation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          from textwrap import dedent
+
+          projection = Path('src/multiplexer/projection.rs')
+          text = projection.read_text()
+          stale = dedent('''
+              pub(crate) fn tui_topology_focus_pane_intent(
+                  &self,
+                  multiplexer_workspace_id: MultiplexerWorkspaceId,
+                  tab_id: TabId,
+                  pane_id: PaneId,
+              ) -> Option<ApplyTopologyOperationV2> {
+                  let snapshot = self.trusted_topology_snapshot()?;
+                  let projection = TuiTopologyProjection::from_snapshot(snapshot).ok()?;
+                  projection
+                      .keyboard_intent(TuiTopologyCommand::Focus(TuiTopologyTarget::Pane {
+                          multiplexer_workspace_id,
+                          tab_id,
+                          pane_id,
+                      }))
+                      .ok()
+              }
+          ''')
+          if stale not in text:
+              raise SystemExit('expected stale client-side pointer helper not found')
+          text = text.replace(stale, '', 1)
+          projection.write_text(text)
+
+          ui = Path('src/workbench_ui.rs')
+          text = ui.read_text()
+          start_marker = '#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub(crate) struct CanonicalTopologyPaneHitRegion {'
+          end_marker = '\n#[cfg(test)]\n#[path = "t092_workbench_navigation_tests.rs"]\nmod t092_workbench_navigation_tests;\n'
+          start = text.find(start_marker)
+          end = text.find(end_marker, start)
+          if start < 0 or end < 0:
+              raise SystemExit('T168 workbench bridge markers not found')
+          replacement = dedent('''
+              #[derive(Debug, Clone, PartialEq, Eq)]
+              pub(crate) struct CanonicalTopologyBoundIntent {
+                  intent: crate::persistent_runtime::protocol::ApplyTopologyOperationV2,
+              }
+
+              impl CanonicalTopologyBoundIntent {
+                  fn new(intent: crate::persistent_runtime::protocol::ApplyTopologyOperationV2) -> Self {
+                      Self { intent }
+                  }
+
+                  pub(crate) fn into_intent(
+                      self,
+                  ) -> crate::persistent_runtime::protocol::ApplyTopologyOperationV2 {
+                      self.intent
+                  }
+              }
+
+              #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+              pub(crate) struct CanonicalTopologyPaneHitRegion {
+                  pub(crate) multiplexer_workspace_id: crate::multiplexer::domain::MultiplexerWorkspaceId,
+                  pub(crate) tab_id: crate::multiplexer::domain::TabId,
+                  pub(crate) pane_id: crate::multiplexer::domain::PaneId,
+                  pub(crate) topology_generation: crate::multiplexer::domain::TopologyGeneration,
+                  pub(crate) column: u16,
+                  pub(crate) row: u16,
+                  pub(crate) width: u16,
+                  pub(crate) height: u16,
+              }
+
+              impl CanonicalTopologyPaneHitRegion {
+                  fn contains(self, column: u16, row: u16) -> bool {
+                      column >= self.column
+                          && row >= self.row
+                          && column < self.column.saturating_add(self.width)
+                          && row < self.row.saturating_add(self.height)
+                  }
+              }
+
+              pub(crate) fn canonical_topology_text(
+                  client: &crate::persistent_runtime::client::RustLocalControlClient,
+                  reduced_motion: bool,
+                  high_contrast: bool,
+                  scaled_text: bool,
+              ) -> Option<String> {
+                  client
+                      .tui_topology_render_lines(reduced_motion, high_contrast, scaled_text)
+                      .map(|lines| lines.join("\\n"))
+              }
+
+              pub(crate) fn canonical_topology_bind_search_focus_intent(
+                  client: &crate::persistent_runtime::client::RustLocalControlClient,
+                  query: &str,
+              ) -> Option<CanonicalTopologyBoundIntent> {
+                  client
+                      .tui_topology_find_focus_intent(query)
+                      .map(CanonicalTopologyBoundIntent::new)
+              }
+
+              pub(crate) fn canonical_topology_bind_pointer_focus_intent(
+                  hit_regions: &[CanonicalTopologyPaneHitRegion],
+                  column: u16,
+                  row: u16,
+              ) -> Option<CanonicalTopologyBoundIntent> {
+                  let mut matches = hit_regions
+                      .iter()
+                      .copied()
+                      .filter(|region| region.contains(column, row));
+                  let target = matches.next()?;
+                  if matches.next().is_some() {
+                      return None;
+                  }
+                  Some(CanonicalTopologyBoundIntent::new(
+                      crate::persistent_runtime::protocol::ApplyTopologyOperationV2 {
+                          expected_topology_generation: target.topology_generation,
+                          operation: crate::persistent_runtime::protocol::TopologyOperationV2::FocusPane {
+                              multiplexer_workspace_id: target.multiplexer_workspace_id,
+                              tab_id: target.tab_id,
+                              pane_id: target.pane_id,
+                          },
+                      },
+                  ))
+              }
+          ''')
+          text = text[:start] + replacement + text[end:]
+          ui.write_text(text)
+
+          tests = Path('src/t168_multiplexer_tui_tests.rs')
+          text = tests.read_text()
+          marker = 'fn t168_workbench_pointer_binding_retains_presented_generation()'
+          if marker not in text:
+              text += dedent('''
+
+                  #[test]
+                  fn t168_workbench_pointer_binding_retains_presented_generation() {
+                      use crate::workbench_ui::{
+                          canonical_topology_bind_pointer_focus_intent, CanonicalTopologyPaneHitRegion,
+                      };
+
+                      let workspace_id = workspace(1);
+                      let tab_id = tab(11);
+                      let pane_id = pane(22);
+                      let presented_generation = generation(7);
+                      let hit_regions = [CanonicalTopologyPaneHitRegion {
+                          multiplexer_workspace_id: workspace_id,
+                          tab_id,
+                          pane_id,
+                          topology_generation: presented_generation,
+                          column: 10,
+                          row: 0,
+                          width: 10,
+                          height: 10,
+                      }];
+
+                      let bound = canonical_topology_bind_pointer_focus_intent(&hit_regions, 12, 3)
+                          .expect("presented exact target should bind");
+                      let intent = bound.into_intent();
+                      assert_eq!(intent.expected_topology_generation, presented_generation);
+                      assert_eq!(
+                          intent.operation,
+                          TopologyOperationV2::FocusPane {
+                              multiplexer_workspace_id: workspace_id,
+                              tab_id,
+                              pane_id,
+                          }
+                      );
+                      assert_ne!(intent.expected_topology_generation, generation(8));
+                  }
+
+                  #[test]
+                  fn t168_workbench_pointer_binding_fails_closed_on_overlapping_regions() {
+                      use crate::workbench_ui::{
+                          canonical_topology_bind_pointer_focus_intent, CanonicalTopologyPaneHitRegion,
+                      };
+
+                      let first = CanonicalTopologyPaneHitRegion {
+                          multiplexer_workspace_id: workspace(1),
+                          tab_id: tab(11),
+                          pane_id: pane(21),
+                          topology_generation: generation(7),
+                          column: 0,
+                          row: 0,
+                          width: 20,
+                          height: 10,
+                      };
+                      let second = CanonicalTopologyPaneHitRegion {
+                          pane_id: pane(22),
+                          ..first
+                      };
+                      assert!(
+                          canonical_topology_bind_pointer_focus_intent(&[first, second], 5, 5)
+                              .is_none()
+                      );
+                  }
+              ''')
+          tests.write_text(text)
+          PY
+
+      - name: Install exact Rust toolchain
+        uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+
+      - name: Format and scope-check repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          git diff --check
+          git diff --name-only -- src | sort > /tmp/changed.txt
+          cat /tmp/changed.txt
+          while IFS= read -r path; do
+            case "$path" in
+              src/multiplexer/projection.rs|src/workbench_ui.rs|src/t168_multiplexer_tui_tests.rs) ;;
+              "") ;;
+              *) echo "unexpected repair path: $path" >&2; exit 1 ;;
+            esac
+          done < /tmp/changed.txt
+
+      - name: Clippy exact repair candidate
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: Run focused T168 tests
+        run: cargo test --locked t168_
+
+      - name: Preserve predecessor navigation tests
+        run: cargo test --locked t092_
+
+      - name: Commit only after all repair gates pass
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$(git status --porcelain -- src/multiplexer/projection.rs src/workbench_ui.rs src/t168_multiplexer_tui_tests.rs)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/multiplexer/projection.rs src/workbench_ui.rs src/t168_multiplexer_tui_tests.rs
+          git commit -m "fix: bind T168 intents to presented topology"
+          git push origin HEAD:impl/spec-012-t168-tui-topology
