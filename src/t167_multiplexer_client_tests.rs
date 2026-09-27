@@ -187,6 +187,80 @@ fn t167_reconnect_reset_clears_subscription_and_cache_authority() {
     assert!(projection.trusted_snapshot().is_none());
 }
 
+#[test]
+fn t167_multi_client_projections_converge_after_event_and_authoritative_snapshot() {
+    let owner_generation = generation(6);
+    let subscription = topology_subscription(None);
+    let mut first = TopologyProjection::new(owner_generation);
+    let mut second = TopologyProjection::new(owner_generation);
+
+    for projection in [&mut first, &mut second] {
+        projection
+            .accept_subscription_ack(&subscription, &topology_ack(None, 10))
+            .unwrap();
+        projection
+            .accept_snapshot(&workspace_list_snapshot(10))
+            .unwrap();
+        projection
+            .accept_event(&MultiplexerEventV2::TopologyChanged {
+                multiplexer_workspace_id: workspace(6),
+                topology_generation: topology_generation(11),
+            })
+            .unwrap();
+        assert_eq!(
+            projection.freshness(),
+            TopologyProjectionFreshness::NeedsSnapshot
+        );
+        projection
+            .accept_snapshot(&workspace_list_snapshot(11))
+            .unwrap();
+    }
+
+    assert_eq!(first.freshness(), TopologyProjectionFreshness::Current);
+    assert_eq!(second.freshness(), TopologyProjectionFreshness::Current);
+    assert_eq!(first.observed_generation(), second.observed_generation());
+    assert_eq!(first.trusted_snapshot(), second.trusted_snapshot());
+}
+
+#[test]
+fn t167_owner_restart_invalidates_old_projection_until_fresh_subscription_and_snapshot() {
+    let old_generation = generation(7);
+    let new_generation = generation(8);
+    let subscription = topology_subscription(None);
+    let mut projection = TopologyProjection::new(old_generation);
+
+    projection
+        .accept_subscription_ack(&subscription, &topology_ack(None, 20))
+        .unwrap();
+    projection
+        .accept_snapshot(&workspace_list_snapshot(20))
+        .unwrap();
+    assert_eq!(projection.freshness(), TopologyProjectionFreshness::Current);
+
+    projection.reset_for_connection(new_generation);
+    assert_eq!(projection.owner_generation_id(), new_generation);
+    assert_eq!(
+        projection.freshness(),
+        TopologyProjectionFreshness::Unsubscribed
+    );
+    assert_eq!(
+        projection
+            .accept_snapshot(&workspace_list_snapshot(20))
+            .unwrap_err(),
+        TopologyProjectionError::Protocol(LocalControlErrorKind::UnsupportedOperation)
+    );
+    assert!(projection.trusted_snapshot().is_none());
+
+    projection
+        .accept_subscription_ack(&subscription, &topology_ack(None, 20))
+        .unwrap();
+    projection
+        .accept_snapshot(&workspace_list_snapshot(20))
+        .unwrap();
+    assert_eq!(projection.freshness(), TopologyProjectionFreshness::Current);
+    assert_eq!(projection.owner_generation_id(), new_generation);
+}
+
 struct ScriptedWire {
     responses: VecDeque<ProtocolMessage>,
     sent: Arc<Mutex<Vec<MessageKind>>>,
