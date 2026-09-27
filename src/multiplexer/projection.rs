@@ -958,6 +958,54 @@ fn topology_match_rank(query: &str, row: &TuiTopologyRow) -> Option<TuiTopologyF
         .then_some(TuiTopologyFindRank::NormalizedSubstring)
 }
 
+impl super::RustLocalControlClient {
+    pub(crate) fn tui_topology_render_lines(
+        &self,
+        reduced_motion: bool,
+        high_contrast: bool,
+        scaled_text: bool,
+    ) -> Option<Vec<String>> {
+        let snapshot = self.trusted_topology_snapshot()?;
+        let projection = TuiTopologyProjection::from_snapshot(snapshot).ok()?;
+        Some(projection.render_lines(TuiTopologyAccessibility {
+            reduced_motion,
+            high_contrast,
+            scaled_text,
+        }))
+    }
+
+    pub(crate) fn tui_topology_find_focus_intent(
+        &self,
+        query: &str,
+    ) -> Option<ApplyTopologyOperationV2> {
+        let snapshot = self.trusted_topology_snapshot()?;
+        let projection = TuiTopologyProjection::from_snapshot(snapshot).ok()?;
+        let TuiTopologyFindResolution::Unique(target) = projection.find(query) else {
+            return None;
+        };
+        projection
+            .keyboard_intent(TuiTopologyCommand::Focus(target))
+            .ok()
+    }
+
+    pub(crate) fn tui_topology_focus_pane_intent(
+        &self,
+        multiplexer_workspace_id: MultiplexerWorkspaceId,
+        tab_id: TabId,
+        pane_id: PaneId,
+    ) -> Option<ApplyTopologyOperationV2> {
+        let snapshot = self.trusted_topology_snapshot()?;
+        let projection = TuiTopologyProjection::from_snapshot(snapshot).ok()?;
+        projection
+            .keyboard_intent(TuiTopologyCommand::Focus(TuiTopologyTarget::Pane {
+                multiplexer_workspace_id,
+                tab_id,
+                pane_id,
+            }))
+            .ok()
+    }
+}
+
 #[cfg(test)]
 #[path = "../t168_multiplexer_tui_tests.rs"]
 mod t168_multiplexer_tui_tests;

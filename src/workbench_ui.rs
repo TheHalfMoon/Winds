@@ -630,6 +630,65 @@ fn resize_selected(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CanonicalTopologyPaneHitRegion {
+    pub(crate) multiplexer_workspace_id: crate::multiplexer::domain::MultiplexerWorkspaceId,
+    pub(crate) tab_id: crate::multiplexer::domain::TabId,
+    pub(crate) pane_id: crate::multiplexer::domain::PaneId,
+    pub(crate) column: u16,
+    pub(crate) row: u16,
+    pub(crate) width: u16,
+    pub(crate) height: u16,
+}
+
+impl CanonicalTopologyPaneHitRegion {
+    fn contains(self, column: u16, row: u16) -> bool {
+        column >= self.column
+            && row >= self.row
+            && column < self.column.saturating_add(self.width)
+            && row < self.row.saturating_add(self.height)
+    }
+}
+
+pub(crate) fn canonical_topology_text(
+    client: &crate::persistent_runtime::client::RustLocalControlClient,
+    reduced_motion: bool,
+    high_contrast: bool,
+    scaled_text: bool,
+) -> Option<String> {
+    client
+        .tui_topology_render_lines(reduced_motion, high_contrast, scaled_text)
+        .map(|lines| lines.join("\n"))
+}
+
+pub(crate) fn canonical_topology_search_focus_intent(
+    client: &crate::persistent_runtime::client::RustLocalControlClient,
+    query: &str,
+) -> Option<crate::persistent_runtime::protocol::ApplyTopologyOperationV2> {
+    client.tui_topology_find_focus_intent(query)
+}
+
+pub(crate) fn canonical_topology_pointer_focus_intent(
+    client: &crate::persistent_runtime::client::RustLocalControlClient,
+    hit_regions: &[CanonicalTopologyPaneHitRegion],
+    column: u16,
+    row: u16,
+) -> Option<crate::persistent_runtime::protocol::ApplyTopologyOperationV2> {
+    let mut matches = hit_regions
+        .iter()
+        .copied()
+        .filter(|region| region.contains(column, row));
+    let target = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    client.tui_topology_focus_pane_intent(
+        target.multiplexer_workspace_id,
+        target.tab_id,
+        target.pane_id,
+    )
+}
+
 #[cfg(test)]
 #[path = "t092_workbench_navigation_tests.rs"]
 mod t092_workbench_navigation_tests;
