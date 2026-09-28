@@ -76,10 +76,7 @@ fn t169_recursive_projection_retains_immutable_ids_under_duplicate_labels() {
     );
     assert_ne!(projected.tabs[0].tab_id, projected.tabs[1].tab_id);
     assert_eq!(projected.focused_tab_id, first_tab_id.to_string());
-    assert_eq!(
-        projected.tabs[0].focused_pane_id,
-        first_pane_id.to_string()
-    );
+    assert_eq!(projected.tabs[0].focused_pane_id, first_pane_id.to_string());
     let third_pane_label = third_pane_id.to_string();
     assert_eq!(
         projected.tabs[1].zoomed_pane_id.as_deref(),
