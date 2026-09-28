@@ -2,10 +2,22 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const bridge = await readFile(new URL("../src/multiplexer/bridge.ts", import.meta.url), "utf8");
-const surface = await readFile(new URL("../src/multiplexer/TopologySurface.tsx", import.meta.url), "utf8");
-const host = await readFile(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
-const rustBridge = await readFile(new URL("../../src/desktop_topology.rs", import.meta.url), "utf8");
+const bridge = await readFile(
+  new URL("../src/multiplexer/bridge.ts", import.meta.url),
+  "utf8",
+);
+const surface = await readFile(
+  new URL("../src/multiplexer/TopologySurface.tsx", import.meta.url),
+  "utf8",
+);
+const host = await readFile(
+  new URL("../src-tauri/src/main.rs", import.meta.url),
+  "utf8",
+);
+const rustBridge = await readFile(
+  new URL("../../src/desktop_topology.rs", import.meta.url),
+  "utf8",
+);
 
 test("T169 exposes only closed typed topology commands", () => {
   assert.match(bridge, /multiplexer_topology_capability/);
@@ -33,11 +45,16 @@ test("T169 recursive presentation binds immutable ids rather than labels", () =>
   assert.doesNotMatch(surface, /displayLabel.*===.*target/);
 });
 
-test("T169 preserves keyboard, pointer, contrast, scale, and reduced-motion hooks", async () => {
-  const css = await readFile(new URL("../src/multiplexer/topology.css", import.meta.url), "utf8");
+test("T169 preserves native keyboard, pointer, contrast, scale, and reduced-motion hooks", async () => {
+  const css = await readFile(
+    new URL("../src/multiplexer/topology.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(surface, /type="button"/);
   assert.match(surface, /onClick=/);
-  assert.match(surface, /onKeyDown=/);
   assert.match(surface, /aria-current/);
+  assert.match(surface, /aria-pressed/);
+  assert.doesNotMatch(surface, /onKeyDown=/);
   assert.match(css, /data-theme="contrast"/);
   assert.match(css, /data-scale="125"/);
   assert.match(css, /data-scale="200"/);
