@@ -201,10 +201,6 @@ fn snapshot_from_client(
         }
         workspaces.push(workspace_projection(&snapshot));
     }
-    workspaces.sort_by(|left, right| {
-        left.multiplexer_workspace_id
-            .cmp(&right.multiplexer_workspace_id)
-    });
 
     Ok(DesktopTopologySnapshot {
         authority: DESKTOP_TOPOLOGY_AUTHORITY,
@@ -298,3 +294,7 @@ pub fn desktop_topology_bind_target(
         pane_id: pane_id.map(|value| value.to_string()),
     })
 }
+
+#[cfg(test)]
+#[path = "t169_desktop_topology_tests.rs"]
+mod tests;
