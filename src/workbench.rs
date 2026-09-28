@@ -531,6 +531,10 @@ pub(crate) fn render_inert_workbench(frame: &mut Frame<'_>) {
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Spec 012 T168 adds presentation-only canonical topology alongside existing workbench render seams"
+)]
 fn render_workbench_accessible(
     frame: &mut Frame<'_>,
     state: &WorkbenchState,

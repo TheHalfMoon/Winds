@@ -144,10 +144,10 @@ impl WorkbenchNavigation {
             return Ok(NavigationEffect::None);
         }
 
-        if self.canonical_topology.is_some() {
-            if let Some(effect) = self.handle_canonical_topology_event(&event) {
-                return Ok(effect);
-            }
+        if self.canonical_topology.is_some()
+            && let Some(effect) = self.handle_canonical_topology_event(&event)
+        {
+            return Ok(effect);
         }
 
         if self.search_query.is_some() && !matches!(&event, Event::Resize(_, _)) {
@@ -1021,8 +1021,8 @@ mod t168_workbench_topology_binding_tests {
             None,
             crate::workbench::PaneSize::new(80, 24),
         );
-        let mut terminals = crate::workbench_terminal::WorkbenchTerminals::new();
-        let mut editor = crate::workbench_input::WorkbenchShellEditor::new();
+        let mut terminals = crate::workbench::terminal::WorkbenchTerminals::new();
+        let mut editor = crate::workbench::terminal::input::WorkbenchShellEditor::new();
         let mut navigation = WorkbenchNavigation::new();
         navigation.install_canonical_topology(presentation, vec![region]);
 
