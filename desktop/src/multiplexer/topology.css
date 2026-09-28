@@ -57,13 +57,13 @@
   padding: 8px 0;
 }
 
-.multiplexer-tabs [role="tab"] {
+.multiplexer-tabs button {
   display: grid;
   gap: 1px;
   min-width: max-content;
 }
 
-.multiplexer-tabs [aria-selected="true"] {
+.multiplexer-tabs [aria-pressed="true"] {
   outline: 2px solid currentColor;
   outline-offset: 2px;
 }
@@ -110,7 +110,7 @@
 
 html[data-theme="contrast"] .multiplexer-topology,
 html[data-theme="contrast"] .multiplexer-pane,
-html[data-theme="contrast"] .multiplexer-tabs [role="tab"] {
+html[data-theme="contrast"] .multiplexer-tabs button {
   border-width: 2px;
 }
 
