@@ -127,9 +127,7 @@ impl WorkbenchNavigation {
         self.search_query = None;
     }
 
-    pub(crate) fn canonical_topology_presentation(
-        &self,
-    ) -> Option<&CanonicalTopologyPresentation> {
+    pub(crate) fn canonical_topology_presentation(&self) -> Option<&CanonicalTopologyPresentation> {
         self.canonical_topology.as_ref()
     }
 
@@ -193,10 +191,7 @@ impl WorkbenchNavigation {
         }
     }
 
-    fn handle_canonical_topology_event(
-        &mut self,
-        event: &Event,
-    ) -> Option<NavigationEffect> {
+    fn handle_canonical_topology_event(&mut self, event: &Event) -> Option<NavigationEffect> {
         let presentation = self.canonical_topology.as_ref()?;
 
         if self.search_query.is_some() && !matches!(event, Event::Resize(_, _)) {
@@ -244,20 +239,16 @@ impl WorkbenchNavigation {
                 self.last_find = None;
                 Some(NavigationEffect::None)
             }
-            Event::Mouse(mouse)
-                if mouse.kind == MouseEventKind::Down(MouseButton::Left) =>
-            {
-                Some(
-                    canonical_topology_bind_pointer_focus_intent(
-                        presentation,
-                        &self.canonical_topology_hit_regions,
-                        mouse.column,
-                        mouse.row,
-                    )
-                    .map(NavigationEffect::CanonicalTopologyIntent)
-                    .unwrap_or(NavigationEffect::None),
+            Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => Some(
+                canonical_topology_bind_pointer_focus_intent(
+                    presentation,
+                    &self.canonical_topology_hit_regions,
+                    mouse.column,
+                    mouse.row,
                 )
-            }
+                .map(NavigationEffect::CanonicalTopologyIntent)
+                .unwrap_or(NavigationEffect::None),
+            ),
             Event::Key(key) if canonical_topology_local_mutation_binding(*key) => {
                 Some(NavigationEffect::None)
             }
@@ -774,11 +765,8 @@ impl CanonicalTopologyPresentation {
         high_contrast: bool,
         scaled_text: bool,
     ) -> Option<Self> {
-        let (topology_generation, lines) = client.tui_topology_rendered_snapshot(
-            reduced_motion,
-            high_contrast,
-            scaled_text,
-        )?;
+        let (topology_generation, lines) =
+            client.tui_topology_rendered_snapshot(reduced_motion, high_contrast, scaled_text)?;
         let bindings = client.tui_topology_search_bindings(topology_generation)?;
         let search_bindings = bindings
             .into_iter()
@@ -817,8 +805,7 @@ impl CanonicalTopologyPresentation {
             .search_bindings
             .iter()
             .filter_map(|binding| {
-                canonical_topology_match_rank(&query, binding)
-                    .map(|rank| (rank, binding))
+                canonical_topology_match_rank(&query, binding).map(|rank| (rank, binding))
             })
             .collect();
         matches.sort_by(|left, right| {
@@ -877,8 +864,7 @@ fn canonical_topology_match_rank(
     if canonical_id.starts_with(query) || label.starts_with(query) {
         return Some(FindRank::NormalizedPrefix);
     }
-    (canonical_id.contains(query) || label.contains(query))
-        .then_some(FindRank::NormalizedSubstring)
+    (canonical_id.contains(query) || label.contains(query)).then_some(FindRank::NormalizedSubstring)
 }
 
 fn canonical_topology_local_mutation_binding(key: KeyEvent) -> bool {
@@ -887,11 +873,7 @@ fn canonical_topology_local_mutation_binding(key: KeyEvent) -> bool {
         || (key.modifiers.contains(KeyModifiers::ALT)
             && matches!(
                 key.code,
-                KeyCode::Char('v')
-                    | KeyCode::Left
-                    | KeyCode::Right
-                    | KeyCode::Up
-                    | KeyCode::Down
+                KeyCode::Char('v') | KeyCode::Left | KeyCode::Right | KeyCode::Up | KeyCode::Down
             ))
 }
 
@@ -901,13 +883,10 @@ pub(crate) fn canonical_topology_bind_pointer_focus_intent(
     column: u16,
     row: u16,
 ) -> Option<CanonicalTopologyBoundIntent> {
-    let mut matches = hit_regions
-        .iter()
-        .copied()
-        .filter(|region| {
-            region.topology_generation == presentation.topology_generation()
-                && region.contains(column, row)
-        });
+    let mut matches = hit_regions.iter().copied().filter(|region| {
+        region.topology_generation == presentation.topology_generation()
+            && region.contains(column, row)
+    });
     let target = matches.next()?;
     if matches.next().is_some() {
         return None;
@@ -964,9 +943,10 @@ mod t168_workbench_topology_binding_tests {
             height: 10,
         }];
 
-        let intent = canonical_topology_bind_pointer_focus_intent(&presentation, &hit_regions, 12, 3)
-            .expect("presented exact target should bind")
-            .into_intent();
+        let intent =
+            canonical_topology_bind_pointer_focus_intent(&presentation, &hit_regions, 12, 3)
+                .expect("presented exact target should bind")
+                .into_intent();
         assert_eq!(intent.expected_topology_generation, presented_generation);
         assert_eq!(
             intent.operation,
@@ -1004,7 +984,10 @@ mod t168_workbench_topology_binding_tests {
             pane_id: pane_id(4),
             ..first
         };
-        assert!(canonical_topology_bind_pointer_focus_intent(&presentation, &[first, second], 5, 5).is_none());
+        assert!(
+            canonical_topology_bind_pointer_focus_intent(&presentation, &[first, second], 5, 5)
+                .is_none()
+        );
     }
 
     #[test]
@@ -1032,7 +1015,12 @@ mod t168_workbench_topology_binding_tests {
         };
 
         let mut state = crate::workbench::WorkbenchState::new();
-        let legacy = state.create_pane("legacy", None, None, crate::workbench::PaneSize::new(80, 24));
+        let legacy = state.create_pane(
+            "legacy",
+            None,
+            None,
+            crate::workbench::PaneSize::new(80, 24),
+        );
         let mut terminals = crate::workbench_terminal::WorkbenchTerminals::new();
         let mut editor = crate::workbench_input::WorkbenchShellEditor::new();
         let mut navigation = WorkbenchNavigation::new();

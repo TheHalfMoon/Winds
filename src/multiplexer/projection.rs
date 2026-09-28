@@ -982,12 +982,8 @@ impl super::RustLocalControlClient {
         high_contrast: bool,
         scaled_text: bool,
     ) -> Option<Vec<String>> {
-        self.tui_topology_rendered_snapshot(
-            reduced_motion,
-            high_contrast,
-            scaled_text,
-        )
-        .map(|(_, lines)| lines)
+        self.tui_topology_rendered_snapshot(reduced_motion, high_contrast, scaled_text)
+            .map(|(_, lines)| lines)
     }
 
     pub(crate) fn tui_topology_search_bindings(

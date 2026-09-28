@@ -557,8 +557,7 @@ fn render_workbench_accessible(
             compact.push_str("\nCANONICAL_TOPOLOGY_END");
         }
         frame.render_widget(
-            Paragraph::new(compact)
-                .block(Block::bordered().title(" Winds Workbench · compact ")),
+            Paragraph::new(compact).block(Block::bordered().title(" Winds Workbench · compact ")),
             area,
         );
         return;
@@ -586,9 +585,8 @@ fn render_workbench_accessible(
         .split(areas[1]);
     if let Some(topology) = canonical_topology {
         frame.render_widget(
-            Paragraph::new(topology.text()).block(
-                Block::bordered().title(" Canonical topology · READ_ONLY_TOPOLOGY "),
-            ),
+            Paragraph::new(topology.text())
+                .block(Block::bordered().title(" Canonical topology · READ_ONLY_TOPOLOGY ")),
             body[0],
         );
     } else {
