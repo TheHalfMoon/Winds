@@ -104,7 +104,10 @@ pub struct DesktopTopologyBoundTarget {
 
 fn parse_owner_generation(value: Option<&str>) -> DesktopTopologyResult<Option<OwnerGenerationId>> {
     value
-        .map(|value| OwnerGenerationId::from_str(value).map_err(|error| format!("invalid expected owner generation: {error}")))
+        .map(|value| {
+            OwnerGenerationId::from_str(value)
+                .map_err(|error| format!("invalid expected owner generation: {error}"))
+        })
         .transpose()
 }
 
@@ -139,9 +142,7 @@ fn layout_node(node: &ProtocolLayoutNodeV2) -> DesktopTopologyLayoutNode {
     }
 }
 
-fn workspace_projection(
-    snapshot: &ProtocolWorkspaceSnapshotV2,
-) -> DesktopTopologyWorkspace {
+fn workspace_projection(snapshot: &ProtocolWorkspaceSnapshotV2) -> DesktopTopologyWorkspace {
     DesktopTopologyWorkspace {
         multiplexer_workspace_id: snapshot.multiplexer_workspace_id.to_string(),
         display_label: snapshot.alias.clone(),
@@ -188,14 +189,22 @@ fn snapshot_from_client(
             .refresh_topology_projection(Some(workspace_id))
             .map_err(|error| format!("desktop topology workspace refresh failed: {error}"))?;
         let MultiplexerSnapshotV2::Workspace { snapshot } = snapshot else {
-            return Err("desktop topology workspace returned an unsupported snapshot shape".to_owned());
+            return Err(
+                "desktop topology workspace returned an unsupported snapshot shape".to_owned(),
+            );
         };
         if snapshot.topology_generation != topology_generation {
-            return Err("desktop topology generation changed during projection; refresh required".to_owned());
+            return Err(
+                "desktop topology generation changed during projection; refresh required"
+                    .to_owned(),
+            );
         }
         workspaces.push(workspace_projection(&snapshot));
     }
-    workspaces.sort_by(|left, right| left.multiplexer_workspace_id.cmp(&right.multiplexer_workspace_id));
+    workspaces.sort_by(|left, right| {
+        left.multiplexer_workspace_id
+            .cmp(&right.multiplexer_workspace_id)
+    });
 
     Ok(DesktopTopologySnapshot {
         authority: DESKTOP_TOPOLOGY_AUTHORITY,
@@ -219,7 +228,9 @@ fn exact_workspace<'a>(
         .workspaces
         .iter()
         .find(|workspace| workspace.multiplexer_workspace_id == workspace_id)
-        .ok_or_else(|| "desktop topology target workspace is absent from the authoritative snapshot".to_owned())
+        .ok_or_else(|| {
+            "desktop topology target workspace is absent from the authoritative snapshot".to_owned()
+        })
 }
 
 pub fn desktop_topology_bind_target(
@@ -249,7 +260,9 @@ pub fn desktop_topology_bind_target(
         expected_owner_generation_id: request.expected_owner_generation_id,
     })?;
     if snapshot.topology_generation != expected_generation.get() {
-        return Err("desktop topology target is stale; authoritative generation changed".to_owned());
+        return Err(
+            "desktop topology target is stale; authoritative generation changed".to_owned(),
+        );
     }
     let workspace = exact_workspace(&snapshot, &workspace_id.to_string())?;
     if let Some(tab_id) = tab_id {
@@ -257,7 +270,9 @@ pub fn desktop_topology_bind_target(
             .tabs
             .iter()
             .find(|tab| tab.tab_id == tab_id.to_string())
-            .ok_or_else(|| "desktop topology target tab is absent from the authoritative workspace".to_owned())?;
+            .ok_or_else(|| {
+                "desktop topology target tab is absent from the authoritative workspace".to_owned()
+            })?;
         if let Some(pane_id) = pane_id {
             fn contains_pane(node: &DesktopTopologyLayoutNode, pane_id: &str) -> bool {
                 match node {
@@ -268,7 +283,9 @@ pub fn desktop_topology_bind_target(
                 }
             }
             if !contains_pane(&tab.root, &pane_id.to_string()) {
-                return Err("desktop topology target pane is absent from the authoritative tab".to_owned());
+                return Err(
+                    "desktop topology target pane is absent from the authoritative tab".to_owned(),
+                );
             }
         }
     }
