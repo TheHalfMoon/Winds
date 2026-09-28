@@ -5,6 +5,7 @@ import { CurrentMark } from "./components/CurrentMark";
 import { DualSessionWorkspace, type DualSessionDockIntent, type DualSessionSelection } from "./dualSession/DualSessionWorkspace";
 import { ChatToolWindow } from "./leftDock/ChatToolWindow";
 import { LeftDock } from "./leftDock/LeftDock";
+import { TopologySurface } from "./multiplexer/TopologySurface";
 import { RightDock } from "./rightDock/RightDock";
 import type { RightDockSurface } from "./rightDock/types";
 
@@ -57,7 +58,7 @@ export function App() {
           <span>TheHalfMoon</span><span aria-hidden="true">/</span><strong>Winds</strong><span className="chrome-separator" aria-hidden="true" /><span>Workbench</span>
         </div>
         <div className="chrome-actions">
-          <span className="static-mode">T142A · Current Spectrum · exact Session identity</span>
+          <span className="static-mode">T169 · owner-authoritative topology · exact immutable identity</span>
           <button type="button" className="icon-button" aria-label="Open command menu" onClick={() => setCommandPaletteOpen(true)}>⌘</button>
           <button type="button" className="avatar-button" aria-label="Profile">AS</button>
         </div>
@@ -71,6 +72,7 @@ export function App() {
           <LeftDock onSelectSession={selectProjectSession} requestedSessionId={selection?.sessionId ?? null} />
         )}
         <main className="center-workspace" aria-label="Workbench">
+          <TopologySurface />
           <DualSessionWorkspace selection={selection} onFocusSession={focusDock} onDockIntent={openDockIntent} />
         </main>
         <RightDock target={dockTarget} requestedSurface={dockSurface} onFocusAttention={(workspaceId, sessionId) => { focusDock({ workspaceId, sessionId }); setDockSurface("context"); }} />
@@ -84,8 +86,8 @@ export function App() {
       />
 
       <footer className="status-rail" aria-label="Desktop status">
-        <div><span className="status-dot" data-tone="ok" /> renderer boundary · immutable truth surfaces · trusted Needs You</div>
-        <div>exact Session target · no broadcast</div>
+        <div><span className="status-dot" data-tone="ok" /> trusted Rust topology bridge · immutable IDs · stale generation fails closed</div>
+        <div>exact workspace/tab/pane target · no renderer authority</div>
         <div>identity · Current Spectrum</div>
       </footer>
     </div>
