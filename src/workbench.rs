@@ -539,19 +539,26 @@ fn render_workbench_accessible(
     accessibility: WorkbenchAccessibilityState,
     candidate: (&str, &str),
     projected: Option<&context::WorkbenchCandidateContext>,
+    canonical_topology: Option<&ui::CanonicalTopologyPresentation>,
 ) {
     let area = frame.area();
     if use_compact_workbench_layout(area.width, area.height) {
+        let mut compact = compact_workbench_text_with_context(
+            state,
+            output,
+            accessibility,
+            candidate.0,
+            candidate.1,
+            projected,
+        );
+        if let Some(topology) = canonical_topology {
+            compact.push_str("\nCANONICAL_TOPOLOGY_BEGIN\n");
+            compact.push_str(topology.text());
+            compact.push_str("\nCANONICAL_TOPOLOGY_END");
+        }
         frame.render_widget(
-            Paragraph::new(compact_workbench_text_with_context(
-                state,
-                output,
-                accessibility,
-                candidate.0,
-                candidate.1,
-                projected,
-            ))
-            .block(Block::bordered().title(" Winds Workbench · compact ")),
+            Paragraph::new(compact)
+                .block(Block::bordered().title(" Winds Workbench · compact ")),
             area,
         );
         return;
@@ -577,11 +584,20 @@ fn render_workbench_accessible(
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(44), Constraint::Min(1)])
         .split(areas[1]);
-    frame.render_widget(
-        Paragraph::new(pane_accessibility_text(state, true))
-            .block(Block::bordered().title(" Panes · textual state ")),
-        body[0],
-    );
+    if let Some(topology) = canonical_topology {
+        frame.render_widget(
+            Paragraph::new(topology.text()).block(
+                Block::bordered().title(" Canonical topology · READ_ONLY_TOPOLOGY "),
+            ),
+            body[0],
+        );
+    } else {
+        frame.render_widget(
+            Paragraph::new(pane_accessibility_text(state, true))
+                .block(Block::bordered().title(" Panes · textual state ")),
+            body[0],
+        );
+    }
 
     if accessibility.verification_inspection_open() {
         frame.render_widget(
@@ -629,6 +645,7 @@ fn render_workbench(
             "CANONICAL_CANDIDATE_NOT_LOADED",
             "CANONICAL_CANDIDATE_TREE_NOT_LOADED",
         ),
+        None,
         None,
     );
 }
@@ -691,6 +708,7 @@ pub(crate) fn run_cli(args: Vec<String>) -> crate::Result<()> {
             accessibility,
             (&candidate_oid, &candidate_tree),
             projected_context.as_ref(),
+            navigation.canonical_topology_presentation(),
         )
     })?;
 
@@ -728,6 +746,7 @@ pub(crate) fn run_cli(args: Vec<String>) -> crate::Result<()> {
                     accessibility,
                     (&candidate_oid, &candidate_tree),
                     projected_context.as_ref(),
+                    navigation.canonical_topology_presentation(),
                 )
             })?;
 

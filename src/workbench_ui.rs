@@ -75,6 +75,7 @@ pub(crate) enum NavigationEffect {
     Quit,
     Find(FindResolution),
     Dispatch(ShellDispatchReceipt),
+    CanonicalTopologyIntent(CanonicalTopologyBoundIntent),
 }
 
 #[derive(Debug, Default)]
@@ -83,6 +84,8 @@ pub(crate) struct WorkbenchNavigation {
     last_find: Option<FindResolution>,
     selected_canonical_target: Option<NavigationTarget>,
     hit_regions: Vec<PaneHitRegion>,
+    canonical_topology: Option<CanonicalTopologyPresentation>,
+    canonical_topology_hit_regions: Vec<CanonicalTopologyPaneHitRegion>,
 }
 
 impl WorkbenchNavigation {
@@ -106,6 +109,30 @@ impl WorkbenchNavigation {
         self.hit_regions = hit_regions;
     }
 
+    pub(crate) fn install_canonical_topology(
+        &mut self,
+        presentation: CanonicalTopologyPresentation,
+        hit_regions: Vec<CanonicalTopologyPaneHitRegion>,
+    ) {
+        self.canonical_topology = Some(presentation);
+        self.canonical_topology_hit_regions = hit_regions;
+        self.search_query = None;
+        self.last_find = None;
+        self.selected_canonical_target = None;
+    }
+
+    pub(crate) fn clear_canonical_topology(&mut self) {
+        self.canonical_topology = None;
+        self.canonical_topology_hit_regions.clear();
+        self.search_query = None;
+    }
+
+    pub(crate) fn canonical_topology_presentation(
+        &self,
+    ) -> Option<&CanonicalTopologyPresentation> {
+        self.canonical_topology.as_ref()
+    }
+
     pub(crate) fn handle_event(
         &mut self,
         state: &mut WorkbenchState,
@@ -117,6 +144,12 @@ impl WorkbenchNavigation {
     ) -> Result<NavigationEffect> {
         if matches!(&event, Event::Key(key) if key.kind == KeyEventKind::Release) {
             return Ok(NavigationEffect::None);
+        }
+
+        if self.canonical_topology.is_some() {
+            if let Some(effect) = self.handle_canonical_topology_event(&event) {
+                return Ok(effect);
+            }
         }
 
         if self.search_query.is_some() && !matches!(&event, Event::Resize(_, _)) {
@@ -157,6 +190,78 @@ impl WorkbenchNavigation {
                 Ok(NavigationEffect::None)
             }
             Event::FocusGained | Event::FocusLost => Ok(NavigationEffect::None),
+        }
+    }
+
+    fn handle_canonical_topology_event(
+        &mut self,
+        event: &Event,
+    ) -> Option<NavigationEffect> {
+        let presentation = self.canonical_topology.as_ref()?;
+
+        if self.search_query.is_some() && !matches!(event, Event::Resize(_, _)) {
+            let Event::Key(key) = event else {
+                return Some(NavigationEffect::None);
+            };
+            let effect = match key.code {
+                KeyCode::Esc => {
+                    self.search_query = None;
+                    NavigationEffect::None
+                }
+                KeyCode::Backspace => {
+                    if let Some(query) = &mut self.search_query {
+                        query.pop();
+                    }
+                    NavigationEffect::None
+                }
+                KeyCode::Enter => {
+                    let query = self.search_query.take().unwrap_or_default();
+                    presentation
+                        .bind_search_focus(&query)
+                        .map(NavigationEffect::CanonicalTopologyIntent)
+                        .unwrap_or(NavigationEffect::None)
+                }
+                KeyCode::Char(character)
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    if let Some(query) = &mut self.search_query {
+                        query.push(character);
+                    }
+                    NavigationEffect::None
+                }
+                _ => NavigationEffect::None,
+            };
+            return Some(effect);
+        }
+
+        match event {
+            Event::Key(key)
+                if key.modifiers.contains(KeyModifiers::CONTROL)
+                    && key.code == KeyCode::Char('f') =>
+            {
+                self.search_query = Some(String::new());
+                self.last_find = None;
+                Some(NavigationEffect::None)
+            }
+            Event::Mouse(mouse)
+                if mouse.kind == MouseEventKind::Down(MouseButton::Left) =>
+            {
+                Some(
+                    canonical_topology_bind_pointer_focus_intent(
+                        presentation,
+                        &self.canonical_topology_hit_regions,
+                        mouse.column,
+                        mouse.row,
+                    )
+                    .map(NavigationEffect::CanonicalTopologyIntent)
+                    .unwrap_or(NavigationEffect::None),
+                )
+            }
+            Event::Key(key) if canonical_topology_local_mutation_binding(*key) => {
+                Some(NavigationEffect::None)
+            }
+            _ => None,
         }
     }
 
@@ -647,6 +752,91 @@ impl CanonicalTopologyBoundIntent {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CanonicalTopologySearchBinding {
+    canonical_id: String,
+    display_label: String,
+    stable_key: String,
+    intent: crate::persistent_runtime::protocol::ApplyTopologyOperationV2,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CanonicalTopologyPresentation {
+    topology_generation: crate::multiplexer::domain::TopologyGeneration,
+    text: String,
+    search_bindings: Vec<CanonicalTopologySearchBinding>,
+}
+
+impl CanonicalTopologyPresentation {
+    pub(crate) fn from_client(
+        client: &crate::persistent_runtime::client::RustLocalControlClient,
+        reduced_motion: bool,
+        high_contrast: bool,
+        scaled_text: bool,
+    ) -> Option<Self> {
+        let (topology_generation, lines) = client.tui_topology_rendered_snapshot(
+            reduced_motion,
+            high_contrast,
+            scaled_text,
+        )?;
+        let bindings = client.tui_topology_search_bindings(topology_generation)?;
+        let search_bindings = bindings
+            .into_iter()
+            .map(|(canonical_id, display_label, stable_key, intent)| {
+                CanonicalTopologySearchBinding {
+                    canonical_id,
+                    display_label,
+                    stable_key,
+                    intent,
+                }
+            })
+            .collect();
+        Some(Self {
+            topology_generation,
+            text: lines.join("\n"),
+            search_bindings,
+        })
+    }
+
+    pub(crate) fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub(crate) const fn topology_generation(
+        &self,
+    ) -> crate::multiplexer::domain::TopologyGeneration {
+        self.topology_generation
+    }
+
+    fn bind_search_focus(&self, query: &str) -> Option<CanonicalTopologyBoundIntent> {
+        let query = normalize_canonical_topology_query(query);
+        if query.is_empty() {
+            return None;
+        }
+        let mut matches: Vec<(FindRank, &CanonicalTopologySearchBinding)> = self
+            .search_bindings
+            .iter()
+            .filter_map(|binding| {
+                canonical_topology_match_rank(&query, binding)
+                    .map(|rank| (rank, binding))
+            })
+            .collect();
+        matches.sort_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then_with(|| left.1.stable_key.cmp(&right.1.stable_key))
+        });
+        let best_rank = matches.first()?.0;
+        let mut best = matches.into_iter().take_while(|item| item.0 == best_rank);
+        let binding = best.next()?.1;
+        if best.next().is_some() {
+            return None;
+        }
+        (binding.intent.expected_topology_generation == self.topology_generation)
+            .then(|| CanonicalTopologyBoundIntent::new(binding.intent.clone()))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CanonicalTopologyPaneHitRegion {
     pub(crate) multiplexer_workspace_id: crate::multiplexer::domain::MultiplexerWorkspaceId,
@@ -668,27 +858,45 @@ impl CanonicalTopologyPaneHitRegion {
     }
 }
 
-pub(crate) fn canonical_topology_text(
-    client: &crate::persistent_runtime::client::RustLocalControlClient,
-    reduced_motion: bool,
-    high_contrast: bool,
-    scaled_text: bool,
-) -> Option<String> {
-    client
-        .tui_topology_render_lines(reduced_motion, high_contrast, scaled_text)
-        .map(|lines| lines.join("\n"))
+fn normalize_canonical_topology_query(value: &str) -> String {
+    value.trim().chars().flat_map(char::to_lowercase).collect()
 }
 
-pub(crate) fn canonical_topology_bind_search_focus_intent(
-    client: &crate::persistent_runtime::client::RustLocalControlClient,
+fn canonical_topology_match_rank(
     query: &str,
-) -> Option<CanonicalTopologyBoundIntent> {
-    client
-        .tui_topology_find_focus_intent(query)
-        .map(CanonicalTopologyBoundIntent::new)
+    binding: &CanonicalTopologySearchBinding,
+) -> Option<FindRank> {
+    let canonical_id = normalize_canonical_topology_query(&binding.canonical_id);
+    if canonical_id == query {
+        return Some(FindRank::ExactCanonicalId);
+    }
+    let label = normalize_canonical_topology_query(&binding.display_label);
+    if label == query {
+        return Some(FindRank::ExactNormalizedLabel);
+    }
+    if canonical_id.starts_with(query) || label.starts_with(query) {
+        return Some(FindRank::NormalizedPrefix);
+    }
+    (canonical_id.contains(query) || label.contains(query))
+        .then_some(FindRank::NormalizedSubstring)
+}
+
+fn canonical_topology_local_mutation_binding(key: KeyEvent) -> bool {
+    (key.modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(key.code, KeyCode::Char('n' | 'h' | 'w')))
+        || (key.modifiers.contains(KeyModifiers::ALT)
+            && matches!(
+                key.code,
+                KeyCode::Char('v')
+                    | KeyCode::Left
+                    | KeyCode::Right
+                    | KeyCode::Up
+                    | KeyCode::Down
+            ))
 }
 
 pub(crate) fn canonical_topology_bind_pointer_focus_intent(
+    presentation: &CanonicalTopologyPresentation,
     hit_regions: &[CanonicalTopologyPaneHitRegion],
     column: u16,
     row: u16,
@@ -696,7 +904,10 @@ pub(crate) fn canonical_topology_bind_pointer_focus_intent(
     let mut matches = hit_regions
         .iter()
         .copied()
-        .filter(|region| region.contains(column, row));
+        .filter(|region| {
+            region.topology_generation == presentation.topology_generation()
+                && region.contains(column, row)
+        });
     let target = matches.next()?;
     if matches.next().is_some() {
         return None;
@@ -737,6 +948,11 @@ mod t168_workbench_topology_binding_tests {
         let tab_id = tab_id(2);
         let pane_id = pane_id(3);
         let presented_generation = TopologyGeneration::new(7).expect("valid generation");
+        let presentation = CanonicalTopologyPresentation {
+            topology_generation: presented_generation,
+            text: "TOPOLOGY".to_owned(),
+            search_bindings: Vec::new(),
+        };
         let hit_regions = [CanonicalTopologyPaneHitRegion {
             multiplexer_workspace_id: workspace_id,
             tab_id,
@@ -748,7 +964,7 @@ mod t168_workbench_topology_binding_tests {
             height: 10,
         }];
 
-        let intent = canonical_topology_bind_pointer_focus_intent(&hit_regions, 12, 3)
+        let intent = canonical_topology_bind_pointer_focus_intent(&presentation, &hit_regions, 12, 3)
             .expect("presented exact target should bind")
             .into_intent();
         assert_eq!(intent.expected_topology_generation, presented_generation);
@@ -768,11 +984,17 @@ mod t168_workbench_topology_binding_tests {
 
     #[test]
     fn t168_workbench_pointer_binding_fails_closed_on_overlapping_regions() {
+        let presented_generation = TopologyGeneration::new(7).expect("valid generation");
+        let presentation = CanonicalTopologyPresentation {
+            topology_generation: presented_generation,
+            text: "TOPOLOGY".to_owned(),
+            search_bindings: Vec::new(),
+        };
         let first = CanonicalTopologyPaneHitRegion {
             multiplexer_workspace_id: workspace_id(1),
             tab_id: tab_id(2),
             pane_id: pane_id(3),
-            topology_generation: TopologyGeneration::new(7).expect("valid generation"),
+            topology_generation: presented_generation,
             column: 0,
             row: 0,
             width: 20,
@@ -782,7 +1004,69 @@ mod t168_workbench_topology_binding_tests {
             pane_id: pane_id(4),
             ..first
         };
-        assert!(canonical_topology_bind_pointer_focus_intent(&[first, second], 5, 5).is_none());
+        assert!(canonical_topology_bind_pointer_focus_intent(&presentation, &[first, second], 5, 5).is_none());
+    }
+
+    #[test]
+    fn t168_workbench_navigation_routes_canonical_pointer_without_local_focus_mutation() {
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let workspace_id = workspace_id(9);
+        let tab_id = tab_id(10);
+        let pane_id = pane_id(11);
+        let presented_generation = TopologyGeneration::new(12).expect("valid generation");
+        let presentation = CanonicalTopologyPresentation {
+            topology_generation: presented_generation,
+            text: "TOPOLOGY authority=READ_ONLY_TOPOLOGY".to_owned(),
+            search_bindings: Vec::new(),
+        };
+        let region = CanonicalTopologyPaneHitRegion {
+            multiplexer_workspace_id: workspace_id,
+            tab_id,
+            pane_id,
+            topology_generation: presented_generation,
+            column: 10,
+            row: 2,
+            width: 10,
+            height: 4,
+        };
+
+        let mut state = crate::workbench::WorkbenchState::new();
+        let legacy = state.create_pane("legacy", None, None, crate::workbench::PaneSize::new(80, 24));
+        let mut terminals = crate::workbench_terminal::WorkbenchTerminals::new();
+        let mut editor = crate::workbench_input::WorkbenchShellEditor::new();
+        let mut navigation = WorkbenchNavigation::new();
+        navigation.install_canonical_topology(presentation, vec![region]);
+
+        let effect = navigation
+            .handle_event(
+                &mut state,
+                &mut terminals,
+                &mut editor,
+                &[],
+                &[],
+                Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::Down(MouseButton::Left),
+                    column: 12,
+                    row: 3,
+                    modifiers: KeyModifiers::NONE,
+                }),
+            )
+            .expect("canonical pointer navigation must be handled");
+        let NavigationEffect::CanonicalTopologyIntent(bound) = effect else {
+            panic!("canonical pointer must return a bound topology intent");
+        };
+        let intent = bound.into_intent();
+        assert_eq!(intent.expected_topology_generation, presented_generation);
+        assert_eq!(
+            intent.operation,
+            TopologyOperationV2::FocusPane {
+                multiplexer_workspace_id: workspace_id,
+                tab_id,
+                pane_id,
+            }
+        );
+        assert_eq!(state.selected_pane(), Some(legacy));
     }
 }
 

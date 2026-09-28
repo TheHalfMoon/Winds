@@ -959,19 +959,61 @@ fn topology_match_rank(query: &str, row: &TuiTopologyRow) -> Option<TuiTopologyF
 }
 
 impl super::RustLocalControlClient {
+    pub(crate) fn tui_topology_rendered_snapshot(
+        &self,
+        reduced_motion: bool,
+        high_contrast: bool,
+        scaled_text: bool,
+    ) -> Option<(TopologyGeneration, Vec<String>)> {
+        let snapshot = self.trusted_topology_snapshot()?;
+        let projection = TuiTopologyProjection::from_snapshot(snapshot).ok()?;
+        let topology_generation = projection.topology_generation();
+        let lines = projection.render_lines(TuiTopologyAccessibility {
+            reduced_motion,
+            high_contrast,
+            scaled_text,
+        });
+        Some((topology_generation, lines))
+    }
+
     pub(crate) fn tui_topology_render_lines(
         &self,
         reduced_motion: bool,
         high_contrast: bool,
         scaled_text: bool,
     ) -> Option<Vec<String>> {
-        let snapshot = self.trusted_topology_snapshot()?;
-        let projection = TuiTopologyProjection::from_snapshot(snapshot).ok()?;
-        Some(projection.render_lines(TuiTopologyAccessibility {
+        self.tui_topology_rendered_snapshot(
             reduced_motion,
             high_contrast,
             scaled_text,
-        }))
+        )
+        .map(|(_, lines)| lines)
+    }
+
+    pub(crate) fn tui_topology_search_bindings(
+        &self,
+        expected_topology_generation: TopologyGeneration,
+    ) -> Option<Vec<(String, String, String, ApplyTopologyOperationV2)>> {
+        let snapshot = self.trusted_topology_snapshot()?;
+        let projection = TuiTopologyProjection::from_snapshot(snapshot).ok()?;
+        if projection.topology_generation() != expected_topology_generation {
+            return None;
+        }
+        projection
+            .rows()
+            .iter()
+            .map(|row| {
+                let intent = projection
+                    .keyboard_intent(TuiTopologyCommand::Focus(row.target))
+                    .ok()?;
+                Some((
+                    row.target.canonical_id(),
+                    row.display_label.clone(),
+                    row.target.stable_key(),
+                    intent,
+                ))
+            })
+            .collect()
     }
 
     pub(crate) fn tui_topology_find_focus_intent(
