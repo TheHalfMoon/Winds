@@ -7,7 +7,8 @@ use super::{PaneId, PaneLifecycleView, PaneSize, SplitAxis, WorkbenchState};
 use crate::domain::{WindsSessionRecord, WorkspaceRecord};
 use crate::git::Result;
 use crossterm::event::{
-    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+    self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
+    MouseEventKind,
 };
 use std::time::Duration;
 
@@ -76,6 +77,7 @@ pub(crate) enum NavigationEffect {
     Find(FindResolution),
     Dispatch(ShellDispatchReceipt),
     CanonicalTopologyIntent(CanonicalTopologyBoundIntent),
+    CanonicalPaneInteraction(super::terminal_ux::BoundPaneInteraction),
 }
 
 #[derive(Debug, Default)]
@@ -86,6 +88,16 @@ pub(crate) struct WorkbenchNavigation {
     hit_regions: Vec<PaneHitRegion>,
     canonical_topology: Option<CanonicalTopologyPresentation>,
     canonical_topology_hit_regions: Vec<CanonicalTopologyPaneHitRegion>,
+    canonical_pointer_capture: Option<CanonicalPointerCapture>,
+}
+
+/// Exact pane identity captured at pointer-down together with the gesture-local
+/// drag state. Nothing here is re-read from focus at action time, so a focus or
+/// topology change between press and release cannot retarget the interaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CanonicalPointerCapture {
+    target: super::terminal_ux::ExactPaneTarget,
+    dragged: bool,
 }
 
 impl WorkbenchNavigation {
@@ -119,12 +131,14 @@ impl WorkbenchNavigation {
         self.search_query = None;
         self.last_find = None;
         self.selected_canonical_target = None;
+        self.canonical_pointer_capture = None;
     }
 
     pub(crate) fn clear_canonical_topology(&mut self) {
         self.canonical_topology = None;
         self.canonical_topology_hit_regions.clear();
         self.search_query = None;
+        self.canonical_pointer_capture = None;
     }
 
     pub(crate) fn canonical_topology_presentation(&self) -> Option<&CanonicalTopologyPresentation> {
@@ -239,14 +253,85 @@ impl WorkbenchNavigation {
                 self.last_find = None;
                 Some(NavigationEffect::None)
             }
-            Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => Some(
-                canonical_topology_bind_pointer_focus_intent(
+            Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
+                self.canonical_pointer_capture = canonical_topology_exact_pane_target(
                     presentation,
                     &self.canonical_topology_hit_regions,
                     mouse.column,
                     mouse.row,
                 )
-                .map(NavigationEffect::CanonicalTopologyIntent)
+                .map(|target| CanonicalPointerCapture {
+                    target,
+                    dragged: false,
+                });
+                Some(
+                    canonical_topology_bind_pointer_focus_intent(
+                        presentation,
+                        &self.canonical_topology_hit_regions,
+                        mouse.column,
+                        mouse.row,
+                    )
+                    .map(NavigationEffect::CanonicalTopologyIntent)
+                    .unwrap_or(NavigationEffect::None),
+                )
+            }
+            Event::Mouse(mouse) if mouse.kind == MouseEventKind::Drag(MouseButton::Left) => {
+                if let Some(capture) = self.canonical_pointer_capture.as_mut() {
+                    capture.dragged = true;
+                }
+                let effect = self
+                    .canonical_pointer_capture
+                    .map(|capture| capture.target)
+                    .and_then(|target| {
+                        super::terminal_ux::bind_exact_pane_interaction(
+                            target,
+                            presentation.topology_generation(),
+                            super::terminal_ux::PaneInteractionKind::MouseCapture {
+                                button: super::terminal_ux::PointerButton::Left,
+                                phase: super::terminal_ux::PointerPhase::Drag,
+                            },
+                            mouse.column,
+                            mouse.row,
+                        )
+                    });
+                Some(
+                    effect
+                        .map(NavigationEffect::CanonicalPaneInteraction)
+                        .unwrap_or(NavigationEffect::None),
+                )
+            }
+            Event::Mouse(mouse) if mouse.kind == MouseEventKind::Up(MouseButton::Left) => {
+                let captured = self.canonical_pointer_capture.take();
+                let effect = captured.and_then(|capture| {
+                    let kind = if capture.dragged {
+                        super::terminal_ux::PaneInteractionKind::CopyOnSelect
+                    } else {
+                        super::terminal_ux::PaneInteractionKind::MouseCapture {
+                            button: super::terminal_ux::PointerButton::Left,
+                            phase: super::terminal_ux::PointerPhase::Up,
+                        }
+                    };
+                    super::terminal_ux::bind_exact_pane_interaction(
+                        capture.target,
+                        presentation.topology_generation(),
+                        kind,
+                        mouse.column,
+                        mouse.row,
+                    )
+                });
+                Some(
+                    effect
+                        .map(NavigationEffect::CanonicalPaneInteraction)
+                        .unwrap_or(NavigationEffect::None),
+                )
+            }
+            Event::Mouse(mouse) => Some(
+                canonical_topology_bind_terminal_interaction(
+                    presentation,
+                    &self.canonical_topology_hit_regions,
+                    *mouse,
+                )
+                .map(NavigationEffect::CanonicalPaneInteraction)
                 .unwrap_or(NavigationEffect::None),
             ),
             Event::Key(key) if canonical_topology_local_mutation_binding(*key) => {
@@ -845,6 +930,85 @@ impl CanonicalTopologyPaneHitRegion {
     }
 }
 
+fn canonical_topology_exact_pane_target(
+    presentation: &CanonicalTopologyPresentation,
+    hit_regions: &[CanonicalTopologyPaneHitRegion],
+    column: u16,
+    row: u16,
+) -> Option<super::terminal_ux::ExactPaneTarget> {
+    let mut matches = hit_regions.iter().copied().filter(|region| {
+        region.topology_generation == presentation.topology_generation()
+            && region.contains(column, row)
+    });
+    let region = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    Some(super::terminal_ux::ExactPaneTarget {
+        multiplexer_workspace_id: region.multiplexer_workspace_id,
+        tab_id: region.tab_id,
+        pane_id: region.pane_id,
+        topology_generation: region.topology_generation,
+    })
+}
+
+pub(crate) fn canonical_topology_bind_terminal_interaction(
+    presentation: &CanonicalTopologyPresentation,
+    hit_regions: &[CanonicalTopologyPaneHitRegion],
+    mouse: MouseEvent,
+) -> Option<super::terminal_ux::BoundPaneInteraction> {
+    use super::terminal_ux::{PaneInteractionKind, PointerPhase};
+    let target =
+        canonical_topology_exact_pane_target(presentation, hit_regions, mouse.column, mouse.row)?;
+    let kind = match mouse.kind {
+        MouseEventKind::Down(MouseButton::Right) => PaneInteractionKind::ContextMenu,
+        MouseEventKind::Down(button) => PaneInteractionKind::MouseCapture {
+            button: map_pointer_button(button),
+            phase: PointerPhase::Down,
+        },
+        MouseEventKind::Up(button) => PaneInteractionKind::MouseCapture {
+            button: map_pointer_button(button),
+            phase: PointerPhase::Up,
+        },
+        MouseEventKind::Drag(button) => PaneInteractionKind::MouseCapture {
+            button: map_pointer_button(button),
+            phase: PointerPhase::Drag,
+        },
+        MouseEventKind::ScrollUp => PaneInteractionKind::Scroll {
+            vertical_lines: -3,
+            horizontal_columns: 0,
+        },
+        MouseEventKind::ScrollDown => PaneInteractionKind::Scroll {
+            vertical_lines: 3,
+            horizontal_columns: 0,
+        },
+        MouseEventKind::ScrollLeft => PaneInteractionKind::Scroll {
+            vertical_lines: 0,
+            horizontal_columns: -3,
+        },
+        MouseEventKind::ScrollRight => PaneInteractionKind::Scroll {
+            vertical_lines: 0,
+            horizontal_columns: 3,
+        },
+        MouseEventKind::Moved => return None,
+    };
+    super::terminal_ux::bind_exact_pane_interaction(
+        target,
+        presentation.topology_generation(),
+        kind,
+        mouse.column,
+        mouse.row,
+    )
+}
+
+fn map_pointer_button(button: MouseButton) -> super::terminal_ux::PointerButton {
+    match button {
+        MouseButton::Left => super::terminal_ux::PointerButton::Left,
+        MouseButton::Middle => super::terminal_ux::PointerButton::Middle,
+        MouseButton::Right => super::terminal_ux::PointerButton::Right,
+    }
+}
+
 fn normalize_canonical_topology_query(value: &str) -> String {
     value.trim().chars().flat_map(char::to_lowercase).collect()
 }
@@ -883,14 +1047,7 @@ pub(crate) fn canonical_topology_bind_pointer_focus_intent(
     column: u16,
     row: u16,
 ) -> Option<CanonicalTopologyBoundIntent> {
-    let mut matches = hit_regions.iter().copied().filter(|region| {
-        region.topology_generation == presentation.topology_generation()
-            && region.contains(column, row)
-    });
-    let target = matches.next()?;
-    if matches.next().is_some() {
-        return None;
-    }
+    let target = canonical_topology_exact_pane_target(presentation, hit_regions, column, row)?;
     Some(CanonicalTopologyBoundIntent::new(
         crate::persistent_runtime::protocol::ApplyTopologyOperationV2 {
             expected_topology_generation: target.topology_generation,
@@ -1055,6 +1212,336 @@ mod t168_workbench_topology_binding_tests {
             }
         );
         assert_eq!(state.selected_pane(), Some(legacy));
+    }
+
+    #[test]
+    fn t171_copy_on_select_retains_pointer_down_target_across_focus_race() {
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let generation = TopologyGeneration::new(12).expect("valid generation");
+        let presentation = CanonicalTopologyPresentation {
+            topology_generation: generation,
+            text: "TOPOLOGY authority=READ_ONLY_TOPOLOGY".to_owned(),
+            search_bindings: Vec::new(),
+        };
+        let first = CanonicalTopologyPaneHitRegion {
+            multiplexer_workspace_id: workspace_id(9),
+            tab_id: tab_id(10),
+            pane_id: pane_id(11),
+            topology_generation: generation,
+            column: 0,
+            row: 0,
+            width: 10,
+            height: 5,
+        };
+        let second = CanonicalTopologyPaneHitRegion {
+            pane_id: pane_id(12),
+            column: 10,
+            ..first
+        };
+        let mut state = crate::workbench::WorkbenchState::new();
+        let mut terminals = crate::workbench::terminal::WorkbenchTerminals::new();
+        let mut editor = crate::workbench::terminal::input::WorkbenchShellEditor::new();
+        let mut navigation = WorkbenchNavigation::new();
+        navigation.install_canonical_topology(presentation, vec![first, second]);
+
+        let down = navigation
+            .handle_event(
+                &mut state,
+                &mut terminals,
+                &mut editor,
+                &[],
+                &[],
+                Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::Down(MouseButton::Left),
+                    column: 2,
+                    row: 2,
+                    modifiers: KeyModifiers::NONE,
+                }),
+            )
+            .unwrap();
+        assert!(matches!(down, NavigationEffect::CanonicalTopologyIntent(_)));
+
+        let up = navigation
+            .handle_event(
+                &mut state,
+                &mut terminals,
+                &mut editor,
+                &[],
+                &[],
+                Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::Up(MouseButton::Left),
+                    column: 12,
+                    row: 2,
+                    modifiers: KeyModifiers::NONE,
+                }),
+            )
+            .unwrap();
+        let NavigationEffect::CanonicalPaneInteraction(click) = up else {
+            panic!("a release must return a bound pane interaction");
+        };
+        assert_eq!(click.target().pane_id, first.pane_id);
+        assert_eq!(
+            click.kind(),
+            super::super::terminal_ux::PaneInteractionKind::MouseCapture {
+                button: super::super::terminal_ux::PointerButton::Left,
+                phase: super::super::terminal_ux::PointerPhase::Up,
+            }
+        );
+    }
+
+    #[test]
+    fn t171_drag_release_copies_on_select_from_pointer_down_pane() {
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let generation = TopologyGeneration::new(12).expect("valid generation");
+        let presentation = CanonicalTopologyPresentation {
+            topology_generation: generation,
+            text: "TOPOLOGY authority=READ_ONLY_TOPOLOGY".to_owned(),
+            search_bindings: Vec::new(),
+        };
+        let first = CanonicalTopologyPaneHitRegion {
+            multiplexer_workspace_id: workspace_id(9),
+            tab_id: tab_id(10),
+            pane_id: pane_id(11),
+            topology_generation: generation,
+            column: 0,
+            row: 0,
+            width: 10,
+            height: 5,
+        };
+        let second = CanonicalTopologyPaneHitRegion {
+            pane_id: pane_id(12),
+            column: 10,
+            ..first
+        };
+        let mut state = crate::workbench::WorkbenchState::new();
+        let mut terminals = crate::workbench::terminal::WorkbenchTerminals::new();
+        let mut editor = crate::workbench::terminal::input::WorkbenchShellEditor::new();
+        let mut navigation = WorkbenchNavigation::new();
+        navigation.install_canonical_topology(presentation, vec![first, second]);
+
+        let mut send = |navigation: &mut WorkbenchNavigation, kind, column| {
+            navigation
+                .handle_event(
+                    &mut state,
+                    &mut terminals,
+                    &mut editor,
+                    &[],
+                    &[],
+                    Event::Mouse(MouseEvent {
+                        kind,
+                        column,
+                        row: 2,
+                        modifiers: KeyModifiers::NONE,
+                    }),
+                )
+                .unwrap()
+        };
+
+        assert!(matches!(
+            send(&mut navigation, MouseEventKind::Down(MouseButton::Left), 2),
+            NavigationEffect::CanonicalTopologyIntent(_)
+        ));
+        assert!(matches!(
+            send(&mut navigation, MouseEventKind::Drag(MouseButton::Left), 6),
+            NavigationEffect::CanonicalPaneInteraction(_)
+        ));
+
+        // Focus moves to the second pane before the release; the action must still
+        // resolve to the pane the gesture started on.
+        let up = send(&mut navigation, MouseEventKind::Up(MouseButton::Left), 12);
+        let NavigationEffect::CanonicalPaneInteraction(copy) = up else {
+            panic!("copy-on-select must retain the pointer-down pane target");
+        };
+        assert_eq!(copy.target().pane_id, first.pane_id);
+        assert_eq!(
+            copy.kind(),
+            super::super::terminal_ux::PaneInteractionKind::CopyOnSelect
+        );
+    }
+
+    #[test]
+    fn t171_pointer_capture_fails_closed_when_generation_advances_mid_gesture() {
+        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let generation = TopologyGeneration::new(12).expect("valid generation");
+        let next = TopologyGeneration::new(13).expect("valid generation");
+        let presentation = CanonicalTopologyPresentation {
+            topology_generation: generation,
+            text: "TOPOLOGY authority=READ_ONLY_TOPOLOGY".to_owned(),
+            search_bindings: Vec::new(),
+        };
+        let region = CanonicalTopologyPaneHitRegion {
+            multiplexer_workspace_id: workspace_id(9),
+            tab_id: tab_id(10),
+            pane_id: pane_id(11),
+            topology_generation: generation,
+            column: 0,
+            row: 0,
+            width: 10,
+            height: 5,
+        };
+        let mut state = crate::workbench::WorkbenchState::new();
+        let mut terminals = crate::workbench::terminal::WorkbenchTerminals::new();
+        let mut editor = crate::workbench::terminal::input::WorkbenchShellEditor::new();
+        let mut navigation = WorkbenchNavigation::new();
+        navigation.install_canonical_topology(presentation.clone(), vec![region]);
+        navigation
+            .handle_event(
+                &mut state,
+                &mut terminals,
+                &mut editor,
+                &[],
+                &[],
+                Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::Down(MouseButton::Left),
+                    column: 2,
+                    row: 2,
+                    modifiers: KeyModifiers::NONE,
+                }),
+            )
+            .unwrap();
+
+        let advanced = CanonicalTopologyPresentation {
+            topology_generation: next,
+            text: presentation.text,
+            search_bindings: Vec::new(),
+        };
+        navigation.install_canonical_topology(advanced, Vec::new());
+
+        let up = navigation
+            .handle_event(
+                &mut state,
+                &mut terminals,
+                &mut editor,
+                &[],
+                &[],
+                Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::Up(MouseButton::Left),
+                    column: 2,
+                    row: 2,
+                    modifiers: KeyModifiers::NONE,
+                }),
+            )
+            .unwrap();
+        assert_eq!(up, NavigationEffect::None);
+    }
+
+    #[test]
+    fn t171_scroll_and_right_click_bind_exact_pane_and_current_generation() {
+        use crate::workbench::terminal_ux::PaneInteractionKind;
+        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+        let generation = TopologyGeneration::new(4).expect("valid generation");
+        let presentation = CanonicalTopologyPresentation {
+            topology_generation: generation,
+            text: "TOPOLOGY authority=READ_ONLY_TOPOLOGY".to_owned(),
+            search_bindings: Vec::new(),
+        };
+        let first = CanonicalTopologyPaneHitRegion {
+            multiplexer_workspace_id: workspace_id(1),
+            tab_id: tab_id(2),
+            pane_id: pane_id(3),
+            topology_generation: generation,
+            column: 0,
+            row: 0,
+            width: 10,
+            height: 5,
+        };
+        let second = CanonicalTopologyPaneHitRegion {
+            pane_id: pane_id(4),
+            column: 10,
+            ..first
+        };
+        let regions = [first, second];
+
+        let mut state = crate::workbench::WorkbenchState::new();
+        let legacy = state.create_pane(
+            "legacy",
+            None,
+            None,
+            crate::workbench::PaneSize::new(80, 24),
+        );
+        let mut terminals = crate::workbench::terminal::WorkbenchTerminals::new();
+        let mut editor = crate::workbench::terminal::input::WorkbenchShellEditor::new();
+        let mut navigation = WorkbenchNavigation::new();
+        navigation.install_canonical_topology(presentation, regions.to_vec());
+
+        state.focus_pane(legacy);
+        assert_eq!(state.selected_pane(), Some(legacy));
+
+        let mut send = |navigation: &mut WorkbenchNavigation, kind| {
+            navigation
+                .handle_event(
+                    &mut state,
+                    &mut terminals,
+                    &mut editor,
+                    &[],
+                    &[],
+                    Event::Mouse(MouseEvent {
+                        kind,
+                        column: 12,
+                        row: 2,
+                        modifiers: KeyModifiers::NONE,
+                    }),
+                )
+                .unwrap()
+        };
+
+        // The focused legacy pane is not the pane under the pointer, so both the
+        // right click and the scroll prove the target is the exact hit pane and
+        // never the focused pane.
+        let right = send(&mut navigation, MouseEventKind::Down(MouseButton::Right));
+        let NavigationEffect::CanonicalPaneInteraction(context) = right else {
+            panic!("right click must return a bound pane interaction");
+        };
+        assert_eq!(context.target().pane_id, second.pane_id);
+        assert_eq!(context.kind(), PaneInteractionKind::ContextMenu);
+
+        let scrolled = send(&mut navigation, MouseEventKind::ScrollUp);
+        let NavigationEffect::CanonicalPaneInteraction(scroll) = scrolled else {
+            panic!("scroll must return a bound pane interaction");
+        };
+        assert_eq!(scroll.target().pane_id, second.pane_id);
+        assert_eq!(
+            scroll.kind(),
+            PaneInteractionKind::Scroll {
+                vertical_lines: -3,
+                horizontal_columns: 0,
+            }
+        );
+        assert_eq!(state.selected_pane(), Some(legacy));
+
+        let stale_regions = [CanonicalTopologyPaneHitRegion {
+            topology_generation: TopologyGeneration::new(5).expect("valid generation"),
+            ..first
+        }];
+        let mut stale_navigation = WorkbenchNavigation::new();
+        stale_navigation.install_canonical_topology(
+            CanonicalTopologyPresentation {
+                topology_generation: TopologyGeneration::new(4).expect("valid generation"),
+                text: "TOPOLOGY authority=READ_ONLY_TOPOLOGY".to_owned(),
+                search_bindings: Vec::new(),
+            },
+            stale_regions.to_vec(),
+        );
+        let stale = stale_navigation
+            .handle_event(
+                &mut state,
+                &mut terminals,
+                &mut editor,
+                &[],
+                &[],
+                Event::Mouse(MouseEvent {
+                    kind: MouseEventKind::ScrollDown,
+                    column: 2,
+                    row: 1,
+                    modifiers: KeyModifiers::NONE,
+                }),
+            )
+            .unwrap();
+        assert_eq!(stale, NavigationEffect::None);
     }
 }
 

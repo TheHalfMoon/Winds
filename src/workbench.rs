@@ -901,6 +901,8 @@ pub(crate) mod output;
 pub(crate) mod screen;
 #[path = "workbench_terminal.rs"]
 pub(crate) mod terminal;
+#[path = "workbench_terminal_ux.rs"]
+pub(crate) mod terminal_ux;
 #[path = "workbench_ui.rs"]
 pub(crate) mod ui;
 
