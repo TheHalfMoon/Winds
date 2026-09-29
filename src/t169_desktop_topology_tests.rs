@@ -49,9 +49,11 @@ fn t169_recursive_projection_retains_immutable_ids_under_duplicate_labels() {
                     ratio_basis_points: 4200,
                     first: Box::new(ProtocolLayoutNodeV2::Pane {
                         pane_id: first_pane_id,
+                        presentation_epoch: 0,
                     }),
                     second: Box::new(ProtocolLayoutNodeV2::Pane {
                         pane_id: second_pane_id,
+                        presentation_epoch: 0,
                     }),
                 },
                 focused_pane_id: first_pane_id,
@@ -62,6 +64,7 @@ fn t169_recursive_projection_retains_immutable_ids_under_duplicate_labels() {
                 alias: "duplicate".to_owned(),
                 root: ProtocolLayoutNodeV2::Pane {
                     pane_id: third_pane_id,
+                    presentation_epoch: 0,
                 },
                 focused_pane_id: third_pane_id,
                 zoomed_pane_id: Some(third_pane_id),
@@ -100,11 +103,11 @@ fn t169_recursive_projection_retains_immutable_ids_under_duplicate_labels() {
     assert_eq!(*ratio_basis_points, 4200);
     assert!(matches!(
         first.as_ref(),
-        DesktopTopologyLayoutNode::Pane { pane_id } if pane_id == &first_pane_id.to_string()
+        DesktopTopologyLayoutNode::Pane { pane_id, .. } if pane_id == &first_pane_id.to_string()
     ));
     assert!(matches!(
         second.as_ref(),
-        DesktopTopologyLayoutNode::Pane { pane_id } if pane_id == &second_pane_id.to_string()
+        DesktopTopologyLayoutNode::Pane { pane_id, .. } if pane_id == &second_pane_id.to_string()
     ));
 }
 

@@ -765,6 +765,46 @@ impl MultiplexerTopology {
             .unwrap_or_else(PanePresentationEpoch::initial))
     }
 
+    /// The presentation epoch of a pane already proven live by its containing
+    /// snapshot. It performs no target lookup, so it is only valid while walking a
+    /// layout the caller just validated.
+    pub(crate) fn pane_presentation_epoch_unchecked(
+        &self,
+        pane_id: PaneId,
+    ) -> PanePresentationEpoch {
+        self.pane_presentation_epochs
+            .get(&pane_id)
+            .copied()
+            .unwrap_or_else(PanePresentationEpoch::initial)
+    }
+
+    /// Whether `close_pane` would currently accept this exact target.
+    ///
+    /// The close policy proves this before it performs any process effect, so an
+    /// impossible close can never stop a process first and fail afterwards.
+    pub(crate) fn can_close_pane(
+        &self,
+        expected: TopologyGeneration,
+        workspace_id: MultiplexerWorkspaceId,
+        tab_id: TabId,
+        pane_id: PaneId,
+    ) -> Result<(), MultiplexerErrorKind> {
+        if self.generation != expected {
+            return Err(MultiplexerErrorKind::StaleTopologyGeneration);
+        }
+        let tab = self.tab(workspace_id, tab_id)?;
+        if leaf_count(&tab.root) <= 1 {
+            return Err(MultiplexerErrorKind::UnsupportedOperation);
+        }
+        if !contains_pane(&tab.root, pane_id) {
+            return Err(MultiplexerErrorKind::UnknownPane);
+        }
+        if self.retired_pane_ids.contains(&pane_id) {
+            return Err(MultiplexerErrorKind::ClosedTarget);
+        }
+        Ok(())
+    }
+
     /// `pane.clear`: presentation-only screen and scrollback clear for one exact pane.
     ///
     /// `requested_presentation_epoch` is a strict compare-and-apply proposal, not

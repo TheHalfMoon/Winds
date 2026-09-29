@@ -6,11 +6,10 @@ use crate::multiplexer::domain::navigation::{
 };
 use crate::multiplexer::domain::{
     ClientSurfaceCapability, LayoutTemplateId, MultiplexerAuthority, MultiplexerErrorKind,
-    MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration,
+    MultiplexerWorkspaceId, PaneId, PaneRuntimeBinding, TabId, TopologyGeneration,
 };
-
 use crate::persistent_runtime::domain::{
-    ClientConnectionId, EventSequence, RuntimeAlias, RuntimeNamespaceId,
+    ClientConnectionId, EventSequence, OwnerGenerationId, RuntimeAlias, RuntimeNamespaceId,
 };
 use crate::persistent_runtime::owner::PersistentOwner;
 use crate::persistent_runtime::protocol::{
@@ -1336,4 +1335,251 @@ fn t170_protocol_still_refuses_generic_or_unbound_privileged_topology_paths() {
         ),
         Err(MultiplexerErrorKind::UnsupportedOperation)
     );
+}
+
+#[test]
+fn t170_binding_requires_multiplexer_write_and_an_accepted_live_runtime() {
+    let home = t170_root("bind-live");
+    let runtime_root = t170_runtime_root();
+    let profile = t170_shell_profile(&home);
+    let mut owner = t170_start_owner(&home, &runtime_root, 1);
+    let writer = t170_client("t170-bind-writer");
+    let observer = t170_client("t170-bind-observer");
+    t170_seed_workspace(&mut owner, &writer, 20);
+
+    let attachment = owner
+        .start_terminal_runtime(
+            RuntimeAlias::new("t170-bind").unwrap(),
+            &profile,
+            &home,
+            TerminalSize { rows: 24, cols: 80 },
+            30,
+            100,
+        )
+        .unwrap();
+    let runtime_namespace_id = attachment.runtime_namespace_id();
+
+    // A namespace this owner never accepted can never back a pane.
+    assert_eq!(
+        t170_apply_operation(
+            &mut owner,
+            &writer,
+            TopologyOperationV2::BindPaneRuntime {
+                multiplexer_workspace_id: t170_workspace(0x61),
+                tab_id: t170_tab(0x62),
+                pane_id: t170_pane(0x63),
+                runtime_namespace_id: t170_runtime(0x7A),
+            },
+            40,
+            41,
+            33,
+            100,
+        ),
+        TopologyMutationOutcomeV2::Rejected {
+            error: MultiplexerErrorKind::UnknownPane
+        }
+    );
+    assert_eq!(
+        owner.multiplexer_topology().pane_runtime_binding(
+            t170_workspace(0x61),
+            t170_tab(0x62),
+            t170_pane(0x63)
+        ),
+        Ok(None)
+    );
+
+    // Binding is a MultiplexerWrite operation, never an observer one.
+    assert_eq!(
+        t170_apply_operation(
+            &mut owner,
+            &observer,
+            TopologyOperationV2::BindPaneRuntime {
+                multiplexer_workspace_id: t170_workspace(0x61),
+                tab_id: t170_tab(0x62),
+                pane_id: t170_pane(0x63),
+                runtime_namespace_id,
+            },
+            42,
+            43,
+            34,
+            100,
+        ),
+        TopologyMutationOutcomeV2::Rejected {
+            error: MultiplexerErrorKind::MultiplexerWriteRequired
+        }
+    );
+
+    // The accepted live namespace binds, and the owner publishes the reference.
+    let binding_generation = owner.multiplexer_topology().generation();
+    assert_eq!(
+        t170_apply_operation(
+            &mut owner,
+            &writer,
+            TopologyOperationV2::BindPaneRuntime {
+                multiplexer_workspace_id: t170_workspace(0x61),
+                tab_id: t170_tab(0x62),
+                pane_id: t170_pane(0x63),
+                runtime_namespace_id,
+            },
+            44,
+            45,
+            35,
+            100,
+        ),
+        TopologyMutationOutcomeV2::Accepted
+    );
+    assert_eq!(
+        owner.multiplexer_topology().pane_runtime_binding(
+            t170_workspace(0x61),
+            t170_tab(0x62),
+            t170_pane(0x63)
+        ),
+        Ok(Some(PaneRuntimeBinding {
+            runtime_namespace_id,
+            bound_at_generation: binding_generation,
+        }))
+    );
+}
+
+#[test]
+fn t170_stop_then_close_never_stops_a_pane_the_close_cannot_complete() {
+    let home = t170_root("last-pane");
+    let runtime_root = t170_runtime_root();
+    let profile = t170_shell_profile(&home);
+    let mut owner = t170_start_owner(&home, &runtime_root, 1);
+    let writer = t170_client("t170-last-pane-writer");
+
+    t170_grant_write(&mut owner, &writer, 20);
+    assert_eq!(
+        t170_apply_operation(
+            &mut owner,
+            &writer,
+            TopologyOperationV2::CreateWorkspace {
+                multiplexer_workspace_id: t170_workspace(0x61),
+                alias: "t170".to_owned(),
+                first_tab_id: t170_tab(0x62),
+                first_tab_alias: "main".to_owned(),
+                first_pane_id: t170_pane(0x63),
+            },
+            22,
+            23,
+            24,
+            100,
+        ),
+        TopologyMutationOutcomeV2::Accepted
+    );
+
+    let attachment = owner
+        .start_terminal_runtime(
+            RuntimeAlias::new("t170-last-pane").unwrap(),
+            &profile,
+            &home,
+            TerminalSize { rows: 24, cols: 80 },
+            30,
+            100,
+        )
+        .unwrap();
+    let runtime_namespace_id = attachment.runtime_namespace_id();
+    owner
+        .request_terminal_control(writer.clone(), runtime_namespace_id, 31, 100)
+        .unwrap();
+    assert_eq!(
+        t170_apply_operation(
+            &mut owner,
+            &writer,
+            TopologyOperationV2::BindPaneRuntime {
+                multiplexer_workspace_id: t170_workspace(0x61),
+                tab_id: t170_tab(0x62),
+                pane_id: t170_pane(0x63),
+                runtime_namespace_id,
+            },
+            32,
+            33,
+            32,
+            100,
+        ),
+        TopologyMutationOutcomeV2::Accepted
+    );
+
+    // The only pane of a tab can never be closed, so the stop must not run.
+    assert_eq!(
+        t170_apply_operation(
+            &mut owner,
+            &writer,
+            TopologyOperationV2::ClosePane {
+                multiplexer_workspace_id: t170_workspace(0x61),
+                tab_id: t170_tab(0x62),
+                pane_id: t170_pane(0x63),
+                policy: ProtocolPaneClosePolicy::StopRuntimeThenClose,
+            },
+            34,
+            35,
+            33,
+            100,
+        ),
+        TopologyMutationOutcomeV2::Rejected {
+            error: MultiplexerErrorKind::UnsupportedOperation
+        }
+    );
+    assert!(
+        owner.runtime_registry_is_live(runtime_namespace_id),
+        "an impossible close must never cost a process stop"
+    );
+    assert!(
+        owner
+            .multiplexer_topology()
+            .pane_runtime_binding(t170_workspace(0x61), t170_tab(0x62), t170_pane(0x63))
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn t170_snapshot_publishes_the_current_presentation_epoch_for_convergence() {
+    use crate::persistent_runtime::protocol::MultiplexerSnapshotV2;
+
+    let (mut topology, _runtime, _bound) = t170_bound_topology();
+    let pane_id = t170_pane(0x13);
+    topology
+        .clear_pane(
+            topology.generation(),
+            t170_workspace(0x11),
+            t170_tab(0x12),
+            pane_id,
+            1,
+        )
+        .unwrap();
+    let topology_generation = topology.generation();
+    let snapshot = crate::persistent_runtime::protocol::multiplexer_snapshot_for_request_v2(
+        &topology,
+        OwnerGenerationId::from_entropy_bytes(t170_id(0x6A)).unwrap(),
+        Some(t170_workspace(0x11)),
+    )
+    .unwrap();
+    let MultiplexerSnapshotV2::Workspace { snapshot } = snapshot else {
+        panic!("an exact workspace request must answer with a workspace snapshot");
+    };
+    assert_eq!(snapshot.topology_generation, topology_generation);
+    let mut epochs = Vec::new();
+    for tab in &snapshot.tabs {
+        collect_pane_epochs(&tab.root, &mut epochs);
+    }
+    assert_eq!(epochs, vec![(pane_id, 1_u64), (t170_pane(0x14), 0_u64)]);
+}
+
+fn collect_pane_epochs(
+    node: &crate::persistent_runtime::protocol::ProtocolLayoutNodeV2,
+    out: &mut Vec<(PaneId, u64)>,
+) {
+    use crate::persistent_runtime::protocol::ProtocolLayoutNodeV2;
+    match node {
+        ProtocolLayoutNodeV2::Pane {
+            pane_id,
+            presentation_epoch,
+        } => out.push((*pane_id, *presentation_epoch)),
+        ProtocolLayoutNodeV2::Split { first, second, .. } => {
+            collect_pane_epochs(first, out);
+            collect_pane_epochs(second, out);
+        }
+    }
 }

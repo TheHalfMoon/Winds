@@ -501,6 +501,16 @@ impl PersistentOwner {
             return Err(MultiplexerErrorKind::UnsupportedOperation);
         };
 
+        // Prove the close can actually complete before any process effect. A pane
+        // that can never be closed, such as the last leaf of a tab, must not cost a
+        // terminal stop that would strand the pane on a dead runtime.
+        self.multiplexer_topology().can_close_pane(
+            request.expected_topology_generation,
+            *multiplexer_workspace_id,
+            *tab_id,
+            *pane_id,
+        )?;
+
         if self
             .controller_registry
             .authorize_mutation(
@@ -635,6 +645,33 @@ impl PersistentOwner {
                             now_monotonic_ms,
                         )
                         .map_err(MultiplexerServiceError::Domain),
+                    // Only the owner knows whether a runtime namespace is an accepted,
+                    // live one. A pane may never be bound to a namespace this owner
+                    // does not hold, so the liveness proof happens before the domain
+                    // ever records the reference.
+                    TopologyOperationV2::BindPaneRuntime {
+                        runtime_namespace_id,
+                        ..
+                    } => {
+                        if !self.runtime_registry.is_live_runtime(*runtime_namespace_id) {
+                            Err(MultiplexerServiceError::Domain(
+                                MultiplexerErrorKind::UnknownPane,
+                            ))
+                        } else {
+                            self.mutate_multiplexer_topology(
+                                &authenticated_connection_id,
+                                mutation.expected_topology_generation,
+                                now_unix_ms,
+                                |topology, expected| {
+                                    apply_topology_operation_v2(
+                                        topology,
+                                        expected,
+                                        &mutation.operation,
+                                    )
+                                },
+                            )
+                        }
+                    }
                     _ => self.mutate_multiplexer_topology(
                         &authenticated_connection_id,
                         mutation.expected_topology_generation,

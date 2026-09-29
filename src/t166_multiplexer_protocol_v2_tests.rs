@@ -570,14 +570,20 @@ fn t166_snapshot_rejects_cross_tab_focus_and_zoom_bindings() {
             ProtocolTabSnapshotV2 {
                 tab_id: tab(20),
                 alias: "first".to_owned(),
-                root: ProtocolLayoutNodeV2::Pane { pane_id: pane(20) },
+                root: ProtocolLayoutNodeV2::Pane {
+                    pane_id: pane(20),
+                    presentation_epoch: 0,
+                },
                 focused_pane_id: pane(20),
                 zoomed_pane_id: None,
             },
             ProtocolTabSnapshotV2 {
                 tab_id: tab(21),
                 alias: "second".to_owned(),
-                root: ProtocolLayoutNodeV2::Pane { pane_id: pane(21) },
+                root: ProtocolLayoutNodeV2::Pane {
+                    pane_id: pane(21),
+                    presentation_epoch: 0,
+                },
                 focused_pane_id: pane(20),
                 zoomed_pane_id: None,
             },
@@ -948,6 +954,7 @@ fn topology_with_panes(tab_counts: &[u16]) -> MultiplexerTopology {
 fn pane_chain(start: u16, count: u16) -> ProtocolLayoutNodeV2 {
     let mut node = ProtocolLayoutNodeV2::Pane {
         pane_id: pane_index(start),
+        presentation_epoch: 0,
     };
     for offset in 1..count {
         node = ProtocolLayoutNodeV2::Split {
@@ -956,6 +963,7 @@ fn pane_chain(start: u16, count: u16) -> ProtocolLayoutNodeV2 {
             first: Box::new(node),
             second: Box::new(ProtocolLayoutNodeV2::Pane {
                 pane_id: pane_index(start + offset),
+                presentation_epoch: 0,
             }),
         };
     }

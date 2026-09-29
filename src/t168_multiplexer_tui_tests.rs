@@ -29,7 +29,10 @@ fn generation(value: u64) -> TopologyGeneration {
 }
 
 fn pane_node(pane_id: PaneId) -> ProtocolLayoutNodeV2 {
-    ProtocolLayoutNodeV2::Pane { pane_id }
+    ProtocolLayoutNodeV2::Pane {
+        pane_id,
+        presentation_epoch: 0,
+    }
 }
 
 fn split_node(first: PaneId, second: PaneId) -> ProtocolLayoutNodeV2 {

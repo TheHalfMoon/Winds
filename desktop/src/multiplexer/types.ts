@@ -1,5 +1,5 @@
 export type DesktopTopologyLayoutNode =
-  | { kind: "PANE"; paneId: string }
+  | { kind: "PANE"; paneId: string; presentationEpoch: number }
   | {
       kind: "SPLIT";
       axis: "HORIZONTAL" | "VERTICAL";
