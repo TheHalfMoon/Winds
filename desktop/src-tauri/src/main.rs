@@ -65,18 +65,22 @@ fn multiplexer_topology_capability() -> DesktopTopologyCapability {
 }
 
 #[tauri::command]
-fn multiplexer_topology_snapshot(
+async fn multiplexer_topology_snapshot(
     request: DesktopTopologySnapshotRequest,
 ) -> Result<DesktopTopologySnapshot, String> {
-    desktop_topology_snapshot(request)
+    tauri::async_runtime::spawn_blocking(move || desktop_topology_snapshot(request))
+        .await
+        .map_err(|error| host_error("multiplexer topology snapshot worker", error))?
         .map_err(|error| host_error("multiplexer topology snapshot", error))
 }
 
 #[tauri::command]
-fn multiplexer_topology_bind_target(
+async fn multiplexer_topology_bind_target(
     request: DesktopTopologyBindRequest,
 ) -> Result<DesktopTopologyBoundTarget, String> {
-    desktop_topology_bind_target(request)
+    tauri::async_runtime::spawn_blocking(move || desktop_topology_bind_target(request))
+        .await
+        .map_err(|error| host_error("multiplexer topology target binding worker", error))?
         .map_err(|error| host_error("multiplexer topology target binding", error))
 }
 

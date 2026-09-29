@@ -1705,6 +1705,9 @@ impl Store {
     /// restart truth and never proves a live owner, a live client, or runtime
     /// authority; callers must still complete the exact generation handshake.
     /// Ambiguous ordering fails closed instead of picking a generation.
+    ///
+    /// The query returns only rows tied at the newest recorded start time, so the
+    /// bounded result never depends on how many owner generations were recorded.
     pub(crate) fn latest_persistent_runtime_owner_generation(
         &self,
     ) -> Result<Option<OwnerGenerationId>> {
@@ -1712,28 +1715,23 @@ impl Store {
         let mut statement = self.connection.prepare(
             "SELECT owner_generation_id, started_unix_ms
                FROM persistent_runtime_owner_generations
-              ORDER BY started_unix_ms DESC, owner_generation_id ASC",
+              WHERE started_unix_ms = (
+                    SELECT MAX(started_unix_ms) FROM persistent_runtime_owner_generations
+              )",
         )?;
         let rows = statement
             .query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-        let Some((newest_id, newest_started_unix_ms)) = rows.first().cloned() else {
-            return Ok(None);
-        };
-        if rows
-            .iter()
-            .filter(|(_, started_unix_ms)| *started_unix_ms == newest_started_unix_ms)
-            .count()
-            != 1
-        {
-            return Err(format!(
-                "recorded owner generation start time {newest_started_unix_ms} is ambiguous"
+        match rows.as_slice() {
+            [] => Ok(None),
+            [(owner_generation_id, _)] => Ok(Some(OwnerGenerationId::parse(owner_generation_id)?)),
+            [(_, started_unix_ms), ..] => Err(format!(
+                "recorded owner generation start time {started_unix_ms} is ambiguous"
             )
-            .into());
+            .into()),
         }
-        Ok(Some(OwnerGenerationId::parse(&newest_id)?))
     }
 
     pub(crate) fn persist_persistent_runtime_record(
