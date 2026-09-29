@@ -5,9 +5,7 @@
 //! process/controller authority. Consequential effects must pass through the
 //! already accepted exact-target authority seams.
 
-use crate::multiplexer::domain::{
-    MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration,
-};
+use crate::multiplexer::domain::{MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration};
 use std::collections::VecDeque;
 
 /// Maximum number of retained presentation rows for one pane.
