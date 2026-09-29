@@ -1,0 +1,139 @@
+.multiplexer-topology {
+  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  border-radius: 12px;
+  padding: 12px;
+  min-width: 0;
+}
+
+.multiplexer-topology-header,
+.multiplexer-workspace-title,
+.multiplexer-tabs,
+.multiplexer-pane {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.multiplexer-topology-header {
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.multiplexer-topology-header > div {
+  display: grid;
+  gap: 2px;
+}
+
+.multiplexer-topology-header span,
+.multiplexer-topology code,
+.multiplexer-tabs small {
+  opacity: 0.72;
+  font-size: 0.78rem;
+}
+
+.multiplexer-workspaces {
+  display: grid;
+  gap: 12px;
+}
+
+.multiplexer-workspace {
+  min-width: 0;
+}
+
+.multiplexer-workspace-title {
+  width: 100%;
+  justify-content: space-between;
+  text-align: left;
+}
+
+.multiplexer-workspace-title code,
+.multiplexer-pane code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.multiplexer-tabs {
+  overflow-x: auto;
+  padding: 8px 0;
+}
+
+.multiplexer-tabs button {
+  display: grid;
+  gap: 1px;
+  min-width: max-content;
+}
+
+.multiplexer-tabs [aria-pressed="true"] {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+.multiplexer-tab-layout,
+.multiplexer-split {
+  min-width: 0;
+  min-height: 104px;
+}
+
+.multiplexer-split {
+  display: grid;
+  gap: 6px;
+}
+
+.multiplexer-pane {
+  min-width: 0;
+  min-height: 92px;
+  align-items: flex-start;
+  justify-content: space-between;
+  text-align: left;
+  overflow: hidden;
+}
+
+.multiplexer-pane[data-focused="true"] {
+  border-width: 2px;
+}
+
+.multiplexer-pane[aria-current="true"] {
+  outline: 3px solid currentColor;
+  outline-offset: -4px;
+}
+
+.multiplexer-pane[data-zoomed="true"]::after {
+  content: "Zoomed";
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.multiplexer-topology-empty {
+  margin: 0;
+  padding: 10px 0;
+}
+
+html[data-theme="contrast"] .multiplexer-topology,
+html[data-theme="contrast"] .multiplexer-pane,
+html[data-theme="contrast"] .multiplexer-tabs button {
+  border-width: 2px;
+}
+
+html[data-scale="125"] .multiplexer-topology {
+  font-size: 1.25rem;
+}
+
+html[data-scale="200"] .multiplexer-topology {
+  font-size: 2rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .multiplexer-topology *,
+  .multiplexer-topology *::before,
+  .multiplexer-topology *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+html[data-motion="reduced"] .multiplexer-topology *,
+html[data-motion="reduced"] .multiplexer-topology *::before,
+html[data-motion="reduced"] .multiplexer-topology *::after {
+  animation: none !important;
+  transition: none !important;
+}

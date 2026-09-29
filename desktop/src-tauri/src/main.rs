@@ -27,6 +27,11 @@ use winds_control::desktop_terminal::{
     DesktopTerminalInputRequest, DesktopTerminalRegistry, DesktopTerminalResizeRequest,
     DesktopTerminalStartRequest, DesktopTerminalStatus, DesktopTerminalTargetRequest,
 };
+use winds_control::desktop_topology::{
+    DesktopTopologyBindRequest, DesktopTopologyBoundTarget, DesktopTopologyCapability,
+    DesktopTopologySnapshot, DesktopTopologySnapshotRequest, desktop_topology_bind_target,
+    desktop_topology_capability, desktop_topology_snapshot,
+};
 
 const TERMINAL_OUTPUT_CHUNK_BYTES: usize = 8 * 1024;
 const TERMINAL_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -52,6 +57,31 @@ fn terminal_registry(
         .registry
         .lock()
         .map_err(|_| host_error("terminal registry", "state lock poisoned"))
+}
+
+#[tauri::command]
+fn multiplexer_topology_capability() -> DesktopTopologyCapability {
+    desktop_topology_capability()
+}
+
+#[tauri::command]
+async fn multiplexer_topology_snapshot(
+    request: DesktopTopologySnapshotRequest,
+) -> Result<DesktopTopologySnapshot, String> {
+    tauri::async_runtime::spawn_blocking(move || desktop_topology_snapshot(request))
+        .await
+        .map_err(|error| host_error("multiplexer topology snapshot worker", error))?
+        .map_err(|error| host_error("multiplexer topology snapshot", error))
+}
+
+#[tauri::command]
+async fn multiplexer_topology_bind_target(
+    request: DesktopTopologyBindRequest,
+) -> Result<DesktopTopologyBoundTarget, String> {
+    tauri::async_runtime::spawn_blocking(move || desktop_topology_bind_target(request))
+        .await
+        .map_err(|error| host_error("multiplexer topology target binding worker", error))?
+        .map_err(|error| host_error("multiplexer topology target binding", error))
 }
 
 #[tauri::command]
@@ -358,6 +388,9 @@ fn main() {
     tauri::Builder::default()
         .manage(Arc::new(TerminalHostState::default()))
         .invoke_handler(tauri::generate_handler![
+            multiplexer_topology_capability,
+            multiplexer_topology_snapshot,
+            multiplexer_topology_bind_target,
             left_dock_snapshot,
             left_dock_attention_snapshot,
             left_dock_update_project,

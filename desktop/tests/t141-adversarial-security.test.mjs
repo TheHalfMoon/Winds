@@ -101,6 +101,7 @@ test('T141 duplicate aliases remain ambiguous instead of selecting a consequenti
 test('T141 renderer bridge exposes only fixed literal commands and no generic authority dispatcher', () => {
   const bridgeFiles = [
     join(root, 'src/leftDock/bridge.ts'),
+    join(root, 'src/multiplexer/bridge.ts'),
     join(root, 'src/rightDock/bridge.ts'),
     join(root, 'src/terminal/bridge.ts'),
   ];
@@ -108,7 +109,8 @@ test('T141 renderer bridge exposes only fixed literal commands and no generic au
   const commands = [...text.matchAll(/invoke(?:<[^>]+>)?\("([^"]+)"/g)].map((match) => match[1]).sort();
   const allowed = [
     'left_dock_attention_snapshot', 'left_dock_create_session', 'left_dock_rename_session', 'left_dock_snapshot',
-    'left_dock_update_project', 'left_dock_update_session', 'right_dock_artifacts', 'right_dock_bind',
+    'left_dock_update_project', 'left_dock_update_session', 'multiplexer_topology_bind_target',
+    'multiplexer_topology_capability', 'multiplexer_topology_snapshot', 'right_dock_artifacts', 'right_dock_bind',
     'right_dock_changes', 'right_dock_context', 'right_dock_evidence', 'right_dock_files', 'right_dock_preview_file',
     'terminal_close', 'terminal_input', 'terminal_interrupt', 'terminal_resize', 'terminal_start', 'terminal_status',
     'terminal_terminate', 'workspace_load_layout', 'workspace_save_layout',

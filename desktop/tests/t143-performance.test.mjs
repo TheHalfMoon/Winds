@@ -29,7 +29,7 @@ const assembleHarness = readFileSync(join(desktopRoot, 'tests/performance/t143_a
 
 test('T143 native readiness uses a qualification-only window-title capability and no production command', () => {
   assert.doesNotMatch(hostManifest, /t143-benchmark/);
-  assert.equal((host.match(/#\[tauri::command\]/g) ?? []).length, 22);
+  assert.equal((host.match(/#\[tauri::command\]/g) ?? []).length, 25);
   assert.doesNotMatch(host, /PageLoadEvent|WINDS_T143_READY_MS|t143-ready/);
   assert.match(main, /VITE_WINDS_T143_NATIVE_READY === "1"/);
   assert.match(main, /markT143NativeReadyWindow\(\)/);

@@ -36,6 +36,11 @@ pub mod desktop_inspection;
     reason = "Spec 010 T135 bounded desktop terminal bridge; Tauri host is the primary caller"
 )]
 pub mod desktop_terminal;
+#[allow(
+    dead_code,
+    reason = "Spec 012 T169 typed Desktop topology bridge; Tauri host is the primary caller"
+)]
+pub mod desktop_topology;
 mod domain;
 #[allow(
     dead_code,
