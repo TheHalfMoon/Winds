@@ -1,6 +1,6 @@
 # Spec 012 Tasks Amendment 003 — T171 Exact-Pane Terminal Gesture Routing
 
-Status: PROPOSED
+Status: CLOSED_CANONICAL
 
 Authority basis: Winds Constitution 1.1.0 principles III, IV, and V; canonical Spec 012 FR-016, FR-022, FR-024, FR-026, FR-030; canonical Plan AD-012-11 through AD-012-14; and canonical T168 and T170 closeouts.
 
@@ -72,14 +72,44 @@ Candidate movement invalidates stale exact-candidate evidence. This governance a
 
 No unavailable reviewer or tool is relabelled as PASS, and no predecessor Jev/OCR result qualifies a moved candidate.
 
+## Canonical closeout
+
+```text
+AMENDMENT_PR=272
+BASE=c4b6c3ea9395e11ca5efce8b04a7362c968d2e4b
+HEAD=c8b6ccc97431f8dc350847085d4b22f435bb588c
+HEAD_TREE=acda857a073546c53db68317c927ab0f914e74c4
+MERGE_BASE=c4b6c3ea9395e11ca5efce8b04a7362c968d2e4b
+AHEAD_BY=1
+BEHIND_BY=0
+CHANGED_PATHS=1 specs/012-workspace-multiplexer-agent-plane/tasks-amendment-003-t171-exact-pane-gesture-routing.md
+PR_EXACT_HEAD_RUNS=quality SUCCESS on c8b6ccc97431f8dc350847085d4b22f435bb588c
+PLATFORM_WORKFLOWS=NOT_TRIGGERED; the only changed path is Markdown under specs/**, and every platform, desktop, terminal, performance, and release-candidate workflow in this repository is path-filtered away from it
+JEV=TypeSafe jev-1.13.0 exact range c4b6c3e..c8b6ccc; grants_unbounded_scope=no p=0.08; claims_unproven_evidence=no p=0.03; fabricates_platform_claim=no p=0.05; permanent_self_authorization=no p=0.05; governance_fit=narrow_correction conf=1.00
+JEV_DRIVING_FINDING=TypeSafe jev-1.13.0 on the T171 implementation candidate c4b6c3e..ada889b returned modifies_out_of_scope_paths=yes p=0.78, which this amendment discharges
+ALIBABA_OPEN_CODE_REVIEW=v1.12.9 exact-range delegation accounting on specs/012-workspace-multiplexer-agent-plane/tasks-amendment-003-t171-exact-pane-gesture-routing.md reviewable_count=0 excluded_count=1 exclude_reason=unsupported_ext, followed by explicit manual exact-head Markdown review
+ALIBABA_LLM_BACKED_REVIEW=NOT_EXECUTED; the pinned provider anthropic/claude-opus-5-5 has no configured api_key in this environment, so the LLM-backed review could not run and is recorded as not executed rather than as a pass
+ALIBABA_OCR_BINARY=v1.12.9 bccbc15f windows/amd64, sha256 ae6f4785fea34a5cfef93ad22d8e7fb8032bbd12c45f2cbcc98cbe1b38cceff1, matching the recorded v1.12.9 manifest entry for opencodereview-windows-amd64.exe
+MANUAL_EXACT_HEAD_REVIEW=governance claims rechecked against the live Tasks file, the T168 authorized-path list, the T171 required-work list, FR-022, and the Constitution 1.1.0 version line; no material finding remains
+MERGE=6b7e39ff9dd8db9f3e934e08592470005c4fa32c
+MERGE_TREE=acda857a073546c53db68317c927ab0f914e74c4
+MERGE_PARENT_1=c4b6c3ea9395e11ca5efce8b04a7362c968d2e4b
+MERGE_PARENT_2=c8b6ccc97431f8dc350847085d4b22f435bb588c
+MERGE_GITHUB_VERIFICATION=VERIFIED_VALID
+POST_MERGE_PUSH_RUNS_ON_6b7e39f=quality 36623361925 SUCCESS; one actually-triggered workflow, none failed
+POST_MERGE_FAILURES=0
+```
+
+No post-merge workflow beyond the one actually triggered by the canonical merge was required, and it did not fail.
+
 ## Authority state
 
 ```text
-SPEC_012_TASKS_AMENDMENT_003=PROPOSED
-T171=BLOCKED_PENDING_THIS_AMENDMENT
+SPEC_012_TASKS_AMENDMENT_003=CLOSED_CANONICAL
+T171=AUTHORIZED_BY_THIS_AMENDMENT
 T172..T185=BLOCKED_BY_PREDECESSOR
 
-T171_EXACT_PANE_GESTURE_ROUTING_PATH=ADDED_TO_T171_AUTHORIZED_PATHS
+T171_EXACT_PANE_GESTURE_ROUTING_PATH=LANDED_CANONICAL
 T168_TOPOLOGY_PROJECTION_CHANGE_AUTHORIZED=NO
 T170_PANE_RUNTIME_BINDING_CHANGE_AUTHORIZED=NO
 WORKBENCH_SCREEN_TRANSCRIPT_LIMIT_CHANGE_AUTHORIZED=NO
