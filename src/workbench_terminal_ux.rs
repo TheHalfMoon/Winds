@@ -16,6 +16,10 @@ pub(crate) const MAX_PANE_WORKING_BUFFER_BYTES: usize = 2 * 1024 * 1024;
 pub(crate) const MAX_SELECTION_CELLS: usize = 256 * 1024;
 /// Maximum number of reported literal-search matches.
 pub(crate) const MAX_SEARCH_MATCHES: usize = 1_000;
+/// Maximum length of one literal search needle.
+pub(crate) const MAX_SEARCH_NEEDLE_BYTES: usize = 2_048;
+/// Maximum length of one presentation-only pane title.
+pub(crate) const MAX_CHROME_TITLE_BYTES: usize = 512;
 /// Maximum length of one offered link target.
 pub(crate) const MAX_LINK_TARGET_BYTES: usize = 2_048;
 /// AD-012-14 graphics payload ceiling retained per pane.
@@ -159,8 +163,11 @@ impl TerminalSelection {
     }
 
     /// Copies the selected byte stream without widening each UTF-8 byte into an
-    /// unrelated Unicode scalar. Invalid/incomplete UTF-8 is rendered lossily,
-    /// but complete multi-byte input remains intact.
+    /// unrelated Unicode scalar. Bytes are preserved exactly, orphan partial
+    /// sequences at either edge are dropped, and the remaining stream is decoded
+    /// with `String::from_utf8_lossy` so complete multi-byte input stays intact
+    /// and any still-invalid interior byte becomes a replacement character
+    /// instead of a panic.
     pub(crate) fn copy_text(&self, lines: &[Vec<u8>]) -> Result<String, SelectionError> {
         let cells = self.cells(lines)?;
         let mut bytes = Vec::with_capacity(cells.len());
@@ -172,8 +179,34 @@ impl TerminalSelection {
             bytes.push(cell.byte);
             previous_row = Some(cell.point.row);
         }
-        Ok(String::from_utf8_lossy(&bytes).into_owned())
+        Ok(decode_copied_bytes(&bytes))
     }
+}
+
+/// Drops a leading run of orphan UTF-8 continuation bytes, then decodes the rest.
+/// A trailing incomplete sequence is dropped rather than rendered as U+FFFD so a
+/// drag that stops inside a wide glyph copies the glyphs it fully covered.
+fn decode_copied_bytes(bytes: &[u8]) -> String {
+    let start = bytes
+        .iter()
+        .position(|byte| !is_utf8_continuation(*byte))
+        .unwrap_or(bytes.len());
+    let body = &bytes[start..];
+    match std::str::from_utf8(body) {
+        Ok(text) => text.to_owned(),
+        Err(error) => {
+            let valid_up_to = error.valid_up_to();
+            if error.error_len().is_none() {
+                String::from_utf8_lossy(&body[..valid_up_to]).into_owned()
+            } else {
+                String::from_utf8_lossy(body).into_owned()
+            }
+        }
+    }
+}
+
+fn is_utf8_continuation(byte: u8) -> bool {
+    byte & 0b1100_0000 == 0b1000_0000
 }
 
 fn head_start(line: &[u8], column: usize) -> usize {
@@ -184,8 +217,11 @@ fn head_start(line: &[u8], column: usize) -> usize {
     word_bounds(line, column).0
 }
 
+/// Word bytes are ASCII word characters plus every non-ASCII byte. Treating a
+/// multi-byte UTF-8 run as one word keeps CJK/IME double-click selection aligned
+/// to whole characters instead of slicing a single byte out of a glyph.
 fn is_word_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || byte == b'_'
+    byte.is_ascii_alphanumeric() || byte == b'_' || byte >= 0x80
 }
 
 fn word_bounds(line: &[u8], column: usize) -> (usize, usize) {
@@ -232,7 +268,7 @@ impl TerminalSearchQuery {
         if needle.is_empty() {
             return Err("terminal search needle must not be empty");
         }
-        if needle.len() > MAX_LINK_TARGET_BYTES {
+        if needle.len() > MAX_SEARCH_NEEDLE_BYTES {
             return Err("terminal search needle exceeds the bounded length");
         }
         Ok(Self {
@@ -366,7 +402,15 @@ impl LinkOffer {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ClipboardOffer {
+    pub(crate) source: ClipboardSource,
     pub(crate) payload: Vec<u8>,
+}
+
+/// The only clipboard source Spec 012 can represent. Remote clipboard bridging is
+/// prohibited, so no remote variant exists to construct.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClipboardSource {
+    LocalOnly,
 }
 
 pub(crate) fn offer_clipboard(payload: &[u8]) -> Option<ClipboardOffer> {
@@ -381,18 +425,48 @@ pub(crate) fn offer_clipboard(payload: &[u8]) -> Option<ClipboardOffer> {
         return None;
     }
     Some(ClipboardOffer {
+        source: ClipboardSource::LocalOnly,
         payload: payload.to_vec(),
     })
+}
+
+/// A clipboard write is only representable after an explicit user/policy
+/// acceptance bound to the exact pane, so an offer never becomes a host write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ClipboardGrant {
+    pub(crate) target: ExactPaneTarget,
+    pub(crate) payload: Vec<u8>,
+}
+
+impl ClipboardOffer {
+    pub(crate) fn accept(
+        self,
+        target: ExactPaneTarget,
+        presented_generation: TopologyGeneration,
+    ) -> Option<ClipboardGrant> {
+        if target.topology_generation != presented_generation {
+            return None;
+        }
+        Some(ClipboardGrant {
+            target,
+            payload: self.payload,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GraphicsRefusal {
     TooLarge,
     RemoteReference,
+    StalePane,
 }
 
+/// A retained local graphics frame. FR-024 requires bounded payload semantics
+/// and exact pane binding, so the frame carries the immutable pane identity that
+/// produced it and can never be replayed onto another pane or generation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GraphicsFrame {
+    pub(crate) target: ExactPaneTarget,
     pub(crate) bytes: Vec<u8>,
 }
 
@@ -402,7 +476,14 @@ fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
         .any(|window| window.eq_ignore_ascii_case(needle))
 }
 
-pub(crate) fn accept_graphics_frame(payload: &[u8]) -> Result<GraphicsFrame, GraphicsRefusal> {
+pub(crate) fn accept_graphics_frame(
+    target: ExactPaneTarget,
+    presented_generation: TopologyGeneration,
+    payload: &[u8],
+) -> Result<GraphicsFrame, GraphicsRefusal> {
+    if target.topology_generation != presented_generation {
+        return Err(GraphicsRefusal::StalePane);
+    }
     if payload.len() > MAX_GRAPHICS_FRAME_BYTES {
         return Err(GraphicsRefusal::TooLarge);
     }
@@ -412,8 +493,47 @@ pub(crate) fn accept_graphics_frame(payload: &[u8]) -> Result<GraphicsFrame, Gra
         return Err(GraphicsRefusal::RemoteReference);
     }
     Ok(GraphicsFrame {
+        target,
         bytes: payload.to_vec(),
     })
+}
+
+/// Presentation-only pane chrome. Titles, accents, borders, gaps, and scrollbars
+/// are user-controlled display text; none of them can carry authority, so the
+/// type exposes no trusted-state field at all (FR-025).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PaneAccent {
+    Default,
+    Running,
+    Attention,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PaneChrome {
+    pub(crate) title: String,
+    pub(crate) accent: PaneAccent,
+}
+
+impl PaneChrome {
+    pub(crate) fn new(title: &[u8]) -> Self {
+        let mut bounded = title.to_vec();
+        bounded.truncate(MAX_CHROME_TITLE_BYTES);
+        Self {
+            title: String::from_utf8_lossy(&bounded).into_owned(),
+            accent: PaneAccent::Default,
+        }
+    }
+
+    pub(crate) const fn with_accent(mut self, accent: PaneAccent) -> Self {
+        self.accent = accent;
+        self
+    }
+
+    /// Chrome can only ever be display state.
+    pub(crate) const fn encodes_trusted_authority(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -512,6 +632,13 @@ impl NotificationBudget {
     }
 }
 
+/// FR-023 requires CJK/IME/input-source behavior to be directly exercised on
+/// every claimed platform domain. T171 runs no native Windows, macOS, Linux, or
+/// WSL input-method evidence, so the recorded claim state is `UNPROVEN` and the
+/// production claim type below has no constructor that can produce anything but
+/// `Unclaimed`.
+pub(crate) const IME_SUPPORT_CLAIM_STATE: &str = "UNPROVEN";
+
 /// T171 cannot manufacture a CJK/IME/input-source claim. Direct native-platform
 /// claim admission belongs to T183; the truthful T171 production state is only
 /// `Unclaimed`.
@@ -528,6 +655,10 @@ impl InputMethodClaim {
 
     pub(crate) const fn is_claimed(&self) -> bool {
         false
+    }
+
+    pub(crate) const fn claim_state(&self) -> &'static str {
+        IME_SUPPORT_CLAIM_STATE
     }
 }
 

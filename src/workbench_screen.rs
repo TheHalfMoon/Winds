@@ -1,16 +1,10 @@
 use super::PaneSize;
-use super::terminal_ux::{MAX_PANE_WORKING_BUFFER_BYTES, MAX_SCROLLBACK_LINES};
 use std::collections::VecDeque;
 
-/// Spec 012 T171 keeps the rendered transcript inside the same pane-local
-/// working-buffer ceiling instead of multiplying owner replay per observer.
-pub(crate) const MAX_TRANSCRIPT_LINES: usize = MAX_SCROLLBACK_LINES;
-pub(crate) const MAX_TRANSCRIPT_BYTES: usize = MAX_PANE_WORKING_BUFFER_BYTES;
+pub(crate) const MAX_TRANSCRIPT_LINES: usize = 100_000;
+pub(crate) const MAX_TRANSCRIPT_BYTES: usize = 32 * 1024 * 1024;
 pub(crate) const MAX_OSC_INPUT_BYTES: usize = 8 * 1024;
-/// `BoundedTranscript` is the single retained presentation copy. Internal vt100
-/// scrollback remains disabled so the parser cannot create a second observer-local
-/// transcript behind the Plan's AD-012-14 accounting boundary.
-pub(crate) const VT100_SCROLLBACK_LINES: usize = 0;
+const VT100_SCROLLBACK_LINES: usize = 0;
 const TERMINAL_DATA_AUTHORITY: &str = "TERMINAL_DATA_ONLY";
 const ESCAPE: u8 = 0x1b;
 const BELL: u8 = 0x07;
@@ -202,6 +196,7 @@ impl OscInputGuard {
         if byte == ESCAPE {
             self.escape_pending = true;
         } else if self.escape_pending && is_escape_ignored_control(byte) {
+            // VTE executes these C0 controls without leaving Escape state.
         } else {
             self.escape_pending = false;
         }

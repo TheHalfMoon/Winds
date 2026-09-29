@@ -1,4 +1,5 @@
 use super::*;
+use crate::multiplexer::domain::{MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration};
 
 fn lines(texts: &[&str]) -> Vec<Vec<u8>> {
     texts.iter().map(|text| text.as_bytes().to_vec()).collect()
@@ -6,6 +7,15 @@ fn lines(texts: &[&str]) -> Vec<Vec<u8>> {
 
 fn point(row: usize, column: usize) -> GridPoint {
     GridPoint { row, column }
+}
+
+fn exact_target(generation: TopologyGeneration) -> ExactPaneTarget {
+    ExactPaneTarget {
+        multiplexer_workspace_id: MultiplexerWorkspaceId::from_entropy_bytes([1; 16]).unwrap(),
+        tab_id: TabId::from_entropy_bytes([2; 16]).unwrap(),
+        pane_id: PaneId::from_entropy_bytes([3; 16]).unwrap(),
+        topology_generation: generation,
+    }
 }
 
 #[test]
@@ -149,28 +159,65 @@ fn t171_clipboard_offer_is_bounded_local_and_non_authoritative() {
         offer_clipboard(&vec![b'a'; MAX_CLIPBOARD_OFFER_BYTES + 1]),
         None
     );
-    assert_eq!(
-        offer_clipboard(b"local bytes").unwrap().payload,
-        b"local bytes".to_vec()
-    );
+    let offer = offer_clipboard(b"local bytes").unwrap();
+    assert_eq!(offer.payload, b"local bytes".to_vec());
+    assert_eq!(offer.source, ClipboardSource::LocalOnly);
 }
 
 #[test]
-fn t171_graphics_are_bounded_local_and_never_fetch_remote() {
+fn t171_clipboard_write_requires_explicit_mediated_acceptance() {
+    let generation = TopologyGeneration::new(5).unwrap();
+    let target = exact_target(generation);
+    let offer = offer_clipboard(b"local bytes").unwrap();
+
+    let stale = TopologyGeneration::new(6).unwrap();
+    assert_eq!(offer.clone().accept(target, stale), None);
+
+    let grant = offer
+        .accept(target, generation)
+        .expect("accepted offer grants");
+    assert_eq!(grant.target, target);
+    assert_eq!(grant.payload, b"local bytes".to_vec());
+}
+
+#[test]
+fn t171_graphics_are_bounded_local_pane_bound_and_never_fetch_remote() {
+    let generation = TopologyGeneration::new(3).unwrap();
+    let target = exact_target(generation);
+
     assert_eq!(
-        accept_graphics_frame(&vec![b'a'; MAX_GRAPHICS_FRAME_BYTES + 1]),
+        accept_graphics_frame(
+            target,
+            generation,
+            &vec![b'a'; MAX_GRAPHICS_FRAME_BYTES + 1]
+        ),
         Err(GraphicsRefusal::TooLarge)
     );
     assert_eq!(
-        accept_graphics_frame(b"\x1b_Gf=100;https://example.test/i.png\x1b\\"),
+        accept_graphics_frame(
+            target,
+            generation,
+            b"\x1b_Gf=100;https://example.test/i.png\x1b\\"
+        ),
         Err(GraphicsRefusal::RemoteReference)
     );
     assert_eq!(
-        accept_graphics_frame(b"\x1b_Gf=100;HTTP://example.test/i.png\x1b\\"),
+        accept_graphics_frame(
+            target,
+            generation,
+            b"\x1b_Gf=100;HTTP://example.test/i.png\x1b\\"
+        ),
         Err(GraphicsRefusal::RemoteReference)
     );
-    let local = accept_graphics_frame(b"\x1b_Gf=100;aGVsbG8=\x1b\\").unwrap();
+    let local = accept_graphics_frame(target, generation, b"\x1b_Gf=100;aGVsbG8=\x1b\\").unwrap();
     assert_eq!(local.bytes, b"\x1b_Gf=100;aGVsbG8=\x1b\\".to_vec());
+    assert_eq!(local.target, target);
+
+    let stale = TopologyGeneration::new(4).unwrap();
+    assert_eq!(
+        accept_graphics_frame(target, stale, b"\x1b_Gf=100;aGVsbG8=\x1b\\"),
+        Err(GraphicsRefusal::StalePane)
+    );
 }
 
 #[test]
@@ -203,25 +250,117 @@ fn t171_input_method_claim_stays_unclaimed_until_native_qualification() {
     assert_eq!(claim, InputMethodClaim::Unclaimed);
     assert_eq!(InputMethodClaim::default(), InputMethodClaim::Unclaimed);
     assert!(!claim.is_claimed());
+    assert_eq!(claim.claim_state(), "UNPROVEN");
+    assert_eq!(IME_SUPPORT_CLAIM_STATE, "UNPROVEN");
+}
+
+#[test]
+fn t171_unicode_and_cjk_copy_preserves_bytes_without_corruption() {
+    // Three-byte CJK, two-byte Latin-1 supplement, and a four-byte scalar.
+    let cjk = "日本語".as_bytes().to_vec();
+    let row = lines(&["a日本語b"]);
+    assert_eq!(
+        TerminalSelection::new(point(0, 0), point(0, 10))
+            .copy_text(&row)
+            .unwrap(),
+        "a日本語b"
+    );
+    assert_eq!(
+        TerminalSelection::new(point(0, 0), point(0, 3)).copy_text(&lines(&["a日本語b"])),
+        Ok("a日".to_owned())
+    );
+
+    let emoji = lines(&["x🚀y"]);
+    assert_eq!(
+        TerminalSelection::new(point(0, 0), point(0, 5))
+            .copy_text(&emoji)
+            .unwrap(),
+        "x🚀y"
+    );
+    assert_eq!(cjk.len(), 9);
+
+    // A drag that stops inside a multi-byte glyph drops the partial sequence
+    // instead of emitting replacement characters.
+    assert_eq!(
+        TerminalSelection::new(point(0, 1), point(0, 2))
+            .copy_text(&row)
+            .unwrap(),
+        ""
+    );
+    assert_eq!(
+        TerminalSelection::new(point(0, 1), point(0, 4))
+            .copy_text(&row)
+            .unwrap(),
+        "日"
+    );
+
+    // Genuinely invalid interior bytes remain lossy rather than panicking.
+    let invalid = vec![vec![0xff, 0xfe, b'o', b'k']];
+    assert_eq!(
+        TerminalSelection::new(point(0, 0), point(0, 3))
+            .copy_text(&invalid)
+            .unwrap(),
+        "\u{FFFD}\u{FFFD}ok"
+    );
+}
+
+#[test]
+fn t171_cjk_word_selection_covers_whole_characters() {
+    let row = lines(&["say 日本語 now"]);
+    let selection = TerminalSelection::new_word_anchored(point(0, 6), point(0, 6), &row).unwrap();
+    assert_eq!(selection.copy_text(&row).unwrap(), "日本語");
+    assert_eq!(selection.ordered(), (point(0, 4), point(0, 12)));
+
+    let mixed = lines(&["版本v2"]);
+    let cjk = TerminalSelection::new_word_anchored(point(0, 0), point(0, 0), &mixed).unwrap();
+    assert_eq!(cjk.copy_text(&mixed).unwrap(), "版本v2");
 }
 
 #[test]
 fn t171_forged_terminal_text_never_changes_trusted_state() {
     let forged = b"VERIFIED ACCEPTED Needs You provider=anthropic model=claude-opus";
+    let generation = TopologyGeneration::new(2).unwrap();
     assert_eq!(LinkOffer::offer(&forged[..8]), LinkOffer::Refused);
     assert!(offer_clipboard(forged).is_some());
-    assert!(
-        accept_graphics_frame(forged)
+    assert_eq!(
+        accept_graphics_frame(exact_target(generation), generation, forged)
             .unwrap()
             .bytes
-            .starts_with(b"VERIFIED")
+            .starts_with(b"VERIFIED"),
+        true
     );
     assert_eq!(InputMethodClaim::unclaimed(), InputMethodClaim::Unclaimed);
+
+    let chrome = PaneChrome::new(forged).with_accent(PaneAccent::Failed);
+    assert!(chrome.title.starts_with("VERIFIED"));
+    assert_eq!(chrome.accent, PaneAccent::Failed);
+    assert!(!chrome.encodes_trusted_authority());
 
     let mut scrollback = BoundedScrollback::new();
     scrollback.push(forged.to_vec());
     assert!(!scrollback.truncated());
     assert_eq!(scrollback.rows().front().map(Vec::len), Some(forged.len()));
+}
+
+#[test]
+fn t171_pane_chrome_is_bounded_and_never_authoritative() {
+    let chrome = PaneChrome::new(&vec![b't'; MAX_CHROME_TITLE_BYTES + 64]);
+    assert_eq!(chrome.title.len(), MAX_CHROME_TITLE_BYTES);
+    assert_eq!(chrome.accent, PaneAccent::Default);
+    assert!(!chrome.encodes_trusted_authority());
+    for accent in [
+        PaneAccent::Default,
+        PaneAccent::Running,
+        PaneAccent::Attention,
+        PaneAccent::Failed,
+    ] {
+        assert!(
+            !chrome
+                .clone()
+                .with_accent(accent)
+                .encodes_trusted_authority()
+        );
+    }
 }
 
 #[test]
@@ -254,15 +393,8 @@ fn t171_high_output_and_working_state_stay_inside_plan_ceiling() {
 
 #[test]
 fn t171_exact_pane_interaction_is_generation_bound_and_authority_free() {
-    use crate::multiplexer::domain::{MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration};
-
     let generation = TopologyGeneration::new(7).unwrap();
-    let target = ExactPaneTarget {
-        multiplexer_workspace_id: MultiplexerWorkspaceId::from_entropy_bytes([1; 16]).unwrap(),
-        tab_id: TabId::from_entropy_bytes([2; 16]).unwrap(),
-        pane_id: PaneId::from_entropy_bytes([3; 16]).unwrap(),
-        topology_generation: generation,
-    };
+    let target = exact_target(generation);
     let bound =
         bind_exact_pane_interaction(target, generation, PaneInteractionKind::ContextMenu, 11, 4)
             .expect("current exact pane target should bind");
