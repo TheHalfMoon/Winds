@@ -163,46 +163,50 @@ impl TerminalSelection {
     }
 
     /// Copies the selected byte stream without widening each UTF-8 byte into an
-    /// unrelated Unicode scalar. Bytes are preserved exactly, orphan partial
-    /// sequences at either edge are dropped, and the remaining stream is decoded
-    /// with `String::from_utf8_lossy` so complete multi-byte input stays intact
-    /// and any still-invalid interior byte becomes a replacement character
-    /// instead of a panic.
+    /// unrelated Unicode scalar. Bytes are preserved exactly, each row's orphan
+    /// partial sequences are dropped at that row's own edges, and the joined
+    /// stream is decoded with `String::from_utf8_lossy` so complete multi-byte
+    /// input stays intact and any still-invalid interior byte becomes a
+    /// replacement character instead of a panic.
     pub(crate) fn copy_text(&self, lines: &[Vec<u8>]) -> Result<String, SelectionError> {
         let cells = self.cells(lines)?;
-        let mut bytes = Vec::with_capacity(cells.len());
-        let mut previous_row = None;
+        let mut rows: Vec<(usize, Vec<u8>)> = Vec::new();
         for cell in cells {
-            if previous_row.is_some_and(|row| row != cell.point.row) {
-                bytes.push(b'\n');
+            match rows.last_mut() {
+                Some((row, bytes)) if *row == cell.point.row => bytes.push(cell.byte),
+                _ => rows.push((cell.point.row, vec![cell.byte])),
             }
-            bytes.push(cell.byte);
-            previous_row = Some(cell.point.row);
         }
-        Ok(decode_copied_bytes(&bytes))
+        let mut text = String::new();
+        for (index, (_, mut row)) in rows.into_iter().enumerate() {
+            trim_partial_utf8_edges(&mut row);
+            if index > 0 {
+                text.push('\n');
+            }
+            text.push_str(&String::from_utf8_lossy(&row));
+        }
+        Ok(text)
     }
 }
 
-/// Drops a leading run of orphan UTF-8 continuation bytes, then decodes the rest.
-/// A trailing incomplete sequence is dropped rather than rendered as U+FFFD so a
-/// drag that stops inside a wide glyph copies the glyphs it fully covered.
-fn decode_copied_bytes(bytes: &[u8]) -> String {
-    let start = bytes
+/// Drops a leading run of orphan UTF-8 continuation bytes and a trailing
+/// incomplete sequence for one row. A drag that stops inside a wide glyph copies
+/// the glyphs it fully covered instead of emitting replacement characters, and a
+/// row boundary inside a glyph never truncates the rows after it.
+fn trim_partial_utf8_edges(row: &mut Vec<u8>) {
+    let start = row
         .iter()
         .position(|byte| !is_utf8_continuation(*byte))
-        .unwrap_or(bytes.len());
-    let body = &bytes[start..];
-    match std::str::from_utf8(body) {
-        Ok(text) => text.to_owned(),
-        Err(error) => {
-            let valid_up_to = error.valid_up_to();
-            if error.error_len().is_none() {
-                String::from_utf8_lossy(&body[..valid_up_to]).into_owned()
-            } else {
-                String::from_utf8_lossy(body).into_owned()
-            }
-        }
+        .unwrap_or(row.len());
+    if start > 0 {
+        row.drain(..start);
     }
+    let trimmed = match std::str::from_utf8(row) {
+        Ok(_) => return,
+        Err(error) if error.error_len().is_none() => error.valid_up_to(),
+        Err(_) => return,
+    };
+    row.truncate(trimmed);
 }
 
 fn is_utf8_continuation(byte: u8) -> bool {

@@ -142,6 +142,18 @@ fn t171_link_activation_requires_valid_target_and_explicit_acceptance() {
         parse_link_target(&vec![b'a'; MAX_LINK_TARGET_BYTES + 1]),
         Err(LinkRefusal::TooLong)
     );
+    assert_eq!(
+        parse_link_target(b"https://exa\xffmple.test"),
+        Err(LinkRefusal::UnsupportedScheme)
+    );
+    let idn = "https://\u{4f8b}\u{3048}.test/\u{8def}\u{5f91}";
+    assert_eq!(
+        parse_link_target(idn.as_bytes()),
+        Ok(LinkTarget {
+            scheme: "https",
+            target: idn.to_owned(),
+        })
+    );
 
     let offer = LinkOffer::offer(b"https://example.test/ok");
     assert!(matches!(offer, LinkOffer::Pending(_)));
@@ -301,6 +313,19 @@ fn t171_unicode_and_cjk_copy_preserves_bytes_without_corruption() {
             .copy_text(&invalid)
             .unwrap(),
         "\u{FFFD}\u{FFFD}ok"
+    );
+
+    // A row that ends inside a glyph must not truncate the rows after it.
+    let split = vec![
+        "日本語".as_bytes()[..2].to_vec(),
+        "second".as_bytes().to_vec(),
+        "third".as_bytes().to_vec(),
+    ];
+    assert_eq!(
+        TerminalSelection::new(point(0, 0), point(2, 4))
+            .copy_text(&split)
+            .unwrap(),
+        "\nsecond\nthird"
     );
 }
 

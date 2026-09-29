@@ -1456,32 +1456,54 @@ mod t168_workbench_topology_binding_tests {
         };
         let regions = [first, second];
 
-        let context = canonical_topology_bind_terminal_interaction(
-            &presentation,
-            &regions,
-            MouseEvent {
-                kind: MouseEventKind::Down(MouseButton::Right),
-                column: 12,
-                row: 3,
-                modifiers: KeyModifiers::NONE,
-            },
-        )
-        .expect("right click binds the exact hit pane");
+        let mut state = crate::workbench::WorkbenchState::new();
+        let legacy = state.create_pane(
+            "legacy",
+            None,
+            None,
+            crate::workbench::PaneSize::new(80, 24),
+        );
+        let mut terminals = crate::workbench::terminal::WorkbenchTerminals::new();
+        let mut editor = crate::workbench::terminal::input::WorkbenchShellEditor::new();
+        let mut navigation = WorkbenchNavigation::new();
+        navigation.install_canonical_topology(presentation, regions.to_vec());
+
+        state.focus_pane(legacy);
+        assert_eq!(state.selected_pane(), Some(legacy));
+
+        let mut send = |navigation: &mut WorkbenchNavigation, kind| {
+            navigation
+                .handle_event(
+                    &mut state,
+                    &mut terminals,
+                    &mut editor,
+                    &[],
+                    &[],
+                    Event::Mouse(MouseEvent {
+                        kind,
+                        column: 12,
+                        row: 2,
+                        modifiers: KeyModifiers::NONE,
+                    }),
+                )
+                .unwrap()
+        };
+
+        // The focused legacy pane is not the pane under the pointer, so both the
+        // right click and the scroll prove the target is the exact hit pane and
+        // never the focused pane.
+        let right = send(&mut navigation, MouseEventKind::Down(MouseButton::Right));
+        let NavigationEffect::CanonicalPaneInteraction(context) = right else {
+            panic!("right click must return a bound pane interaction");
+        };
         assert_eq!(context.target().pane_id, second.pane_id);
         assert_eq!(context.kind(), PaneInteractionKind::ContextMenu);
 
-        let scroll = canonical_topology_bind_terminal_interaction(
-            &presentation,
-            &regions,
-            MouseEvent {
-                kind: MouseEventKind::ScrollUp,
-                column: 2,
-                row: 1,
-                modifiers: KeyModifiers::NONE,
-            },
-        )
-        .expect("scroll binds the exact hit pane");
-        assert_eq!(scroll.target().pane_id, first.pane_id);
+        let scrolled = send(&mut navigation, MouseEventKind::ScrollUp);
+        let NavigationEffect::CanonicalPaneInteraction(scroll) = scrolled else {
+            panic!("scroll must return a bound pane interaction");
+        };
+        assert_eq!(scroll.target().pane_id, second.pane_id);
         assert_eq!(
             scroll.kind(),
             PaneInteractionKind::Scroll {
@@ -1489,24 +1511,37 @@ mod t168_workbench_topology_binding_tests {
                 horizontal_columns: 0,
             }
         );
+        assert_eq!(state.selected_pane(), Some(legacy));
 
         let stale_regions = [CanonicalTopologyPaneHitRegion {
             topology_generation: TopologyGeneration::new(5).expect("valid generation"),
             ..first
         }];
-        assert!(
-            canonical_topology_bind_terminal_interaction(
-                &presentation,
-                &stale_regions,
-                MouseEvent {
+        let mut stale_navigation = WorkbenchNavigation::new();
+        stale_navigation.install_canonical_topology(
+            CanonicalTopologyPresentation {
+                topology_generation: TopologyGeneration::new(4).expect("valid generation"),
+                text: "TOPOLOGY authority=READ_ONLY_TOPOLOGY".to_owned(),
+                search_bindings: Vec::new(),
+            },
+            stale_regions.to_vec(),
+        );
+        let stale = stale_navigation
+            .handle_event(
+                &mut state,
+                &mut terminals,
+                &mut editor,
+                &[],
+                &[],
+                Event::Mouse(MouseEvent {
                     kind: MouseEventKind::ScrollDown,
                     column: 2,
                     row: 1,
                     modifiers: KeyModifiers::NONE,
-                },
+                }),
             )
-            .is_none()
-        );
+            .unwrap();
+        assert_eq!(stale, NavigationEffect::None);
     }
 }
 
