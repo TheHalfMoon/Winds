@@ -14,10 +14,11 @@ use crate::persistent_runtime::domain::{
     RuntimeAlias, RuntimeNamespaceId,
 };
 use crate::persistent_runtime::protocol::{
-    MAX_CONTROL_FRAME_BYTES, MultiplexerEventSubscriptionAckV2, MultiplexerEventV2,
-    MultiplexerSnapshotV2, MultiplexerSubscriptionBoundaryV2, MultiplexerSubscriptionStreamV2,
-    MultiplexerWriteStateV2, ProtocolMessage, ProtocolPayload, ProtocolResult,
-    RequestSequenceGuard, TopologyMutationOutcomeV2, TopologyMutationResultV2,
+    ApplyTopologyOperationV2, MAX_CONTROL_FRAME_BYTES, MultiplexerEventSubscriptionAckV2,
+    MultiplexerEventV2, MultiplexerSnapshotV2, MultiplexerSubscriptionBoundaryV2,
+    MultiplexerSubscriptionStreamV2, MultiplexerWriteStateV2, ProtocolMessage,
+    ProtocolPaneClosePolicy, ProtocolPayload, ProtocolResult, RequestSequenceGuard,
+    TopologyMutationOutcomeV2, TopologyMutationResultV2, TopologyOperationV2,
     apply_topology_operation_v2, decode_frame, encode_frame, inactive_v2_domain_response,
     multiplexer_snapshot_for_request_v2, topology_operation_target_ids_v2,
     validate_candidate_topology_v2, validate_owner_v2_handshake,
@@ -455,12 +456,98 @@ impl PersistentOwner {
         )
     }
 
+    /// Enforces `STOP_RUNTIME_THEN_CLOSE` for one exact pane.
+    ///
+    /// The proof order is fixed and never reordered: MultiplexerWrite, then the
+    /// current topology generation, then the exact live pane, then the pane's exact
+    /// bound runtime, then the exact Runtime Controller lease. Only after all five
+    /// does the stop run, and the pane is removed only after the stop reaches a
+    /// truthful terminal disposition. A failed, outcome-unknown, or ownership-lost
+    /// stop never reports a clean close and never removes the pane. There is no
+    /// implicit terminate-on-close and no orphan cleanup.
+    fn apply_stop_runtime_then_close(
+        &mut self,
+        client_connection_id: &ClientConnectionId,
+        request: &ApplyTopologyOperationV2,
+        operation: &TopologyOperationV2,
+        now_unix_ms: i64,
+        now_monotonic_ms: u64,
+    ) -> Result<TopologyGeneration, MultiplexerErrorKind> {
+        let TopologyOperationV2::ClosePane {
+            multiplexer_workspace_id,
+            tab_id,
+            pane_id,
+            ..
+        } = operation
+        else {
+            return Err(MultiplexerErrorKind::UnsupportedOperation);
+        };
+        if self.multiplexer_authority(client_connection_id)
+            != MultiplexerAuthority::MultiplexerWrite
+        {
+            return Err(MultiplexerErrorKind::MultiplexerWriteRequired);
+        }
+        if self.multiplexer_topology().generation() != request.expected_topology_generation {
+            return Err(MultiplexerErrorKind::StaleTopologyGeneration);
+        }
+        let Some(binding) = self.multiplexer_topology().pane_runtime_binding(
+            *multiplexer_workspace_id,
+            *tab_id,
+            *pane_id,
+        )?
+        else {
+            // An unbound pane has no process to stop. Silently degrading to a
+            // topology-only close would be an implicit policy change, so fail closed.
+            return Err(MultiplexerErrorKind::UnsupportedOperation);
+        };
+
+        if self
+            .controller_registry
+            .authorize_mutation(
+                binding.runtime_namespace_id,
+                client_connection_id,
+                now_monotonic_ms,
+            )
+            .is_err()
+        {
+            return Err(MultiplexerErrorKind::RuntimeControllerRequired);
+        }
+
+        if self
+            .controller_stop_terminal(
+                client_connection_id,
+                binding.runtime_namespace_id,
+                now_unix_ms,
+                now_monotonic_ms,
+            )
+            .is_err()
+        {
+            // Failed, outcome-unknown, or ownership-lost. The pane stays and the
+            // client is told the outcome is unknown rather than a clean stop.
+            return Err(MultiplexerErrorKind::OutcomeUnknown);
+        }
+
+        // The process reached a truthful terminal disposition. The pane close is
+        // still a compare-and-apply: if the topology moved in between, the stop
+        // stands and the close reports an unknown outcome instead of a clean close.
+        self.mutate_multiplexer_topology(
+            client_connection_id,
+            request.expected_topology_generation,
+            now_unix_ms,
+            |topology, expected| {
+                topology.close_pane(expected, *multiplexer_workspace_id, *tab_id, *pane_id)
+            },
+        )
+        .map_err(|_| MultiplexerErrorKind::OutcomeUnknown)
+    }
+
     pub(crate) fn dispatch_multiplexer_protocol_v2(
         &mut self,
         authenticated_connection_id: ClientConnectionId,
         request: &ProtocolMessage,
         response_sequence: EventSequence,
         now_unix_ms: i64,
+        now_monotonic_ms: u64,
     ) -> ProtocolResult<ProtocolMessage> {
         if matches!(&request.payload, ProtocolPayload::Hello { .. }) {
             validate_owner_v2_handshake(request)?;
@@ -535,14 +622,28 @@ impl PersistentOwner {
 
                 let (workspace_id, tab_id, pane_id, secondary_tab_id, secondary_pane_id) =
                     topology_operation_target_ids_v2(&mutation.operation);
-                let outcome = self.mutate_multiplexer_topology(
-                    &authenticated_connection_id,
-                    mutation.expected_topology_generation,
-                    now_unix_ms,
-                    |topology, expected| {
-                        apply_topology_operation_v2(topology, expected, &mutation.operation)
-                    },
-                );
+                let outcome = match &mutation.operation {
+                    TopologyOperationV2::ClosePane {
+                        policy: ProtocolPaneClosePolicy::StopRuntimeThenClose,
+                        ..
+                    } => self
+                        .apply_stop_runtime_then_close(
+                            &authenticated_connection_id,
+                            mutation,
+                            &mutation.operation,
+                            now_unix_ms,
+                            now_monotonic_ms,
+                        )
+                        .map_err(MultiplexerServiceError::Domain),
+                    _ => self.mutate_multiplexer_topology(
+                        &authenticated_connection_id,
+                        mutation.expected_topology_generation,
+                        now_unix_ms,
+                        |topology, expected| {
+                            apply_topology_operation_v2(topology, expected, &mutation.operation)
+                        },
+                    ),
+                };
 
                 let (result, snapshot) = match outcome {
                     Ok(accepted_topology_generation) => {
@@ -633,6 +734,14 @@ impl PersistentOwner {
     #[cfg(test)]
     pub(crate) fn has_active_session_for_test(&self) -> bool {
         self.session.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn runtime_registry_is_live(
+        &self,
+        runtime_namespace_id: RuntimeNamespaceId,
+    ) -> bool {
+        self.runtime_registry.is_live_runtime(runtime_namespace_id)
     }
 
     pub(crate) fn ready_unix_ms(&self) -> i64 {
@@ -1370,6 +1479,43 @@ impl PersistentOwner {
         {
             return Ok(());
         }
+        // `pane.clear` converges observers with a typed clear marker that carries
+        // the owner-assigned pane-local presentation epoch. It is presentation only:
+        // no lifecycle, verification, or evidence state changes with it.
+        if let ProtocolPayload::ApplyTopologyOperation {
+            request:
+                ApplyTopologyOperationV2 {
+                    operation:
+                        TopologyOperationV2::ClearPane {
+                            multiplexer_workspace_id: clear_workspace_id,
+                            tab_id: clear_tab_id,
+                            pane_id: clear_pane_id,
+                            ..
+                        },
+                    ..
+                },
+        } = &request.payload
+        {
+            let Some(epoch) = self
+                .multiplexer_topology()
+                .pane_presentation_epoch(*clear_workspace_id, *clear_tab_id, *clear_pane_id)
+                .ok()
+            else {
+                return Err(OwnerError::Endpoint(
+                    "accepted pane clear omitted its exact pane".to_owned(),
+                ));
+            };
+            return self.queue_topology_event(
+                session,
+                MultiplexerEventV2::PaneCleared {
+                    multiplexer_workspace_id: *clear_workspace_id,
+                    tab_id: *clear_tab_id,
+                    pane_id: *clear_pane_id,
+                    topology_generation: accepted_generation,
+                    presentation_epoch: epoch.get(),
+                },
+            );
+        }
         self.queue_topology_event(
             session,
             MultiplexerEventV2::TopologyChanged {
@@ -1448,6 +1594,7 @@ impl PersistentOwner {
                     request,
                     response_sequence,
                     now_unix_ms,
+                    now_monotonic_ms,
                 ),
             ProtocolPayload::AttachObserver => {
                 let runtime_id = request

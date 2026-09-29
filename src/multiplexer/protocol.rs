@@ -1022,11 +1022,27 @@ pub(crate) fn apply_topology_operation_v2(
             pane_id,
             policy: ProtocolPaneClosePolicy::DetachView,
         } => topology.close_pane(expected, *multiplexer_workspace_id, *tab_id, *pane_id),
+        TopologyOperationV2::ClearPane {
+            multiplexer_workspace_id,
+            tab_id,
+            pane_id,
+            presentation_epoch,
+        } => topology.clear_pane(
+            expected,
+            *multiplexer_workspace_id,
+            *tab_id,
+            *pane_id,
+            *presentation_epoch,
+        ),
+        // `STOP_RUNTIME_THEN_CLOSE` reaches the domain only after the owner has
+        // proven MultiplexerWrite, resolved the exact bound runtime, required the
+        // exact Runtime Controller lease, and reached a truthful stop disposition.
+        // Any path that reaches the domain without that proof fails closed here
+        // rather than downgrading to a topology-only close.
         TopologyOperationV2::ClosePane {
             policy: ProtocolPaneClosePolicy::StopRuntimeThenClose,
             ..
         }
-        | TopologyOperationV2::ClearPane { .. }
         | TopologyOperationV2::ApplyLayoutTemplate { .. } => {
             Err(MultiplexerErrorKind::UnsupportedOperation)
         }

@@ -2081,7 +2081,7 @@ fn t166_owner_dispatch_preflights_capability_and_applies_exact_topology() {
     )
     .unwrap();
     let observer_response = owner
-        .dispatch_multiplexer_protocol_v2(client.clone(), &observer_request, sequence(91), 101)
+        .dispatch_multiplexer_protocol_v2(client.clone(), &observer_request, sequence(91), 101, 101)
         .unwrap();
     assert!(matches!(
         observer_response.payload,
@@ -2111,7 +2111,7 @@ fn t166_owner_dispatch_preflights_capability_and_applies_exact_topology() {
     )
     .unwrap();
     let write_response = owner
-        .dispatch_multiplexer_protocol_v2(client.clone(), &write_request, sequence(93), 102)
+        .dispatch_multiplexer_protocol_v2(client.clone(), &write_request, sequence(93), 102, 102)
         .unwrap();
     assert!(matches!(
         write_response.payload,
@@ -2145,7 +2145,7 @@ fn t166_owner_dispatch_preflights_capability_and_applies_exact_topology() {
     )
     .unwrap();
     let mutation_response = owner
-        .dispatch_multiplexer_protocol_v2(client.clone(), &mutation_request, sequence(95), 103)
+        .dispatch_multiplexer_protocol_v2(client.clone(), &mutation_request, sequence(95), 103, 103)
         .unwrap();
     assert!(matches!(
         mutation_response.payload,
@@ -2176,7 +2176,13 @@ fn t166_owner_dispatch_preflights_capability_and_applies_exact_topology() {
 
     assert_eq!(
         owner
-            .dispatch_multiplexer_protocol_v2(client.clone(), &mutation_request, sequence(96), 104,)
+            .dispatch_multiplexer_protocol_v2(
+                client.clone(),
+                &mutation_request,
+                sequence(96),
+                104,
+                104
+            )
             .unwrap_err(),
         LocalControlErrorKind::DuplicateOrOutOfOrderRequest
     );
