@@ -35,6 +35,26 @@ fn t170_root(label: &str) -> PathBuf {
     path.canonicalize().unwrap()
 }
 
+/// A short runtime root. The POSIX owner endpoint is a unix socket path, so the
+/// root must stay well inside the platform path limit.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn t170_runtime_root() -> PathBuf {
+    let sequence = NEXT_T170_ROOT.fetch_add(1, Ordering::Relaxed);
+    let path = PathBuf::from("/tmp").join(format!("w170r{sequence:x}"));
+    let _ = fs::remove_dir_all(&path);
+    fs::create_dir_all(&path).unwrap();
+    path.canonicalize().unwrap()
+}
+
+#[cfg(windows)]
+fn t170_runtime_root() -> PathBuf {
+    let sequence = NEXT_T170_ROOT.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("w170r-{sequence}"));
+    let _ = fs::remove_dir_all(&path);
+    fs::create_dir_all(&path).unwrap();
+    path.canonicalize().unwrap()
+}
+
 fn t170_shell_profile(root: &Path) -> ShellProfile {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     let candidate = "/bin/sh".to_owned();
@@ -700,7 +720,7 @@ fn t170_seed_workspace(owner: &mut PersistentOwner, client: &ClientConnectionId,
 #[test]
 fn t170_stop_runtime_then_close_fails_closed_on_every_missing_authority() {
     let home = t170_root("stop-authority");
-    let runtime_root = t170_root("stop-authority-runtime");
+    let runtime_root = t170_runtime_root();
     let mut owner = t170_start_owner(&home, &runtime_root, 1);
     let writer = t170_client("t170-writer");
 
@@ -776,7 +796,7 @@ fn t170_stop_runtime_then_close_fails_closed_on_every_missing_authority() {
 #[test]
 fn t170_stop_runtime_then_close_requires_multiplexer_write_and_exact_controller() {
     let home = t170_root("stop-controller");
-    let runtime_root = t170_root("stop-controller-runtime");
+    let runtime_root = t170_runtime_root();
     let profile = t170_shell_profile(&home);
     let mut owner = t170_start_owner(&home, &runtime_root, 1);
     let writer = t170_client("t170-controller-writer");
@@ -975,7 +995,7 @@ fn t170_stop_runtime_then_close_requires_multiplexer_write_and_exact_controller(
 #[test]
 fn t170_input_races_never_retarget_a_stale_pane_or_a_stale_controller() {
     let home = t170_root("input-race");
-    let runtime_root = t170_root("input-race-runtime");
+    let runtime_root = t170_runtime_root();
     let profile = t170_shell_profile(&home);
     let mut owner = t170_start_owner(&home, &runtime_root, 1);
     let writer = t170_client("t170-race-writer");
@@ -1145,7 +1165,7 @@ fn t170_input_races_never_retarget_a_stale_pane_or_a_stale_controller() {
 #[test]
 fn t170_pane_clear_publishes_a_typed_presentation_marker_with_the_owner_assigned_epoch() {
     let home = t170_root("clear-marker");
-    let runtime_root = t170_root("clear-marker-runtime");
+    let runtime_root = t170_runtime_root();
     let mut owner = t170_start_owner(&home, &runtime_root, 1);
     let observer = t170_client("t170-clear-observer");
     let writer = t170_client("t170-clear-writer");
@@ -1223,7 +1243,7 @@ fn t170_pane_clear_publishes_a_typed_presentation_marker_with_the_owner_assigned
 #[test]
 fn t170_topology_write_authority_never_implies_runtime_controller_authority() {
     let home = t170_root("authority-split");
-    let runtime_root = t170_root("authority-split-runtime");
+    let runtime_root = t170_runtime_root();
     let profile = t170_shell_profile(&home);
     let mut owner = t170_start_owner(&home, &runtime_root, 1);
     let writer = t170_client("t170-authority-writer");
