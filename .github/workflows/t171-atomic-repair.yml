@@ -1,0 +1,767 @@
+name: T171 atomic repair executor
+
+on:
+  push:
+    branches:
+      - repair/t171-terminal-ux-0732304
+
+permissions:
+  contents: write
+
+env:
+  EXPECTED_HEAD: 0732304629a79099716c69383b96f3f5fc707779
+  TARGET_BRANCH: impl/spec-012-t171-terminal-ux
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+
+      - name: Verify exact target and detach candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "refs/heads/${TARGET_BRANCH}"
+          test "$(git rev-parse FETCH_HEAD)" = "$EXPECTED_HEAD"
+          git checkout --detach "$EXPECTED_HEAD"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Apply T171 correctness and exact-pane routing repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --whitespace=error-all <<'PATCH'
+          diff --git a/src/workbench_terminal_ux.rs b/src/workbench_terminal_ux.rs
+          index 3ee8068e..00000000 100644
+          --- a/src/workbench_terminal_ux.rs
+          +++ b/src/workbench_terminal_ux.rs
+          @@ -7,6 +7,9 @@
+           //! authority. A caller must still route any real effect through its own exact
+           //! authority check.
+           
+          +use crate::multiplexer::domain::{
+          +    MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration,
+          +};
+           use std::collections::VecDeque;
+           
+           /// Bounded scrollback retained per pane. The bound is explicit: once the line
+          @@ -196,15 +199,15 @@ impl TerminalSelection {
+               /// never contains an escape byte that the child did not print.
+               pub(crate) fn copy_text(&self, lines: &[Vec<u8>]) -> Result<String, SelectionError> {
+                   let cells = self.cells(lines)?;
+          -        let mut text = String::with_capacity(cells.len());
+          +        let mut bytes = Vec::with_capacity(cells.len());
+                   let mut previous_row = None;
+                   for cell in cells {
+                       if previous_row.is_some_and(|row| row != cell.point.row) {
+          -                text.push('\n');
+          +                bytes.push(b'\n');
+                       }
+          -            text.push(cell.byte as char);
+          +            bytes.push(cell.byte);
+                       previous_row = Some(cell.point.row);
+                   }
+          -        Ok(text)
+          +        Ok(String::from_utf8_lossy(&bytes).into_owned())
+               }
+           }
+           
+          @@ -596,57 +599,55 @@ impl NotificationBudget {
+           /// The claim is gated by native platform evidence. Without that evidence the
+           /// state stays unclaimed, which is a truthful statement rather than a silent
+           /// assumption.
+          -#[derive(Debug, Clone, PartialEq, Eq)]
+          +#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+           pub(crate) enum InputMethodClaim {
+               /// No native platform evidence was produced, so no support is claimed.
+          +    #[default]
+               Unclaimed,
+          -    /// Native platform evidence qualified this claim.
+          -    Claimed {
+          -        /// The platform that produced the evidence.
+          -        evidence_platform: String,
+          -        /// The bounded evidence that qualified it.
+          -        evidence: String,
+          -    },
+           }
+           
+           impl InputMethodClaim {
+          -    /// Records a claim only when bounded native evidence accompanies it.
+          -    pub(crate) fn claim(evidence_platform: &str, evidence: &str) -> Self {
+          -        if evidence_platform.is_empty() || evidence.is_empty() {
+          -            return Self::Unclaimed;
+          -        }
+          -        Self::Claimed {
+          -            evidence_platform: evidence_platform.to_owned(),
+          -            evidence: evidence.to_owned(),
+          -        }
+          +    /// T171 deliberately cannot mint a native input-method claim. T183 owns
+          +    /// direct native-platform qualification; until such canonical evidence is
+          +    /// admitted, the only truthful production state is `Unclaimed`.
+          +    pub(crate) const fn unclaimed() -> Self {
+          +        Self::Unclaimed
+               }
+           
+               pub(crate) const fn is_claimed(&self) -> bool {
+          -        matches!(self, Self::Claimed { .. })
+          +        false
+               }
+           }
+           
+           /// Bounded scrollback for one exact pane.
+           ///
+          -/// Rows are appended in order and dropped from the front once the line budget is
+          -/// reached. Truncation is explicit and observable, never silent.
+          +/// Rows are appended in order and dropped from the front once either the line
+          +/// budget or the Plan's 2 MiB pane-local working-buffer ceiling is reached.
+          +/// Truncation is explicit and observable, never silent.
+           #[derive(Debug, Clone)]
+           pub(crate) struct BoundedScrollback {
+               rows: VecDeque<Vec<u8>>,
+          +    retained_bytes: usize,
+               dropped_rows: u64,
+          +    dropped_bytes: u64,
+               truncated: bool,
+           }
+           
+           impl BoundedScrollback {
+               pub(crate) fn new() -> Self {
+                   Self {
+                       rows: VecDeque::new(),
+          +            retained_bytes: 0,
+                       dropped_rows: 0,
+          +            dropped_bytes: 0,
+                       truncated: false,
+                   }
+               }
+           
+          -    /// Appends one row, dropping the oldest row when the budget is reached.
+          -    pub(crate) fn push(&mut self, row: Vec<u8>) {
+          +    /// Appends one row while preserving the newest bounded bytes. A single
+          +    /// oversized row is truncated from the front before it is retained.
+          +    pub(crate) fn push(&mut self, mut row: Vec<u8>) {
+          +        if row.len() > MAX_PANE_WORKING_BUFFER_BYTES {
+          +            let excess = row.len() - MAX_PANE_WORKING_BUFFER_BYTES;
+          +            row.drain(..excess);
+          +            self.dropped_bytes = self
+          +                .dropped_bytes
+          +                .saturating_add(u64::try_from(excess).unwrap_or(u64::MAX));
+          +            self.truncated = true;
+          +        }
+          +        self.retained_bytes = self.retained_bytes.saturating_add(row.len());
+                   self.rows.push_back(row);
+          -        while self.rows.len() > MAX_SCROLLBACK_LINES {
+          -            self.rows.pop_front();
+          +        while self.rows.len() > MAX_SCROLLBACK_LINES
+          +            || self.retained_bytes > MAX_PANE_WORKING_BUFFER_BYTES
+          +        {
+          +            let Some(dropped) = self.rows.pop_front() else {
+          +                break;
+          +            };
+          +            self.retained_bytes = self.retained_bytes.saturating_sub(dropped.len());
+                       self.dropped_rows = self.dropped_rows.saturating_add(1);
+          +            self.dropped_bytes = self
+          +                .dropped_bytes
+          +                .saturating_add(u64::try_from(dropped.len()).unwrap_or(u64::MAX));
+                       self.truncated = true;
+                   }
+               }
+          @@ -670,10 +671,108 @@ impl BoundedScrollback {
+                   self.rows.len()
+               }
+           
+          +    pub(crate) const fn retained_bytes(&self) -> usize {
+          +        self.retained_bytes
+          +    }
+          +
+               pub(crate) fn is_empty(&self) -> bool {
+                   self.rows.is_empty()
+               }
+           
+          +    pub(crate) const fn dropped_bytes(&self) -> u64 {
+          +        self.dropped_bytes
+          +    }
+          +
+               pub(crate) const fn truncated(&self) -> bool {
+                   self.truncated
+               }
+          @@ -687,6 +786,94 @@ impl Default for BoundedScrollback {
+               }
+           }
+           
+          +/// Immutable multiplexer identity captured when a terminal interaction begins.
+          +///
+          +/// This is presentation binding only. Holding it never grants MultiplexerWrite,
+          +/// Runtime Controller, process, host, clipboard, or verification authority.
+          +#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+          +pub(crate) struct ExactPaneTarget {
+          +    pub(crate) multiplexer_workspace_id: MultiplexerWorkspaceId,
+          +    pub(crate) tab_id: TabId,
+          +    pub(crate) pane_id: PaneId,
+          +    pub(crate) topology_generation: TopologyGeneration,
+          +}
+          +
+          +#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+          +pub(crate) enum PointerButton {
+          +    Left,
+          +    Middle,
+          +    Right,
+          +}
+          +
+          +#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+          +pub(crate) enum PointerPhase {
+          +    Down,
+          +    Drag,
+          +    Up,
+          +}
+          +
+          +/// A terminal interaction that has already been bound to one immutable pane.
+          +#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+          +pub(crate) enum PaneInteractionKind {
+          +    MouseCapture {
+          +        button: PointerButton,
+          +        phase: PointerPhase,
+          +    },
+          +    ContextMenu,
+          +    CopyOnSelect,
+          +    Scroll {
+          +        vertical_lines: i16,
+          +        horizontal_columns: i16,
+          +    },
+          +}
+          +
+          +#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+          +pub(crate) struct BoundPaneInteraction {
+          +    target: ExactPaneTarget,
+          +    kind: PaneInteractionKind,
+          +    column: u16,
+          +    row: u16,
+          +}
+          +
+          +impl BoundPaneInteraction {
+          +    pub(crate) const fn target(self) -> ExactPaneTarget {
+          +        self.target
+          +    }
+          +
+          +    pub(crate) const fn kind(self) -> PaneInteractionKind {
+          +        self.kind
+          +    }
+          +
+          +    pub(crate) const fn column(self) -> u16 {
+          +        self.column
+          +    }
+          +
+          +    pub(crate) const fn row(self) -> u16 {
+          +        self.row
+          +    }
+          +
+          +    pub(crate) const fn is_current_generation(self, generation: TopologyGeneration) -> bool {
+          +        self.target.topology_generation.get() == generation.get()
+          +    }
+          +}
+          +
+          +/// Binds one local terminal gesture to the exact pane identity that was
+          +/// presented when the gesture was captured. A stale presentation generation
+          +/// fails closed instead of being retargeted to current focus.
+          +pub(crate) fn bind_exact_pane_interaction(
+          +    target: ExactPaneTarget,
+          +    presented_generation: TopologyGeneration,
+          +    kind: PaneInteractionKind,
+          +    column: u16,
+          +    row: u16,
+          +) -> Option<BoundPaneInteraction> {
+          +    if target.topology_generation != presented_generation {
+          +        return None;
+          +    }
+          +    Some(BoundPaneInteraction {
+          +        target,
+          +        kind,
+          +        column,
+          +        row,
+          +    })
+          +}
+          +
+           #[cfg(test)]
+           #[path = "t171_terminal_ux_tests.rs"]
+           mod t171_terminal_ux_tests;
+          diff --git a/src/workbench_screen.rs b/src/workbench_screen.rs
+          index 20000000..00000000 100644
+          --- a/src/workbench_screen.rs
+          +++ b/src/workbench_screen.rs
+          @@ -1,10 +1,15 @@
+           use super::PaneSize;
+          +use super::terminal_ux::{MAX_PANE_WORKING_BUFFER_BYTES, MAX_SCROLLBACK_LINES};
+           use std::collections::VecDeque;
+           
+          -pub(crate) const MAX_TRANSCRIPT_LINES: usize = 100_000;
+          -pub(crate) const MAX_TRANSCRIPT_BYTES: usize = 32 * 1024 * 1024;
+          +/// Spec 012 T171 deliberately keeps the rendered transcript inside the same
+          +/// pane-local working-buffer ceiling rather than multiplying owner replay.
+          +pub(crate) const MAX_TRANSCRIPT_LINES: usize = MAX_SCROLLBACK_LINES;
+          +pub(crate) const MAX_TRANSCRIPT_BYTES: usize = MAX_PANE_WORKING_BUFFER_BYTES;
+           pub(crate) const MAX_OSC_INPUT_BYTES: usize = 8 * 1024;
+          -const VT100_SCROLLBACK_LINES: usize = 0;
+          +/// Internal vt100 scrollback stays zero because `BoundedTranscript` is the
+          +/// single bounded presentation copy; enabling a second parser scrollback would
+          +/// duplicate retained output per observer and violate AD-012-14.
+          +pub(crate) const VT100_SCROLLBACK_LINES: usize = 0;
+           const TERMINAL_DATA_AUTHORITY: &str = "TERMINAL_DATA_ONLY";
+           const ESCAPE: u8 = 0x1b;
+           const BELL: u8 = 0x07;
+          diff --git a/src/workbench_ui.rs b/src/workbench_ui.rs
+          index 77827e17..00000000 100644
+          --- a/src/workbench_ui.rs
+          +++ b/src/workbench_ui.rs
+          @@ -71,6 +71,7 @@ pub(crate) enum NavigationEffect {
+               Find(FindResolution),
+               Dispatch(ShellDispatchReceipt),
+               CanonicalTopologyIntent(CanonicalTopologyBoundIntent),
+          +    CanonicalPaneInteraction(super::terminal_ux::BoundPaneInteraction),
+           }
+           
+           #[derive(Debug, Default)]
+          @@ -82,6 +83,7 @@ pub(crate) struct WorkbenchNavigation {
+               hit_regions: Vec<PaneHitRegion>,
+               canonical_topology: Option<CanonicalTopologyPresentation>,
+               canonical_topology_hit_regions: Vec<CanonicalTopologyPaneHitRegion>,
+          +    canonical_selection_capture: Option<super::terminal_ux::ExactPaneTarget>,
+           }
+          @@ -111,6 +113,7 @@ impl WorkbenchNavigation {
+               self.search_query = None;
+               self.last_find = None;
+               self.selected_canonical_target = None;
+          +        self.canonical_selection_capture = None;
+               }
+           
+               pub(crate) fn clear_canonical_topology(&mut self) {
+          @@ -118,6 +121,7 @@ impl WorkbenchNavigation {
+                   self.canonical_topology = None;
+                   self.canonical_topology_hit_regions.clear();
+                   self.search_query = None;
+          +        self.canonical_selection_capture = None;
+               }
+          @@ -248,15 +252,54 @@ impl WorkbenchNavigation {
+                       self.last_find = None;
+                       Some(NavigationEffect::None)
+                   }
+          -        Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => Some(
+          -            canonical_topology_bind_pointer_focus_intent(
+          -                presentation,
+          -                &self.canonical_topology_hit_regions,
+          -                mouse.column,
+          -                mouse.row,
+          -            )
+          -            .map(NavigationEffect::CanonicalTopologyIntent)
+          -            .unwrap_or(NavigationEffect::None),
+          -        ),
+          +        Event::Mouse(mouse) if mouse.kind == MouseEventKind::Down(MouseButton::Left) => {
+          +            self.canonical_selection_capture = canonical_topology_exact_pane_target(
+          +                presentation,
+          +                &self.canonical_topology_hit_regions,
+          +                mouse.column,
+          +                mouse.row,
+          +            );
+          +            Some(
+          +                canonical_topology_bind_pointer_focus_intent(
+          +                    presentation,
+          +                    &self.canonical_topology_hit_regions,
+          +                    mouse.column,
+          +                    mouse.row,
+          +                )
+          +                .map(NavigationEffect::CanonicalTopologyIntent)
+          +                .unwrap_or(NavigationEffect::None),
+          +            )
+          +        }
+          +        Event::Mouse(mouse) if mouse.kind == MouseEventKind::Drag(MouseButton::Left) => {
+          +            let effect = self.canonical_selection_capture.and_then(|target| {
+          +                super::terminal_ux::bind_exact_pane_interaction(
+          +                    target,
+          +                    presentation.topology_generation(),
+          +                    super::terminal_ux::PaneInteractionKind::MouseCapture {
+          +                        button: super::terminal_ux::PointerButton::Left,
+          +                        phase: super::terminal_ux::PointerPhase::Drag,
+          +                    },
+          +                    mouse.column,
+          +                    mouse.row,
+          +                )
+          +            });
+          +            Some(
+          +                effect
+          +                    .map(NavigationEffect::CanonicalPaneInteraction)
+          +                    .unwrap_or(NavigationEffect::None),
+          +            )
+          +        }
+          +        Event::Mouse(mouse) if mouse.kind == MouseEventKind::Up(MouseButton::Left) => {
+          +            let captured = self.canonical_selection_capture.take();
+          +            let effect = captured.and_then(|target| {
+          +                super::terminal_ux::bind_exact_pane_interaction(
+          +                    target,
+          +                    presentation.topology_generation(),
+          +                    super::terminal_ux::PaneInteractionKind::CopyOnSelect,
+          +                    mouse.column,
+          +                    mouse.row,
+          +                )
+          +            });
+          +            Some(
+          +                effect
+          +                    .map(NavigationEffect::CanonicalPaneInteraction)
+          +                    .unwrap_or(NavigationEffect::None),
+          +            )
+          +        }
+          +        Event::Mouse(mouse) => Some(
+          +            canonical_topology_bind_terminal_interaction(
+          +                presentation,
+          +                &self.canonical_topology_hit_regions,
+          +                *mouse,
+          +            )
+          +            .map(NavigationEffect::CanonicalPaneInteraction)
+          +            .unwrap_or(NavigationEffect::None),
+          +        ),
+                   Event::Key(key) if canonical_topology_local_mutation_binding(*key) => {
+                       Some(NavigationEffect::None)
+                   }
+          @@ -857,6 +900,83 @@ impl CanonicalTopologyPaneHitRegion {
+               }
+           }
+           
+          +fn canonical_topology_exact_pane_target(
+          +    presentation: &CanonicalTopologyPresentation,
+          +    hit_regions: &[CanonicalTopologyPaneHitRegion],
+          +    column: u16,
+          +    row: u16,
+          +) -> Option<super::terminal_ux::ExactPaneTarget> {
+          +    let mut matches = hit_regions.iter().copied().filter(|region| {
+          +        region.topology_generation == presentation.topology_generation()
+          +            && region.contains(column, row)
+          +    });
+          +    let region = matches.next()?;
+          +    if matches.next().is_some() {
+          +        return None;
+          +    }
+          +    Some(super::terminal_ux::ExactPaneTarget {
+          +        multiplexer_workspace_id: region.multiplexer_workspace_id,
+          +        tab_id: region.tab_id,
+          +        pane_id: region.pane_id,
+          +        topology_generation: region.topology_generation,
+          +    })
+          +}
+          +
+          +pub(crate) fn canonical_topology_bind_terminal_interaction(
+          +    presentation: &CanonicalTopologyPresentation,
+          +    hit_regions: &[CanonicalTopologyPaneHitRegion],
+          +    mouse: crossterm::event::MouseEvent,
+          +) -> Option<super::terminal_ux::BoundPaneInteraction> {
+          +    use super::terminal_ux::{
+          +        PaneInteractionKind, PointerButton as BoundButton, PointerPhase,
+          +    };
+          +    let target = canonical_topology_exact_pane_target(
+          +        presentation,
+          +        hit_regions,
+          +        mouse.column,
+          +        mouse.row,
+          +    )?;
+          +    let kind = match mouse.kind {
+          +        MouseEventKind::Down(MouseButton::Right) => PaneInteractionKind::ContextMenu,
+          +        MouseEventKind::Down(button) => PaneInteractionKind::MouseCapture {
+          +            button: map_pointer_button(button),
+          +            phase: PointerPhase::Down,
+          +        },
+          +        MouseEventKind::Up(button) => PaneInteractionKind::MouseCapture {
+          +            button: map_pointer_button(button),
+          +            phase: PointerPhase::Up,
+          +        },
+          +        MouseEventKind::Drag(button) => PaneInteractionKind::MouseCapture {
+          +            button: map_pointer_button(button),
+          +            phase: PointerPhase::Drag,
+          +        },
+          +        MouseEventKind::ScrollUp => PaneInteractionKind::Scroll {
+          +            vertical_lines: -3,
+          +            horizontal_columns: 0,
+          +        },
+          +        MouseEventKind::ScrollDown => PaneInteractionKind::Scroll {
+          +            vertical_lines: 3,
+          +            horizontal_columns: 0,
+          +        },
+          +        MouseEventKind::ScrollLeft => PaneInteractionKind::Scroll {
+          +            vertical_lines: 0,
+          +            horizontal_columns: -3,
+          +        },
+          +        MouseEventKind::ScrollRight => PaneInteractionKind::Scroll {
+          +            vertical_lines: 0,
+          +            horizontal_columns: 3,
+          +        },
+          +        MouseEventKind::Moved => return None,
+          +    };
+          +    super::terminal_ux::bind_exact_pane_interaction(
+          +        target,
+          +        presentation.topology_generation(),
+          +        kind,
+          +        mouse.column,
+          +        mouse.row,
+          +    )
+          +}
+          +
+          +fn map_pointer_button(button: MouseButton) -> super::terminal_ux::PointerButton {
+          +    match button {
+          +        MouseButton::Left => super::terminal_ux::PointerButton::Left,
+          +        MouseButton::Middle => super::terminal_ux::PointerButton::Middle,
+          +        MouseButton::Right => super::terminal_ux::PointerButton::Right,
+          +    }
+          +}
+          +
+           fn normalize_canonical_topology_query(value: &str) -> String {
+               value.trim().chars().flat_map(char::to_lowercase).collect()
+           }
+          @@ -1030,6 +1150,83 @@ mod t168_workbench_topology_binding_tests {
+                   .is_none()
+               );
+               }
+          +
+          +    #[test]
+          +    fn t171_copy_on_select_and_scroll_stay_bound_to_exact_presented_pane() {
+          +        use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+          +
+          +        let presented_generation = TopologyGeneration::new(12).expect("valid generation");
+          +        let presentation = CanonicalTopologyPresentation {
+          +            topology_generation: presented_generation,
+          +            text: "TOPOLOGY authority=READ_ONLY_TOPOLOGY".to_owned(),
+          +            search_bindings: Vec::new(),
+          +        };
+          +        let first = CanonicalTopologyPaneHitRegion {
+          +            multiplexer_workspace_id: workspace_id(9),
+          +            tab_id: tab_id(10),
+          +            pane_id: pane_id(11),
+          +            topology_generation: presented_generation,
+          +            column: 0,
+          +            row: 0,
+          +            width: 10,
+          +            height: 5,
+          +        };
+          +        let second = CanonicalTopologyPaneHitRegion {
+          +            pane_id: pane_id(12),
+          +            column: 10,
+          +            ..first
+          +        };
+          +        let mut state = crate::workbench::WorkbenchState::new();
+          +        let mut terminals = crate::workbench::terminal::WorkbenchTerminals::new();
+          +        let mut editor = crate::workbench::terminal::input::WorkbenchShellEditor::new();
+          +        let mut navigation = WorkbenchNavigation::new();
+          +        navigation.install_canonical_topology(presentation, vec![first, second]);
+          +
+          +        let down = navigation
+          +            .handle_event(
+          +                &mut state,
+          +                &mut terminals,
+          +                &mut editor,
+          +                &[],
+          +                &[],
+          +                Event::Mouse(MouseEvent {
+          +                    kind: MouseEventKind::Down(MouseButton::Left),
+          +                    column: 2,
+          +                    row: 2,
+          +                    modifiers: KeyModifiers::NONE,
+          +                }),
+          +            )
+          +            .unwrap();
+          +        assert!(matches!(down, NavigationEffect::CanonicalTopologyIntent(_)));
+          +
+          +        let up = navigation
+          +            .handle_event(
+          +                &mut state,
+          +                &mut terminals,
+          +                &mut editor,
+          +                &[],
+          +                &[],
+          +                Event::Mouse(MouseEvent {
+          +                    kind: MouseEventKind::Up(MouseButton::Left),
+          +                    column: 12,
+          +                    row: 2,
+          +                    modifiers: KeyModifiers::NONE,
+          +                }),
+          +            )
+          +            .unwrap();
+          +        let NavigationEffect::CanonicalPaneInteraction(copy) = up else {
+          +            panic!("copy-on-select must retain the pointer-down pane target");
+          +        };
+          +        assert_eq!(copy.target().pane_id, first.pane_id);
+          +        assert_eq!(copy.kind(), super::super::terminal_ux::PaneInteractionKind::CopyOnSelect);
+          +
+          +        let scroll = canonical_topology_bind_terminal_interaction(
+          +            navigation.canonical_topology_presentation().unwrap(),
+          +            &[first, second],
+          +            MouseEvent {
+          +                kind: MouseEventKind::ScrollDown,
+          +                column: 12,
+          +                row: 2,
+          +                modifiers: KeyModifiers::NONE,
+          +            },
+          +        )
+          +        .expect("scroll must bind to exact hit pane");
+          +        assert_eq!(scroll.target().pane_id, second.pane_id);
+          +        assert!(scroll.is_current_generation(presented_generation));
+          +    }
+           }
+           
+           #[cfg(test)]
+          diff --git a/src/t171_terminal_ux_tests.rs b/src/t171_terminal_ux_tests.rs
+          index c1f44059..00000000 100644
+          --- a/src/t171_terminal_ux_tests.rs
+          +++ b/src/t171_terminal_ux_tests.rs
+          @@ -301,24 +301,11 @@ fn t171_notifications_are_bounded_and_suppressible() {
+           
+           #[test]
+           fn t171_input_method_claim_is_gated_by_native_evidence() {
+          -    assert_eq!(
+          -        InputMethodClaim::claim("", "evidence"),
+          -        InputMethodClaim::Unclaimed
+          -    );
+          -    assert_eq!(
+          -        InputMethodClaim::claim("windows", ""),
+          -        InputMethodClaim::Unclaimed
+          -    );
+          -    let unclaimed = InputMethodClaim::claim("", "");
+          +    let unclaimed = InputMethodClaim::unclaimed();
+          +    assert_eq!(unclaimed, InputMethodClaim::Unclaimed);
+               assert!(!unclaimed.is_claimed());
+          -
+          -    let claimed = InputMethodClaim::claim("windows-11", "conpty-ime-fixture");
+          -    assert!(claimed.is_claimed());
+          -    assert_eq!(
+          -        claimed,
+          -        InputMethodClaim::Claimed {
+          -            evidence_platform: "windows-11".to_owned(),
+          -            evidence: "conpty-ime-fixture".to_owned(),
+          -        }
+          -    );
+          +    assert_eq!(InputMethodClaim::default(), InputMethodClaim::Unclaimed);
+          +    // T171 cannot manufacture a platform claim from caller-provided strings;
+          +    // direct native claim admission belongs to T183 qualification.
+           }
+           
+           #[test]
+          @@ -339,7 +326,7 @@ fn t171_forged_terminal_text_never_changes_trusted_state() {
+               assert!(offer_clipboard(forged).is_some());
+               let frame = accept_graphics_frame(forged).expect("bounded local text stays a frame");
+               assert!(frame.bytes.starts_with(b"VERIFIED"));
+          -    assert_eq!(InputMethodClaim::claim("", ""), InputMethodClaim::Unclaimed);
+          +    assert_eq!(InputMethodClaim::unclaimed(), InputMethodClaim::Unclaimed);
+           
+               let mut scrollback = BoundedScrollback::new();
+               scrollback.push(forged.to_vec());
+          @@ -355,13 +342,13 @@ fn t171_high_output_adversarial_input_stays_bounded() {
+                   assert!(scrollback.len() <= MAX_SCROLLBACK_LINES);
+                   let _ = index;
+               }
+          -    assert_eq!(scrollback.len(), MAX_SCROLLBACK_LINES);
+          -    assert_eq!(
+          -        scrollback.dropped_rows(),
+          -        u64::try_from(MAX_SCROLLBACK_LINES).unwrap_or(0)
+          -    );
+          +    assert!(scrollback.len() <= MAX_SCROLLBACK_LINES);
+          +    assert!(scrollback.retained_bytes() <= MAX_PANE_WORKING_BUFFER_BYTES);
+          +    assert!(scrollback.dropped_rows() > 0);
+          +    assert!(scrollback.dropped_bytes() > 0);
+           
+               let content = lines(&[&"y".repeat(4_096)]);
+               let whole = TerminalSelection::new(point(0, 0), point(0, 4_095));
+          @@ -400,4 +387,63 @@ fn t171_high_output_adversarial_input_stays_bounded() {
+                   "an over-budget chunk is refused whole rather than partially retained"
+               );
+               assert_eq!(working.retained_bytes(), MAX_PANE_WORKING_BUFFER_BYTES);
+          +
+          +    assert_eq!(
+          +        crate::workbench::screen::MAX_TRANSCRIPT_LINES,
+          +        MAX_SCROLLBACK_LINES
+          +    );
+          +    assert_eq!(
+          +        crate::workbench::screen::MAX_TRANSCRIPT_BYTES,
+          +        MAX_PANE_WORKING_BUFFER_BYTES
+          +    );
+          +    assert_eq!(crate::workbench::screen::VT100_SCROLLBACK_LINES, 0);
+          +}
+          +
+          +#[test]
+          +fn t171_scrollback_has_a_byte_ceiling_and_utf8_copy_is_not_byte_mangled() {
+          +    let mut scrollback = BoundedScrollback::new();
+          +    scrollback.push(vec![b'a'; MAX_PANE_WORKING_BUFFER_BYTES + 100]);
+          +    assert_eq!(scrollback.retained_bytes(), MAX_PANE_WORKING_BUFFER_BYTES);
+          +    assert!(scrollback.truncated());
+          +    assert_eq!(scrollback.dropped_bytes(), 100);
+          +
+          +    let content = vec!["hé".as_bytes().to_vec()];
+          +    let selection = TerminalSelection::new(point(0, 0), point(0, 2));
+          +    assert_eq!(selection.copy_text(&content).unwrap(), "hé");
+          +}
+          +
+          +#[test]
+          +fn t171_exact_pane_interaction_is_generation_bound_and_authority_free() {
+          +    use crate::multiplexer::domain::{
+          +        MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration,
+          +    };
+          +
+          +    let generation = TopologyGeneration::new(7).unwrap();
+          +    let target = ExactPaneTarget {
+          +        multiplexer_workspace_id: MultiplexerWorkspaceId::from_entropy_bytes([1; 16])
+          +            .unwrap(),
+          +        tab_id: TabId::from_entropy_bytes([2; 16]).unwrap(),
+          +        pane_id: PaneId::from_entropy_bytes([3; 16]).unwrap(),
+          +        topology_generation: generation,
+          +    };
+          +    let bound = bind_exact_pane_interaction(
+          +        target,
+          +        generation,
+          +        PaneInteractionKind::ContextMenu,
+          +        11,
+          +        4,
+          +    )
+          +    .expect("current exact pane target should bind");
+          +    assert_eq!(bound.target(), target);
+          +    assert_eq!(bound.kind(), PaneInteractionKind::ContextMenu);
+          +    assert_eq!(bound.column(), 11);
+          +    assert_eq!(bound.row(), 4);
+          +    assert!(bound.is_current_generation(generation));
+          +    assert!(!bound.is_current_generation(TopologyGeneration::new(8).unwrap()));
+          +    assert!(
+          +        bind_exact_pane_interaction(
+          +            target,
+          +            TopologyGeneration::new(8).unwrap(),
+          +            PaneInteractionKind::CopyOnSelect,
+          +            0,
+          +            0,
+          +        )
+          +        .is_none()
+          +    );
+           }
+          PATCH
+          git diff --check
+
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c
+        with:
+          toolchain: 1.97.1
+          components: rustfmt, clippy
+
+      - name: Format and qualify repair locally
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          git diff --check
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          cargo test --locked t171 -- --test-threads=1
+
+      - name: Commit and fast-forward target branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Winds T171 Repair"
+          git config user.email "actions@users.noreply.github.com"
+          git add src/workbench_terminal_ux.rs src/workbench_screen.rs src/workbench_ui.rs src/t171_terminal_ux_tests.rs
+          git commit -m "T171: bind bounded UX to exact pane identity"
+          test "$(git rev-parse HEAD^)" = "$EXPECTED_HEAD"
+          git push origin "HEAD:refs/heads/${TARGET_BRANCH}"
+          echo "REPAIRED_HEAD=$(git rev-parse HEAD)"
+          echo "REPAIRED_TREE=$(git rev-parse HEAD^{tree})"
