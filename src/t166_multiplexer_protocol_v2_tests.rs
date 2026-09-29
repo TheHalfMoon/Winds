@@ -4,8 +4,8 @@ use crate::multiplexer::domain::navigation::{
     WorkspaceState,
 };
 use crate::multiplexer::domain::{
-    AgentObservationId, ClientSurfaceCapability, MultiplexerAuthority, MultiplexerErrorKind,
-    MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration,
+    AgentObservationId, ClientSurfaceCapability, LayoutTemplateId, MultiplexerAuthority,
+    MultiplexerErrorKind, MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration,
 };
 use crate::persistent_runtime::domain::{
     ClientConnectionId, EventSequence, LocalControlErrorKind, OwnerGenerationId, RuntimeNamespaceId,
@@ -1260,6 +1260,10 @@ fn t166_inactive_future_domains_return_typed_unsupported_without_side_effect_pat
     assert_eq!(response.owner_generation_id, Some(generation(35)));
     validate_response_binding(&request, &response).unwrap();
 
+    // `CLEAR_PANE` and `CLOSE_PANE`/`STOP_RUNTIME_THEN_CLOSE` became active in
+    // T170 and are no longer short-circuited here. `APPLY_LAYOUT_TEMPLATE` is
+    // still a later-task domain and must keep returning the typed unsupported
+    // outcome without any side effect.
     let future_topology = ProtocolMessage::new(
         connection("t166-inactive"),
         sequence(52),
@@ -1269,11 +1273,9 @@ fn t166_inactive_future_domains_return_typed_unsupported_without_side_effect_pat
         ProtocolPayload::ApplyTopologyOperation {
             request: ApplyTopologyOperationV2 {
                 expected_topology_generation: topology_generation(2),
-                operation: TopologyOperationV2::ClearPane {
+                operation: TopologyOperationV2::ApplyLayoutTemplate {
+                    template_id: LayoutTemplateId::from_entropy_bytes([35_u8; 16]).unwrap(),
                     multiplexer_workspace_id: workspace(35),
-                    tab_id: tab(35),
-                    pane_id: pane(35),
-                    presentation_epoch: 1,
                 },
             },
         },
@@ -1286,6 +1288,42 @@ fn t166_inactive_future_domains_return_typed_unsupported_without_side_effect_pat
             kind: LocalControlErrorKind::UnsupportedOperation,
         }
     );
+    assert!(
+        inactive_v2_domain_response(&active_clear_pane(&future_topology), sequence(54)).is_err(),
+        "an active T170 topology operation must never take the inactive short circuit"
+    );
+}
+
+fn active_clear_pane(template: &ProtocolMessage) -> ProtocolMessage {
+    let ProtocolPayload::ApplyTopologyOperation {
+        request:
+            ApplyTopologyOperationV2 {
+                expected_topology_generation,
+                operation: TopologyOperationV2::ApplyLayoutTemplate { .. },
+            },
+    } = &template.payload
+    else {
+        unreachable!("the fixture request must be a template application");
+    };
+    ProtocolMessage::new(
+        connection("t166-active-clear"),
+        sequence(55),
+        None,
+        generation(35),
+        None,
+        ProtocolPayload::ApplyTopologyOperation {
+            request: ApplyTopologyOperationV2 {
+                expected_topology_generation: *expected_topology_generation,
+                operation: TopologyOperationV2::ClearPane {
+                    multiplexer_workspace_id: workspace(35),
+                    tab_id: tab(35),
+                    pane_id: pane(35),
+                    presentation_epoch: 1,
+                },
+            },
+        },
+    )
+    .unwrap()
 }
 
 #[test]
@@ -2006,14 +2044,31 @@ fn t166_topology_helpers_execute_only_currently_authorized_operations() {
     assert_eq!(accepted, topology_generation(2));
     assert_eq!(topology.workspace(workspace(70)).unwrap().alias, "dispatch");
 
-    let deferred = TopologyOperationV2::ClearPane {
+    // `CLEAR_PANE` became an authorized operation in T170. `APPLY_LAYOUT_TEMPLATE`
+    // is still deferred to a later task and must keep failing closed.
+    let cleared = TopologyOperationV2::ClearPane {
         multiplexer_workspace_id: workspace(70),
         tab_id: tab(71),
         pane_id: pane(72),
         presentation_epoch: 1,
     };
+    let cleared_generation =
+        apply_topology_operation_v2(&mut topology, accepted, &cleared).unwrap();
+    assert_eq!(cleared_generation, accepted.checked_next().unwrap());
     assert_eq!(
-        apply_topology_operation_v2(&mut topology, accepted, &deferred).unwrap_err(),
+        topology
+            .pane_presentation_epoch(workspace(70), tab(71), pane(72))
+            .unwrap()
+            .get(),
+        1
+    );
+
+    let deferred = TopologyOperationV2::ApplyLayoutTemplate {
+        template_id: LayoutTemplateId::from_entropy_bytes([70_u8; 16]).unwrap(),
+        multiplexer_workspace_id: workspace(70),
+    };
+    assert_eq!(
+        apply_topology_operation_v2(&mut topology, cleared_generation, &deferred).unwrap_err(),
         MultiplexerErrorKind::UnsupportedOperation
     );
 }
