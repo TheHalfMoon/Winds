@@ -121,6 +121,8 @@ mod t138_desktop_attention_tests;
 mod t146_persistent_runtime_domain_tests;
 #[cfg(test)]
 mod t162_multiplexer_domain_tests;
+#[cfg(test)]
+mod t170_pane_runtime_binding_tests;
 mod workbench;
 mod workflow_cli;
 

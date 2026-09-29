@@ -930,7 +930,7 @@ impl TuiTopologyProjection {
 
 fn collect_protocol_panes(node: &ProtocolLayoutNodeV2, pane_ids: &mut Vec<PaneId>) {
     match node {
-        ProtocolLayoutNodeV2::Pane { pane_id } => pane_ids.push(*pane_id),
+        ProtocolLayoutNodeV2::Pane { pane_id, .. } => pane_ids.push(*pane_id),
         ProtocolLayoutNodeV2::Split { first, second, .. } => {
             collect_protocol_panes(first, pane_ids);
             collect_protocol_panes(second, pane_ids);

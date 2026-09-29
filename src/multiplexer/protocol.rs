@@ -58,6 +58,12 @@ pub(crate) enum ProtocolPaneClosePolicy {
 pub(crate) enum ProtocolLayoutNodeV2 {
     Pane {
         pane_id: PaneId,
+        /// The owner-authoritative pane-local presentation epoch.
+        ///
+        /// It is projected into every snapshot so any client can read the current
+        /// epoch and converge on `pane.clear` without having seen the clear event.
+        #[serde(default)]
+        presentation_epoch: u64,
     },
     Split {
         axis: ProtocolSplitAxis,
@@ -261,6 +267,12 @@ pub(crate) enum TopologyOperationV2 {
         tab_id: TabId,
         pane_id: PaneId,
         presentation_epoch: u64,
+    },
+    BindPaneRuntime {
+        multiplexer_workspace_id: MultiplexerWorkspaceId,
+        tab_id: TabId,
+        pane_id: PaneId,
+        runtime_namespace_id: RuntimeNamespaceId,
     },
     ApplyLayoutTemplate {
         template_id: LayoutTemplateId,
@@ -634,9 +646,15 @@ pub(crate) struct MultiplexerEventSubscriptionAckV2 {
     pub(crate) boundary: MultiplexerSubscriptionBoundaryV2,
 }
 
-fn protocol_layout_node(node: &LayoutNode) -> ProtocolLayoutNodeV2 {
+fn protocol_layout_node(
+    node: &LayoutNode,
+    presentation_epoch: &dyn Fn(PaneId) -> u64,
+) -> ProtocolLayoutNodeV2 {
     match node {
-        LayoutNode::Pane(pane_id) => ProtocolLayoutNodeV2::Pane { pane_id: *pane_id },
+        LayoutNode::Pane(pane_id) => ProtocolLayoutNodeV2::Pane {
+            pane_id: *pane_id,
+            presentation_epoch: presentation_epoch(*pane_id),
+        },
         LayoutNode::Split {
             axis,
             ratio_bps,
@@ -648,13 +666,14 @@ fn protocol_layout_node(node: &LayoutNode) -> ProtocolLayoutNodeV2 {
                 SplitAxis::Vertical => ProtocolSplitAxis::Vertical,
             },
             ratio_basis_points: ratio_bps.get(),
-            first: Box::new(protocol_layout_node(first)),
-            second: Box::new(protocol_layout_node(second)),
+            first: Box::new(protocol_layout_node(first, presentation_epoch)),
+            second: Box::new(protocol_layout_node(second, presentation_epoch)),
         },
     }
 }
 
 fn protocol_workspace_snapshot(
+    topology: &MultiplexerTopology,
     workspace: &WorkspaceState,
     topology_generation: TopologyGeneration,
 ) -> ProtocolWorkspaceSnapshotV2 {
@@ -669,7 +688,9 @@ fn protocol_workspace_snapshot(
             .map(|tab| ProtocolTabSnapshotV2 {
                 tab_id: tab.id,
                 alias: tab.alias.clone(),
-                root: protocol_layout_node(&tab.root),
+                root: protocol_layout_node(&tab.root, &|pane_id| {
+                    topology.pane_presentation_epoch_unchecked(pane_id).get()
+                }),
                 focused_pane_id: tab.focused_pane_id,
                 zoomed_pane_id: tab.zoomed_pane_id,
             })
@@ -686,7 +707,7 @@ pub(crate) fn multiplexer_snapshot_for_request_v2(
     if let Some(workspace_id) = requested_workspace_id {
         let workspace = topology.workspace(workspace_id)?;
         return Ok(MultiplexerSnapshotV2::Workspace {
-            snapshot: protocol_workspace_snapshot(workspace, topology.generation()),
+            snapshot: protocol_workspace_snapshot(topology, workspace, topology.generation()),
         });
     }
 
@@ -860,6 +881,12 @@ pub(crate) fn topology_operation_target_ids_v2(
             tab_id,
             pane_id,
             ..
+        }
+        | TopologyOperationV2::BindPaneRuntime {
+            multiplexer_workspace_id,
+            tab_id,
+            pane_id,
+            ..
         } => (
             Some(*multiplexer_workspace_id),
             Some(*tab_id),
@@ -1022,11 +1049,43 @@ pub(crate) fn apply_topology_operation_v2(
             pane_id,
             policy: ProtocolPaneClosePolicy::DetachView,
         } => topology.close_pane(expected, *multiplexer_workspace_id, *tab_id, *pane_id),
+        TopologyOperationV2::ClearPane {
+            multiplexer_workspace_id,
+            tab_id,
+            pane_id,
+            presentation_epoch,
+        } => topology.clear_pane(
+            expected,
+            *multiplexer_workspace_id,
+            *tab_id,
+            *pane_id,
+            *presentation_epoch,
+        ),
+        // Only the owner may bind a pane to a runtime, because only the owner knows
+        // whether that runtime is an accepted, live namespace. The owner checks
+        // liveness before it ever reaches this domain call, so a bound pane can
+        // never reference a runtime the current owner does not hold.
+        TopologyOperationV2::BindPaneRuntime {
+            multiplexer_workspace_id,
+            tab_id,
+            pane_id,
+            runtime_namespace_id,
+        } => topology.bind_pane_runtime(
+            expected,
+            *multiplexer_workspace_id,
+            *tab_id,
+            *pane_id,
+            *runtime_namespace_id,
+        ),
+        // `STOP_RUNTIME_THEN_CLOSE` reaches the domain only after the owner has
+        // proven MultiplexerWrite, resolved the exact bound runtime, required the
+        // exact Runtime Controller lease, and reached a truthful stop disposition.
+        // Any path that reaches the domain without that proof fails closed here
+        // rather than downgrading to a topology-only close.
         TopologyOperationV2::ClosePane {
             policy: ProtocolPaneClosePolicy::StopRuntimeThenClose,
             ..
         }
-        | TopologyOperationV2::ClearPane { .. }
         | TopologyOperationV2::ApplyLayoutTemplate { .. } => {
             Err(MultiplexerErrorKind::UnsupportedOperation)
         }
@@ -1123,7 +1182,7 @@ pub(crate) fn validate_candidate_topology_v2(
         exact_snapshot_frame_with_worst_case_envelope(
             owner_generation_id,
             MultiplexerSnapshotV2::Workspace {
-                snapshot: protocol_workspace_snapshot(workspace, topology.generation()),
+                snapshot: protocol_workspace_snapshot(topology, workspace, topology.generation()),
             },
         )?;
     }
@@ -1391,7 +1450,7 @@ fn validate_layout_node(
     pane_ids: &mut BTreeSet<PaneId>,
 ) -> ProtocolResult<()> {
     match node {
-        ProtocolLayoutNodeV2::Pane { pane_id } => {
+        ProtocolLayoutNodeV2::Pane { pane_id, .. } => {
             if !pane_ids.insert(*pane_id) {
                 return Err(LocalControlErrorKind::MalformedFrame);
             }

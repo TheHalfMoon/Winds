@@ -1044,14 +1044,13 @@ pub(crate) fn inactive_v2_domain_response(
         | ProtocolPayload::ListAgentObservations { .. }
         | ProtocolPayload::ListWorktrees { .. }
         | ProtocolPayload::ApplyWorktreeOperation { .. } => true,
+        // `CLEAR_PANE` and `CLOSE_PANE`/`STOP_RUNTIME_THEN_CLOSE` are active from
+        // T170. The clear path is a MultiplexerWrite-only presentation mutation and
+        // the stop-then-close path additionally requires the exact Runtime
+        // Controller lease, both enforced in the owner before any domain mutation.
         ProtocolPayload::ApplyTopologyOperation { request } => matches!(
             request.operation,
-            TopologyOperationV2::ClearPane { .. }
-                | TopologyOperationV2::ApplyLayoutTemplate { .. }
-                | TopologyOperationV2::ClosePane {
-                    policy: ProtocolPaneClosePolicy::StopRuntimeThenClose,
-                    ..
-                }
+            TopologyOperationV2::ApplyLayoutTemplate { .. }
         ),
         _ => false,
     };

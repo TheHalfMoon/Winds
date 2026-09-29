@@ -4,8 +4,8 @@ use crate::multiplexer::domain::navigation::{
     WorkspaceState,
 };
 use crate::multiplexer::domain::{
-    AgentObservationId, ClientSurfaceCapability, MultiplexerAuthority, MultiplexerErrorKind,
-    MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration,
+    AgentObservationId, ClientSurfaceCapability, LayoutTemplateId, MultiplexerAuthority,
+    MultiplexerErrorKind, MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration,
 };
 use crate::persistent_runtime::domain::{
     ClientConnectionId, EventSequence, LocalControlErrorKind, OwnerGenerationId, RuntimeNamespaceId,
@@ -570,14 +570,20 @@ fn t166_snapshot_rejects_cross_tab_focus_and_zoom_bindings() {
             ProtocolTabSnapshotV2 {
                 tab_id: tab(20),
                 alias: "first".to_owned(),
-                root: ProtocolLayoutNodeV2::Pane { pane_id: pane(20) },
+                root: ProtocolLayoutNodeV2::Pane {
+                    pane_id: pane(20),
+                    presentation_epoch: 0,
+                },
                 focused_pane_id: pane(20),
                 zoomed_pane_id: None,
             },
             ProtocolTabSnapshotV2 {
                 tab_id: tab(21),
                 alias: "second".to_owned(),
-                root: ProtocolLayoutNodeV2::Pane { pane_id: pane(21) },
+                root: ProtocolLayoutNodeV2::Pane {
+                    pane_id: pane(21),
+                    presentation_epoch: 0,
+                },
                 focused_pane_id: pane(20),
                 zoomed_pane_id: None,
             },
@@ -948,6 +954,7 @@ fn topology_with_panes(tab_counts: &[u16]) -> MultiplexerTopology {
 fn pane_chain(start: u16, count: u16) -> ProtocolLayoutNodeV2 {
     let mut node = ProtocolLayoutNodeV2::Pane {
         pane_id: pane_index(start),
+        presentation_epoch: 0,
     };
     for offset in 1..count {
         node = ProtocolLayoutNodeV2::Split {
@@ -956,6 +963,7 @@ fn pane_chain(start: u16, count: u16) -> ProtocolLayoutNodeV2 {
             first: Box::new(node),
             second: Box::new(ProtocolLayoutNodeV2::Pane {
                 pane_id: pane_index(start + offset),
+                presentation_epoch: 0,
             }),
         };
     }
@@ -1260,6 +1268,10 @@ fn t166_inactive_future_domains_return_typed_unsupported_without_side_effect_pat
     assert_eq!(response.owner_generation_id, Some(generation(35)));
     validate_response_binding(&request, &response).unwrap();
 
+    // `CLEAR_PANE` and `CLOSE_PANE`/`STOP_RUNTIME_THEN_CLOSE` became active in
+    // T170 and are no longer short-circuited here. `APPLY_LAYOUT_TEMPLATE` is
+    // still a later-task domain and must keep returning the typed unsupported
+    // outcome without any side effect.
     let future_topology = ProtocolMessage::new(
         connection("t166-inactive"),
         sequence(52),
@@ -1269,11 +1281,9 @@ fn t166_inactive_future_domains_return_typed_unsupported_without_side_effect_pat
         ProtocolPayload::ApplyTopologyOperation {
             request: ApplyTopologyOperationV2 {
                 expected_topology_generation: topology_generation(2),
-                operation: TopologyOperationV2::ClearPane {
+                operation: TopologyOperationV2::ApplyLayoutTemplate {
+                    template_id: LayoutTemplateId::from_entropy_bytes([35_u8; 16]).unwrap(),
                     multiplexer_workspace_id: workspace(35),
-                    tab_id: tab(35),
-                    pane_id: pane(35),
-                    presentation_epoch: 1,
                 },
             },
         },
@@ -1286,6 +1296,42 @@ fn t166_inactive_future_domains_return_typed_unsupported_without_side_effect_pat
             kind: LocalControlErrorKind::UnsupportedOperation,
         }
     );
+    assert!(
+        inactive_v2_domain_response(&active_clear_pane(&future_topology), sequence(54)).is_err(),
+        "an active T170 topology operation must never take the inactive short circuit"
+    );
+}
+
+fn active_clear_pane(template: &ProtocolMessage) -> ProtocolMessage {
+    let ProtocolPayload::ApplyTopologyOperation {
+        request:
+            ApplyTopologyOperationV2 {
+                expected_topology_generation,
+                operation: TopologyOperationV2::ApplyLayoutTemplate { .. },
+            },
+    } = &template.payload
+    else {
+        unreachable!("the fixture request must be a template application");
+    };
+    ProtocolMessage::new(
+        connection("t166-active-clear"),
+        sequence(55),
+        None,
+        generation(35),
+        None,
+        ProtocolPayload::ApplyTopologyOperation {
+            request: ApplyTopologyOperationV2 {
+                expected_topology_generation: *expected_topology_generation,
+                operation: TopologyOperationV2::ClearPane {
+                    multiplexer_workspace_id: workspace(35),
+                    tab_id: tab(35),
+                    pane_id: pane(35),
+                    presentation_epoch: 1,
+                },
+            },
+        },
+    )
+    .unwrap()
 }
 
 #[test]
@@ -2006,14 +2052,31 @@ fn t166_topology_helpers_execute_only_currently_authorized_operations() {
     assert_eq!(accepted, topology_generation(2));
     assert_eq!(topology.workspace(workspace(70)).unwrap().alias, "dispatch");
 
-    let deferred = TopologyOperationV2::ClearPane {
+    // `CLEAR_PANE` became an authorized operation in T170. `APPLY_LAYOUT_TEMPLATE`
+    // is still deferred to a later task and must keep failing closed.
+    let cleared = TopologyOperationV2::ClearPane {
         multiplexer_workspace_id: workspace(70),
         tab_id: tab(71),
         pane_id: pane(72),
         presentation_epoch: 1,
     };
+    let cleared_generation =
+        apply_topology_operation_v2(&mut topology, accepted, &cleared).unwrap();
+    assert_eq!(cleared_generation, accepted.checked_next().unwrap());
     assert_eq!(
-        apply_topology_operation_v2(&mut topology, accepted, &deferred).unwrap_err(),
+        topology
+            .pane_presentation_epoch(workspace(70), tab(71), pane(72))
+            .unwrap()
+            .get(),
+        1
+    );
+
+    let deferred = TopologyOperationV2::ApplyLayoutTemplate {
+        template_id: LayoutTemplateId::from_entropy_bytes([70_u8; 16]).unwrap(),
+        multiplexer_workspace_id: workspace(70),
+    };
+    assert_eq!(
+        apply_topology_operation_v2(&mut topology, cleared_generation, &deferred).unwrap_err(),
         MultiplexerErrorKind::UnsupportedOperation
     );
 }
@@ -2081,7 +2144,7 @@ fn t166_owner_dispatch_preflights_capability_and_applies_exact_topology() {
     )
     .unwrap();
     let observer_response = owner
-        .dispatch_multiplexer_protocol_v2(client.clone(), &observer_request, sequence(91), 101)
+        .dispatch_multiplexer_protocol_v2(client.clone(), &observer_request, sequence(91), 101, 101)
         .unwrap();
     assert!(matches!(
         observer_response.payload,
@@ -2111,7 +2174,7 @@ fn t166_owner_dispatch_preflights_capability_and_applies_exact_topology() {
     )
     .unwrap();
     let write_response = owner
-        .dispatch_multiplexer_protocol_v2(client.clone(), &write_request, sequence(93), 102)
+        .dispatch_multiplexer_protocol_v2(client.clone(), &write_request, sequence(93), 102, 102)
         .unwrap();
     assert!(matches!(
         write_response.payload,
@@ -2145,7 +2208,7 @@ fn t166_owner_dispatch_preflights_capability_and_applies_exact_topology() {
     )
     .unwrap();
     let mutation_response = owner
-        .dispatch_multiplexer_protocol_v2(client.clone(), &mutation_request, sequence(95), 103)
+        .dispatch_multiplexer_protocol_v2(client.clone(), &mutation_request, sequence(95), 103, 103)
         .unwrap();
     assert!(matches!(
         mutation_response.payload,
@@ -2176,7 +2239,13 @@ fn t166_owner_dispatch_preflights_capability_and_applies_exact_topology() {
 
     assert_eq!(
         owner
-            .dispatch_multiplexer_protocol_v2(client.clone(), &mutation_request, sequence(96), 104,)
+            .dispatch_multiplexer_protocol_v2(
+                client.clone(),
+                &mutation_request,
+                sequence(96),
+                104,
+                104
+            )
             .unwrap_err(),
         LocalControlErrorKind::DuplicateOrOutOfOrderRequest
     );

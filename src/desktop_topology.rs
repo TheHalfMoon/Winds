@@ -54,6 +54,7 @@ pub struct DesktopTopologyBindRequest {
 pub enum DesktopTopologyLayoutNode {
     Pane {
         pane_id: String,
+        presentation_epoch: u64,
     },
     Split {
         axis: String,
@@ -133,8 +134,12 @@ fn connect() -> DesktopTopologyResult<RustLocalControlClient> {
 
 fn layout_node(node: &ProtocolLayoutNodeV2) -> DesktopTopologyLayoutNode {
     match node {
-        ProtocolLayoutNodeV2::Pane { pane_id } => DesktopTopologyLayoutNode::Pane {
+        ProtocolLayoutNodeV2::Pane {
+            pane_id,
+            presentation_epoch,
+        } => DesktopTopologyLayoutNode::Pane {
             pane_id: pane_id.to_string(),
+            presentation_epoch: *presentation_epoch,
         },
         ProtocolLayoutNodeV2::Split {
             axis,
@@ -304,7 +309,9 @@ pub fn desktop_topology_bind_target(
         if let Some(pane_id) = pane_id {
             fn contains_pane(node: &DesktopTopologyLayoutNode, pane_id: &str) -> bool {
                 match node {
-                    DesktopTopologyLayoutNode::Pane { pane_id: candidate } => candidate == pane_id,
+                    DesktopTopologyLayoutNode::Pane {
+                        pane_id: candidate, ..
+                    } => candidate == pane_id,
                     DesktopTopologyLayoutNode::Split { first, second, .. } => {
                         contains_pane(first, pane_id) || contains_pane(second, pane_id)
                     }

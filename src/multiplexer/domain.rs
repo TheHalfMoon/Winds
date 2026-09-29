@@ -207,6 +207,45 @@ pub(crate) enum MultiplexerErrorKind {
     TopologyGenerationExhausted,
 }
 
+/// The explicit reference from one live topology pane to one owner-managed runtime.
+///
+/// A binding records only a reference and the topology generation at which the
+/// reference was established. It is never runtime truth: liveness, process state,
+/// controller authority, and terminal disposition are all derived from the owner
+/// runtime registry and its exact controller lease.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PaneRuntimeBinding {
+    pub(crate) runtime_namespace_id: RuntimeNamespaceId,
+    pub(crate) bound_at_generation: TopologyGeneration,
+}
+
+/// A pane-local presentation epoch advanced only by an owner-accepted `pane.clear`.
+///
+/// The epoch is presentation state. It never carries child bytes, a lifecycle
+/// transition, a verification event, or evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub(crate) struct PanePresentationEpoch(u64);
+
+impl PanePresentationEpoch {
+    /// The epoch a pane holds before any accepted clear.
+    pub(crate) const fn initial() -> Self {
+        Self(0)
+    }
+
+    /// The next epoch after an owner-accepted clear.
+    pub(crate) fn next(self) -> Result<Self, MultiplexerErrorKind> {
+        self.0
+            .checked_add(1)
+            .map(Self)
+            .ok_or(MultiplexerErrorKind::TopologyGenerationExhausted)
+    }
+
+    pub(crate) const fn get(self) -> u64 {
+        self.0
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct AgentObservationTopologyBinding {

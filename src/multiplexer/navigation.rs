@@ -1,5 +1,9 @@
-use super::{MultiplexerErrorKind, MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration};
-use std::collections::BTreeSet;
+use super::{
+    MultiplexerErrorKind, MultiplexerWorkspaceId, PaneId, PanePresentationEpoch,
+    PaneRuntimeBinding, TabId, TopologyGeneration,
+};
+use crate::persistent_runtime::domain::RuntimeNamespaceId;
+use std::collections::{BTreeMap, BTreeSet};
 
 const GEOMETRY_EXTENT: u32 = 1_000_000;
 const MIN_SPLIT_RATIO_BPS: u16 = 1_000;
@@ -107,6 +111,8 @@ pub(crate) struct MultiplexerTopology {
     retired_workspace_ids: BTreeSet<MultiplexerWorkspaceId>,
     retired_tab_ids: BTreeSet<(MultiplexerWorkspaceId, TabId)>,
     retired_pane_ids: BTreeSet<PaneId>,
+    pane_runtime_bindings: BTreeMap<PaneId, PaneRuntimeBinding>,
+    pane_presentation_epochs: BTreeMap<PaneId, PanePresentationEpoch>,
 }
 
 impl MultiplexerTopology {
@@ -118,6 +124,8 @@ impl MultiplexerTopology {
             retired_workspace_ids: BTreeSet::new(),
             retired_tab_ids: BTreeSet::new(),
             retired_pane_ids: BTreeSet::new(),
+            pane_runtime_bindings: BTreeMap::new(),
+            pane_presentation_epochs: BTreeMap::new(),
         }
     }
 
@@ -126,6 +134,10 @@ impl MultiplexerTopology {
         workspaces: Vec<WorkspaceState>,
         focused_workspace_id: Option<MultiplexerWorkspaceId>,
     ) -> Result<Self, MultiplexerErrorKind> {
+        // Presentation topology is restored, but no pane runtime binding or pane
+        // presentation epoch is. Both are owner-generation scoped: a restored pane
+        // claims nothing from a previous owner generation, so a restart can never
+        // leave a pane pointing at a runtime the current owner does not control.
         if workspaces.is_empty() {
             if focused_workspace_id.is_some() {
                 return Err(MultiplexerErrorKind::UnknownWorkspace);
@@ -137,6 +149,8 @@ impl MultiplexerTopology {
                 retired_workspace_ids: BTreeSet::new(),
                 retired_tab_ids: BTreeSet::new(),
                 retired_pane_ids: BTreeSet::new(),
+                pane_runtime_bindings: BTreeMap::new(),
+                pane_presentation_epochs: BTreeMap::new(),
             });
         }
 
@@ -185,6 +199,8 @@ impl MultiplexerTopology {
             retired_workspace_ids: BTreeSet::new(),
             retired_tab_ids: BTreeSet::new(),
             retired_pane_ids: BTreeSet::new(),
+            pane_runtime_bindings: BTreeMap::new(),
+            pane_presentation_epochs: BTreeMap::new(),
         })
     }
 
@@ -321,6 +337,7 @@ impl MultiplexerTopology {
                 candidate.retired_tab_ids.insert((workspace_id, tab.id));
                 collect_pane_ids(&tab.root, &mut candidate.retired_pane_ids);
             }
+            candidate.forget_retired_pane_state();
             if candidate.focused_workspace_id == Some(workspace_id) {
                 candidate.focused_workspace_id = candidate.workspaces.first().map(|item| item.id);
             }
@@ -429,6 +446,7 @@ impl MultiplexerTopology {
             };
             candidate.retired_tab_ids.insert((workspace_id, tab_id));
             collect_pane_ids(&closed_root, &mut candidate.retired_pane_ids);
+            candidate.forget_retired_pane_state();
             Ok(())
         })
     }
@@ -680,8 +698,187 @@ impl MultiplexerTopology {
                 }
             }
             candidate.retired_pane_ids.insert(pane_id);
+            candidate.forget_pane_state(pane_id);
             Ok(())
         })
+    }
+
+    /// Binds one exact live pane to one exact owner-managed runtime.
+    ///
+    /// The binding is a reference only. It grants no controller authority, starts
+    /// no process, and never inherits into a replacement pane: a retired `PaneId`
+    /// drops its binding and its presentation epoch, so a freshly split or
+    /// replacement pane starts unbound with no inherited state of any kind.
+    pub(crate) fn bind_pane_runtime(
+        &mut self,
+        expected: TopologyGeneration,
+        workspace_id: MultiplexerWorkspaceId,
+        tab_id: TabId,
+        pane_id: PaneId,
+        runtime_namespace_id: RuntimeNamespaceId,
+    ) -> Result<TopologyGeneration, MultiplexerErrorKind> {
+        self.transact(expected, |candidate| {
+            candidate.require_live_pane(workspace_id, tab_id, pane_id)?;
+            if candidate
+                .pane_runtime_bindings
+                .values()
+                .any(|binding| binding.runtime_namespace_id == runtime_namespace_id)
+            {
+                return Err(MultiplexerErrorKind::IdentityReuse);
+            }
+            candidate.pane_runtime_bindings.insert(
+                pane_id,
+                PaneRuntimeBinding {
+                    runtime_namespace_id,
+                    bound_at_generation: expected,
+                },
+            );
+            Ok(())
+        })
+    }
+
+    /// The exact runtime reference for one exact live pane.
+    ///
+    /// This is a presentation/reference lookup only. It never proves that the
+    /// runtime is live and never proves controller authority.
+    pub(crate) fn pane_runtime_binding(
+        &self,
+        workspace_id: MultiplexerWorkspaceId,
+        tab_id: TabId,
+        pane_id: PaneId,
+    ) -> Result<Option<PaneRuntimeBinding>, MultiplexerErrorKind> {
+        self.require_live_pane(workspace_id, tab_id, pane_id)?;
+        Ok(self.pane_runtime_bindings.get(&pane_id).copied())
+    }
+
+    pub(crate) fn pane_presentation_epoch(
+        &self,
+        workspace_id: MultiplexerWorkspaceId,
+        tab_id: TabId,
+        pane_id: PaneId,
+    ) -> Result<PanePresentationEpoch, MultiplexerErrorKind> {
+        self.require_live_pane(workspace_id, tab_id, pane_id)?;
+        Ok(self
+            .pane_presentation_epochs
+            .get(&pane_id)
+            .copied()
+            .unwrap_or_else(PanePresentationEpoch::initial))
+    }
+
+    /// The presentation epoch of a pane already proven live by its containing
+    /// snapshot. It performs no target lookup, so it is only valid while walking a
+    /// layout the caller just validated.
+    pub(crate) fn pane_presentation_epoch_unchecked(
+        &self,
+        pane_id: PaneId,
+    ) -> PanePresentationEpoch {
+        self.pane_presentation_epochs
+            .get(&pane_id)
+            .copied()
+            .unwrap_or_else(PanePresentationEpoch::initial)
+    }
+
+    /// Whether `close_pane` would currently accept this exact target.
+    ///
+    /// The close policy proves this before it performs any process effect, so an
+    /// impossible close can never stop a process first and fail afterwards.
+    pub(crate) fn can_close_pane(
+        &self,
+        expected: TopologyGeneration,
+        workspace_id: MultiplexerWorkspaceId,
+        tab_id: TabId,
+        pane_id: PaneId,
+    ) -> Result<(), MultiplexerErrorKind> {
+        if self.generation != expected {
+            return Err(MultiplexerErrorKind::StaleTopologyGeneration);
+        }
+        let tab = self.tab(workspace_id, tab_id)?;
+        if leaf_count(&tab.root) <= 1 {
+            return Err(MultiplexerErrorKind::UnsupportedOperation);
+        }
+        if !contains_pane(&tab.root, pane_id) {
+            return Err(MultiplexerErrorKind::UnknownPane);
+        }
+        if self.retired_pane_ids.contains(&pane_id) {
+            return Err(MultiplexerErrorKind::ClosedTarget);
+        }
+        Ok(())
+    }
+
+    /// `pane.clear`: presentation-only screen and scrollback clear for one exact pane.
+    ///
+    /// `requested_presentation_epoch` is a strict compare-and-apply proposal, not
+    /// an assignment: the owner computes the only accepted next value itself and
+    /// accepts nothing else, so a client can never mint, skip, rewind, or replay an
+    /// epoch. No child bytes are produced, no runtime lifecycle transition occurs,
+    /// and no verification or evidence event is created. Only the exact named pane
+    /// is affected.
+    pub(crate) fn clear_pane(
+        &mut self,
+        expected: TopologyGeneration,
+        workspace_id: MultiplexerWorkspaceId,
+        tab_id: TabId,
+        pane_id: PaneId,
+        requested_presentation_epoch: u64,
+    ) -> Result<TopologyGeneration, MultiplexerErrorKind> {
+        self.transact(expected, |candidate| {
+            let current = candidate.pane_presentation_epoch(workspace_id, tab_id, pane_id)?;
+            let required = current.next()?;
+            if requested_presentation_epoch != required.get() {
+                return Err(MultiplexerErrorKind::DuplicateOrReplayedMutation);
+            }
+            candidate.pane_presentation_epochs.insert(pane_id, required);
+            Ok(())
+        })
+    }
+
+    fn require_live_pane(
+        &self,
+        workspace_id: MultiplexerWorkspaceId,
+        tab_id: TabId,
+        pane_id: PaneId,
+    ) -> Result<(), MultiplexerErrorKind> {
+        let tab = self.tab(workspace_id, tab_id)?;
+        if !contains_pane(&tab.root, pane_id) {
+            return Err(MultiplexerErrorKind::UnknownPane);
+        }
+        if self.retired_pane_ids.contains(&pane_id) {
+            return Err(MultiplexerErrorKind::ClosedTarget);
+        }
+        Ok(())
+    }
+
+    /// Drops every pane-scoped reference a closed pane must never inherit again.
+    ///
+    /// The bound runtime itself is untouched. `DETACH_VIEW` therefore leaves the
+    /// runtime alive and discoverable in the owner runtime inventory, and no
+    /// implicit terminate or orphan cleanup happens here.
+    fn forget_pane_state(&mut self, pane_id: PaneId) {
+        self.pane_runtime_bindings.remove(&pane_id);
+        self.pane_presentation_epochs.remove(&pane_id);
+    }
+
+    /// Drops pane-scoped references for every pane that no longer exists in topology.
+    ///
+    /// The bound runtimes themselves are untouched, so a closed pane never stops a
+    /// process and never triggers implicit cleanup. This only guarantees that a
+    /// replacement pane can never inherit a stale reference.
+    fn forget_retired_pane_state(&mut self) {
+        let live_pane_ids = self.live_pane_ids();
+        self.pane_runtime_bindings
+            .retain(|pane_id, _| live_pane_ids.contains(pane_id));
+        self.pane_presentation_epochs
+            .retain(|pane_id, _| live_pane_ids.contains(pane_id));
+    }
+
+    fn live_pane_ids(&self) -> BTreeSet<PaneId> {
+        let mut pane_ids = BTreeSet::new();
+        for workspace in &self.workspaces {
+            for tab in &workspace.tabs {
+                collect_pane_ids(&tab.root, &mut pane_ids);
+            }
+        }
+        pane_ids
     }
 
     pub(crate) fn directional_neighbor(
