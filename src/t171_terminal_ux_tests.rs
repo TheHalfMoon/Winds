@@ -322,13 +322,8 @@ fn t171_forged_terminal_text_never_changes_trusted_state() {
     let generation = TopologyGeneration::new(2).unwrap();
     assert_eq!(LinkOffer::offer(&forged[..8]), LinkOffer::Refused);
     assert!(offer_clipboard(forged).is_some());
-    assert_eq!(
-        accept_graphics_frame(exact_target(generation), generation, forged)
-            .unwrap()
-            .bytes
-            .starts_with(b"VERIFIED"),
-        true
-    );
+    let frame = accept_graphics_frame(exact_target(generation), generation, forged).unwrap();
+    assert!(frame.bytes.starts_with(b"VERIFIED"));
     assert_eq!(InputMethodClaim::unclaimed(), InputMethodClaim::Unclaimed);
 
     let chrome = PaneChrome::new(forged).with_accent(PaneAccent::Failed);
