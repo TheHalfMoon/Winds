@@ -1699,6 +1699,43 @@ impl Store {
         Ok(())
     }
 
+    /// Returns the single most recently started recorded owner generation.
+    ///
+    /// This is an expected-endpoint selector only. A recorded generation explains
+    /// restart truth and never proves a live owner, a live client, or runtime
+    /// authority; callers must still complete the exact generation handshake.
+    /// Ambiguous ordering fails closed instead of picking a generation.
+    pub(crate) fn latest_persistent_runtime_owner_generation(
+        &self,
+    ) -> Result<Option<OwnerGenerationId>> {
+        self.validate_persistent_runtime_schema()?;
+        let mut statement = self.connection.prepare(
+            "SELECT owner_generation_id, started_unix_ms
+               FROM persistent_runtime_owner_generations
+              ORDER BY started_unix_ms DESC, owner_generation_id ASC",
+        )?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let Some((newest_id, newest_started_unix_ms)) = rows.first().cloned() else {
+            return Ok(None);
+        };
+        if rows
+            .iter()
+            .filter(|(_, started_unix_ms)| *started_unix_ms == newest_started_unix_ms)
+            .count()
+            != 1
+        {
+            return Err(format!(
+                "recorded owner generation start time {newest_started_unix_ms} is ambiguous"
+            )
+            .into());
+        }
+        Ok(Some(OwnerGenerationId::parse(&newest_id)?))
+    }
+
     pub(crate) fn persist_persistent_runtime_record(
         &self,
         input: &PersistentRuntimeRecordInput<'_>,

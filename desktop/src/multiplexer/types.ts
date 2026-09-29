@@ -35,6 +35,7 @@ export interface DesktopTopologyCapability {
   authority: "OWNER_AUTHORITATIVE_TOPOLOGY";
   trustedRustHost: boolean;
   rendererDirectOwnerAccess: boolean;
+  rendererSuppliedOwnerGeneration: boolean;
   controllingTtyRequired: boolean;
   terminalSurfaceCapable: boolean;
   genericInvokeSurface: boolean;

@@ -1,5 +1,8 @@
 use super::*;
 use crate::persistent_runtime::protocol::{ProtocolTabSnapshotV2, ProtocolWorkspaceSnapshotV2};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_HOME: AtomicU64 = AtomicU64::new(0);
 
 fn workspace_id(byte: u8) -> MultiplexerWorkspaceId {
     MultiplexerWorkspaceId::from_entropy_bytes([byte; 16]).expect("valid workspace id")
@@ -21,6 +24,7 @@ fn t169_desktop_capability_is_tty_independent_and_has_no_renderer_authority() {
     assert!(capability.terminal_surface_capable);
     assert!(!capability.controlling_tty_required);
     assert!(!capability.renderer_direct_owner_access);
+    assert!(!capability.renderer_supplied_owner_generation);
     assert!(!capability.generic_invoke_surface);
 }
 
@@ -105,9 +109,94 @@ fn t169_recursive_projection_retains_immutable_ids_under_duplicate_labels() {
 }
 
 #[test]
-fn t169_owner_generation_and_target_ids_fail_closed_on_malformed_input() {
-    assert!(parse_owner_generation(Some("not-a-generation")).is_err());
+fn t169_target_ids_fail_closed_on_malformed_input() {
     assert!(MultiplexerWorkspaceId::parse("not-a-workspace").is_err());
     assert!(TabId::parse("not-a-tab").is_err());
     assert!(PaneId::parse("not-a-pane").is_err());
+}
+
+#[test]
+fn t169_renderer_cannot_supply_an_owner_generation_or_any_untyped_request_field() {
+    assert!(
+        serde_json::from_value::<DesktopTopologySnapshotRequest>(serde_json::json!({
+            "expectedOwnerGenerationId": "00112233445566778899aabbccddeeff",
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<DesktopTopologyBindRequest>(serde_json::json!({
+            "expectedOwnerGenerationId": "00112233445566778899aabbccddeeff",
+            "expectedTopologyGeneration": 1,
+            "multiplexerWorkspaceId": workspace_id(1).to_string(),
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<DesktopTopologyBindRequest>(serde_json::json!({
+            "expectedTopologyGeneration": 1,
+            "multiplexerWorkspaceId": workspace_id(1).to_string(),
+            "paneOwnerGenerationId": "00112233445566778899aabbccddeeff",
+        }))
+        .is_err()
+    );
+
+    let snapshot: DesktopTopologySnapshotRequest =
+        serde_json::from_value(serde_json::json!({})).expect("closed empty snapshot request");
+    assert_eq!(snapshot, DesktopTopologySnapshotRequest {});
+}
+
+fn test_home(name: &str) -> std::path::PathBuf {
+    let sequence = NEXT_HOME.fetch_add(1, Ordering::Relaxed);
+    let home = std::env::temp_dir().join(format!(
+        "winds-t169-{name}-{}-{sequence}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&home).unwrap();
+    home
+}
+
+fn generation(byte: u8) -> OwnerGenerationId {
+    OwnerGenerationId::from_entropy_bytes([byte; 16]).expect("valid owner generation")
+}
+
+#[test]
+fn t169_trusted_owner_generation_is_empty_absent_ambiguous_or_unusable_and_never_renderer_supplied()
+{
+    let empty = test_home("empty");
+    let store = Store::open(&empty).unwrap();
+    assert_eq!(
+        store.latest_persistent_runtime_owner_generation().unwrap(),
+        None
+    );
+
+    store
+        .record_persistent_runtime_owner_generation(generation(1), 1_000)
+        .unwrap();
+    store
+        .record_persistent_runtime_owner_generation(generation(2), 2_000)
+        .unwrap();
+    assert_eq!(
+        store.latest_persistent_runtime_owner_generation().unwrap(),
+        Some(generation(2))
+    );
+
+    store
+        .record_persistent_runtime_owner_generation(generation(3), 2_000)
+        .unwrap();
+    assert!(
+        store
+            .latest_persistent_runtime_owner_generation()
+            .is_err_and(|error| error.to_string().contains("ambiguous")),
+        "an ambiguous recorded generation start time must fail closed"
+    );
+
+    store
+        .record_persistent_runtime_owner_generation(generation(4), 3_000)
+        .unwrap();
+    assert_eq!(
+        store.latest_persistent_runtime_owner_generation().unwrap(),
+        Some(generation(4))
+    );
+
+    let _ = std::fs::remove_dir_all(&empty);
 }

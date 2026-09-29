@@ -1,11 +1,12 @@
+use crate::desktop::desktop_bridge_default_home;
 use crate::multiplexer::domain::{MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration};
 use crate::persistent_runtime::client::RustLocalControlClient;
 use crate::persistent_runtime::domain::OwnerGenerationId;
 use crate::persistent_runtime::protocol::{
     MultiplexerSnapshotV2, ProtocolLayoutNodeV2, ProtocolSplitAxis, ProtocolWorkspaceSnapshotV2,
 };
+use crate::store::Store;
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
 
 pub type DesktopTopologyResult<T> = Result<T, String>;
 
@@ -17,6 +18,7 @@ pub struct DesktopTopologyCapability {
     pub authority: &'static str,
     pub trusted_rust_host: bool,
     pub renderer_direct_owner_access: bool,
+    pub renderer_supplied_owner_generation: bool,
     pub controlling_tty_required: bool,
     pub terminal_surface_capable: bool,
     pub generic_invoke_surface: bool,
@@ -27,6 +29,7 @@ pub fn desktop_topology_capability() -> DesktopTopologyCapability {
         authority: DESKTOP_TOPOLOGY_AUTHORITY,
         trusted_rust_host: true,
         renderer_direct_owner_access: false,
+        renderer_supplied_owner_generation: false,
         controlling_tty_required: false,
         terminal_surface_capable: true,
         generic_invoke_surface: false,
@@ -35,14 +38,11 @@ pub fn desktop_topology_capability() -> DesktopTopologyCapability {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DesktopTopologySnapshotRequest {
-    pub expected_owner_generation_id: Option<String>,
-}
+pub struct DesktopTopologySnapshotRequest {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DesktopTopologyBindRequest {
-    pub expected_owner_generation_id: Option<String>,
     pub expected_topology_generation: u64,
     pub multiplexer_workspace_id: String,
     pub tab_id: Option<String>,
@@ -102,20 +102,32 @@ pub struct DesktopTopologyBoundTarget {
     pub pane_id: Option<String>,
 }
 
-fn parse_owner_generation(value: Option<&str>) -> DesktopTopologyResult<Option<OwnerGenerationId>> {
-    value
-        .map(|value| {
-            OwnerGenerationId::from_str(value)
-                .map_err(|error| format!("invalid expected owner generation: {error}"))
+/// Resolves the exact expected owner generation from the trusted Rust host.
+///
+/// The renderer never supplies, selects, or influences this value. The recorded
+/// generation is an expected-endpoint selector read from the same local Winds
+/// store the owner itself writes; it is never liveness, controller, topology, or
+/// runtime authority. Only the exact generation handshake against the private
+/// endpoint proves that a bound owner accepted this client.
+fn trusted_expected_owner_generation() -> DesktopTopologyResult<OwnerGenerationId> {
+    let home = desktop_bridge_default_home()
+        .map_err(|error| format!("desktop topology Winds home is unavailable: {error}"))?;
+    let store = Store::open(&home)
+        .map_err(|error| format!("desktop topology Winds store is unavailable: {error}"))?;
+    store
+        .latest_persistent_runtime_owner_generation()
+        .map_err(|error| {
+            format!("desktop topology owner generation record is unusable: {error}")
+        })?
+        .ok_or_else(|| {
+            "desktop topology has no recorded owner generation; start the Winds owner before projecting topology"
+                .to_owned()
         })
-        .transpose()
 }
 
-fn connect(
-    expected_owner_generation_id: Option<&str>,
-) -> DesktopTopologyResult<RustLocalControlClient> {
-    let expected_owner_generation_id = parse_owner_generation(expected_owner_generation_id)?;
-    RustLocalControlClient::connect(None, expected_owner_generation_id)
+fn connect() -> DesktopTopologyResult<RustLocalControlClient> {
+    let expected_owner_generation_id = trusted_expected_owner_generation()?;
+    RustLocalControlClient::connect(None, Some(expected_owner_generation_id))
         .map_err(|error| format!("desktop topology owner connection failed: {error}"))
 }
 
@@ -163,28 +175,35 @@ fn workspace_projection(snapshot: &ProtocolWorkspaceSnapshotV2) -> DesktopTopolo
     }
 }
 
+fn workspace_id_list(
+    snapshot: &MultiplexerSnapshotV2,
+) -> DesktopTopologyResult<(TopologyGeneration, Vec<MultiplexerWorkspaceId>)> {
+    let MultiplexerSnapshotV2::WorkspaceList {
+        topology_generation,
+        workspaces,
+    } = snapshot
+    else {
+        return Err("desktop topology list returned an unsupported snapshot shape".to_owned());
+    };
+    Ok((
+        *topology_generation,
+        workspaces
+            .iter()
+            .map(|workspace| workspace.multiplexer_workspace_id)
+            .collect::<Vec<_>>(),
+    ))
+}
+
 fn snapshot_from_client(
     client: &mut RustLocalControlClient,
 ) -> DesktopTopologyResult<DesktopTopologySnapshot> {
     let list = client
         .refresh_topology_projection(None)
         .map_err(|error| format!("desktop topology refresh failed: {error}"))?;
-    let (topology_generation, workspace_ids) = match list {
-        MultiplexerSnapshotV2::WorkspaceList {
-            topology_generation,
-            workspaces,
-        } => (
-            topology_generation,
-            workspaces
-                .into_iter()
-                .map(|workspace| workspace.multiplexer_workspace_id)
-                .collect::<Vec<_>>(),
-        ),
-        _ => return Err("desktop topology list returned an unsupported snapshot shape".to_owned()),
-    };
+    let (topology_generation, workspace_ids) = workspace_id_list(&list)?;
 
     let mut workspaces = Vec::with_capacity(workspace_ids.len());
-    for workspace_id in workspace_ids {
+    for workspace_id in workspace_ids.iter().copied() {
         let snapshot = client
             .refresh_topology_projection(Some(workspace_id))
             .map_err(|error| format!("desktop topology workspace refresh failed: {error}"))?;
@@ -202,6 +221,19 @@ fn snapshot_from_client(
         workspaces.push(workspace_projection(&snapshot));
     }
 
+    // A trailing authoritative re-read proves the whole projection came from one
+    // generation and one owner-ordered workspace set. A change after the final
+    // workspace fetch would otherwise be presented as current truth.
+    let trailing = client
+        .refresh_topology_projection(None)
+        .map_err(|error| format!("desktop topology refresh failed: {error}"))?;
+    let (trailing_generation, trailing_workspace_ids) = workspace_id_list(&trailing)?;
+    if trailing_generation != topology_generation || trailing_workspace_ids != workspace_ids {
+        return Err(
+            "desktop topology generation changed during projection; refresh required".to_owned(),
+        );
+    }
+
     Ok(DesktopTopologySnapshot {
         authority: DESKTOP_TOPOLOGY_AUTHORITY,
         topology_generation: topology_generation.get(),
@@ -209,10 +241,12 @@ fn snapshot_from_client(
     })
 }
 
+/// The snapshot request carries no renderer-chosen field at all. Every privileged
+/// input for projection is resolved by the trusted Rust host.
 pub fn desktop_topology_snapshot(
-    request: DesktopTopologySnapshotRequest,
+    _request: DesktopTopologySnapshotRequest,
 ) -> DesktopTopologyResult<DesktopTopologySnapshot> {
-    let mut client = connect(request.expected_owner_generation_id.as_deref())?;
+    let mut client = connect()?;
     snapshot_from_client(&mut client)
 }
 
@@ -252,9 +286,7 @@ pub fn desktop_topology_bind_target(
     let expected_generation = TopologyGeneration::new(request.expected_topology_generation)
         .map_err(|error| format!("invalid topology generation: {error}"))?;
 
-    let snapshot = desktop_topology_snapshot(DesktopTopologySnapshotRequest {
-        expected_owner_generation_id: request.expected_owner_generation_id,
-    })?;
+    let snapshot = desktop_topology_snapshot(DesktopTopologySnapshotRequest {})?;
     if snapshot.topology_generation != expected_generation.get() {
         return Err(
             "desktop topology target is stale; authoritative generation changed".to_owned(),

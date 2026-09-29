@@ -1,9 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  bindTopologyTarget,
-  loadTopologyCapability,
-  loadTopologySnapshot,
-} from "./bridge";
+import { useCallback, useEffect, useState } from "react";
+import { topologyBridge } from "./bridge";
 import type {
   DesktopTopologyBoundTarget,
   DesktopTopologyIdentity,
@@ -13,11 +9,6 @@ import type {
   DesktopTopologyWorkspace,
 } from "./types";
 import "./topology.css";
-
-function expectedOwnerGenerationId(): string | null {
-  const value = document.documentElement.dataset.ownerGenerationId?.trim();
-  return value ? value : null;
-}
 
 function paneCount(node: DesktopTopologyLayoutNode): number {
   if (node.kind === "PANE") return 1;
@@ -79,6 +70,7 @@ function LayoutNode({ node, workspace, tab, bound, bind }: LayoutProps) {
             ? `${firstBasis}fr ${secondBasis}fr`
             : undefined,
       }}
+      role="group"
       aria-label={`${node.axis.toLowerCase()} split`}
     >
       <LayoutNode
@@ -103,19 +95,20 @@ export function TopologySurface() {
   const [snapshot, setSnapshot] = useState<DesktopTopologySnapshot | null>(null);
   const [bound, setBound] = useState<DesktopTopologyBoundTarget | null>(null);
   const [status, setStatus] = useState("Loading canonical topology…");
-  const ownerGeneration = useMemo(expectedOwnerGenerationId, []);
 
   const refresh = useCallback(async () => {
     try {
-      const capability = await loadTopologyCapability();
+      const bridge = topologyBridge();
+      const capability = await bridge.capability();
       if (
         !capability.trustedRustHost ||
         capability.rendererDirectOwnerAccess ||
+        capability.rendererSuppliedOwnerGeneration ||
         capability.genericInvokeSurface
       ) {
         throw new Error("Desktop topology capability boundary is not trusted");
       }
-      const next = await loadTopologySnapshot(ownerGeneration);
+      const next = await bridge.snapshot();
       setSnapshot(next);
       setBound((current) =>
         current?.topologyGeneration === next.topologyGeneration ? current : null,
@@ -130,7 +123,7 @@ export function TopologySurface() {
         error instanceof Error ? error.message : "Canonical topology unavailable",
       );
     }
-  }, [ownerGeneration]);
+  }, []);
 
   useEffect(() => {
     void refresh();
@@ -140,8 +133,7 @@ export function TopologySurface() {
     async (target: DesktopTopologyIdentity) => {
       if (!snapshot) return;
       try {
-        const next = await bindTopologyTarget(
-          ownerGeneration,
+        const next = await topologyBridge().bindTarget(
           snapshot.topologyGeneration,
           target,
         );
@@ -155,7 +147,7 @@ export function TopologySurface() {
         await refresh();
       }
     },
-    [ownerGeneration, refresh, snapshot],
+    [refresh, snapshot],
   );
 
   return (
@@ -188,6 +180,7 @@ export function TopologySurface() {
       ) : (
         <div
           className="multiplexer-workspaces"
+          role="group"
           aria-label="Workspace, tab, and pane topology"
         >
           {snapshot.workspaces.map((workspace) => {

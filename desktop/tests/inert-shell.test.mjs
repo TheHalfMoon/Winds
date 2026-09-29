@@ -7,6 +7,9 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('..', import.meta.url));
 const host = readFileSync(join(root, 'src-tauri/src/main.rs'), 'utf8');
 const commandNames = [
+  'multiplexer_topology_capability',
+  'multiplexer_topology_snapshot',
+  'multiplexer_topology_bind_target',
   'left_dock_snapshot',
   'left_dock_attention_snapshot',
   'left_dock_update_project',
