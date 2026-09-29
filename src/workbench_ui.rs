@@ -929,12 +929,8 @@ pub(crate) fn canonical_topology_bind_terminal_interaction(
     mouse: MouseEvent,
 ) -> Option<super::terminal_ux::BoundPaneInteraction> {
     use super::terminal_ux::{PaneInteractionKind, PointerPhase};
-    let target = canonical_topology_exact_pane_target(
-        presentation,
-        hit_regions,
-        mouse.column,
-        mouse.row,
-    )?;
+    let target =
+        canonical_topology_exact_pane_target(presentation, hit_regions, mouse.column, mouse.row)?;
     let kind = match mouse.kind {
         MouseEventKind::Down(MouseButton::Right) => PaneInteractionKind::ContextMenu,
         MouseEventKind::Down(button) => PaneInteractionKind::MouseCapture {
