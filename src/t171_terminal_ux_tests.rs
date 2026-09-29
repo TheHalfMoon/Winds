@@ -109,7 +109,7 @@ fn t171_link_activation_requires_valid_target_and_explicit_acceptance() {
         parse_link_target(b"https://example.test/a"),
         Ok(LinkTarget {
             scheme: "https",
-            target: "//example.test/a".to_owned(),
+            target: "https://example.test/a".to_owned(),
         })
     );
     assert_eq!(
@@ -135,7 +135,10 @@ fn t171_link_activation_requires_valid_target_and_explicit_acceptance() {
 
     let offer = LinkOffer::offer(b"https://example.test/ok");
     assert!(matches!(offer, LinkOffer::Pending(_)));
-    assert!(matches!(offer.accept(), LinkOffer::Granted(_)));
+    let LinkOffer::Granted(grant) = offer.accept() else {
+        panic!("validated link must require and retain explicit acceptance");
+    };
+    assert_eq!(grant.target.target, "https://example.test/ok");
     assert_eq!(LinkOffer::offer(b"file:///tmp/x"), LinkOffer::Refused);
 }
 
