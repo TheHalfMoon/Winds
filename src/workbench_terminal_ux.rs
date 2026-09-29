@@ -332,7 +332,7 @@ pub(crate) fn parse_link_target(raw: &[u8]) -> Result<LinkTarget, LinkRefusal> {
         .ok_or(LinkRefusal::UnsupportedScheme)?;
     Ok(LinkTarget {
         scheme,
-        target: String::from_utf8_lossy(&raw[separator + 1..]).into_owned(),
+        target: String::from_utf8_lossy(raw).into_owned(),
     })
 }
 
