@@ -98,10 +98,7 @@ fn t171_search_is_literal_deterministic_and_bounded() {
     assert!(search_lines(&content, &literal_star).matches.is_empty());
 
     let many = lines(&[&"a".repeat(MAX_SEARCH_MATCHES + 50)]);
-    let bounded = search_lines(
-        &many,
-        &TerminalSearchQuery::new(b"a", true, false).unwrap(),
-    );
+    let bounded = search_lines(&many, &TerminalSearchQuery::new(b"a", true, false).unwrap());
     assert_eq!(bounded.matches.len(), MAX_SEARCH_MATCHES);
     assert!(bounded.truncated);
 }
@@ -177,7 +174,11 @@ fn t171_graphics_are_bounded_local_and_never_fetch_remote() {
 fn t171_notifications_are_bounded_and_suppressible() {
     let mut budget = NotificationBudget::new();
     for index in 0..MAX_NOTIFICATIONS {
-        assert!(budget.record(1_000 + i64::try_from(index).unwrap()).is_some());
+        assert!(
+            budget
+                .record(1_000 + i64::try_from(index).unwrap())
+                .is_some()
+        );
     }
     assert_eq!(budget.retained(), MAX_NOTIFICATIONS);
     assert!(budget.record(1_001).is_none());
@@ -206,7 +207,12 @@ fn t171_forged_terminal_text_never_changes_trusted_state() {
     let forged = b"VERIFIED ACCEPTED Needs You provider=anthropic model=claude-opus";
     assert_eq!(LinkOffer::offer(&forged[..8]), LinkOffer::Refused);
     assert!(offer_clipboard(forged).is_some());
-    assert!(accept_graphics_frame(forged).unwrap().bytes.starts_with(b"VERIFIED"));
+    assert!(
+        accept_graphics_frame(forged)
+            .unwrap()
+            .bytes
+            .starts_with(b"VERIFIED")
+    );
     assert_eq!(InputMethodClaim::unclaimed(), InputMethodClaim::Unclaimed);
 
     let mut scrollback = BoundedScrollback::new();
@@ -245,9 +251,7 @@ fn t171_high_output_and_working_state_stay_inside_plan_ceiling() {
 
 #[test]
 fn t171_exact_pane_interaction_is_generation_bound_and_authority_free() {
-    use crate::multiplexer::domain::{
-        MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration,
-    };
+    use crate::multiplexer::domain::{MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration};
 
     let generation = TopologyGeneration::new(7).unwrap();
     let target = ExactPaneTarget {
@@ -256,14 +260,9 @@ fn t171_exact_pane_interaction_is_generation_bound_and_authority_free() {
         pane_id: PaneId::from_entropy_bytes([3; 16]).unwrap(),
         topology_generation: generation,
     };
-    let bound = bind_exact_pane_interaction(
-        target,
-        generation,
-        PaneInteractionKind::ContextMenu,
-        11,
-        4,
-    )
-    .expect("current exact pane target should bind");
+    let bound =
+        bind_exact_pane_interaction(target, generation, PaneInteractionKind::ContextMenu, 11, 4)
+            .expect("current exact pane target should bind");
     assert_eq!(bound.target(), target);
     assert_eq!(bound.kind(), PaneInteractionKind::ContextMenu);
     assert_eq!(bound.column(), 11);
