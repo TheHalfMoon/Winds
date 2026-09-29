@@ -68,14 +68,16 @@ fn multiplexer_topology_capability() -> DesktopTopologyCapability {
 fn multiplexer_topology_snapshot(
     request: DesktopTopologySnapshotRequest,
 ) -> Result<DesktopTopologySnapshot, String> {
-    desktop_topology_snapshot(request).map_err(|error| host_error("multiplexer topology snapshot", error))
+    desktop_topology_snapshot(request)
+        .map_err(|error| host_error("multiplexer topology snapshot", error))
 }
 
 #[tauri::command]
 fn multiplexer_topology_bind_target(
     request: DesktopTopologyBindRequest,
 ) -> Result<DesktopTopologyBoundTarget, String> {
-    desktop_topology_bind_target(request).map_err(|error| host_error("multiplexer topology target binding", error))
+    desktop_topology_bind_target(request)
+        .map_err(|error| host_error("multiplexer topology target binding", error))
 }
 
 #[tauri::command]

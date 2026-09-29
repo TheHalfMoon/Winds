@@ -159,7 +159,62 @@ jobs:
           expected_lock_with_root_edge("Cargo.lock", "windows-sys")
           expected_lock_with_root_edge("desktop/src-tauri/Cargo.lock", "windows-sys 0.61.2")
           PY
-          test "$(grep -c '#\[tauri::command\]' desktop/src-tauri/src/main.rs)" -eq 22
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+
+          candidate = os.environ["CANDIDATE_SHA"]
+          host = subprocess.check_output(
+              ["git", "show", f"{candidate}:desktop/src-tauri/src/main.rs"]
+          ).decode("utf-8")
+
+          expected = {
+              "left_dock_snapshot",
+              "left_dock_attention_snapshot",
+              "left_dock_update_project",
+              "left_dock_create_session",
+              "left_dock_rename_session",
+              "left_dock_update_session",
+              "workspace_load_layout",
+              "workspace_save_layout",
+              "right_dock_bind",
+              "right_dock_files",
+              "right_dock_preview_file",
+              "right_dock_changes",
+              "right_dock_evidence",
+              "right_dock_context",
+              "right_dock_artifacts",
+              "terminal_status",
+              "terminal_start",
+              "terminal_input",
+              "terminal_resize",
+              "terminal_interrupt",
+              "terminal_terminate",
+              "terminal_close",
+              "multiplexer_topology_capability",
+              "multiplexer_topology_snapshot",
+              "multiplexer_topology_bind_target",
+          }
+
+          assert host.count("#[tauri::command]") == len(expected), (
+              "privileged Tauri command definitions drifted from the exact closed set"
+          )
+          registered_match = re.search(
+              r"tauri::generate_handler!\[(.*?)\]", host, re.DOTALL
+          )
+          assert registered_match is not None, "missing generate_handler! registration"
+          registered = {
+              entry.strip()
+              for entry in registered_match.group(1).split(",")
+              if entry.strip()
+          }
+          assert registered == expected, (
+              "registered privileged Tauri commands drifted from the exact closed set: "
+              f"unexpected={sorted(registered - expected)} "
+              f"missing={sorted(expected - registered)}"
+          )
+          PY
 
       - name: Production deterministic gates
         working-directory: desktop
