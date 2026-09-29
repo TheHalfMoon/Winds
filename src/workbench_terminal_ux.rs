@@ -1,39 +1,34 @@
 //! Deterministic, bounded, presentation-only terminal UX behavior.
 //!
-//! Everything in this module produces presentation state: bounded scrollback,
-//! selection, search results, link offers, clipboard offers, graphics frames,
-//! notifications, and the input-method claim. Nothing here launches a process,
-//! performs a network fetch, opens a path, mutates a workspace, or grants
-//! authority. A caller must still route any real effect through its own exact
-//! authority check.
+//! This module owns local presentation state only. It never launches a process,
+//! opens a host target, performs a network fetch, mutates topology, or grants
+//! process/controller authority. Consequential effects must pass through the
+//! already accepted exact-target authority seams.
 
+use crate::multiplexer::domain::{
+    MultiplexerWorkspaceId, PaneId, TabId, TopologyGeneration,
+};
 use std::collections::VecDeque;
 
-/// Bounded scrollback retained per pane. The bound is explicit: once the line
-/// budget is reached, older rows are dropped and truncation becomes observable.
+/// Maximum number of retained presentation rows for one pane.
 pub(crate) const MAX_SCROLLBACK_LINES: usize = 10_000;
-/// Hard ceiling on one selection, so a runaway drag cannot grow unbounded.
-pub(crate) const MAX_SELECTION_CELLS: usize = 256 * 1024;
-/// Hard ceiling on reported search matches.
-pub(crate) const MAX_SEARCH_MATCHES: usize = 1_000;
-/// Hard ceiling on one link target, in bytes.
-pub(crate) const MAX_LINK_TARGET_BYTES: usize = 2_048;
-/// Plan ceiling AD-012-14: the pane-local retained graphics payload.
-pub(crate) const MAX_GRAPHICS_FRAME_BYTES: usize = 8 * 1024 * 1024;
-/// Plan ceiling AD-012-14: the pane-local rendered and parsed working buffer.
+/// AD-012-14 pane-local rendered/parsed working-buffer ceiling.
 pub(crate) const MAX_PANE_WORKING_BUFFER_BYTES: usize = 2 * 1024 * 1024;
-/// Hard ceiling on one clipboard offer, in bytes.
+/// Maximum number of cells materialized by one selection.
+pub(crate) const MAX_SELECTION_CELLS: usize = 256 * 1024;
+/// Maximum number of reported literal-search matches.
+pub(crate) const MAX_SEARCH_MATCHES: usize = 1_000;
+/// Maximum length of one offered link target.
+pub(crate) const MAX_LINK_TARGET_BYTES: usize = 2_048;
+/// AD-012-14 graphics payload ceiling retained per pane.
+pub(crate) const MAX_GRAPHICS_FRAME_BYTES: usize = 8 * 1024 * 1024;
+/// Maximum payload of one local clipboard offer.
 pub(crate) const MAX_CLIPBOARD_OFFER_BYTES: usize = 64 * 1024;
-/// Plan ceiling AD-012-14: the notification pending queue.
+/// AD-012-14 maximum pending notifications.
 pub(crate) const MAX_NOTIFICATIONS: usize = 128;
-/// The notification window, in milliseconds.
+/// Deterministic notification burst window.
 pub(crate) const NOTIFICATION_WINDOW_MS: i64 = 5_000;
 
-/// The link schemes a terminal is permitted to offer.
-///
-/// A local `file` scheme is deliberately absent. Opening a local path would be a
-/// host filesystem action taken from bytes a child process printed, so it is
-/// never offered regardless of user intent.
 pub(crate) const OFFERABLE_LINK_SCHEMES: [&str; 2] = ["https", "http"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -42,24 +37,18 @@ pub(crate) struct GridPoint {
     pub(crate) column: usize,
 }
 
-/// One exact cell in a terminal grid.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct GridCell {
     pub(crate) point: GridPoint,
     pub(crate) byte: u8,
 }
 
-/// Why a selection could not be represented.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SelectionError {
-    /// The selection would exceed the bounded cell budget.
     TooLarge,
 }
 
-/// A bounded, deterministic selection over one exact pane's grid.
-///
-/// The selection is a pure range over supplied cell content. It carries no
-/// authority and cannot read anything the caller did not hand it.
+/// A deterministic selection over caller-supplied terminal bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TerminalSelection {
     anchor: GridPoint,
@@ -67,15 +56,10 @@ pub(crate) struct TerminalSelection {
 }
 
 impl TerminalSelection {
-    /// Starts a selection at an exact cell.
     pub(crate) const fn new(anchor: GridPoint, head: GridPoint) -> Self {
         Self { anchor, head }
     }
 
-    /// Starts a selection at a point and extends it to the word around `head`.
-    ///
-    /// Both ends are word-aligned, so a word-anchored drag never captures the
-    /// gap between two words.
     pub(crate) fn new_word_anchored(
         anchor: GridPoint,
         head: GridPoint,
@@ -107,7 +91,6 @@ impl TerminalSelection {
         self.head
     }
 
-    /// The selection bounds in document order, independent of drag direction.
     pub(crate) fn ordered(&self) -> (GridPoint, GridPoint) {
         if (self.anchor.row, self.anchor.column) <= (self.head.row, self.head.column) {
             (self.anchor, self.head)
@@ -116,10 +99,6 @@ impl TerminalSelection {
         }
     }
 
-    /// The exact inclusive cell count the selection covers over `lines`.
-    ///
-    /// The count is computed from the supplied content, so it stays exact for any
-    /// real selection and saturates instead of overflowing for a fabricated one.
     pub(crate) fn cell_count(&self, lines: &[Vec<u8>]) -> usize {
         let (start, end) = self.ordered();
         if end.row == start.row {
@@ -133,17 +112,16 @@ impl TerminalSelection {
                 .saturating_sub(start.column)
                 .saturating_add(1);
         }
+
         let mut count = 0_usize;
         for row in start.row..=end.row {
             let width = lines.get(row).map_or(0, Vec::len);
             let first_column = if row == start.row { start.column } else { 0 };
-            let last_column = if row == end.row { end.column } else { width };
             if first_column >= width {
                 continue;
             }
-            // Clamp to the same bound `cells` uses, so the budget check and the
-            // materialized result can never disagree about a selection's size.
-            let last_column = last_column.min(width - 1);
+            let requested_last = if row == end.row { end.column } else { width };
+            let last_column = requested_last.min(width - 1);
             count = count.saturating_add(last_column.saturating_sub(first_column) + 1);
             if count > MAX_SELECTION_CELLS {
                 return count;
@@ -152,75 +130,66 @@ impl TerminalSelection {
         count
     }
 
-    /// The exact cells the selection covers, in document order.
-    ///
-    /// The result is bounded. A selection larger than the cell budget fails
-    /// closed rather than allocating an unbounded copy.
     pub(crate) fn cells(&self, lines: &[Vec<u8>]) -> Result<Vec<GridCell>, SelectionError> {
-        let (start, end) = self.ordered();
         if self.cell_count(lines) > MAX_SELECTION_CELLS {
             return Err(SelectionError::TooLarge);
         }
+        let (start, end) = self.ordered();
         let mut cells = Vec::new();
         for row in start.row..=end.row {
             let line = lines.get(row).map(Vec::as_slice).unwrap_or(&[]);
             let first_column = if row == start.row { start.column } else { 0 };
-            let last_column = if row == end.row {
+            if first_column >= line.len() {
+                continue;
+            }
+            let requested_last = if row == end.row {
                 end.column
             } else {
                 line.len()
             };
-            if first_column >= line.len() {
-                continue;
-            }
-            for column in first_column..=last_column.min(line.len().saturating_sub(1)) {
-                cells.push(GridCell {
-                    point: GridPoint { row, column },
-                    byte: line.get(column).copied().unwrap_or(b' '),
-                });
+            let last_column = requested_last.min(line.len().saturating_sub(1));
+            for column in first_column..=last_column {
+                if let Some(byte) = line.get(column).copied() {
+                    cells.push(GridCell {
+                        point: GridPoint { row, column },
+                        byte,
+                    });
+                }
             }
         }
         Ok(cells)
     }
 
-    /// The deterministic plain text the selection copies.
-    ///
-    /// Newlines separate rows, trailing padding is never invented, and the copy
-    /// never contains an escape byte that the child did not print.
+    /// Copies the selected byte stream without widening each UTF-8 byte into an
+    /// unrelated Unicode scalar. Invalid/incomplete UTF-8 is rendered lossily,
+    /// but complete multi-byte input remains intact.
     pub(crate) fn copy_text(&self, lines: &[Vec<u8>]) -> Result<String, SelectionError> {
         let cells = self.cells(lines)?;
-        let mut text = String::with_capacity(cells.len());
+        let mut bytes = Vec::with_capacity(cells.len());
         let mut previous_row = None;
         for cell in cells {
             if previous_row.is_some_and(|row| row != cell.point.row) {
-                text.push('\n');
+                bytes.push(b'\n');
             }
-            text.push(cell.byte as char);
+            bytes.push(cell.byte);
             previous_row = Some(cell.point.row);
         }
-        Ok(text)
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
     }
 }
 
-/// The start column of the word around `column`, used to keep a word-anchored
-/// head inside a non-word run.
 fn head_start(line: &[u8], column: usize) -> usize {
     let column = column.min(line.len());
     if column >= line.len() || !is_word_byte(line[column]) {
         return column;
     }
-    let (start, _) = word_bounds(line, column);
-    start
+    word_bounds(line, column).0
 }
 
 fn is_word_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
-/// The deterministic word bounds around `column`.
-///
-/// Words are maximal runs of ASCII alphanumerics and underscore. Everything else
-/// is a separator, so word selection is stable for any given line and column.
 fn word_bounds(line: &[u8], column: usize) -> (usize, usize) {
     let column = column.min(line.len());
     if column >= line.len() || !is_word_byte(line[column]) {
@@ -237,25 +206,18 @@ fn word_bounds(line: &[u8], column: usize) -> (usize, usize) {
     (start, end)
 }
 
-/// One exact search hit.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SearchMatch {
     pub(crate) row: usize,
     pub(crate) column: usize,
 }
 
-/// The bounded, deterministic result of one search.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SearchResult {
     pub(crate) matches: Vec<SearchMatch>,
-    /// True when matches were dropped because the bound was reached.
     pub(crate) truncated: bool,
 }
 
-/// A bounded, literal, case-sensitive-or-insensitive line search.
-///
-/// The query is matched literally. It is never interpreted as a regular
-/// expression, so a pathological pattern cannot cost unbounded work.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TerminalSearchQuery {
     pub(crate) needle: Vec<u8>,
@@ -264,7 +226,6 @@ pub(crate) struct TerminalSearchQuery {
 }
 
 impl TerminalSearchQuery {
-    /// Rejects an empty or overlong needle rather than matching everything.
     pub(crate) fn new(
         needle: &[u8],
         case_sensitive: bool,
@@ -306,21 +267,17 @@ impl TerminalSearchQuery {
     }
 }
 
-/// Runs the search over bounded line content in deterministic order.
 pub(crate) fn search_lines(lines: &[Vec<u8>], query: &TerminalSearchQuery) -> SearchResult {
     let mut matches = Vec::new();
     let mut truncated = false;
-    'outer: for (row, line) in lines.iter().enumerate() {
-        if line.is_empty() {
-            continue;
-        }
+    'rows: for (row, line) in lines.iter().enumerate() {
         for column in 0..line.len() {
             if !query.matches_at(line, column) {
                 continue;
             }
             if matches.len() >= MAX_SEARCH_MATCHES {
                 truncated = true;
-                break 'outer;
+                break 'rows;
             }
             matches.push(SearchMatch { row, column });
         }
@@ -328,38 +285,24 @@ pub(crate) fn search_lines(lines: &[Vec<u8>], query: &TerminalSearchQuery) -> Se
     SearchResult { matches, truncated }
 }
 
-/// Why a link target was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LinkRefusal {
-    /// The target exceeded the bounded length.
     TooLong,
-    /// No scheme was present.
     MissingScheme,
-    /// The scheme is not offerable, including any local-file scheme.
     UnsupportedScheme,
-    /// The target carried embedded control bytes.
     ControlBytes,
 }
 
-/// One validated, offerable link target.
-///
-/// Validation is about what may be *offered*. It never opens anything.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LinkTarget {
     pub(crate) scheme: &'static str,
     pub(crate) target: String,
 }
-/// Validates one OSC 8 target against the offerable scheme set.
-///
-/// The canonical fail-closed host model decides first. This layer only decides
-/// what may be *offered* on top of that verdict, and it never opens anything.
+
 pub(crate) fn parse_link_target(raw: &[u8]) -> Result<LinkTarget, LinkRefusal> {
     if raw.len() > MAX_LINK_TARGET_BYTES {
         return Err(LinkRefusal::TooLong);
     }
-    // The accepted host-safety model is the authority on whether a terminal
-    // request may ever reach a host action. Only an advisory verdict that still
-    // performs no host action can become an offer.
     let assessment = super::screen::host_safety::assess_terminal_host_request(
         super::screen::host_safety::TerminalHostRequestKind::Hyperlink,
         raw,
@@ -395,28 +338,19 @@ pub(crate) fn parse_link_target(raw: &[u8]) -> Result<LinkTarget, LinkRefusal> {
     })
 }
 
-/// An explicit grant to activate one exact link target.
-///
-/// A grant is never implied by the target being valid. It exists only because an
-/// accepted user or policy action produced it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct LinkActivationGrant {
     pub(crate) target: LinkTarget,
 }
 
-/// One offered link, before and after an accepted activation decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum LinkOffer {
-    /// The target failed validation and is never offered.
     Refused,
-    /// Offered for user review. Nothing has been opened.
     Pending(LinkTarget),
-    /// An accepted user or policy action produced this exact grant.
     Granted(LinkActivationGrant),
 }
 
 impl LinkOffer {
-    /// Validation alone never produces a grant.
     pub(crate) fn offer(raw: &[u8]) -> Self {
         match parse_link_target(raw) {
             Ok(target) => Self::Pending(target),
@@ -424,7 +358,6 @@ impl LinkOffer {
         }
     }
 
-    /// Records an explicit accepted activation for this exact target.
     pub(crate) fn accept(self) -> Self {
         match self {
             Self::Pending(target) => Self::Granted(LinkActivationGrant { target }),
@@ -433,17 +366,11 @@ impl LinkOffer {
     }
 }
 
-/// One offered clipboard write. The child never writes the clipboard itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ClipboardOffer {
     pub(crate) payload: Vec<u8>,
 }
 
-/// Accepts one bounded local clipboard offer and refuses anything else.
-///
-/// The offer is local only: it holds bytes the local child printed. It is never
-/// applied on the child's behalf, and the canonical host-safety model still owns
-/// the decision to act.
 pub(crate) fn offer_clipboard(payload: &[u8]) -> Option<ClipboardOffer> {
     if payload.is_empty() || payload.len() > MAX_CLIPBOARD_OFFER_BYTES {
         return None;
@@ -460,35 +387,29 @@ pub(crate) fn offer_clipboard(payload: &[u8]) -> Option<ClipboardOffer> {
     })
 }
 
-/// Why a graphics payload was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GraphicsRefusal {
-    /// The frame exceeded the bounded size.
     TooLarge,
-    /// The frame referenced a remote location, which is never fetched.
     RemoteReference,
 }
 
-/// One bounded local graphics frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct GraphicsFrame {
     pub(crate) bytes: Vec<u8>,
 }
 
-/// Accepts one bounded local graphics frame and refuses anything remote.
-///
-/// A remote reference is refused rather than fetched. There is deliberately no
-/// code path in this module that can retrieve bytes from a network location.
+fn contains_ascii_case_insensitive(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle))
+}
+
 pub(crate) fn accept_graphics_frame(payload: &[u8]) -> Result<GraphicsFrame, GraphicsRefusal> {
     if payload.len() > MAX_GRAPHICS_FRAME_BYTES {
         return Err(GraphicsRefusal::TooLarge);
     }
-    if payload
-        .windows(8)
-        .any(|window| window[..7].eq_ignore_ascii_case(b"http://"))
-        || payload
-            .windows(9)
-            .any(|window| window[..8].eq_ignore_ascii_case(b"https://"))
+    if contains_ascii_case_insensitive(payload, b"http://")
+        || contains_ascii_case_insensitive(payload, b"https://")
     {
         return Err(GraphicsRefusal::RemoteReference);
     }
@@ -497,11 +418,6 @@ pub(crate) fn accept_graphics_frame(payload: &[u8]) -> Result<GraphicsFrame, Gra
     })
 }
 
-/// Bounded pane-local rendered and parsed working bytes.
-///
-/// This mirrors the Plan ceiling for a pane-local working buffer. A pane view
-/// references bounded owner replay and keeps only this much of its own
-/// working state, so the owner replay budget is never multiplied by observers.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PaneWorkingBuffer {
     retained_bytes: usize,
@@ -516,8 +432,6 @@ impl PaneWorkingBuffer {
         }
     }
 
-    /// Records one bounded chunk. An over-budget chunk is refused whole rather
-    /// than partially retained, so a pane can never hold a torn buffer.
     pub(crate) fn retain(&mut self, chunk: &[u8]) -> Result<(), ()> {
         let next = self.retained_bytes.saturating_add(chunk.len());
         if next > MAX_PANE_WORKING_BUFFER_BYTES {
@@ -541,13 +455,11 @@ impl PaneWorkingBuffer {
     }
 }
 
-/// One bounded, suppressible terminal notification.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TerminalNotification {
     pub(crate) now_unix_ms: i64,
 }
 
-/// A bounded, suppressible notification budget.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct NotificationBudget {
     suppressed: bool,
@@ -562,12 +474,11 @@ impl NotificationBudget {
         Self::default()
     }
 
-    /// Notifications are suppressible, and suppression stops all recording.
     pub(crate) fn suppress(&mut self) {
         self.suppressed = true;
     }
 
-    pub(crate) fn is_suppressed(&self) -> bool {
+    pub(crate) const fn is_suppressed(&self) -> bool {
         self.suppressed
     }
 
@@ -579,10 +490,6 @@ impl NotificationBudget {
         self.retained.len()
     }
 
-    /// Records one notification inside the bounded window.
-    ///
-    /// Returns the recorded notification, or `None` when suppressed, out of
-    /// window, or over budget. A bell can never grow an unbounded queue.
     pub(crate) fn record(&mut self, now_unix_ms: i64) -> Option<TerminalNotification> {
         if self.suppressed {
             return None;
@@ -607,49 +514,33 @@ impl NotificationBudget {
     }
 }
 
-/// The explicit claim state for CJK, IME, and input-source support.
-///
-/// The claim is gated by native platform evidence. Without that evidence the
-/// state stays unclaimed, which is a truthful statement rather than a silent
-/// assumption.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// T171 cannot manufacture a CJK/IME/input-source claim. Direct native-platform
+/// claim admission belongs to T183; the truthful T171 production state is only
+/// `Unclaimed`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum InputMethodClaim {
-    /// No native platform evidence was produced, so no support is claimed.
+    #[default]
     Unclaimed,
-    /// Native platform evidence qualified this claim.
-    Claimed {
-        /// The platform that produced the evidence.
-        evidence_platform: String,
-        /// The bounded evidence that qualified it.
-        evidence: String,
-    },
 }
 
 impl InputMethodClaim {
-    /// Records a claim only when bounded native evidence accompanies it.
-    pub(crate) fn claim(evidence_platform: &str, evidence: &str) -> Self {
-        if evidence_platform.is_empty() || evidence.is_empty() {
-            return Self::Unclaimed;
-        }
-        Self::Claimed {
-            evidence_platform: evidence_platform.to_owned(),
-            evidence: evidence.to_owned(),
-        }
+    pub(crate) const fn unclaimed() -> Self {
+        Self::Unclaimed
     }
 
     pub(crate) const fn is_claimed(&self) -> bool {
-        matches!(self, Self::Claimed { .. })
+        false
     }
 }
 
-/// Bounded scrollback for one exact pane.
-///
-/// Rows are appended in order and dropped from the front once the line budget is
-/// reached. Truncation is explicit and observable, never silent.
+/// Pane-local bounded presentation scrollback. Both line count and retained bytes
+/// are bounded; a single oversized row retains only its newest bounded bytes.
 #[derive(Debug, Clone)]
 pub(crate) struct BoundedScrollback {
     rows: VecDeque<Vec<u8>>,
+    retained_bytes: usize,
     dropped_rows: u64,
+    dropped_bytes: u64,
     truncated: bool,
 }
 
@@ -657,17 +548,35 @@ impl BoundedScrollback {
     pub(crate) fn new() -> Self {
         Self {
             rows: VecDeque::new(),
+            retained_bytes: 0,
             dropped_rows: 0,
+            dropped_bytes: 0,
             truncated: false,
         }
     }
 
-    /// Appends one row, dropping the oldest row when the budget is reached.
-    pub(crate) fn push(&mut self, row: Vec<u8>) {
+    pub(crate) fn push(&mut self, mut row: Vec<u8>) {
+        if row.len() > MAX_PANE_WORKING_BUFFER_BYTES {
+            let excess = row.len() - MAX_PANE_WORKING_BUFFER_BYTES;
+            row.drain(..excess);
+            self.dropped_bytes = self
+                .dropped_bytes
+                .saturating_add(u64::try_from(excess).unwrap_or(u64::MAX));
+            self.truncated = true;
+        }
+        self.retained_bytes = self.retained_bytes.saturating_add(row.len());
         self.rows.push_back(row);
-        while self.rows.len() > MAX_SCROLLBACK_LINES {
-            self.rows.pop_front();
+        while self.rows.len() > MAX_SCROLLBACK_LINES
+            || self.retained_bytes > MAX_PANE_WORKING_BUFFER_BYTES
+        {
+            let Some(dropped) = self.rows.pop_front() else {
+                break;
+            };
+            self.retained_bytes = self.retained_bytes.saturating_sub(dropped.len());
             self.dropped_rows = self.dropped_rows.saturating_add(1);
+            self.dropped_bytes = self
+                .dropped_bytes
+                .saturating_add(u64::try_from(dropped.len()).unwrap_or(u64::MAX));
             self.truncated = true;
         }
     }
@@ -684,12 +593,20 @@ impl BoundedScrollback {
         self.rows.is_empty()
     }
 
-    pub(crate) const fn truncated(&self) -> bool {
-        self.truncated
+    pub(crate) const fn retained_bytes(&self) -> usize {
+        self.retained_bytes
     }
 
     pub(crate) const fn dropped_rows(&self) -> u64 {
         self.dropped_rows
+    }
+
+    pub(crate) const fn dropped_bytes(&self) -> u64 {
+        self.dropped_bytes
+    }
+
+    pub(crate) const fn truncated(&self) -> bool {
+        self.truncated
     }
 }
 
@@ -697,6 +614,95 @@ impl Default for BoundedScrollback {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Immutable pane identity captured at the presentation boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ExactPaneTarget {
+    pub(crate) multiplexer_workspace_id: MultiplexerWorkspaceId,
+    pub(crate) tab_id: TabId,
+    pub(crate) pane_id: PaneId,
+    pub(crate) topology_generation: TopologyGeneration,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PointerButton {
+    Left,
+    Middle,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PointerPhase {
+    Down,
+    Drag,
+    Up,
+}
+
+/// Local gesture semantics only; none of these variants grants runtime authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PaneInteractionKind {
+    MouseCapture {
+        button: PointerButton,
+        phase: PointerPhase,
+    },
+    ContextMenu,
+    CopyOnSelect,
+    Scroll {
+        vertical_lines: i16,
+        horizontal_columns: i16,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BoundPaneInteraction {
+    target: ExactPaneTarget,
+    kind: PaneInteractionKind,
+    column: u16,
+    row: u16,
+}
+
+impl BoundPaneInteraction {
+    pub(crate) const fn target(self) -> ExactPaneTarget {
+        self.target
+    }
+
+    pub(crate) const fn kind(self) -> PaneInteractionKind {
+        self.kind
+    }
+
+    pub(crate) const fn column(self) -> u16 {
+        self.column
+    }
+
+    pub(crate) const fn row(self) -> u16 {
+        self.row
+    }
+
+    pub(crate) const fn is_current_generation(self, generation: TopologyGeneration) -> bool {
+        self.target.topology_generation.get() == generation.get()
+    }
+}
+
+/// Binds a terminal gesture to the pane identity/generation visible when the
+/// gesture was captured. A stale generation fails closed rather than retargeting
+/// to whatever pane later receives focus.
+pub(crate) fn bind_exact_pane_interaction(
+    target: ExactPaneTarget,
+    presented_generation: TopologyGeneration,
+    kind: PaneInteractionKind,
+    column: u16,
+    row: u16,
+) -> Option<BoundPaneInteraction> {
+    if target.topology_generation != presented_generation {
+        return None;
+    }
+    Some(BoundPaneInteraction {
+        target,
+        kind,
+        column,
+        row,
+    })
 }
 
 #[cfg(test)]
