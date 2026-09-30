@@ -519,7 +519,14 @@ pub(crate) fn detect_in(
     input: DetectionInput,
     host: CatalogPlatform,
 ) -> AgentDetection {
-    let source = match input {
+    // Untrusted display text is not a detection input. It is recorded as
+    // untrusted and never classified, so a shell title, a pane label, or a line
+    // of terminal prose cannot promote a family. This is checked before
+    // normalization so no untrusted string is ever compared against a rule.
+    if let Some(refused) = input.refuse() {
+        return refused;
+    }
+    let (source, normalized) = match input {
         DetectionInput::StructuredMetadataNamespace { namespace } => {
             match normalize_namespace(namespace) {
                 Some(normalized) => (DetectionSource::StructuredMetadataNamespace, normalized),
@@ -540,20 +547,14 @@ pub(crate) fn detect_in(
                 }
             }
         }
-        // Untrusted display text is not a detection input. It is recorded as
-        // untrusted and never classified, so a shell title, a pane label, or a
-        // line of terminal prose cannot promote a family.
         DetectionInput::TerminalProse(_)
         | DetectionInput::UserLabel(_)
         | DetectionInput::ShellTitle(_) => {
-            return AgentDetection::UntrustedText {
-                source: input
-                    .untrusted_source()
-                    .expect("an untrusted input always has an untrusted source"),
+            return AgentDetection::Unknown {
+                reason: UnknownReason::NoMatch,
             };
         }
     };
-    let (source, normalized) = source;
 
     let mut observed: Vec<&AgentCatalogEntry> = Vec::new();
     let mut unavailable: Vec<AgentFamily> = Vec::new();
@@ -698,12 +699,25 @@ pub(crate) enum DetectionInput<'a> {
 }
 
 impl DetectionInput<'_> {
-    fn untrusted_source(self) -> Option<UntrustedTextSource> {
+    /// The classification an input is refused with, or `None` for a structured
+    /// input that must be classified.
+    ///
+    /// Refusing here rather than at the end of the match means the classifier has
+    /// exactly one way to produce [`AgentDetection::UntrustedText`], and no
+    /// untrusted string ever reaches normalization or a rule comparison.
+    fn refuse(&self) -> Option<AgentDetection> {
         match self {
-            DetectionInput::TerminalProse(_) => Some(UntrustedTextSource::TerminalProse),
-            DetectionInput::UserLabel(_) => Some(UntrustedTextSource::UserLabel),
-            DetectionInput::ShellTitle(_) => Some(UntrustedTextSource::ShellTitle),
-            _ => None,
+            DetectionInput::TerminalProse(_) => Some(AgentDetection::UntrustedText {
+                source: UntrustedTextSource::TerminalProse,
+            }),
+            DetectionInput::UserLabel(_) => Some(AgentDetection::UntrustedText {
+                source: UntrustedTextSource::UserLabel,
+            }),
+            DetectionInput::ShellTitle(_) => Some(AgentDetection::UntrustedText {
+                source: UntrustedTextSource::ShellTitle,
+            }),
+            DetectionInput::StructuredMetadataNamespace { .. }
+            | DetectionInput::ExecutableFileName { .. } => None,
         }
     }
 }
