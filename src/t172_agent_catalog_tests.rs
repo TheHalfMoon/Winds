@@ -232,6 +232,68 @@ fn t172_pinned_catalog_validates_and_has_no_cross_family_claim() {
     assert_eq!(cross_family_claims_in(catalog.entries()), Vec::new());
     assert_eq!(pinned().revision(), "t172-pinned-1");
 }
+#[test]
+fn t172_every_family_namespace_matches_the_ledger_attested_stem() {
+    // The namespace is the one substantive data claim this catalog makes: it is
+    // the detector-manifest stem that Spec 012 ledger rows A01-A24 pin in their
+    // source-evidence column in
+    // `docs/research/021-herdr-exhaustive-capability-ledger.md`. The stems are
+    // written out here independently of the catalog, so changing any one of them
+    // is a test failure rather than a silent departure from the cited evidence.
+    //
+    // Two of them are not the obvious lowercase family name, which is exactly why
+    // this table is needed: `github-copilot` for `GithubCopilot` and `qodercli`
+    // for `Qodercli`.
+    let attested = [
+        (AgentFamily::Pi, "pi", "A01"),
+        (AgentFamily::Claude, "claude", "A02"),
+        (AgentFamily::Codex, "codex", "A03"),
+        (AgentFamily::Gemini, "gemini", "A04"),
+        (AgentFamily::Cursor, "cursor", "A05"),
+        (AgentFamily::Devin, "devin", "A06"),
+        (AgentFamily::Antigravity, "antigravity", "A07"),
+        (AgentFamily::Cline, "cline", "A08"),
+        (AgentFamily::Omp, "omp", "A09"),
+        (AgentFamily::Mastracode, "mastracode", "A10"),
+        (AgentFamily::OpenCode, "opencode", "A11"),
+        (AgentFamily::GithubCopilot, "github-copilot", "A12"),
+        (AgentFamily::Kimi, "kimi", "A13"),
+        (AgentFamily::Kiro, "kiro", "A14"),
+        (AgentFamily::Droid, "droid", "A15"),
+        (AgentFamily::Amp, "amp", "A16"),
+        (AgentFamily::Grok, "grok", "A17"),
+        (AgentFamily::Hermes, "hermes", "A18"),
+        (AgentFamily::Kilo, "kilo", "A19"),
+        (AgentFamily::Qodercli, "qodercli", "A20"),
+        (AgentFamily::Qwen, "qwen", "A21"),
+        (AgentFamily::Letta, "letta", "A22"),
+        (AgentFamily::Maki, "maki", "A23"),
+        (AgentFamily::Muse, "muse", "A24"),
+    ];
+    assert_eq!(attested.len(), AgentFamily::ALL.len());
+    for (family, namespace, row) in attested {
+        assert_eq!(
+            pinned().entry(family).unwrap().namespace,
+            namespace,
+            "ledger row {row} attests this stem for {family:?}"
+        );
+        assert_eq!(
+            observed_family(&observe(namespace)),
+            family,
+            "{namespace:?} must classify as {family:?} on every host"
+        );
+        for platform in CatalogPlatform::ALL {
+            assert_eq!(
+                observed_family(&pinned().detect(
+                    DetectionInput::StructuredMetadataNamespace { namespace },
+                    platform
+                )),
+                family,
+                "{namespace:?} must classify as {family:?} on {platform:?}"
+            );
+        }
+    }
+}
 
 #[test]
 fn t172_pinned_catalog_asserts_no_unsubstantiated_vendor_claim() {
@@ -241,11 +303,25 @@ fn t172_pinned_catalog_asserts_no_unsubstantiated_vendor_claim() {
             entry.executable_basenames, NO_BASENAMES,
             "{family:?}: no vendor executable basename is substantiated, so none may be asserted"
         );
+        // Written out here rather than compared against `CatalogPlatform::ALL`,
+        // so that dropping a host from both constants together cannot leave this
+        // test passing.
         assert_eq!(
-            entry.platforms,
-            &CatalogPlatform::ALL,
-            "{family:?}: no platform restriction is substantiated, so none may be asserted"
+            entry.platforms.len(),
+            4,
+            "{family:?}: no platform restriction is substantiated, so all four hosts apply"
         );
+        for platform in [
+            CatalogPlatform::Windows,
+            CatalogPlatform::MacOs,
+            CatalogPlatform::Linux,
+            CatalogPlatform::Wsl,
+        ] {
+            assert!(
+                entry.platforms.contains(&platform),
+                "{family:?} must record {platform:?} as applicable"
+            );
+        }
     }
 }
 
@@ -462,19 +538,20 @@ fn t172_revalidation_never_retargets_a_stale_family() {
             if other == family {
                 continue;
             }
-            let reclassified = pinned().detect(
-                DetectionInput::StructuredMetadataNamespace {
-                    namespace: namespace_of(other),
-                },
-                CatalogPlatform::Linux,
-            );
-            assert_eq!(observed_family(&reclassified), other);
+            let other_input = DetectionInput::StructuredMetadataNamespace {
+                namespace: namespace_of(other),
+            };
             assert_eq!(
-                pinned().revalidate(
-                    &current,
-                    reclassified_input(&reclassified, other),
-                    CatalogPlatform::Linux
-                ),
+                pinned().detect(other_input, CatalogPlatform::Linux),
+                AgentDetection::Observed {
+                    family: other,
+                    source: DetectionSource::StructuredMetadataNamespace,
+                    support: AgentSupport::DetectionOnly,
+                },
+                "{namespace:?} must still classify as {other:?} on its own"
+            );
+            assert_eq!(
+                pinned().revalidate(&current, other_input, CatalogPlatform::Linux),
                 AgentDetection::Stale,
                 "{family:?} must not be retargeted to {other:?}"
             );
@@ -492,14 +569,6 @@ fn t172_revalidation_never_retargets_a_stale_family() {
                 "{family:?} must not be refreshed by untrusted text"
             );
         }
-    }
-}
-
-/// An input that would produce `detection` for the family it names.
-fn reclassified_input(detection: &AgentDetection, family: AgentFamily) -> DetectionInput<'static> {
-    assert_eq!(observed_family(detection), family);
-    DetectionInput::StructuredMetadataNamespace {
-        namespace: namespace_of(family),
     }
 }
 
@@ -908,13 +977,14 @@ fn t172_catalog_grants_no_execution_authority_for_any_family() {
 }
 
 #[test]
-fn t172_catalog_module_declares_no_capability_surface() {
-    // These three guarantees are compiler-enforced, so editing this file cannot
-    // evade them: the module's `#![forbid(unsafe_code)]` makes unsafe a build
-    // error; the module-level `const _: () = assert!(...)` proves the pinned
-    // catalog is const-evaluable borrowed data, so no runtime, refresh, or
-    // reload path can hide in it; and the `Send + Sync` bound below means the
-    // catalog holds no interior mutability, so it cannot change under a reader.
+fn t172_catalog_module_is_hermetic_and_names_no_capability_path() {
+    // What actually guarantees this module has no capability is the type system,
+    // not this test. Three properties are compiler-enforced and cannot be edited
+    // away: `#![forbid(unsafe_code)]` makes unsafe a build error; the
+    // module-level `const _: () = assert!(...)` proves the pinned catalog is
+    // const-evaluable borrowed data, so no runtime, refresh, or reload path can
+    // hide in it; and the `Send + Sync` bound below rules out `Cell`, `RefCell`,
+    // and `Mutex`, so an accepted entry cannot change under a reader.
     let source = include_str!("multiplexer/agent_catalog.rs");
     assert!(
         source.contains("#![forbid(unsafe_code)]"),
@@ -924,11 +994,25 @@ fn t172_catalog_module_declares_no_capability_surface() {
     assert_shared(&pinned());
     assert_eq!(AgentCatalog::pinned().entries().len(), 24);
 
-    // The remaining surface is checked by scanning the source for any capability
-    // path. Both spellings matter and both are checked: an import and a fully
-    // qualified path are each sufficient on their own, and a fully qualified
-    // `std::process::Command::new` needs no import, so an import-only check would
-    // miss exactly the case it is meant to catch.
+    // Everything below is a regression guardrail, not a proof. No text scan can
+    // prove a negative, so this test is stated for what it is: it makes adding a
+    // capability require an intentional edit to a named list, which a reviewer
+    // sees. It is not offered as additional proof beyond the three
+    // compiler-enforced properties above.
+    //
+    // Hermeticity is checked first because it closes the widest hole. A module
+    // that names no path outside itself cannot reach an existing Winds helper
+    // that spawns, reads, or writes, so a capability cannot be introduced by
+    // calling something else in this crate.
+    for outside in ["crate::", "super::", "::std::"] {
+        assert!(
+            !source.contains(outside),
+            "the catalog must be hermetic; it must not name {outside}"
+        );
+    }
+    // Then the capability paths themselves. Both spellings are checked, because
+    // each is sufficient alone: an import, and a fully qualified path that needs
+    // no import, which is exactly what an import-only check would miss.
     //
     // The import check is a line-prefix test rather than a substring test,
     // because ordinary prose such as "because no" contains "use ".
@@ -971,30 +1055,71 @@ fn t172_catalog_entries_are_immutable_borrowed_data() {
     fn assert_shared<T: Send + Sync + 'static>(_: &T) {}
     assert_shared(&pinned());
 
-    // An entry is a value over shared references, not a handle. Reassigning
-    // every field of a local copy must leave the pinned catalog untouched, which
-    // is the property that would break if an entry ever held a mutable handle or
-    // an interior-mutable cell instead of plain borrowed data.
+    // An entry is a value over shared references, not a handle. Rewriting a
+    // local copy changes only local behaviour, which is the property that would
+    // break if an entry ever held a mutable handle or an interior-mutable cell
+    // instead of plain borrowed data. These assertions check what the copy does,
+    // not merely that the assignments took effect.
     let original = *pinned().entry(AgentFamily::Pi).unwrap();
     let mut edited = original;
     edited.family = AgentFamily::Muse;
     edited.namespace = "edited";
     edited.executable_basenames = EDITED_BASENAMES;
     edited.platforms = WSL_ONLY;
-    // The local copy now differs from the pinned entry in every field...
-    assert_eq!(edited.family, AgentFamily::Muse);
-    assert_eq!(edited.namespace, "edited");
-    assert_eq!(edited.executable_basenames, EDITED_BASENAMES);
-    assert_eq!(edited.platforms, WSL_ONLY);
-    // ...and the pinned catalog is untouched in every one of them.
-    let pinned_pi = pinned().entry(AgentFamily::Pi).unwrap();
-    assert_eq!(pinned_pi.family, original.family);
-    assert_eq!(pinned_pi.namespace, original.namespace);
+
+    // The local copy classifies as what it was edited to be, on its own host...
     assert_eq!(
-        pinned_pi.executable_basenames,
-        original.executable_basenames
+        detect_in(
+            &[edited],
+            DetectionInput::StructuredMetadataNamespace {
+                namespace: "edited"
+            },
+            CatalogPlatform::Wsl
+        ),
+        AgentDetection::Observed {
+            family: AgentFamily::Muse,
+            source: DetectionSource::StructuredMetadataNamespace,
+            support: AgentSupport::DetectionOnly,
+        }
     );
-    assert_eq!(pinned_pi.platforms, original.platforms);
+    // ...and no longer classifies as the family it was copied from.
+    assert_eq!(
+        detect_in(
+            &[edited],
+            DetectionInput::StructuredMetadataNamespace { namespace: "pi" },
+            CatalogPlatform::Wsl
+        ),
+        AgentDetection::Unknown {
+            reason: UnknownReason::NoMatch
+        }
+    );
+
+    // The pinned catalog is untouched by any of that: it still classifies Pi from
+    // its own namespace, and it does not accept the value the copy was given.
+    assert_eq!(
+        pinned().detect(
+            DetectionInput::StructuredMetadataNamespace {
+                namespace: original.namespace
+            },
+            CatalogPlatform::Linux
+        ),
+        AgentDetection::Observed {
+            family: AgentFamily::Pi,
+            source: DetectionSource::StructuredMetadataNamespace,
+            support: AgentSupport::DetectionOnly,
+        }
+    );
+    assert_eq!(
+        pinned().detect(
+            DetectionInput::StructuredMetadataNamespace {
+                namespace: "edited"
+            },
+            CatalogPlatform::Linux
+        ),
+        AgentDetection::Unknown {
+            reason: UnknownReason::NoMatch
+        }
+    );
 
     // A reference held across further lookups still reads the accepted data.
     let held = pinned().entry(AgentFamily::Pi).unwrap();
