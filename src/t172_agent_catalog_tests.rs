@@ -17,6 +17,7 @@ static BASENAME_CLAUDE: &[&str] = &["claude"];
 static BASENAME_EMPTY: &[&str] = &[""];
 static BASENAME_UPPER: &[&str] = &["Pi"];
 static BASENAME_DUPLICATE: &[&str] = &["pi", "pi"];
+static EDITED_BASENAMES: &[&str] = &["edited"];
 
 /// The single-host slice recording `platform`, so a fixture can carry
 /// compile-time data for a host chosen at runtime.
@@ -907,12 +908,30 @@ fn t172_catalog_grants_no_execution_authority_for_any_family() {
 }
 
 #[test]
-fn t172_catalog_module_reaches_no_host_capability() {
-    // The module declares no `use` statement at all, so it cannot name a
-    // process, filesystem, network, thread, or async API. `unsafe` is already
-    // forbidden by the module attribute, which is a compile-time guarantee this
-    // test cannot weaken.
+fn t172_catalog_module_declares_no_capability_surface() {
+    // These three guarantees are compiler-enforced, so editing this file cannot
+    // evade them: the module's `#![forbid(unsafe_code)]` makes unsafe a build
+    // error; the module-level `const _: () = assert!(...)` proves the pinned
+    // catalog is const-evaluable borrowed data, so no runtime, refresh, or
+    // reload path can hide in it; and the `Send + Sync` bound below means the
+    // catalog holds no interior mutability, so it cannot change under a reader.
     let source = include_str!("multiplexer/agent_catalog.rs");
+    assert!(
+        source.contains("#![forbid(unsafe_code)]"),
+        "the catalog must keep forbidding unsafe code"
+    );
+    fn assert_shared<T: Send + Sync + 'static>(_: &T) {}
+    assert_shared(&pinned());
+    assert_eq!(AgentCatalog::pinned().entries().len(), 24);
+
+    // The remaining surface is checked by scanning the source for any capability
+    // path. Both spellings matter and both are checked: an import and a fully
+    // qualified path are each sufficient on their own, and a fully qualified
+    // `std::process::Command::new` needs no import, so an import-only check would
+    // miss exactly the case it is meant to catch.
+    //
+    // The import check is a line-prefix test rather than a substring test,
+    // because ordinary prose such as "because no" contains "use ".
     let imports: Vec<&str> = source
         .lines()
         .map(str::trim)
@@ -922,29 +941,66 @@ fn t172_catalog_module_reaches_no_host_capability() {
         imports.is_empty(),
         "the catalog must declare no import; found {imports:?}"
     );
-    // `unsafe` is already forbidden by the module attribute, which the compiler
-    // enforces on every build. This asserts the guard is actually present, so
-    // dropping it cannot pass unnoticed.
-    assert!(
-        source.contains("#![forbid(unsafe_code)]"),
-        "the catalog must keep forbidding unsafe code"
-    );
-    // The pinned catalog is proven compile-time data by a module-level const
-    // assertion, so a runtime, refresh, or reload path cannot be hiding here.
-    assert_eq!(AgentCatalog::pinned().entries().len(), 24);
+    for path in [
+        "std::process",
+        "std::fs",
+        "std::net",
+        "std::thread",
+        "std::sync",
+        "std::cell",
+        "std::rc",
+        "std::path",
+        "std::env",
+        "tokio",
+        "reqwest",
+        "Box<dyn",
+        "static mut",
+        "extern \"C\"",
+    ] {
+        assert!(
+            !source.contains(path),
+            "the catalog must not name {path}; it declares no capability surface"
+        );
+    }
 }
 
 #[test]
 fn t172_catalog_entries_are_immutable_borrowed_data() {
+    // `Send + Sync + 'static` rules out `Cell`, `RefCell`, and `Mutex`, so an
+    // accepted catalog entry cannot be written through while a reader holds it.
     fn assert_shared<T: Send + Sync + 'static>(_: &T) {}
     assert_shared(&pinned());
-    let entry = *pinned().entry(AgentFamily::Pi).unwrap();
-    let copy = entry;
-    assert_eq!(entry, copy, "a catalog entry is plain data, never a handle");
-    // Holding a borrowed entry across further lookups cannot observe a change.
-    let later = pinned().entry(AgentFamily::Muse).unwrap();
-    assert_eq!(entry.namespace, "pi");
-    assert_eq!(later.namespace, "muse");
+
+    // An entry is a value over shared references, not a handle. Reassigning
+    // every field of a local copy must leave the pinned catalog untouched, which
+    // is the property that would break if an entry ever held a mutable handle or
+    // an interior-mutable cell instead of plain borrowed data.
+    let original = *pinned().entry(AgentFamily::Pi).unwrap();
+    let mut edited = original;
+    edited.family = AgentFamily::Muse;
+    edited.namespace = "edited";
+    edited.executable_basenames = EDITED_BASENAMES;
+    edited.platforms = WSL_ONLY;
+    // The local copy now differs from the pinned entry in every field...
+    assert_eq!(edited.family, AgentFamily::Muse);
+    assert_eq!(edited.namespace, "edited");
+    assert_eq!(edited.executable_basenames, EDITED_BASENAMES);
+    assert_eq!(edited.platforms, WSL_ONLY);
+    // ...and the pinned catalog is untouched in every one of them.
+    let pinned_pi = pinned().entry(AgentFamily::Pi).unwrap();
+    assert_eq!(pinned_pi.family, original.family);
+    assert_eq!(pinned_pi.namespace, original.namespace);
+    assert_eq!(
+        pinned_pi.executable_basenames,
+        original.executable_basenames
+    );
+    assert_eq!(pinned_pi.platforms, original.platforms);
+
+    // A reference held across further lookups still reads the accepted data.
+    let held = pinned().entry(AgentFamily::Pi).unwrap();
+    let _later = pinned().entry(AgentFamily::Muse).unwrap();
+    assert_eq!(held.namespace, original.namespace);
+    assert_eq!(held.family, AgentFamily::Pi);
 }
 
 #[test]
