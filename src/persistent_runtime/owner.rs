@@ -137,6 +137,7 @@ struct OwnerConnectionSession {
     next_response_sequence: u64,
     observers: BTreeMap<RuntimeNamespaceId, ObserverHandle>,
     topology_subscription: Option<TopologySubscriptionState>,
+    agent_observation_subscription: Option<(Option<MultiplexerWorkspaceId>, u64)>,
     inbound: Vec<u8>,
     outbound: VecDeque<u8>,
     outbound_bytes: usize,
@@ -156,6 +157,7 @@ impl OwnerConnectionSession {
             next_response_sequence: 1,
             observers: BTreeMap::new(),
             topology_subscription: None,
+            agent_observation_subscription: None,
             inbound: Vec::new(),
             outbound: VecDeque::new(),
             outbound_bytes: 0,
@@ -264,6 +266,7 @@ pub(crate) struct PersistentOwner {
     runtime_registry: PersistentTerminalRegistry,
     controller_registry: ControllerRegistry,
     multiplexer_service: MultiplexerService,
+    agent_observation_store: crate::multiplexer::agent_state::AgentObservationStore,
     multiplexer_request_sequences: BTreeMap<ClientConnectionId, RequestSequenceGuard>,
 }
 
@@ -329,6 +332,8 @@ impl PersistentOwner {
             runtime_registry: PersistentTerminalRegistry::new(generation_id),
             controller_registry: ControllerRegistry::new(generation_id),
             multiplexer_service,
+            agent_observation_store:
+                crate::multiplexer::agent_state::AgentObservationStore::new(generation_id),
             multiplexer_request_sequences: BTreeMap::new(),
         })
     }
@@ -367,6 +372,8 @@ impl PersistentOwner {
             runtime_registry: PersistentTerminalRegistry::new(generation_id),
             controller_registry: ControllerRegistry::new(generation_id),
             multiplexer_service,
+            agent_observation_store:
+                crate::multiplexer::agent_state::AgentObservationStore::new(generation_id),
             multiplexer_request_sequences: BTreeMap::new(),
         })
     }
@@ -740,8 +747,10 @@ impl PersistentOwner {
                     snapshot: MultiplexerSnapshotV2::MutationResult { result, snapshot },
                 }
             }
+            ProtocolPayload::ListAgentObservations { .. } => {
+                return self.dispatch_agent_observation_list(request, response_sequence);
+            }
             ProtocolPayload::SubscribeMultiplexerEvents { .. }
-            | ProtocolPayload::ListAgentObservations { .. }
             | ProtocolPayload::ListWorktrees { .. }
             | ProtocolPayload::ApplyWorktreeOperation { .. } => {
                 return inactive_v2_domain_response(request, response_sequence);
@@ -1404,6 +1413,7 @@ impl PersistentOwner {
         };
         self.queue_session_message(session, response.clone())?;
         self.queue_topology_event_after_response(session, &request, &response)?;
+        self.queue_agent_observation_events_after_response(session, &request, &response)?;
         session.last_activity_monotonic_ms = now_monotonic_ms;
         Ok(())
     }
@@ -1616,6 +1626,10 @@ impl PersistentOwner {
             ProtocolPayload::Ping => {
                 self.respond_simple(request, response_sequence, ProtocolPayload::Pong)
             }
+            ProtocolPayload::SubscribeMultiplexerEvents {
+                request: subscription,
+            } if subscription.stream == MultiplexerSubscriptionStreamV2::AgentObservations => self
+                .dispatch_agent_observation_subscription(session, request, response_sequence),
             ProtocolPayload::SubscribeMultiplexerEvents { .. } => {
                 self.dispatch_topology_subscription(session, request, response_sequence)
             }
@@ -1902,6 +1916,7 @@ impl PersistentOwner {
                 }
             }
             self.pump_topology_subscription_gap(&mut session)?;
+            self.pump_agent_observation_subscription_gap(&mut session)?;
             Ok(())
         })();
         self.session = Some(session);
@@ -2440,6 +2455,9 @@ impl Drop for OwnerSingleton {
         }
     }
 }
+
+#[path = "owner_agent_observation.rs"]
+mod owner_agent_observation;
 
 #[cfg(test)]
 #[path = "../t151_persistent_owner_shell_tests.rs"]
