@@ -379,13 +379,12 @@ impl AgentObservationStore {
         let summary = evidence_summary(&candidate.detection, candidate.source_class)
             .ok_or(ObservationError::Unrepresentable)?;
 
-        self.withdraw(
+        let mut events = self.withdraw(
             &candidate.pane_id,
             candidate.multiplexer_workspace_id,
             next_revision,
         );
 
-        let mut events = Vec::new();
         for (slot, (family, observation_id)) in qualified
             .families
             .into_iter()
@@ -881,5 +880,76 @@ mod t173_review_regressions {
             snapshot.observations[0].source_class,
             AgentObservationSourceV2::OwnedProcessMetadata
         );
+    }
+
+    #[test]
+    fn t173_review_replacement_emits_removals_before_new_upsert() {
+        let (topology, identities) = topology(1);
+        let (workspace_id, tab_id, pane_id) = identities[0];
+        let first_id = observation_id(0x60);
+        let second_id = observation_id(0x61);
+        let replacement_id = observation_id(0x62);
+        let mut store = AgentObservationStore::new(owner(0xa1));
+
+        let initial = store
+            .record(
+                &topology,
+                owner(0xa1),
+                candidate(
+                    workspace_id,
+                    tab_id,
+                    pane_id,
+                    vec![first_id, second_id],
+                    AgentDetection::Ambiguous {
+                        families: vec![AgentFamily::Claude, AgentFamily::Codex],
+                    },
+                    AgentObservationSourceV2::OwnedProcessMetadata,
+                ),
+            )
+            .expect("ambiguous observations are recordable");
+        assert_eq!(initial.len(), 2);
+
+        let replacement = store
+            .record(
+                &topology,
+                owner(0xa1),
+                candidate(
+                    workspace_id,
+                    tab_id,
+                    pane_id,
+                    vec![replacement_id],
+                    observed(AgentFamily::Gemini),
+                    AgentObservationSourceV2::OwnedProcessMetadata,
+                ),
+            )
+            .expect("replacement is recordable");
+        assert_eq!(replacement.len(), 3);
+        assert!(matches!(
+            replacement[0],
+            AgentObservationEventV2::Removed { observation_id, .. } if observation_id == first_id
+        ));
+        assert!(matches!(
+            replacement[1],
+            AgentObservationEventV2::Removed { observation_id, .. } if observation_id == second_id
+        ));
+        assert!(matches!(
+            replacement[2],
+            AgentObservationEventV2::Upsert { ref observation, .. }
+                if observation.observation_id == replacement_id
+                    && observation.family == AgentFamilyV2::Gemini
+        ));
+
+        let snapshot = store
+            .snapshot(
+                &topology,
+                &ListAgentObservationsV2 {
+                    multiplexer_workspace_id: None,
+                    cursor: None,
+                },
+            )
+            .expect("snapshot remains available");
+        assert_eq!(snapshot.observations.len(), 1);
+        assert_eq!(snapshot.observations[0].observation_id, replacement_id);
+        assert_eq!(snapshot.observations[0].family, AgentFamilyV2::Gemini);
     }
 }
