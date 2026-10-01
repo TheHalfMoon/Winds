@@ -654,6 +654,10 @@ impl PersistentOwner {
                             now_monotonic_ms,
                         )
                         .map_err(MultiplexerServiceError::Domain),
+                    // Only the owner knows whether a runtime namespace is an accepted,
+                    // live one. A pane may never be bound to a namespace this owner
+                    // does not hold, so the liveness proof happens before the domain
+                    // ever records the reference.
                     TopologyOperationV2::BindPaneRuntime {
                         runtime_namespace_id,
                         ..
@@ -1524,6 +1528,9 @@ impl PersistentOwner {
         {
             return Ok(());
         }
+        // `pane.clear` converges observers with a typed clear marker that carries
+        // the owner-assigned pane-local presentation epoch. It is presentation only:
+        // no lifecycle, verification, or evidence state changes with it.
         if let ProtocolPayload::ApplyTopologyOperation {
             request:
                 ApplyTopologyOperationV2 {
@@ -2320,6 +2327,8 @@ impl OwnerSingleton {
             return Err(OwnerError::SingletonSecurityMismatch);
         }
 
+        // SAFETY: file owns a valid descriptor for the private regular lock file. The kernel
+        // releases this advisory lock automatically when the File is dropped.
         if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             let error = std::io::Error::last_os_error();
             if matches!(
@@ -2366,6 +2375,7 @@ impl OwnerSingleton {
         impl Drop for Descriptor {
             fn drop(&mut self) {
                 if !self.0.is_null() {
+                    // SAFETY: the descriptor was allocated by the SDDL conversion API via LocalAlloc.
                     let _ = unsafe { windows_sys::Win32::Foundation::LocalFree(self.0) };
                 }
             }
@@ -2380,6 +2390,7 @@ impl OwnerSingleton {
         let mut sddl_wide: Vec<u16> = sddl.encode_utf16().collect();
         sddl_wide.push(0);
         let mut raw_descriptor: PSECURITY_DESCRIPTOR = null_mut();
+        // SAFETY: sddl_wide is NUL-terminated and raw_descriptor is a valid writable output pointer.
         if unsafe {
             ConvertStringSecurityDescriptorToSecurityDescriptorW(
                 sddl_wide.as_ptr(),
@@ -2406,6 +2417,8 @@ impl OwnerSingleton {
             ));
         }
         wide.push(0);
+        // SAFETY: wide is NUL-terminated, security points to a live descriptor, share mode zero
+        // gives the singleton kernel ownership property, and template handle is null.
         let handle = unsafe {
             CreateFileW(
                 wide.as_ptr(),
@@ -2418,6 +2431,7 @@ impl OwnerSingleton {
             )
         };
         if handle == INVALID_HANDLE_VALUE || handle.is_null() {
+            // SAFETY: GetLastError has no preconditions.
             let code = unsafe { GetLastError() };
             if code == ERROR_SHARING_VIOLATION {
                 return Err(OwnerError::SingletonAlreadyActive);
@@ -2425,6 +2439,7 @@ impl OwnerSingleton {
             return Err(OwnerError::SingletonIo(format!("CreateFileW error {code}")));
         }
         if validate_pipe_owner_and_dacl(handle, &user_sid).is_err() {
+            // SAFETY: handle is owned by this scope and has not been transferred.
             let _ = unsafe { CloseHandle(handle) };
             return Err(OwnerError::SingletonSecurityMismatch);
         }
@@ -2438,6 +2453,7 @@ impl Drop for OwnerSingleton {
         if !self.handle.is_null()
             && self.handle != windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE
         {
+            // SAFETY: this guard owns the singleton file handle and closes it exactly once.
             let _ = unsafe { windows_sys::Win32::Foundation::CloseHandle(self.handle) };
         }
     }
