@@ -90,6 +90,49 @@ jobs:
             };'''
           path.write_text(text[:start] + replacement + text[end:], encoding='utf-8')
           PY
+      - name: Repair T174 Desktop snapshot consumers and visible exact binding
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path_name: str, old: str, new: str) -> None:
+              path = Path(path_name)
+              text = path.read_text(encoding='utf-8')
+              if text.count(old) != 1:
+                  raise SystemExit(f'{path_name}: expected one repair target {old!r}, found {text.count(old)}')
+              path.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          replace_once(
+              'desktop/src/commandPalette/CommandPalette.tsx',
+              'import type { BridgeSnapshot } from "../leftDock/types";',
+              'import { UNAVAILABLE_AGENT_DOCK_SNAPSHOT, type BridgeSnapshot } from "../leftDock/types";',
+          )
+          replace_once(
+              'desktop/src/commandPalette/CommandPalette.tsx',
+              'const emptySnapshot: BridgeSnapshot = { projects: [] };',
+              'const emptySnapshot: BridgeSnapshot = { projects: [], agentDock: UNAVAILABLE_AGENT_DOCK_SNAPSHOT };',
+          )
+          replace_once(
+              'desktop/src/leftDock/ChatToolWindow.tsx',
+              'import type { BridgeProject, BridgeSnapshot } from "./types";',
+              'import { UNAVAILABLE_AGENT_DOCK_SNAPSHOT, type BridgeProject, type BridgeSnapshot } from "./types";',
+          )
+          replace_once(
+              'desktop/src/leftDock/ChatToolWindow.tsx',
+              'const emptySnapshot: BridgeSnapshot = { projects: [] };',
+              'const emptySnapshot: BridgeSnapshot = { projects: [], agentDock: UNAVAILABLE_AGENT_DOCK_SNAPSHOT };',
+          )
+          replace_once(
+              'desktop/src/agentDock/AgentDock.tsx',
+              'pane {compactId(observation.paneId)} · obs {compactId(observation.observationId)}',
+              'ws {compactId(observation.multiplexerWorkspaceId)} · pane {compactId(observation.paneId)} · obs {compactId(observation.observationId)}',
+          )
+
+          types_text = Path('desktop/src/leftDock/types.ts').read_text(encoding='utf-8')
+          if 'UNAVAILABLE_AGENT_DOCK_SNAPSHOT' not in types_text:
+              raise SystemExit('generated T174 bridge types did not define UNAVAILABLE_AGENT_DOCK_SNAPSHOT')
+          PY
       - name: Format Rust
         run: cargo fmt --all
       - name: Qualify focused T174 Rust tests
@@ -113,7 +156,7 @@ jobs:
           git diff --check
           git config user.name "Winds qualification bot"
           git config user.email "actions@users.noreply.github.com"
-          git add src/desktop.rs src/workbench_ui.rs src/t174_agent_dock_tests.rs desktop/src/leftDock/types.ts desktop/src/leftDock/fixture.ts desktop/src/leftDock/LeftDock.tsx
+          git add src/desktop.rs src/workbench_ui.rs src/t174_agent_dock_tests.rs desktop/src/leftDock/types.ts desktop/src/leftDock/fixture.ts desktop/src/leftDock/LeftDock.tsx desktop/src/leftDock/ChatToolWindow.tsx desktop/src/commandPalette/CommandPalette.tsx desktop/src/agentDock/AgentDock.tsx
           if git diff --cached --quiet; then
             echo "No implementation patch to commit"
             exit 1
