@@ -37,11 +37,12 @@ jobs:
         with:
           toolchain: 1.97.1
           components: rustfmt, clippy
-      - name: Repair known T174 builder patch compile defects
+      - name: Repair known T174 builder patch defects
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
+
           path = Path('.github/t174_patch.py')
           text = path.read_text(encoding='utf-8')
           replacements = {
@@ -54,6 +55,14 @@ jobs:
                   raise SystemExit(f'missing expected T174 repair target: {old}')
               text = text.replace(old, new)
           path.write_text(text, encoding='utf-8')
+
+          test_path = Path('src/t174_agent_dock_tests.rs')
+          test_text = test_path.read_text(encoding='utf-8')
+          old = 'let recent = dock.list("", CanonicalAgentDockSort::Recent, true);'
+          new = 'let recent = dock.list("", CanonicalAgentDockSort::Recent, false);'
+          if test_text.count(old) != 1:
+              raise SystemExit('missing unique T174 ungrouped recent-sort qualification target')
+          test_path.write_text(test_text.replace(old, new, 1), encoding='utf-8')
           PY
       - name: Apply T174 bridge and TUI projection patch
         run: python .github/t174_patch.py
@@ -80,7 +89,7 @@ jobs:
           git diff --check
           git config user.name "Winds qualification bot"
           git config user.email "actions@users.noreply.github.com"
-          git add src/desktop.rs src/workbench_ui.rs desktop/src/leftDock/types.ts desktop/src/leftDock/fixture.ts desktop/src/leftDock/LeftDock.tsx
+          git add src/desktop.rs src/workbench_ui.rs src/t174_agent_dock_tests.rs desktop/src/leftDock/types.ts desktop/src/leftDock/fixture.ts desktop/src/leftDock/LeftDock.tsx
           if git diff --cached --quiet; then
             echo "No implementation patch to commit"
             exit 1
