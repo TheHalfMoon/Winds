@@ -100,8 +100,7 @@ impl AgentObservationProjection {
                 LocalControlErrorKind::UnsupportedOperation,
             ));
         }
-        let MultiplexerSubscriptionBoundaryV2::AgentObservations { snapshot_revision } =
-            ack.boundary
+        let MultiplexerSubscriptionBoundaryV2::AgentObservations { snapshot_revision } = ack.boundary
         else {
             return Err(AgentObservationProjectionError::Protocol(
                 LocalControlErrorKind::MalformedFrame,
