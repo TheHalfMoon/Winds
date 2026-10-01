@@ -3,9 +3,8 @@ use crate::multiplexer::agent_state::{ObservationCandidate, ObservationError};
 use crate::multiplexer::domain::MultiplexerWorkspaceId;
 use crate::persistent_runtime::domain::{EventSequence, LocalControlErrorKind};
 use crate::persistent_runtime::protocol::{
-    AgentObservationEventV2, MultiplexerEventSubscriptionAckV2,
-    MultiplexerSubscriptionBoundaryV2, MultiplexerSubscriptionStreamV2, ProtocolMessage,
-    ProtocolPayload, ProtocolResult,
+    AgentObservationEventV2, MultiplexerEventSubscriptionAckV2, MultiplexerSubscriptionBoundaryV2,
+    MultiplexerSubscriptionStreamV2, ProtocolMessage, ProtocolPayload, ProtocolResult,
 };
 
 impl PersistentOwner {
@@ -90,10 +89,8 @@ impl PersistentOwner {
                 .map_err(map_agent_observation_protocol_error)?;
             self.agent_observation_store.snapshot_revision()
         };
-        session.agent_observation_subscription = Some((
-            subscription.multiplexer_workspace_id,
-            snapshot_revision,
-        ));
+        session.agent_observation_subscription =
+            Some((subscription.multiplexer_workspace_id, snapshot_revision));
 
         self.respond_simple(
             request,
