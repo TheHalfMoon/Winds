@@ -45,15 +45,6 @@ impl PersistentOwner {
                 .invalidate_against(topology)
                 .map_err(map_agent_observation_protocol_error)?;
 
-            if let Some(cursor) = &list.cursor {
-                if cursor.owner_generation_id != self.generation_id {
-                    return Err(LocalControlErrorKind::StaleOwnerGeneration);
-                }
-                if cursor.snapshot_revision != self.agent_observation_store.snapshot_revision() {
-                    return Err(LocalControlErrorKind::OutcomeUnknown);
-                }
-            }
-
             self.agent_observation_store
                 .snapshot(topology, list)
                 .map_err(map_agent_observation_protocol_error)?
