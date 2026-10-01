@@ -3,6 +3,10 @@ mod topology_projection;
 pub(crate) use topology_projection::TopologyProjectionFreshness;
 use topology_projection::{TopologyProjection, TopologyProjectionError};
 
+pub(crate) use crate::multiplexer::agent_projection::AgentObservationProjectionFreshness;
+use crate::multiplexer::agent_projection::{
+    AgentObservationProjection, AgentObservationProjectionError,
+};
 use crate::multiplexer::domain::{
     MultiplexerErrorKind, MultiplexerWorkspaceId, TopologyGeneration,
 };
@@ -11,8 +15,9 @@ use crate::persistent_runtime::domain::{
     RuntimeAlias, RuntimeLifecycleEvent, RuntimeNamespaceId, RuntimeTruth,
 };
 use crate::persistent_runtime::protocol::{
-    ListMultiplexerWorkspacesV2, MAX_INBOUND_CONTROL_FRAME_BYTES, MessageKind,
-    MultiplexerSnapshotV2, MultiplexerSubscriptionStreamV2, MutationOutcomeTracker,
+    AgentObservationCursorV2, AgentObservationSnapshotV2, AgentObservationV2,
+    ListAgentObservationsV2, ListMultiplexerWorkspacesV2, MAX_INBOUND_CONTROL_FRAME_BYTES,
+    MessageKind, MultiplexerSnapshotV2, MultiplexerSubscriptionStreamV2, MutationOutcomeTracker,
     PROTOCOL_VERSION, ProtocolMessage, ProtocolPayload, SubscribeMultiplexerEventsV2,
     TopologyMutationOutcomeV2, decode_frame, encode_frame, is_legacy_protocol_frame,
     validate_event_binding, validate_multiplexer_subscription_event_binding,
@@ -103,6 +108,17 @@ fn map_topology_projection_error(error: TopologyProjectionError) -> LocalControl
     match error {
         TopologyProjectionError::Protocol(kind) => map_protocol_error(kind),
         TopologyProjectionError::Multiplexer(kind) => LocalControlClientError::Multiplexer(kind),
+    }
+}
+
+fn map_agent_observation_projection_error(
+    error: AgentObservationProjectionError,
+) -> LocalControlClientError {
+    match error {
+        AgentObservationProjectionError::Protocol(kind) => map_protocol_error(kind),
+        AgentObservationProjectionError::StaleSnapshotRevision => {
+            LocalControlClientError::Protocol(LocalControlErrorKind::OutcomeUnknown)
+        }
     }
 }
 
@@ -339,6 +355,7 @@ pub(crate) struct RustLocalControlClient {
     mutation_outcomes: MutationOutcomeTracker,
     attached_runtimes: BTreeSet<RuntimeNamespaceId>,
     topology_projection: TopologyProjection,
+    agent_observation_projection: AgentObservationProjection,
     pending_events: VecDeque<ProtocolMessage>,
     pending_event_bytes: usize,
 }
@@ -379,6 +396,20 @@ impl RustLocalControlClient {
 
     pub(crate) fn trusted_topology_snapshot(&self) -> Option<&MultiplexerSnapshotV2> {
         self.topology_projection.trusted_snapshot()
+    }
+
+    pub(crate) fn agent_observation_projection_freshness(
+        &self,
+    ) -> AgentObservationProjectionFreshness {
+        self.agent_observation_projection.freshness()
+    }
+
+    pub(crate) fn agent_observation_observed_revision(&self) -> Option<u64> {
+        self.agent_observation_projection.observed_revision()
+    }
+
+    pub(crate) fn trusted_agent_observations(&self) -> Option<Vec<AgentObservationV2>> {
+        self.agent_observation_projection.trusted_observations()
     }
 
     pub(crate) fn reconnect(&mut self) -> ClientResult<()> {
@@ -462,6 +493,92 @@ impl RustLocalControlClient {
             .accept_snapshot(&snapshot)
             .map_err(map_topology_projection_error)?;
         Ok(snapshot)
+    }
+
+    pub(crate) fn subscribe_agent_observations(
+        &mut self,
+        multiplexer_workspace_id: Option<MultiplexerWorkspaceId>,
+    ) -> ClientResult<u64> {
+        let subscription = SubscribeMultiplexerEventsV2 {
+            stream: MultiplexerSubscriptionStreamV2::AgentObservations,
+            multiplexer_workspace_id,
+        };
+        let (_, response) = self.transact(
+            None,
+            ProtocolPayload::SubscribeMultiplexerEvents {
+                request: subscription.clone(),
+            },
+            false,
+        )?;
+        match response.payload {
+            ProtocolPayload::MultiplexerEventSubscriptionAck { ack } => self
+                .agent_observation_projection
+                .accept_subscription_ack(&subscription, &ack)
+                .map_err(map_agent_observation_projection_error),
+            _ => Err(LocalControlClientError::UnexpectedResponse(response.kind())),
+        }
+    }
+
+    pub(crate) fn refresh_agent_observation_projection(
+        &mut self,
+        multiplexer_workspace_id: Option<MultiplexerWorkspaceId>,
+    ) -> ClientResult<Vec<AgentObservationV2>> {
+        self.subscribe_agent_observations(multiplexer_workspace_id)?;
+        self.refresh_subscribed_agent_observation_projection()
+    }
+
+    pub(crate) fn refresh_subscribed_agent_observation_projection(
+        &mut self,
+    ) -> ClientResult<Vec<AgentObservationV2>> {
+        let filter = self
+            .agent_observation_projection
+            .subscription_filter()
+            .ok_or(LocalControlClientError::Protocol(
+                LocalControlErrorKind::UnsupportedOperation,
+            ))?;
+        if self.agent_observation_projection.freshness()
+            == AgentObservationProjectionFreshness::NeedsResubscribe
+        {
+            self.subscribe_agent_observations(filter)?;
+        }
+        let mut cursor: Option<AgentObservationCursorV2> = None;
+        loop {
+            let snapshot = self.list_agent_observation_page(filter, cursor.clone())?;
+            let next_cursor = snapshot.next_cursor.clone();
+            self.agent_observation_projection
+                .accept_snapshot(&snapshot)
+                .map_err(map_agent_observation_projection_error)?;
+            cursor = next_cursor;
+            if cursor.is_none() {
+                break;
+            }
+        }
+        self.agent_observation_projection
+            .trusted_observations()
+            .ok_or(LocalControlClientError::Protocol(
+                LocalControlErrorKind::OutcomeUnknown,
+            ))
+    }
+
+    fn list_agent_observation_page(
+        &mut self,
+        multiplexer_workspace_id: Option<MultiplexerWorkspaceId>,
+        cursor: Option<AgentObservationCursorV2>,
+    ) -> ClientResult<AgentObservationSnapshotV2> {
+        let (_, response) = self.transact(
+            None,
+            ProtocolPayload::ListAgentObservations {
+                request: ListAgentObservationsV2 {
+                    multiplexer_workspace_id,
+                    cursor,
+                },
+            },
+            false,
+        )?;
+        match response.payload {
+            ProtocolPayload::AgentObservationSnapshot { snapshot } => Ok(snapshot),
+            _ => Err(LocalControlClientError::UnexpectedResponse(response.kind())),
+        }
     }
 
     pub(crate) fn attach_observer(
@@ -629,6 +746,7 @@ impl RustLocalControlClient {
             mutation_outcomes: MutationOutcomeTracker::new(),
             attached_runtimes: BTreeSet::new(),
             topology_projection: TopologyProjection::new(owner_generation_id),
+            agent_observation_projection: AgentObservationProjection::new(owner_generation_id),
             pending_events: VecDeque::new(),
             pending_event_bytes: 0,
         })
@@ -644,6 +762,8 @@ impl RustLocalControlClient {
         self.next_sequence = replacement.next_sequence;
         self.attached_runtimes.clear();
         self.topology_projection
+            .reset_for_connection(self.owner_generation_id);
+        self.agent_observation_projection
             .reset_for_connection(self.owner_generation_id);
         self.pending_events.clear();
         self.pending_event_bytes = 0;
@@ -793,6 +913,28 @@ impl RustLocalControlClient {
                 .accept_event(topology_event)
                 .map_err(map_topology_projection_error)?;
             return Ok(());
+        } else if let ProtocolPayload::AgentObservationEvent {
+            event: observation_event,
+        } = &event.payload
+        {
+            let subscription = self
+                .agent_observation_projection
+                .subscription()
+                .cloned()
+                .ok_or(LocalControlClientError::Protocol(
+                    LocalControlErrorKind::UnsupportedOperation,
+                ))?;
+            validate_multiplexer_subscription_event_binding(
+                &self.connection_id,
+                self.owner_generation_id,
+                &subscription,
+                &event,
+            )
+            .map_err(map_protocol_error)?;
+            self.agent_observation_projection
+                .accept_event(observation_event)
+                .map_err(map_agent_observation_projection_error)?;
+            return Ok(());
         } else {
             match event.runtime_namespace_id {
                 Some(runtime_namespace_id) => {
@@ -817,11 +959,7 @@ impl RustLocalControlClient {
                         &event,
                     )
                     .map_err(map_protocol_error)?;
-                    if matches!(
-                        event.payload,
-                        ProtocolPayload::AgentObservationEvent { .. }
-                            | ProtocolPayload::AttentionEvent { .. }
-                    ) {
+                    if matches!(event.payload, ProtocolPayload::AttentionEvent { .. }) {
                         return Err(LocalControlClientError::Protocol(
                             LocalControlErrorKind::UnsupportedOperation,
                         ));
