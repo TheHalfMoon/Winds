@@ -12,7 +12,7 @@
 //!   different identities, and an observation carries at most one runtime
 //!   reference, taken from the owner-accepted topology binding rather than from
 //!   anything a caller asserts;
-//! - a detection is not an execution. [`AgentSupport`] has no variant that can
+//! - a detection is not an execution. `AgentSupport` has no variant that can
 //!   express launch, install, or prompt authority, so no observation can claim
 //!   real provider execution;
 //! - a classification is not a verification and not an acceptance. Nothing in
@@ -38,7 +38,7 @@ use crate::persistent_runtime::protocol::{
     AgentObservationV2, ListAgentObservationsV2, MAX_V2_AGENT_OBSERVATIONS_PER_PAGE,
     MAX_V2_EVIDENCE_SUMMARY_BYTES, MAX_V2_GIT_WORKSPACE_ID_BYTES, MAX_V2_PROVIDER_SESSION_ID_BYTES,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Every way an observation can be refused. All of them fail closed: a refused
 /// candidate changes nothing.
@@ -49,7 +49,8 @@ pub(crate) enum ObservationError {
     /// The candidate was offered under a different owner generation, so nothing
     /// it claims about a binding can be trusted against this owner.
     StaleOwnerGeneration,
-    /// One observation identity is already bound to a different pane.
+    /// One observation identity is already bound to a different pane, or the
+    /// candidate repeats one identity for multiple observations.
     ObservationIdentityReuse,
     /// The candidate carried a field the frozen wire contract cannot accept.
     Unrepresentable,
@@ -67,9 +68,9 @@ impl From<MultiplexerErrorKind> for ObservationError {
 /// The authority order of a source class, lower is stronger.
 ///
 /// A pane may be described by more than one accepted source. The strongest
-/// accepted source wins, so a later weak description can never downgrade a
-/// classification that a stronger source already established, and a stronger
-/// source can replace a weaker one.
+/// accepted source wins, so a later weak description can never downgrade or
+/// withdraw a classification that a stronger source already established, and a
+/// stronger source can replace a weaker one.
 fn source_rank(source: AgentObservationSourceV2) -> u8 {
     match source {
         AgentObservationSourceV2::WindsLaunchMetadata => 0,
@@ -92,7 +93,7 @@ impl QualifiedFamilies {
     /// requires a family because the frozen wire field is required. Rather than
     /// invent a family for a pane Winds could not attribute, those outcomes
     /// produce no observation at all, and any observation the pane previously
-    /// held is withdrawn.
+    /// held is withdrawn when the source is authoritative enough to do so.
     fn is_named(&self) -> bool {
         !self.families.is_empty()
     }
@@ -131,13 +132,6 @@ fn qualify(detection: &AgentDetection) -> QualifiedFamilies {
 }
 
 /// The confidence a source class may claim for a family it qualified.
-///
-/// Two rules, and they compose. A user-declared presentation is capped at
-/// `UserDeclared`, because a presentation label can accompany an observation
-/// Winds qualified from structured input but can never raise confidence above
-/// what the user asserted. And anything short of a single current classification
-/// is `Unknown`, so an ambiguous or unavailable outcome can never be read as a
-/// confident attribution of one family.
 fn confidence_for(
     source: AgentObservationSourceV2,
     freshness: AgentObservationFreshnessV2,
@@ -186,16 +180,10 @@ fn as_wire_family(family: AgentFamily) -> AgentFamilyV2 {
 }
 
 /// One pane's qualified detector result and the provenance Winds can prove for it.
-///
-/// `multiplexer_workspace_id` is required and `git_workspace_id` is optional and
-/// independent, because a multiplexer workspace is a presentation container and a
-/// Git workspace is a repository fact. Neither implies the other, and a
-/// `GitWorkspaceId` never identifies a pane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ObservationCandidate {
     /// One observation identity per candidate family, positionally matching the
-    /// families the classification named. The frozen page validator rejects a page
-    /// that repeats an identity, so ambiguity cannot share one.
+    /// families the classification named.
     pub(crate) observation_ids: Vec<AgentObservationId>,
     pub(crate) multiplexer_workspace_id: MultiplexerWorkspaceId,
     pub(crate) tab_id: TabId,
@@ -208,10 +196,6 @@ pub(crate) struct ObservationCandidate {
 }
 
 impl ObservationCandidate {
-    /// Whether every optional field fits the frozen wire budget.
-    ///
-    /// Checked before a record is ever built, so an unrepresentable candidate is
-    /// refused rather than persisted and refused later by the protocol validator.
     fn is_representable(&self) -> bool {
         self.observed_unix_ms >= 0
             && optional_text_fits(&self.git_workspace_id, MAX_V2_GIT_WORKSPACE_ID_BYTES)
@@ -237,10 +221,8 @@ fn evidence_fits(summary: &str) -> bool {
 
 /// The structured summary Winds records for an observation.
 ///
-/// This is a description of the classification Winds made, built from the
-/// classification alone. It never copies terminal output, a pane label, or any
-/// other untrusted text, so it cannot carry model-generated prose into a field a
-/// later task might read as evidence.
+/// This description is built from structured classification state only. It never
+/// copies terminal output, a pane label, or other untrusted prose.
 fn evidence_summary(
     detection: &AgentDetection,
     source: AgentObservationSourceV2,
@@ -254,11 +236,9 @@ fn evidence_summary(
         AgentDetection::UntrustedText { .. } => "UNTRUSTED_TEXT",
         AgentDetection::Stale => "STALE",
     };
-    let summary = format!("detection={state};source_class={source:?}");
-    Some(summary)
+    Some(format!("detection={state};source_class={source:?}"))
 }
 
-/// One observation bound to the exact identity it was recorded against.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BoundObservation {
     observation_id: AgentObservationId,
@@ -277,7 +257,6 @@ struct BoundObservation {
 }
 
 impl BoundObservation {
-    /// The frozen wire projection of this observation.
     fn to_wire(&self, owner_generation_id: OwnerGenerationId) -> AgentObservationV2 {
         AgentObservationV2 {
             observation_id: self.observation_id,
@@ -300,19 +279,13 @@ impl BoundObservation {
 
 /// Bounded agent observations for one owner generation.
 ///
-/// Records are keyed by pane, so the projection order is deterministic and the
-/// record count is bounded by the topology's pane count. Each observation identity
-/// is additionally indexed so that one identity can never come to denote two
-/// panes.
+/// Records are keyed by pane plus deterministic candidate position. The number of
+/// records is bounded by live topology and the finite compile-time detector
+/// catalog, and wire projection is additionally bounded by the frozen page limit.
 #[derive(Debug, Clone)]
 pub(crate) struct AgentObservationStore {
     owner_generation_id: OwnerGenerationId,
     snapshot_revision: u64,
-    ///
-    /// Keyed by pane and by the candidate family's position, which is the pinned
-    /// ledger order the catalog supplies. The frozen wire family carries no
-    /// ordering and must not be given one, so the position stands in for it and
-    /// keeps the projection deterministic.
     records: BTreeMap<(PaneId, usize), BoundObservation>,
     observation_index: BTreeMap<AgentObservationId, PaneId>,
 }
@@ -339,12 +312,8 @@ impl AgentObservationStore {
         self.records.len()
     }
 
-    /// Records one qualified candidate, replacing whatever the pane held.
-    ///
-    /// The pane's `(workspace, tab, pane)` triple is resolved against live
-    /// topology, and the runtime reference is taken from the owner-accepted
-    /// binding rather than from the candidate. A candidate therefore cannot claim
-    /// a pane that does not exist or a runtime that is not bound to it.
+    /// Records one qualified candidate, replacing whatever the pane held when the
+    /// candidate source is at least as authoritative as the accepted source.
     pub(crate) fn record(
         &mut self,
         topology: &MultiplexerTopology,
@@ -357,27 +326,52 @@ impl AgentObservationStore {
         if !candidate.is_representable() {
             return Err(ObservationError::Unrepresentable);
         }
+
         let binding = topology.pane_runtime_binding(
             candidate.multiplexer_workspace_id,
             candidate.tab_id,
             candidate.pane_id,
         )?;
-        // The runtime reference is observed, never asserted.
         let runtime_namespace_id = binding.map(|binding| binding.runtime_namespace_id);
-        // Every refusal is decided before any mutation, so a refused candidate
-        // leaves the store exactly as it found it.
         let next_revision = self
             .snapshot_revision
             .checked_add(1)
             .ok_or(ObservationError::SnapshotRevisionExhausted)?;
-
         let qualified = qualify(&candidate.detection);
-        let previous = self.records.get(&(candidate.pane_id, 0)).cloned();
+
+        // Validate the complete identity set before any mutation. Checking only
+        // the first identity is insufficient for ambiguous/unavailable outcomes:
+        // a later ID could already denote another pane, or the candidate could
+        // repeat one ID internally and construct a wire-invalid page.
+        if qualified.is_named() {
+            if candidate.observation_ids.len() != qualified.families.len() {
+                return Err(ObservationError::Unrepresentable);
+            }
+            let mut candidate_ids = BTreeSet::new();
+            for observation_id in &candidate.observation_ids {
+                if !candidate_ids.insert(*observation_id)
+                    || self
+                        .observation_index
+                        .get(observation_id)
+                        .is_some_and(|bound| *bound != candidate.pane_id)
+                {
+                    return Err(ObservationError::ObservationIdentityReuse);
+                }
+            }
+        }
+
+        // Source ordering is pane-wide. A weaker source must not replace or erase
+        // stronger accepted truth merely by reporting another family or no family.
+        // The stronger source must itself update/withdraw, or the binding must
+        // become stale, before weaker evidence can become authoritative.
+        if self.records.values().any(|existing| {
+            existing.pane_id == candidate.pane_id
+                && source_rank(existing.source_class) < source_rank(candidate.source_class)
+        }) {
+            return Ok(Vec::new());
+        }
 
         if !qualified.is_named() {
-            // Nothing attributable to name, so no observation exists for this
-            // pane and any earlier one is withdrawn rather than left to look
-            // current.
             let removed = self.withdraw(
                 &candidate.pane_id,
                 candidate.multiplexer_workspace_id,
@@ -389,40 +383,10 @@ impl AgentObservationStore {
             return Ok(removed);
         }
 
-        // A weaker source never replaces a stronger accepted classification for
-        // the same pane and family.
-        if let Some(existing) = &previous {
-            let stronger = source_rank(existing.source_class) < source_rank(candidate.source_class);
-            if stronger
-                && existing.family == candidate.primary_family()
-                && existing.freshness == AgentObservationFreshnessV2::Current
-                && candidate.detection_is_observed()
-            {
-                return Ok(Vec::new());
-            }
-        }
-
         let confidence = confidence_for(candidate.source_class, qualified.freshness);
         let summary = evidence_summary(&candidate.detection, candidate.source_class)
             .ok_or(ObservationError::Unrepresentable)?;
 
-        // One observation identity per candidate family. The frozen page validator
-        // rejects a page that repeats an identity, so accepting fewer identities
-        // than families would build a page the owner cannot send.
-        if candidate.observation_ids.len() != qualified.families.len() {
-            return Err(ObservationError::Unrepresentable);
-        }
-        // One observation identity may denote only one pane.
-        if candidate.observation_ids.first().is_some_and(|first| {
-            self.observation_index
-                .get(first)
-                .is_some_and(|bound| *bound != candidate.pane_id)
-        }) {
-            return Err(ObservationError::ObservationIdentityReuse);
-        }
-
-        // Withdraw whatever the pane held, so a family set that changed size
-        // cannot leave an orphan behind.
         self.withdraw(
             &candidate.pane_id,
             candidate.multiplexer_workspace_id,
@@ -465,20 +429,14 @@ impl AgentObservationStore {
     }
 
     /// Drops every observation whose exact binding no longer holds.
-    ///
-    /// An observation survives only while its pane is still live in the same
-    /// workspace and tab and still resolves to the same runtime reference. A
-    /// closed pane, a retired workspace or tab, a replaced runtime, an unbound
-    /// runtime, or a newly bound runtime all invalidate it, because each is a
-    /// change to the identity the observation was bound to.
     pub(crate) fn invalidate_against(
         &mut self,
         topology: &MultiplexerTopology,
     ) -> Result<Vec<AgentObservationEventV2>, ObservationError> {
-        let stale: Vec<(PaneId, MultiplexerWorkspaceId)> = self
+        let stale: BTreeMap<PaneId, MultiplexerWorkspaceId> = self
             .records
             .iter()
-            .filter(|((_, _), record)| !binding_holds(topology, record))
+            .filter(|(_, record)| !binding_holds(topology, record))
             .map(|((pane_id, _), record)| (*pane_id, record.multiplexer_workspace_id))
             .collect();
         if stale.is_empty() {
@@ -496,11 +454,7 @@ impl AgentObservationStore {
         Ok(removed)
     }
 
-    /// Removes one pane's observation and returns the removal event.
-    /// Removes every observation one pane held and returns the removal events.
-    ///
-    /// A pane may hold more than one observation when a classification named several
-    /// families, so this removes by pane rather than by a single key.
+    /// Removes every observation one pane held and returns removal events.
     fn withdraw(
         &mut self,
         pane_id: &PaneId,
@@ -529,11 +483,9 @@ impl AgentObservationStore {
 
     /// The bounded snapshot projection.
     ///
-    /// Invalidates against live topology first, so a projection can never carry
-    /// an observation whose binding has already gone. A cursor from another owner
-    /// generation is refused. A cursor from an older snapshot revision is a
-    /// history gap, and the recovery is a full resnapshot from offset zero rather
-    /// than a partial page that would silently omit whatever changed.
+    /// A stale cursor is a history gap. Recovery restarts at offset zero under the
+    /// current snapshot revision and remains pageable; otherwise a snapshot larger
+    /// than one page would silently omit authoritative observations after a gap.
     pub(crate) fn snapshot(
         &mut self,
         topology: &MultiplexerTopology,
@@ -541,16 +493,16 @@ impl AgentObservationStore {
     ) -> Result<AgentObservationSnapshotV2, ObservationError> {
         self.invalidate_against(topology)?;
 
-        let (offset, continuation) = match &request.cursor {
-            None => (0_u16, true),
+        let offset = match &request.cursor {
+            None => 0_u16,
             Some(cursor) => {
                 if cursor.owner_generation_id != self.owner_generation_id {
                     return Err(ObservationError::StaleOwnerGeneration);
                 }
                 if cursor.snapshot_revision != self.snapshot_revision {
-                    (0_u16, false)
+                    0_u16
                 } else {
-                    (cursor.offset, true)
+                    cursor.offset
                 }
             }
         };
@@ -568,18 +520,17 @@ impl AgentObservationStore {
             .map(|record| record.to_wire(self.owner_generation_id))
             .collect();
 
-        let next_cursor =
-            if continuation && usize::from(offset) + page.len() < self.page_size(request) {
-                Some(AgentObservationCursorV2 {
-                    owner_generation_id: self.owner_generation_id,
-                    snapshot_revision: self.snapshot_revision,
-                    offset: offset
-                        .checked_add(u16::try_from(page.len()).unwrap_or(u16::MAX))
-                        .ok_or(ObservationError::Unrepresentable)?,
-                })
-            } else {
-                None
-            };
+        let next_cursor = if usize::from(offset) + page.len() < self.page_size(request) {
+            Some(AgentObservationCursorV2 {
+                owner_generation_id: self.owner_generation_id,
+                snapshot_revision: self.snapshot_revision,
+                offset: offset
+                    .checked_add(u16::try_from(page.len()).unwrap_or(u16::MAX))
+                    .ok_or(ObservationError::Unrepresentable)?,
+            })
+        } else {
+            None
+        };
 
         Ok(AgentObservationSnapshotV2 {
             filter_multiplexer_workspace_id: request.multiplexer_workspace_id,
@@ -590,7 +541,6 @@ impl AgentObservationStore {
         })
     }
 
-    /// How many observations the request selects, after filtering.
     fn page_size(&self, request: &ListAgentObservationsV2) -> usize {
         self.records
             .values()
@@ -603,10 +553,6 @@ impl AgentObservationStore {
     }
 
     /// The bounded event projection since `cursor`.
-    ///
-    /// A cursor from an older snapshot revision has missed events, so the result
-    /// is an explicit history gap rather than a partial event list that a caller
-    /// could mistake for a complete one.
     pub(crate) fn events_since(
         &mut self,
         topology: &MultiplexerTopology,
@@ -628,7 +574,6 @@ impl AgentObservationStore {
     }
 }
 
-/// Whether one observation's exact binding still holds against live topology.
 fn binding_holds(topology: &MultiplexerTopology, record: &BoundObservation) -> bool {
     topology
         .pane_runtime_binding(
@@ -641,26 +586,313 @@ fn binding_holds(topology: &MultiplexerTopology, record: &BoundObservation) -> b
         })
 }
 
-/// The one family an ambiguous or unavailable classification can be attributed to.
-///
-/// An observation names exactly one family, so a multi-family outcome is stored as
-/// one observation per candidate family and each is a candidate rather than a
-/// claim. This exposes the first candidate for the single-family comparison the
-/// downgrade guard needs; it is never used to *select* a winner.
-impl ObservationCandidate {
-    fn primary_family(&self) -> AgentFamilyV2 {
-        match &self.detection {
-            AgentDetection::Observed { family, .. } => as_wire_family(*family),
-            _ => AgentFamilyV2::Pi,
-        }
-    }
-
-    /// Whether the detector qualified a single family as current.
-    fn detection_is_observed(&self) -> bool {
-        matches!(self.detection, AgentDetection::Observed { .. })
-    }
-}
-
 #[cfg(test)]
 #[path = "../t173_agent_observation_tests.rs"]
 mod t173_agent_observation_tests;
+
+#[cfg(test)]
+mod t173_review_regressions {
+    use super::*;
+    use crate::multiplexer::agent_catalog::{
+        AgentSupport, DetectionSource, UnknownReason,
+    };
+    use crate::multiplexer::domain::navigation::{
+        LayoutNode, MultiplexerTopology, TabState, WorkspaceState,
+    };
+    use crate::multiplexer::domain::TopologyGeneration;
+
+    fn owner(byte: u8) -> OwnerGenerationId {
+        OwnerGenerationId::from_entropy_bytes([byte; 16]).expect("non-zero owner generation")
+    }
+
+    fn observation_id(byte: u8) -> AgentObservationId {
+        AgentObservationId::from_entropy_bytes([byte; 16]).expect("non-zero observation id")
+    }
+
+    fn workspace_id(byte: u8) -> MultiplexerWorkspaceId {
+        MultiplexerWorkspaceId::from_entropy_bytes([byte; 16]).expect("non-zero workspace id")
+    }
+
+    fn tab_id(byte: u8) -> TabId {
+        TabId::from_entropy_bytes([byte; 16]).expect("non-zero tab id")
+    }
+
+    fn pane_id(byte: u8) -> PaneId {
+        PaneId::from_entropy_bytes([byte; 16]).expect("non-zero pane id")
+    }
+
+    fn observed(family: AgentFamily) -> AgentDetection {
+        AgentDetection::Observed {
+            family,
+            source: DetectionSource::StructuredMetadataNamespace,
+            support: AgentSupport::DetectionOnly,
+        }
+    }
+
+    fn all_families() -> Vec<AgentFamily> {
+        vec![
+            AgentFamily::Pi,
+            AgentFamily::Claude,
+            AgentFamily::Codex,
+            AgentFamily::Gemini,
+            AgentFamily::Cursor,
+            AgentFamily::Devin,
+            AgentFamily::Antigravity,
+            AgentFamily::Cline,
+            AgentFamily::Omp,
+            AgentFamily::Mastracode,
+            AgentFamily::OpenCode,
+            AgentFamily::GithubCopilot,
+            AgentFamily::Kimi,
+            AgentFamily::Kiro,
+            AgentFamily::Droid,
+            AgentFamily::Amp,
+            AgentFamily::Grok,
+            AgentFamily::Hermes,
+            AgentFamily::Kilo,
+            AgentFamily::Qodercli,
+            AgentFamily::Qwen,
+            AgentFamily::Letta,
+            AgentFamily::Maki,
+            AgentFamily::Muse,
+        ]
+    }
+
+    fn topology(workspaces: usize) -> (MultiplexerTopology, Vec<(MultiplexerWorkspaceId, TabId, PaneId)>) {
+        let mut identities = Vec::with_capacity(workspaces);
+        let mut states = Vec::with_capacity(workspaces);
+        for index in 0..workspaces {
+            let byte = u8::try_from(index + 1).expect("test topology stays under 255 workspaces");
+            let workspace_id = workspace_id(byte);
+            let tab_id = tab_id(byte);
+            let pane_id = pane_id(byte);
+            identities.push((workspace_id, tab_id, pane_id));
+            states.push(WorkspaceState {
+                id: workspace_id,
+                alias: format!("w-{index}"),
+                tabs: vec![TabState {
+                    id: tab_id,
+                    alias: "main".to_owned(),
+                    root: LayoutNode::Pane(pane_id),
+                    focused_pane_id: pane_id,
+                    zoomed_pane_id: None,
+                }],
+                focused_tab_id: tab_id,
+            });
+        }
+        let focused = identities.first().map(|(workspace_id, _, _)| *workspace_id);
+        let topology = MultiplexerTopology::restore_presentation(
+            TopologyGeneration::initial(),
+            states,
+            focused,
+        )
+        .expect("review topology is valid");
+        (topology, identities)
+    }
+
+    fn candidate(
+        workspace_id: MultiplexerWorkspaceId,
+        tab_id: TabId,
+        pane_id: PaneId,
+        observation_ids: Vec<AgentObservationId>,
+        detection: AgentDetection,
+        source_class: AgentObservationSourceV2,
+    ) -> ObservationCandidate {
+        ObservationCandidate {
+            observation_ids,
+            multiplexer_workspace_id: workspace_id,
+            tab_id,
+            pane_id,
+            detection,
+            source_class,
+            provider_native_session_id: None,
+            git_workspace_id: None,
+            observed_unix_ms: 1_700_000_000_000,
+        }
+    }
+
+    #[test]
+    fn t173_review_rejects_duplicate_ids_inside_one_multi_family_candidate() {
+        let (topology, identities) = topology(1);
+        let (workspace_id, tab_id, pane_id) = identities[0];
+        let repeated = observation_id(0x40);
+        let mut store = AgentObservationStore::new(owner(0xa1));
+        let result = store.record(
+            &topology,
+            owner(0xa1),
+            candidate(
+                workspace_id,
+                tab_id,
+                pane_id,
+                vec![repeated, repeated],
+                AgentDetection::Ambiguous {
+                    families: vec![AgentFamily::Pi, AgentFamily::Claude],
+                },
+                AgentObservationSourceV2::OwnedProcessMetadata,
+            ),
+        );
+        assert_eq!(result, Err(ObservationError::ObservationIdentityReuse));
+        assert_eq!(store.observation_count(), 0);
+    }
+
+    #[test]
+    fn t173_review_rejects_reused_nonfirst_id_bound_to_another_pane() {
+        let (topology, identities) = topology(2);
+        let first = identities[0];
+        let second = identities[1];
+        let reused = observation_id(0x41);
+        let mut store = AgentObservationStore::new(owner(0xa1));
+        store
+            .record(
+                &topology,
+                owner(0xa1),
+                candidate(
+                    first.0,
+                    first.1,
+                    first.2,
+                    vec![reused],
+                    observed(AgentFamily::Cline),
+                    AgentObservationSourceV2::OwnedProcessMetadata,
+                ),
+            )
+            .expect("first observation is recordable");
+
+        let result = store.record(
+            &topology,
+            owner(0xa1),
+            candidate(
+                second.0,
+                second.1,
+                second.2,
+                vec![observation_id(0x42), reused],
+                AgentDetection::Ambiguous {
+                    families: vec![AgentFamily::Pi, AgentFamily::Claude],
+                },
+                AgentObservationSourceV2::OwnedProcessMetadata,
+            ),
+        );
+        assert_eq!(result, Err(ObservationError::ObservationIdentityReuse));
+        assert_eq!(store.observation_count(), 1);
+    }
+
+    #[test]
+    fn t173_review_stale_resnapshot_remains_pageable_after_history_gap() {
+        let (topology, identities) = topology(6);
+        let families = all_families();
+        let mut store = AgentObservationStore::new(owner(0xa1));
+        let mut next_id = 1_u8;
+        for (workspace_id, tab_id, pane_id) in identities {
+            let mut ids = Vec::with_capacity(families.len());
+            for _ in &families {
+                ids.push(observation_id(next_id));
+                next_id = next_id.checked_add(1).expect("test IDs stay below 255");
+            }
+            store
+                .record(
+                    &topology,
+                    owner(0xa1),
+                    candidate(
+                        workspace_id,
+                        tab_id,
+                        pane_id,
+                        ids,
+                        AgentDetection::Ambiguous {
+                            families: families.clone(),
+                        },
+                        AgentObservationSourceV2::OwnedProcessMetadata,
+                    ),
+                )
+                .expect("ambiguous observations are recordable");
+        }
+        assert_eq!(store.observation_count(), 144);
+
+        let stale = AgentObservationCursorV2 {
+            owner_generation_id: owner(0xa1),
+            snapshot_revision: 1,
+            offset: 77,
+        };
+        let first = store
+            .snapshot(
+                &topology,
+                &ListAgentObservationsV2 {
+                    multiplexer_workspace_id: None,
+                    cursor: Some(stale),
+                },
+            )
+            .expect("stale cursor restarts an authoritative snapshot");
+        assert_eq!(first.page_offset, 0);
+        assert_eq!(first.observations.len(), MAX_V2_AGENT_OBSERVATIONS_PER_PAGE);
+        let continuation = first
+            .next_cursor
+            .expect("a >128-item resnapshot must remain pageable");
+        assert_eq!(continuation.snapshot_revision, store.snapshot_revision());
+        assert_eq!(continuation.offset, 128);
+
+        let second = store
+            .snapshot(
+                &topology,
+                &ListAgentObservationsV2 {
+                    multiplexer_workspace_id: None,
+                    cursor: Some(continuation),
+                },
+            )
+            .expect("continuation completes the authoritative resnapshot");
+        assert_eq!(second.page_offset, 128);
+        assert_eq!(second.observations.len(), 16);
+        assert!(second.next_cursor.is_none());
+    }
+
+    #[test]
+    fn t173_review_weaker_source_cannot_erase_stronger_current_truth() {
+        let (topology, identities) = topology(1);
+        let (workspace_id, tab_id, pane_id) = identities[0];
+        let mut store = AgentObservationStore::new(owner(0xa1));
+        store
+            .record(
+                &topology,
+                owner(0xa1),
+                candidate(
+                    workspace_id,
+                    tab_id,
+                    pane_id,
+                    vec![observation_id(0x50)],
+                    observed(AgentFamily::Claude),
+                    AgentObservationSourceV2::OwnedProcessMetadata,
+                ),
+            )
+            .expect("strong observation is recordable");
+
+        let events = store
+            .record(
+                &topology,
+                owner(0xa1),
+                candidate(
+                    workspace_id,
+                    tab_id,
+                    pane_id,
+                    Vec::new(),
+                    AgentDetection::Unknown {
+                        reason: UnknownReason::NoMatch,
+                    },
+                    AgentObservationSourceV2::UserDeclaredPresentation,
+                ),
+            )
+            .expect("weaker unknown evidence is a no-op, not an eraser");
+        assert!(events.is_empty());
+        let snapshot = store
+            .snapshot(
+                &topology,
+                &ListAgentObservationsV2 {
+                    multiplexer_workspace_id: None,
+                    cursor: None,
+                },
+            )
+            .expect("snapshot remains available");
+        assert_eq!(snapshot.observations.len(), 1);
+        assert_eq!(snapshot.observations[0].family, AgentFamilyV2::Claude);
+        assert_eq!(
+            snapshot.observations[0].source_class,
+            AgentObservationSourceV2::OwnedProcessMetadata
+        );
+    }
+}
