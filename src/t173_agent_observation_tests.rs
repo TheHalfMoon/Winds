@@ -12,7 +12,7 @@ use crate::persistent_runtime::domain::RuntimeNamespaceId;
 use crate::persistent_runtime::domain::{ClientConnectionId, EventSequence};
 use crate::persistent_runtime::protocol::{
     MAX_CONTROL_FRAME_BYTES, MAX_V2_AGENT_OBSERVATIONS_PER_PAGE, MAX_V2_EVIDENCE_SUMMARY_BYTES,
-    MessageKind, ProtocolMessage, ProtocolPayload, encode_frame,
+    MAX_V2_PROVIDER_SESSION_ID_BYTES, MessageKind, ProtocolMessage, ProtocolPayload, encode_frame,
 };
 
 /// An owner(0xa1) generation for the store under test, and one that is not.
@@ -135,6 +135,35 @@ fn observed(family: AgentFamily) -> AgentDetection {
     }
 }
 
+fn all_families() -> Vec<AgentFamily> {
+    vec![
+        AgentFamily::Pi,
+        AgentFamily::Claude,
+        AgentFamily::Codex,
+        AgentFamily::Gemini,
+        AgentFamily::Cursor,
+        AgentFamily::Devin,
+        AgentFamily::Antigravity,
+        AgentFamily::Cline,
+        AgentFamily::Omp,
+        AgentFamily::Mastracode,
+        AgentFamily::OpenCode,
+        AgentFamily::GithubCopilot,
+        AgentFamily::Kimi,
+        AgentFamily::Kiro,
+        AgentFamily::Droid,
+        AgentFamily::Amp,
+        AgentFamily::Grok,
+        AgentFamily::Hermes,
+        AgentFamily::Kilo,
+        AgentFamily::Qodercli,
+        AgentFamily::Qwen,
+        AgentFamily::Letta,
+        AgentFamily::Maki,
+        AgentFamily::Muse,
+    ]
+}
+
 fn new_store() -> AgentObservationStore {
     AgentObservationStore::new(owner(0xa1))
 }
@@ -193,21 +222,6 @@ fn t173_observed_detection_binds_to_exact_pane_and_runtime() {
 fn t173_bound_runtime_reference_comes_from_topology_not_the_candidate() {
     let pane_id = pane(0x21);
     let (mut topology, workspace_id, tab_id) = topology_with(pane_id);
-    topology = topology
-        .bind_pane_runtime(
-            TopologyGeneration::initial(),
-            workspace_id,
-            tab_id,
-            pane_id,
-            runtime(0x22),
-        )
-        .map(|_| {
-            let mut next = topology_with(pane_id).0;
-            let _ = &mut next;
-            next
-        })
-        .unwrap_or(topology);
-    // Binding is a separate owner(0xa1)-accepted transition; drive it directly instead.
     let bound = bind(&mut topology, workspace_id, tab_id, pane_id, runtime(0x22));
     assert!(bound, "the pane must accept a runtime binding");
 
@@ -339,13 +353,23 @@ fn t173_runtime_replacement_invalidates_a_stale_observation() {
         Some(runtime(0x25))
     );
 
-    // A second runtime cannot be bound while the first is bound, so replacement
-    // is modelled as the pane losing its runtime and gaining another. Unbinding
-    // alone must already invalidate.
-    let generation = topology.generation();
-    let closed = topology.close_pane(generation, workspace_id, tab_id, pane_id);
-    assert!(closed.is_ok());
-    let removed = store.invalidate_against(&topology).expect("not refusable");
+    // Prove the binding itself, rather than pane liveness, is part of freshness:
+    // the same workspace/tab/pane identities resolving to a different runtime
+    // must invalidate the observation recorded against runtime 0x25.
+    let (mut replacement_topology, replacement_workspace, replacement_tab) =
+        topology_with(pane_id);
+    assert_eq!(replacement_workspace, workspace_id);
+    assert_eq!(replacement_tab, tab_id);
+    assert!(bind(
+        &mut replacement_topology,
+        workspace_id,
+        tab_id,
+        pane_id,
+        runtime(0x26)
+    ));
+    let removed = store
+        .invalidate_against(&replacement_topology)
+        .expect("runtime replacement invalidation cannot be refused");
     assert_eq!(removed.len(), 1);
     assert_eq!(store.observation_count(), 0);
 }
@@ -377,25 +401,23 @@ fn t173_unbound_runtime_invalidates_a_bound_observation() {
         )
         .expect("recordable");
 
-    // Close the pane and reopen the same layout identity is impossible, so
-    // instead prove the binding check directly: a record bound to runtime R is
-    // invalid against a topology where the pane resolves to runtime S.
-    let (other_topology, other_workspace, other_tab) = topology_with(pane_id);
+    // The same exact pane resolving to another runtime must not inherit the old
+    // observation merely because its workspace/tab/pane IDs match.
+    let (mut other_topology, other_workspace, other_tab) = topology_with(pane_id);
     assert!(bind(
-        &mut other_topology.clone(),
+        &mut other_topology,
         other_workspace,
         other_tab,
         pane_id,
         runtime(0x28)
     ));
-    // Against an unbound topology the bound observation cannot still hold.
     let removed = store
         .invalidate_against(&other_topology)
         .expect("not refusable");
     assert_eq!(
         removed.len(),
         1,
-        "an observation bound to runtime 0x27 must not hold where the pane is unbound"
+        "an observation bound to runtime 0x27 must not hold where the pane resolves to runtime 0x28"
     );
 }
 
@@ -618,30 +640,144 @@ fn t173_event_gap_forces_an_explicit_resnapshot() {
 
 #[test]
 fn t173_snapshot_paging_is_bounded_and_complete() {
-    let pane_id = pane(0x36);
-    let (topology, workspace_id, tab_id) = topology_with(pane_id);
+    let families = all_families();
+    let mut identities = Vec::new();
+    let mut workspaces = Vec::new();
+    for index in 0_u8..6 {
+        let workspace_id = workspace(0x20 + index);
+        let tab_id = tab(0x40 + index);
+        let pane_id = pane(0x60 + index);
+        identities.push((workspace_id, tab_id, pane_id));
+        workspaces.push(WorkspaceState {
+            id: workspace_id,
+            alias: format!("page-{index}"),
+            tabs: vec![TabState {
+                id: tab_id,
+                alias: "main".to_owned(),
+                root: LayoutNode::Pane(pane_id),
+                focused_pane_id: pane_id,
+                zoomed_pane_id: None,
+            }],
+            focused_tab_id: tab_id,
+        });
+    }
+    let topology = MultiplexerTopology::restore_presentation(
+        TopologyGeneration::initial(),
+        workspaces,
+        Some(identities[0].0),
+    )
+    .expect("the paging topology is valid");
     let mut store = new_store();
+
+    for (pane_index, (workspace_id, tab_id, pane_id)) in identities.iter().copied().enumerate() {
+        let observation_ids = (0..families.len())
+            .map(|family_index| {
+                id(u8::try_from(pane_index * families.len() + family_index + 1)
+                    .expect("the fixture stays below 255 identities"))
+            })
+            .collect();
+        store
+            .record(
+                &topology,
+                owner(0xa1),
+                candidate_with_ids(
+                    workspace_id,
+                    tab_id,
+                    pane_id,
+                    observation_ids,
+                    AgentDetection::Ambiguous {
+                        families: families.clone(),
+                    },
+                ),
+            )
+            .expect("each paging pane is recordable");
+    }
+    let expected_total = identities.len() * families.len();
+    assert_eq!(expected_total, 144);
+    assert_eq!(store.observation_count(), expected_total);
+
+    let first = full_snapshot(&mut store, &topology);
+    assert_eq!(first.observations.len(), MAX_V2_AGENT_OBSERVATIONS_PER_PAGE);
+    let stale_cursor = first
+        .next_cursor
+        .clone()
+        .expect("144 observations require a continuation page");
+    assert_eq!(usize::from(stale_cursor.offset), MAX_V2_AGENT_OBSERVATIONS_PER_PAGE);
+
+    // Move the revision after a client has received page one. The old cursor must
+    // restart from offset zero, but the restarted snapshot must remain pageable.
+    let (workspace_id, tab_id, pane_id) = identities[0];
     store
         .record(
             &topology,
             owner(0xa1),
-            candidate(
+            candidate_with_ids(
                 workspace_id,
                 tab_id,
                 pane_id,
-                id(0x63),
-                observed(AgentFamily::Hermes),
+                (0..families.len())
+                    .map(|index| id(0xa0 + u8::try_from(index).expect("24 families fit in u8")))
+                    .collect(),
+                AgentDetection::Ambiguous {
+                    families: families.clone(),
+                },
             ),
         )
-        .expect("recordable");
+        .expect("revision-moving replacement is recordable");
+    assert_eq!(store.observation_count(), expected_total);
 
-    let first = full_snapshot(&mut store, &topology);
-    assert!(
-        first.next_cursor.is_none(),
-        "one page needs no continuation"
-    );
-    assert!(first.observations.len() <= MAX_V2_AGENT_OBSERVATIONS_PER_PAGE);
-    assert_eq!(first.snapshot_revision, store.snapshot_revision());
+    let restarted = store
+        .snapshot(
+            &topology,
+            &ListAgentObservationsV2 {
+                multiplexer_workspace_id: None,
+                cursor: Some(stale_cursor),
+            },
+        )
+        .expect("a stale cursor restarts authoritatively");
+    assert_eq!(restarted.page_offset, 0);
+    assert_eq!(restarted.observations.len(), MAX_V2_AGENT_OBSERVATIONS_PER_PAGE);
+    assert_eq!(restarted.snapshot_revision, store.snapshot_revision());
+    let mut cursor = restarted
+        .next_cursor
+        .clone()
+        .expect("the restarted first page must preserve continuation");
+    assert_eq!(cursor.snapshot_revision, store.snapshot_revision());
+
+    let mut seen = restarted
+        .observations
+        .iter()
+        .map(|observation| observation.observation_id)
+        .collect::<Vec<_>>();
+    let mut page_count = 1;
+    loop {
+        let page = store
+            .snapshot(
+                &topology,
+                &ListAgentObservationsV2 {
+                    multiplexer_workspace_id: None,
+                    cursor: Some(cursor),
+                },
+            )
+            .expect("continuation cursor is answerable");
+        page_count += 1;
+        assert!(page.observations.len() <= MAX_V2_AGENT_OBSERVATIONS_PER_PAGE);
+        assert_eq!(page.snapshot_revision, store.snapshot_revision());
+        seen.extend(
+            page.observations
+                .iter()
+                .map(|observation| observation.observation_id),
+        );
+        let Some(next) = page.next_cursor else {
+            break;
+        };
+        cursor = next;
+    }
+    assert_eq!(page_count, 2);
+    assert_eq!(seen.len(), expected_total);
+    seen.sort_unstable();
+    seen.dedup();
+    assert_eq!(seen.len(), expected_total, "every observation appears exactly once");
 }
 
 #[test]
@@ -897,26 +1033,6 @@ fn t173_source_classes_are_ordered_and_a_user_claim_never_raises_confidence() {
         "a user claim never raises confidence above what the user asserted"
     );
 
-    // A user-declared presentation is capped at UserDeclared confidence, even
-    // though the detection itself was Winds-qualified from structured input.
-    let mut declared = candidate(
-        workspace_id,
-        tab_id,
-        pane_id,
-        id(0x70),
-        observed(AgentFamily::Letta),
-    );
-    declared.source_class = AgentObservationSourceV2::UserDeclaredPresentation;
-    store
-        .record(&topology, owner(0xa1), declared)
-        .expect("recordable");
-    let snapshot = full_snapshot(&mut store, &topology);
-    assert_eq!(
-        snapshot.observations[0].confidence_class,
-        AgentObservationConfidenceV2::UserDeclared,
-        "a user claim never raises confidence above what the user asserted"
-    );
-
     // A stronger source does replace a weaker accepted classification.
     let stronger = candidate(
         workspace_id,
@@ -1071,7 +1187,7 @@ fn t173_provider_session_identity_is_separate_and_optional() {
     // An empty or oversized optional field is refused rather than truncated.
     for bad in [
         Some(String::new()),
-        Some("x".repeat(MAX_V2_EVIDENCE_SUMMARY_BYTES + 1)),
+        Some("x".repeat(MAX_V2_PROVIDER_SESSION_ID_BYTES + 1)),
     ] {
         let mut invalid = candidate(
             workspace_id,
