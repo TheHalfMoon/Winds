@@ -339,10 +339,6 @@ impl AgentObservationStore {
             .ok_or(ObservationError::SnapshotRevisionExhausted)?;
         let qualified = qualify(&candidate.detection);
 
-        // Validate the complete identity set before any mutation. Checking only
-        // the first identity is insufficient for ambiguous/unavailable outcomes:
-        // a later ID could already denote another pane, or the candidate could
-        // repeat one ID internally and construct a wire-invalid page.
         if qualified.is_named() {
             if candidate.observation_ids.len() != qualified.families.len() {
                 return Err(ObservationError::Unrepresentable);
@@ -360,10 +356,6 @@ impl AgentObservationStore {
             }
         }
 
-        // Source ordering is pane-wide. A weaker source must not replace or erase
-        // stronger accepted truth merely by reporting another family or no family.
-        // The stronger source must itself update/withdraw, or the binding must
-        // become stale, before weaker evidence can become authoritative.
         if self.records.values().any(|existing| {
             existing.pane_id == candidate.pane_id
                 && source_rank(existing.source_class) < source_rank(candidate.source_class)
@@ -428,7 +420,6 @@ impl AgentObservationStore {
         Ok(events)
     }
 
-    /// Drops every observation whose exact binding no longer holds.
     pub(crate) fn invalidate_against(
         &mut self,
         topology: &MultiplexerTopology,
@@ -454,7 +445,6 @@ impl AgentObservationStore {
         Ok(removed)
     }
 
-    /// Removes every observation one pane held and returns removal events.
     fn withdraw(
         &mut self,
         pane_id: &PaneId,
@@ -481,11 +471,6 @@ impl AgentObservationStore {
         removed
     }
 
-    /// The bounded snapshot projection.
-    ///
-    /// A stale cursor is a history gap. Recovery restarts at offset zero under the
-    /// current snapshot revision and remains pageable; otherwise a snapshot larger
-    /// than one page would silently omit authoritative observations after a gap.
     pub(crate) fn snapshot(
         &mut self,
         topology: &MultiplexerTopology,
@@ -552,7 +537,6 @@ impl AgentObservationStore {
             .count()
     }
 
-    /// The bounded event projection since `cursor`.
     pub(crate) fn events_since(
         &mut self,
         topology: &MultiplexerTopology,
@@ -824,10 +808,7 @@ mod t173_review_regressions {
             )
             .expect("stale cursor restarts an authoritative snapshot");
         assert_eq!(first.page_offset, 0);
-        assert_eq!(
-            first.observations.len(),
-            MAX_V2_AGENT_OBSERVATIONS_PER_PAGE
-        );
+        assert_eq!(first.observations.len(), MAX_V2_AGENT_OBSERVATIONS_PER_PAGE);
         let continuation = first
             .next_cursor
             .expect("a >128-item resnapshot must remain pageable");
