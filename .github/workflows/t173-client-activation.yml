@@ -1,0 +1,253 @@
+name: t173-client-activation
+
+on:
+  push:
+    branches:
+      - impl/spec-012-t173-agent-observation
+    paths:
+      - .github/workflows/t173-client-activation.yml
+
+permissions:
+  contents: write
+
+jobs:
+  activate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: impl/spec-012-t173-agent-observation
+          fetch-depth: 0
+
+      - name: Activate client projection
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/persistent_runtime/client.rs")
+          text = path.read_text()
+          replacements = [
+              (
+                  "use topology_projection::{TopologyProjection, TopologyProjectionError};\n\nuse crate::multiplexer::domain::{\n",
+                  "use topology_projection::{TopologyProjection, TopologyProjectionError};\n\n"
+                  "pub(crate) use crate::multiplexer::agent_projection::AgentObservationProjectionFreshness;\n"
+                  "use crate::multiplexer::agent_projection::{\n"
+                  "    AgentObservationProjection, AgentObservationProjectionError,\n"
+                  "};\n"
+                  "use crate::multiplexer::domain::{\n",
+              ),
+              (
+                  "    ListMultiplexerWorkspacesV2, MAX_INBOUND_CONTROL_FRAME_BYTES, MessageKind,\n",
+                  "    AgentObservationCursorV2, AgentObservationSnapshotV2, AgentObservationV2,\n"
+                  "    ListAgentObservationsV2, ListMultiplexerWorkspacesV2, MAX_INBOUND_CONTROL_FRAME_BYTES,\n"
+                  "    MessageKind,\n",
+              ),
+              (
+                  "fn map_topology_projection_error(error: TopologyProjectionError) -> LocalControlClientError {\n    match error {\n        TopologyProjectionError::Protocol(kind) => map_protocol_error(kind),\n        TopologyProjectionError::Multiplexer(kind) => LocalControlClientError::Multiplexer(kind),\n    }\n}\n\n",
+                  "fn map_topology_projection_error(error: TopologyProjectionError) -> LocalControlClientError {\n"
+                  "    match error {\n"
+                  "        TopologyProjectionError::Protocol(kind) => map_protocol_error(kind),\n"
+                  "        TopologyProjectionError::Multiplexer(kind) => LocalControlClientError::Multiplexer(kind),\n"
+                  "    }\n"
+                  "}\n\n"
+                  "fn map_agent_observation_projection_error(\n"
+                  "    error: AgentObservationProjectionError,\n"
+                  ") -> LocalControlClientError {\n"
+                  "    match error {\n"
+                  "        AgentObservationProjectionError::Protocol(kind) => map_protocol_error(kind),\n"
+                  "        AgentObservationProjectionError::StaleSnapshotRevision => {\n"
+                  "            LocalControlClientError::Protocol(LocalControlErrorKind::OutcomeUnknown)\n"
+                  "        }\n"
+                  "    }\n"
+                  "}\n\n",
+              ),
+              (
+                  "    topology_projection: TopologyProjection,\n    pending_events: VecDeque<ProtocolMessage>,\n",
+                  "    topology_projection: TopologyProjection,\n"
+                  "    agent_observation_projection: AgentObservationProjection,\n"
+                  "    pending_events: VecDeque<ProtocolMessage>,\n",
+              ),
+              (
+                  "    pub(crate) fn trusted_topology_snapshot(&self) -> Option<&MultiplexerSnapshotV2> {\n        self.topology_projection.trusted_snapshot()\n    }\n\n",
+                  "    pub(crate) fn trusted_topology_snapshot(&self) -> Option<&MultiplexerSnapshotV2> {\n"
+                  "        self.topology_projection.trusted_snapshot()\n"
+                  "    }\n\n"
+                  "    pub(crate) fn agent_observation_projection_freshness(\n"
+                  "        &self,\n"
+                  "    ) -> AgentObservationProjectionFreshness {\n"
+                  "        self.agent_observation_projection.freshness()\n"
+                  "    }\n\n"
+                  "    pub(crate) fn agent_observation_observed_revision(&self) -> Option<u64> {\n"
+                  "        self.agent_observation_projection.observed_revision()\n"
+                  "    }\n\n"
+                  "    pub(crate) fn trusted_agent_observations(&self) -> Option<Vec<AgentObservationV2>> {\n"
+                  "        self.agent_observation_projection.trusted_observations()\n"
+                  "    }\n\n",
+              ),
+              (
+                  "    pub(crate) fn refresh_subscribed_topology_projection(\n        &mut self,\n    ) -> ClientResult<MultiplexerSnapshotV2> {\n        let filter = self.topology_projection.subscription_filter().ok_or(\n            LocalControlClientError::Protocol(LocalControlErrorKind::UnsupportedOperation),\n        )?;\n        let snapshot = self.list_topology_snapshot(filter)?;\n        self.topology_projection\n            .accept_snapshot(&snapshot)\n            .map_err(map_topology_projection_error)?;\n        Ok(snapshot)\n    }\n\n",
+                  "    pub(crate) fn refresh_subscribed_topology_projection(\n"
+                  "        &mut self,\n"
+                  "    ) -> ClientResult<MultiplexerSnapshotV2> {\n"
+                  "        let filter = self.topology_projection.subscription_filter().ok_or(\n"
+                  "            LocalControlClientError::Protocol(LocalControlErrorKind::UnsupportedOperation),\n"
+                  "        )?;\n"
+                  "        let snapshot = self.list_topology_snapshot(filter)?;\n"
+                  "        self.topology_projection\n"
+                  "            .accept_snapshot(&snapshot)\n"
+                  "            .map_err(map_topology_projection_error)?;\n"
+                  "        Ok(snapshot)\n"
+                  "    }\n\n"
+                  "    pub(crate) fn subscribe_agent_observations(\n"
+                  "        &mut self,\n"
+                  "        multiplexer_workspace_id: Option<MultiplexerWorkspaceId>,\n"
+                  "    ) -> ClientResult<u64> {\n"
+                  "        let subscription = SubscribeMultiplexerEventsV2 {\n"
+                  "            stream: MultiplexerSubscriptionStreamV2::AgentObservations,\n"
+                  "            multiplexer_workspace_id,\n"
+                  "        };\n"
+                  "        let (_, response) = self.transact(\n"
+                  "            None,\n"
+                  "            ProtocolPayload::SubscribeMultiplexerEvents {\n"
+                  "                request: subscription.clone(),\n"
+                  "            },\n"
+                  "            false,\n"
+                  "        )?;\n"
+                  "        match response.payload {\n"
+                  "            ProtocolPayload::MultiplexerEventSubscriptionAck { ack } => self\n"
+                  "                .agent_observation_projection\n"
+                  "                .accept_subscription_ack(&subscription, &ack)\n"
+                  "                .map_err(map_agent_observation_projection_error),\n"
+                  "            _ => Err(LocalControlClientError::UnexpectedResponse(response.kind())),\n"
+                  "        }\n"
+                  "    }\n\n"
+                  "    pub(crate) fn refresh_agent_observation_projection(\n"
+                  "        &mut self,\n"
+                  "        multiplexer_workspace_id: Option<MultiplexerWorkspaceId>,\n"
+                  "    ) -> ClientResult<Vec<AgentObservationV2>> {\n"
+                  "        self.subscribe_agent_observations(multiplexer_workspace_id)?;\n"
+                  "        self.refresh_subscribed_agent_observation_projection()\n"
+                  "    }\n\n"
+                  "    pub(crate) fn refresh_subscribed_agent_observation_projection(\n"
+                  "        &mut self,\n"
+                  "    ) -> ClientResult<Vec<AgentObservationV2>> {\n"
+                  "        let filter = self\n"
+                  "            .agent_observation_projection\n"
+                  "            .subscription_filter()\n"
+                  "            .ok_or(LocalControlClientError::Protocol(\n"
+                  "                LocalControlErrorKind::UnsupportedOperation,\n"
+                  "            ))?;\n"
+                  "        if self.agent_observation_projection.freshness()\n"
+                  "            == AgentObservationProjectionFreshness::NeedsResubscribe\n"
+                  "        {\n"
+                  "            self.subscribe_agent_observations(filter)?;\n"
+                  "        }\n"
+                  "        let mut cursor: Option<AgentObservationCursorV2> = None;\n"
+                  "        loop {\n"
+                  "            let snapshot = self.list_agent_observation_page(filter, cursor.clone())?;\n"
+                  "            let next_cursor = snapshot.next_cursor.clone();\n"
+                  "            self.agent_observation_projection\n"
+                  "                .accept_snapshot(&snapshot)\n"
+                  "                .map_err(map_agent_observation_projection_error)?;\n"
+                  "            cursor = next_cursor;\n"
+                  "            if cursor.is_none() {\n"
+                  "                break;\n"
+                  "            }\n"
+                  "        }\n"
+                  "        self.agent_observation_projection\n"
+                  "            .trusted_observations()\n"
+                  "            .ok_or(LocalControlClientError::Protocol(\n"
+                  "                LocalControlErrorKind::OutcomeUnknown,\n"
+                  "            ))\n"
+                  "    }\n\n"
+                  "    fn list_agent_observation_page(\n"
+                  "        &mut self,\n"
+                  "        multiplexer_workspace_id: Option<MultiplexerWorkspaceId>,\n"
+                  "        cursor: Option<AgentObservationCursorV2>,\n"
+                  "    ) -> ClientResult<AgentObservationSnapshotV2> {\n"
+                  "        let (_, response) = self.transact(\n"
+                  "            None,\n"
+                  "            ProtocolPayload::ListAgentObservations {\n"
+                  "                request: ListAgentObservationsV2 {\n"
+                  "                    multiplexer_workspace_id,\n"
+                  "                    cursor,\n"
+                  "                },\n"
+                  "            },\n"
+                  "            false,\n"
+                  "        )?;\n"
+                  "        match response.payload {\n"
+                  "            ProtocolPayload::AgentObservationSnapshot { snapshot } => Ok(snapshot),\n"
+                  "            _ => Err(LocalControlClientError::UnexpectedResponse(response.kind())),\n"
+                  "        }\n"
+                  "    }\n\n",
+              ),
+              (
+                  "            topology_projection: TopologyProjection::new(owner_generation_id),\n            pending_events: VecDeque::new(),\n",
+                  "            topology_projection: TopologyProjection::new(owner_generation_id),\n"
+                  "            agent_observation_projection: AgentObservationProjection::new(owner_generation_id),\n"
+                  "            pending_events: VecDeque::new(),\n",
+              ),
+              (
+                  "        self.topology_projection\n            .reset_for_connection(self.owner_generation_id);\n        self.pending_events.clear();\n",
+                  "        self.topology_projection\n"
+                  "            .reset_for_connection(self.owner_generation_id);\n"
+                  "        self.agent_observation_projection\n"
+                  "            .reset_for_connection(self.owner_generation_id);\n"
+                  "        self.pending_events.clear();\n",
+              ),
+              (
+                  "            return Ok(());\n        } else {\n            match event.runtime_namespace_id {\n",
+                  "            return Ok(());\n"
+                  "        } else if let ProtocolPayload::AgentObservationEvent {\n"
+                  "            event: observation_event,\n"
+                  "        } = &event.payload\n"
+                  "        {\n"
+                  "            let subscription = self\n"
+                  "                .agent_observation_projection\n"
+                  "                .subscription()\n"
+                  "                .cloned()\n"
+                  "                .ok_or(LocalControlClientError::Protocol(\n"
+                  "                    LocalControlErrorKind::UnsupportedOperation,\n"
+                  "                ))?;\n"
+                  "            validate_multiplexer_subscription_event_binding(\n"
+                  "                &self.connection_id,\n"
+                  "                self.owner_generation_id,\n"
+                  "                &subscription,\n"
+                  "                &event,\n"
+                  "            )\n"
+                  "            .map_err(map_protocol_error)?;\n"
+                  "            self.agent_observation_projection\n"
+                  "                .accept_event(observation_event)\n"
+                  "                .map_err(map_agent_observation_projection_error)?;\n"
+                  "            return Ok(());\n"
+                  "        } else {\n"
+                  "            match event.runtime_namespace_id {\n",
+              ),
+              (
+                  "                    if matches!(\n                        event.payload,\n                        ProtocolPayload::AgentObservationEvent { .. }\n                            | ProtocolPayload::AttentionEvent { .. }\n                    ) {\n",
+                  "                    if matches!(event.payload, ProtocolPayload::AttentionEvent { .. }) {\n",
+              ),
+          ]
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected exactly one client activation anchor, found {count}: {old!r}")
+              text = text.replace(old, new, 1)
+          path.write_text(text)
+          PY
+
+          cargo fmt --all
+          rm .github/workflows/t173-client-activation.yml
+          git diff --check
+
+      - name: Commit activated client
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/persistent_runtime/client.rs .github/workflows/t173-client-activation.yml
+          git diff --cached --check
+          git commit -m "feat(spec-012): activate agent observation client projection"
+          git push origin HEAD:impl/spec-012-t173-agent-observation
