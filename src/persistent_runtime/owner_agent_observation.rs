@@ -195,7 +195,7 @@ impl PersistentOwner {
             return self.queue_agent_observation_event(
                 session,
                 AgentObservationEventV2::HistoryGap {
-                    last_known_snapshot_revision,
+                    last_known_snapshot_revision: last_snapshot_revision,
                 },
             );
         }
@@ -208,7 +208,7 @@ impl PersistentOwner {
             return self.queue_agent_observation_event(
                 session,
                 AgentObservationEventV2::HistoryGap {
-                    last_known_snapshot_revision,
+                    last_known_snapshot_revision: last_snapshot_revision,
                 },
             );
         }
