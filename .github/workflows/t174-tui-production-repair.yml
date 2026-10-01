@@ -59,6 +59,13 @@ jobs:
               raise SystemExit(f"expected one nested render-call target, found {text.count(old_call)}")
           text = text.replace(old_call, new_call, 1)
 
+          pointer_deref = "let Some(dock) = dock.as_deref_mut() else {"
+          occurrences = [index for index in range(len(text)) if text.startswith(pointer_deref, index)]
+          if not occurrences:
+              raise SystemExit("expected at least one mutable dock borrow target")
+          last = occurrences[-1]
+          text = text[:last] + "let Some(dock) = dock else {" + text[last + len(pointer_deref):]
+
           path.write_text(text, encoding="utf-8")
           PY
 
