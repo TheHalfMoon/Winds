@@ -1,0 +1,73 @@
+name: T174 Alibaba OCR Exact Head 7155fb3
+
+on:
+  push:
+    branches:
+      - review/t174-ocr-7155fb3
+
+permissions:
+  contents: read
+
+env:
+  BASE_SHA: 974ab64859e2468a558f9497f3d9bd10d7956e63
+  HEAD_SHA: 7155fb38818600785926b5eeec3b4ab2c635e267
+  OCR_VERSION: 1.12.9
+
+jobs:
+  ocr-review:
+    name: Alibaba Open Code Review
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout review executor branch
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact T174 candidate and base
+        shell: bash
+        run: |
+          set -euo pipefail
+          git cat-file -e "$BASE_SHA^{commit}"
+          git fetch --no-tags origin refs/heads/impl/spec-012-t174-agent-dock
+          test "$(git rev-parse FETCH_HEAD)" = "$HEAD_SHA"
+          git cat-file -e "$HEAD_SHA^{commit}"
+          test "$(git merge-base "$BASE_SHA" "$HEAD_SHA")" = "$BASE_SHA"
+          git diff --check "$BASE_SHA" "$HEAD_SHA"
+          test "$(git rev-parse HEAD)" != "$HEAD_SHA"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+
+      - name: Install exact Alibaba Open Code Review
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g "@alibaba-group/open-code-review@$OCR_VERSION"
+          ocr version | tee ocr-version.txt
+          grep -F "$OCR_VERSION" ocr-version.txt
+
+      - name: Review exact T174 range
+        shell: bash
+        run: |
+          set -euo pipefail
+          ocr delegate preview --format json --from "$BASE_SHA" --to "$HEAD_SHA" | tee ocr-preview.json
+
+      - name: Resolve rule for changed product path
+        shell: bash
+        run: |
+          set -euo pipefail
+          ocr delegate rule --format json src/workbench.rs | tee ocr-rules.json
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: t174-alibaba-ocr-7155fb3
+          path: |
+            ocr-version.txt
+            ocr-preview.json
+            ocr-rules.json
+          if-no-files-found: warn
+          retention-days: 14
