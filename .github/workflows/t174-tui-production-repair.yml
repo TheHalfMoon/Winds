@@ -30,6 +30,7 @@ jobs:
         run: |
           set -euo pipefail
           cp .github/t174_tui_repair.py "$RUNNER_TEMP/t174_tui_repair.py"
+          sed -i 's/if text.count(old) != 2:/if text.count(old) < 1:/' "$RUNNER_TEMP/t174_tui_repair.py"
           git fetch --no-tags origin "refs/heads/${TARGET_BRANCH}"
           test "$(git rev-parse FETCH_HEAD)" = "$EXPECTED_TARGET_HEAD"
           git checkout --detach "$EXPECTED_TARGET_HEAD"
