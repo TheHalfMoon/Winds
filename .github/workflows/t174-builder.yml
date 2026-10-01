@@ -66,6 +66,30 @@ jobs:
           PY
       - name: Apply T174 bridge and TUI projection patch
         run: python .github/t174_patch.py
+      - name: Repair generated T174 Clippy conditional
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('src/workbench_ui.rs')
+          text = path.read_text(encoding='utf-8')
+          pattern = re.compile(
+              r"let group_order = group_by_workspace\s*\.then\(\|\| \{\s*left\.multiplexer_workspace_id\s*\.cmp\(&right\.multiplexer_workspace_id\)\s*\}\)\s*\.unwrap_or\(std::cmp::Ordering::Equal\);",
+              re.MULTILINE,
+          )
+          replacement = '''let group_order = if group_by_workspace {
+                left.multiplexer_workspace_id
+                    .cmp(&right.multiplexer_workspace_id)
+            } else {
+                std::cmp::Ordering::Equal
+            };'''
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'expected one generated T174 group-order repair target, found {count}')
+          path.write_text(text, encoding='utf-8')
+          PY
       - name: Format Rust
         run: cargo fmt --all
       - name: Qualify focused T174 Rust tests
