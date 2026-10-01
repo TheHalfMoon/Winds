@@ -100,7 +100,8 @@ impl AgentObservationProjection {
                 LocalControlErrorKind::UnsupportedOperation,
             ));
         }
-        let MultiplexerSubscriptionBoundaryV2::AgentObservations { snapshot_revision } = ack.boundary
+        let MultiplexerSubscriptionBoundaryV2::AgentObservations { snapshot_revision } =
+            ack.boundary
         else {
             return Err(AgentObservationProjectionError::Protocol(
                 LocalControlErrorKind::MalformedFrame,
@@ -129,9 +130,12 @@ impl AgentObservationProjection {
         if self.freshness == AgentObservationProjectionFreshness::NeedsResubscribe {
             return Err(AgentObservationProjectionError::StaleSnapshotRevision);
         }
-        let subscription = self.subscription.as_ref().ok_or(
-            AgentObservationProjectionError::Protocol(LocalControlErrorKind::UnsupportedOperation),
-        )?;
+        let subscription =
+            self.subscription
+                .as_ref()
+                .ok_or(AgentObservationProjectionError::Protocol(
+                    LocalControlErrorKind::UnsupportedOperation,
+                ))?;
         if snapshot.filter_multiplexer_workspace_id != subscription.multiplexer_workspace_id
             || snapshot.snapshot_revision == 0
         {
@@ -150,9 +154,11 @@ impl AgentObservationProjection {
             ));
         }
 
-        let boundary = self.subscription_boundary.ok_or(
-            AgentObservationProjectionError::Protocol(LocalControlErrorKind::MalformedFrame),
-        )?;
+        let boundary =
+            self.subscription_boundary
+                .ok_or(AgentObservationProjectionError::Protocol(
+                    LocalControlErrorKind::MalformedFrame,
+                ))?;
         let observed = self.observed_revision.unwrap_or(boundary);
         if snapshot.snapshot_revision < boundary || snapshot.snapshot_revision < observed {
             self.invalidate_for_resubscribe(snapshot.snapshot_revision);
@@ -228,9 +234,12 @@ impl AgentObservationProjection {
         &mut self,
         event: &AgentObservationEventV2,
     ) -> Result<(), AgentObservationProjectionError> {
-        let subscription = self.subscription.as_ref().ok_or(
-            AgentObservationProjectionError::Protocol(LocalControlErrorKind::UnsupportedOperation),
-        )?;
+        let subscription =
+            self.subscription
+                .as_ref()
+                .ok_or(AgentObservationProjectionError::Protocol(
+                    LocalControlErrorKind::UnsupportedOperation,
+                ))?;
         if self.freshness == AgentObservationProjectionFreshness::NeedsResubscribe {
             return Err(AgentObservationProjectionError::StaleSnapshotRevision);
         }
@@ -239,7 +248,10 @@ impl AgentObservationProjection {
             AgentObservationEventV2::Upsert {
                 snapshot_revision,
                 observation,
-            } => (Some(observation.multiplexer_workspace_id), *snapshot_revision),
+            } => (
+                Some(observation.multiplexer_workspace_id),
+                *snapshot_revision,
+            ),
             AgentObservationEventV2::Removed {
                 snapshot_revision,
                 multiplexer_workspace_id,
@@ -280,9 +292,12 @@ impl AgentObservationProjection {
         }
 
         if subscription.multiplexer_workspace_id.is_none() && revision > previous {
-            let expected = previous.checked_add(1).ok_or(
-                AgentObservationProjectionError::Protocol(LocalControlErrorKind::MalformedFrame),
-            )?;
+            let expected =
+                previous
+                    .checked_add(1)
+                    .ok_or(AgentObservationProjectionError::Protocol(
+                        LocalControlErrorKind::MalformedFrame,
+                    ))?;
             if revision != expected {
                 self.invalidate_for_resubscribe(previous);
                 return Ok(());
