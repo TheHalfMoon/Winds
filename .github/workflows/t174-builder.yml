@@ -82,12 +82,7 @@ jobs:
           old = text[start:end]
           if '.then' not in old or 'Ordering::Equal' not in old:
               raise SystemExit(f'unexpected generated group-order span: {old!r}')
-          replacement = '''let group_order = if group_by_workspace {
-                left.multiplexer_workspace_id
-                    .cmp(&right.multiplexer_workspace_id)
-            } else {
-                std::cmp::Ordering::Equal
-            };'''
+          replacement = 'let group_order = if group_by_workspace {\n                left.multiplexer_workspace_id\n                    .cmp(&right.multiplexer_workspace_id)\n            } else {\n                std::cmp::Ordering::Equal\n            };'
           path.write_text(text[:start] + replacement + text[end:], encoding='utf-8')
           PY
       - name: Repair T174 Desktop snapshot consumers and visible exact binding
@@ -105,43 +100,31 @@ jobs:
 
           types_path = Path('desktop/src/leftDock/types.ts')
           types_text = types_path.read_text(encoding='utf-8')
-          bridge_snapshot = '''export interface BridgeSnapshot {
-            readonly projects: readonly BridgeProject[];
-            readonly agentDock: BridgeAgentDockSnapshot;
-          }'''
+          marker = 'export interface BridgeSnapshot {'
+          if types_text.count(marker) != 1:
+              raise SystemExit(f'desktop/src/leftDock/types.ts: expected one BridgeSnapshot marker, found {types_text.count(marker)}')
           if 'UNAVAILABLE_AGENT_DOCK_SNAPSHOT' not in types_text:
-              if types_text.count(bridge_snapshot) != 1:
-                  raise SystemExit('desktop/src/leftDock/types.ts: generated BridgeSnapshot target not unique')
-              constant = '''export const UNAVAILABLE_AGENT_DOCK_SNAPSHOT: BridgeAgentDockSnapshot = {
-            authority: "OWNER_AUTHORITATIVE_AGENT_OBSERVATIONS",
-            availability: "UNAVAILABLE",
-            observations: [],
-            detectionOnly: true,
-            unavailableReason: "SNAPSHOT_NOT_LOADED",
-          };
+              constant = 'export const UNAVAILABLE_AGENT_DOCK_SNAPSHOT: BridgeAgentDockSnapshot = {\n  authority: "OWNER_AUTHORITATIVE_AGENT_OBSERVATIONS",\n  availability: "UNAVAILABLE",\n  observations: [],\n  detectionOnly: true,\n  unavailableReason: "SNAPSHOT_NOT_LOADED",\n};\n\n'
+              position = types_text.index(marker)
+              types_path.write_text(types_text[:position] + constant + types_text[position:], encoding='utf-8')
 
-          '''
-              types_path.write_text(types_text.replace(bridge_snapshot, constant + bridge_snapshot, 1), encoding='utf-8')
+          left_path = Path('desktop/src/leftDock/LeftDock.tsx')
+          left_text = left_path.read_text(encoding='utf-8')
+          import_line = 'import type { BridgeProject, BridgeSessionSummary, BridgeSnapshot, LeftDockBridge } from "./types";'
+          if left_text.count(import_line) != 1:
+              raise SystemExit('LeftDock type import target is not unique')
+          left_text = left_text.replace(import_line, 'import { UNAVAILABLE_AGENT_DOCK_SNAPSHOT } from "./types";\n' + import_line, 1)
+          snapshot_marker = 'const emptySnapshot: BridgeSnapshot = {'
+          if left_text.count(snapshot_marker) != 1:
+              raise SystemExit('LeftDock generated empty snapshot marker is not unique')
+          start = left_text.index(snapshot_marker)
+          end = left_text.index('};', start) + 2
+          span = left_text[start:end]
+          if 'agentDock' not in span or 'SNAPSHOT_NOT_LOADED' not in span:
+              raise SystemExit(f'unexpected LeftDock generated empty snapshot span: {span!r}')
+          left_text = left_text[:start] + 'const emptySnapshot: BridgeSnapshot = { projects: [], agentDock: UNAVAILABLE_AGENT_DOCK_SNAPSHOT };' + left_text[end:]
+          left_path.write_text(left_text, encoding='utf-8')
 
-          replace_once(
-              'desktop/src/leftDock/LeftDock.tsx',
-              'import type { BridgeProject, BridgeSessionSummary, BridgeSnapshot, LeftDockBridge } from "./types";',
-              'import { UNAVAILABLE_AGENT_DOCK_SNAPSHOT } from "./types";\nimport type { BridgeProject, BridgeSessionSummary, BridgeSnapshot, LeftDockBridge } from "./types";',
-          )
-          replace_once(
-              'desktop/src/leftDock/LeftDock.tsx',
-              '''const emptySnapshot: BridgeSnapshot = {
-            projects: [],
-            agentDock: {
-              authority: "OWNER_AUTHORITATIVE_AGENT_OBSERVATIONS",
-              availability: "UNAVAILABLE",
-              observations: [],
-              detectionOnly: true,
-              unavailableReason: "SNAPSHOT_NOT_LOADED",
-            },
-          };''',
-              'const emptySnapshot: BridgeSnapshot = { projects: [], agentDock: UNAVAILABLE_AGENT_DOCK_SNAPSHOT };',
-          )
           replace_once(
               'desktop/src/commandPalette/CommandPalette.tsx',
               'import type { BridgeSnapshot } from "../leftDock/types";',
