@@ -39,24 +39,20 @@ jobs:
           from pathlib import Path
           path = Path('src/persistent_runtime/owner_agent_observation.rs')
           text = path.read_text()
-          old = '''            if let Some(cursor) = &list.cursor {
-              if cursor.owner_generation_id != self.generation_id {
-                  return Err(LocalControlErrorKind::StaleOwnerGeneration);
-              }
-              if cursor.snapshot_revision != self.agent_observation_store.snapshot_revision() {
-                  return Err(LocalControlErrorKind::OutcomeUnknown);
-              }
-          }
-
-'''
-          # Preserve exact Rust indentation from the source; normalize only the
-          # Python literal's two intentionally over-indented inner lines below.
-          old = old.replace('              if cursor.owner_generation_id', '                if cursor.owner_generation_id')
-          old = old.replace('                  return Err', '                    return Err')
-          old = old.replace('              }\n              if cursor.snapshot_revision', '                }\n                if cursor.snapshot_revision')
-          old = old.replace('              }\n          }', '                }\n            }')
-          if text.count(old) != 1:
-              raise SystemExit(f'expected exactly one stale-cursor precheck, found {text.count(old)}')
+          old = (
+              "            if let Some(cursor) = &list.cursor {\n"
+              "                if cursor.owner_generation_id != self.generation_id {\n"
+              "                    return Err(LocalControlErrorKind::StaleOwnerGeneration);\n"
+              "                }\n"
+              "                if cursor.snapshot_revision != self.agent_observation_store.snapshot_revision() {\n"
+              "                    return Err(LocalControlErrorKind::OutcomeUnknown);\n"
+              "                }\n"
+              "            }\n"
+              "\n"
+          )
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'expected exactly one stale-cursor precheck, found {count}')
           path.write_text(text.replace(old, '', 1))
           PY
           test "$(git diff --name-only)" = "src/persistent_runtime/owner_agent_observation.rs"
