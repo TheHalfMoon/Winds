@@ -593,13 +593,11 @@ mod t173_agent_observation_tests;
 #[cfg(test)]
 mod t173_review_regressions {
     use super::*;
-    use crate::multiplexer::agent_catalog::{
-        AgentSupport, DetectionSource, UnknownReason,
-    };
+    use crate::multiplexer::agent_catalog::{AgentSupport, DetectionSource, UnknownReason};
+    use crate::multiplexer::domain::TopologyGeneration;
     use crate::multiplexer::domain::navigation::{
         LayoutNode, MultiplexerTopology, TabState, WorkspaceState,
     };
-    use crate::multiplexer::domain::TopologyGeneration;
 
     fn owner(byte: u8) -> OwnerGenerationId {
         OwnerGenerationId::from_entropy_bytes([byte; 16]).expect("non-zero owner generation")
@@ -658,7 +656,12 @@ mod t173_review_regressions {
         ]
     }
 
-    fn topology(workspaces: usize) -> (MultiplexerTopology, Vec<(MultiplexerWorkspaceId, TabId, PaneId)>) {
+    fn topology(
+        workspaces: usize,
+    ) -> (
+        MultiplexerTopology,
+        Vec<(MultiplexerWorkspaceId, TabId, PaneId)>,
+    ) {
         let mut identities = Vec::with_capacity(workspaces);
         let mut states = Vec::with_capacity(workspaces);
         for index in 0..workspaces {
@@ -821,7 +824,10 @@ mod t173_review_regressions {
             )
             .expect("stale cursor restarts an authoritative snapshot");
         assert_eq!(first.page_offset, 0);
-        assert_eq!(first.observations.len(), MAX_V2_AGENT_OBSERVATIONS_PER_PAGE);
+        assert_eq!(
+            first.observations.len(),
+            MAX_V2_AGENT_OBSERVATIONS_PER_PAGE
+        );
         let continuation = first
             .next_cursor
             .expect("a >128-item resnapshot must remain pageable");
