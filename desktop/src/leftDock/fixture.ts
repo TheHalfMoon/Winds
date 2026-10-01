@@ -1,6 +1,48 @@
 import type { BridgeLayoutPresentation, BridgeSnapshot, LeftDockBridge } from "./types";
 
 const fixture: BridgeSnapshot = {
+  agentDock: {
+    authority: "OWNER_AUTHORITATIVE_AGENT_OBSERVATIONS",
+    availability: "CURRENT",
+    detectionOnly: true,
+    unavailableReason: null,
+    observations: [
+      {
+        observationId: "11111111111111111111111111111111",
+        family: "CODEX",
+        sourceClass: "PROVIDER_STRUCTURED_METADATA",
+        confidenceClass: "STRONG",
+        freshness: "CURRENT",
+        multiplexerWorkspaceId: "21212121212121212121212121212121",
+        gitWorkspaceId: "fixture-winds",
+        tabId: "31313131313131313131313131313131",
+        paneId: "41414141414141414141414141414141",
+        runtimeNamespaceId: "51515151515151515151515151515151",
+        providerNativeSessionId: "fixture-provider-a",
+        ownerGenerationId: "61616161616161616161616161616161",
+        observedUnixMs: 1,
+        structuredEvidenceSummary: "fixture structured metadata only",
+        executionAuthority: "DETECTION_ONLY_UNPROVEN",
+      },
+      {
+        observationId: "12121212121212121212121212121212",
+        family: "CODEX",
+        sourceClass: "USER_DECLARED_PRESENTATION",
+        confidenceClass: "USER_DECLARED",
+        freshness: "CURRENT",
+        multiplexerWorkspaceId: "21212121212121212121212121212121",
+        gitWorkspaceId: "fixture-winds",
+        tabId: "31313131313131313131313131313131",
+        paneId: "42424242424242424242424242424242",
+        runtimeNamespaceId: null,
+        providerNativeSessionId: null,
+        ownerGenerationId: "61616161616161616161616161616161",
+        observedUnixMs: 2,
+        structuredEvidenceSummary: "fixture user declaration only",
+        executionAuthority: "DETECTION_ONLY_UNPROVEN",
+      },
+    ],
+  },
   projects: [
     {
       project: {
@@ -119,7 +161,7 @@ function buildT143PerformanceFixture(): BridgeSnapshot {
       sessions,
     };
   });
-  t143PerformanceFixture = { projects: [...fixture.projects, ...projects] };
+  t143PerformanceFixture = { projects: [...fixture.projects, ...projects], agentDock: fixture.agentDock };
   return t143PerformanceFixture;
 }
 

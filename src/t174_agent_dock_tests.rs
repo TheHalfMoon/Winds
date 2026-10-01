@@ -58,8 +58,12 @@ fn observation(
     }
 }
 
-fn topology_for(observation: &AgentObservationV2, generation: u64) -> CanonicalTopologyPresentation {
-    let topology_generation = TopologyGeneration::new(generation).expect("valid topology generation");
+fn topology_for(
+    observation: &AgentObservationV2,
+    generation: u64,
+) -> CanonicalTopologyPresentation {
+    let topology_generation =
+        TopologyGeneration::new(generation).expect("valid topology generation");
     CanonicalTopologyPresentation {
         topology_generation,
         text: "canonical topology".to_owned(),
@@ -83,8 +87,9 @@ fn topology_for(observation: &AgentObservationV2, generation: u64) -> CanonicalT
 fn t174_duplicate_labels_and_concurrent_observations_preserve_exact_targets() {
     let first = observation(0x11, 0x21, 0x31, 0x41, 0x51, 100);
     let second = observation(0x12, 0x21, 0x31, 0x42, 0x52, 101);
-    let dock = CanonicalAgentDockPresentation::from_observations(vec![first.clone(), second.clone()])
-        .expect("distinct observation identities should project");
+    let dock =
+        CanonicalAgentDockPresentation::from_observations(vec![first.clone(), second.clone()])
+            .expect("distinct observation identities should project");
 
     let rows = dock.list("codex", CanonicalAgentDockSort::Family, false);
     assert_eq!(rows.len(), 2);
@@ -104,7 +109,9 @@ fn t174_rename_is_display_alias_only_and_never_changes_identity_or_truth() {
 
     dock.rename(original.observation_id, Some("Pair Reviewer"))
         .expect("bounded display alias should be accepted");
-    let item = dock.get(original.observation_id).expect("item should remain present");
+    let item = dock
+        .get(original.observation_id)
+        .expect("item should remain present");
     assert_eq!(item.display_alias.as_deref(), Some("Pair Reviewer"));
     assert_eq!(dock.read(original.observation_id), Some(&original));
 
@@ -130,7 +137,10 @@ fn t174_focus_returns_read_only_exact_pane_view_target_and_refuses_stale_or_miss
         .focus(current.observation_id, &topology)
         .expect("exact current pane should bind as a view target");
     assert_eq!(target.observation_id, current.observation_id);
-    assert_eq!(target.multiplexer_workspace_id, current.multiplexer_workspace_id);
+    assert_eq!(
+        target.multiplexer_workspace_id,
+        current.multiplexer_workspace_id
+    );
     assert_eq!(target.tab_id, current.tab_id);
     assert_eq!(target.pane_id, current.pane_id);
     assert_eq!(target.runtime_namespace_id, current.runtime_namespace_id);
@@ -146,7 +156,10 @@ fn t174_focus_returns_read_only_exact_pane_view_target_and_refuses_stale_or_miss
 
     let unrelated = observation(0x15, 0x25, 0x35, 0x45, 0x55, 301);
     let unrelated_topology = topology_for(&unrelated, 8);
-    assert!(dock.focus(current.observation_id, &unrelated_topology).is_none());
+    assert!(
+        dock.focus(current.observation_id, &unrelated_topology)
+            .is_none()
+    );
 }
 
 #[test]
@@ -160,7 +173,7 @@ fn t174_filter_sort_group_are_presentation_only_and_explain_detection_limits() {
     let dock = CanonicalAgentDockPresentation::from_observations(original.clone())
         .expect("observations should project");
 
-    let recent = dock.list("", CanonicalAgentDockSort::Recent, true);
+    let recent = dock.list("", CanonicalAgentDockSort::Recent, false);
     assert_eq!(recent[0].observation_id, second.observation_id);
     let filtered = dock.list("claude", CanonicalAgentDockSort::Source, true);
     assert_eq!(filtered.len(), 1);

@@ -53,7 +53,7 @@ function AgentRow({
           {observation.sourceClass} · {observation.freshness}
         </span>
         <span className="agent-row-binding">
-          pane {compactId(observation.paneId)} · obs {compactId(observation.observationId)}
+          ws {compactId(observation.multiplexerWorkspaceId)} · tab {compactId(observation.tabId)} · pane {compactId(observation.paneId)} · obs {compactId(observation.observationId)}
         </span>
       </button>
       <button

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
+import { AgentDock } from "../agentDock/AgentDock";
 import { RuntimeMark } from "../components/RuntimeMark";
 import { leftDockBridge } from "./bridge";
 import {
@@ -17,9 +18,10 @@ import {
   sessionReorderPlan,
   sessionUpdatePlan,
 } from "./model";
+import { UNAVAILABLE_AGENT_DOCK_SNAPSHOT } from "./types";
 import type { BridgeProject, BridgeSessionSummary, BridgeSnapshot, LeftDockBridge } from "./types";
 
-const emptySnapshot: BridgeSnapshot = { projects: [] };
+const emptySnapshot: BridgeSnapshot = { projects: [], agentDock: UNAVAILABLE_AGENT_DOCK_SNAPSHOT };
 
 const PROJECT_PAGE_THRESHOLD = 40;
 const PROJECT_PAGE_SIZE = 14;
@@ -527,6 +529,7 @@ export function LeftDock({
           </nav>
         )}
       </div>
+      <AgentDock snapshot={snapshot.agentDock} />
       <div className="dock-foot">
         <div className="projection-status" role="status" aria-live="polite">{status}</div>
         <button type="button" className="quiet-action" data-focus-key="dock:refresh" onClick={() => {

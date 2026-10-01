@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { leftDockBridge } from "../leftDock/bridge";
-import type { BridgeSnapshot } from "../leftDock/types";
+import { UNAVAILABLE_AGENT_DOCK_SNAPSHOT, type BridgeSnapshot } from "../leftDock/types";
 import { displayPath } from "../rightDock/model";
 import type { RightDockSurface } from "../rightDock/types";
 import { commandPaletteItems, type CommandPaletteItem } from "./model";
 
-const emptySnapshot: BridgeSnapshot = { projects: [] };
+const emptySnapshot: BridgeSnapshot = { projects: [], agentDock: UNAVAILABLE_AGENT_DOCK_SNAPSHOT };
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

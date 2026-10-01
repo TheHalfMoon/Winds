@@ -10,6 +10,7 @@ use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
     MouseEventKind,
 };
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 pub(crate) const HOST_EVENT_WAIT: Duration = Duration::from_millis(250);
@@ -1059,6 +1060,387 @@ pub(crate) fn canonical_topology_bind_pointer_focus_intent(
         },
     ))
 }
+
+const T174_MAX_DISPLAY_ALIAS_BYTES: usize = 128;
+const T174_DETECTION_ONLY_NONCLAIM: &str = "DETECTION_ONLY_UNPROVEN";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CanonicalAgentDockSort {
+    Family,
+    Recent,
+    Source,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CanonicalAgentDockItem {
+    pub(crate) observation: crate::persistent_runtime::protocol::AgentObservationV2,
+    pub(crate) display_alias: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CanonicalAgentDockListItem {
+    pub(crate) observation_id: crate::multiplexer::domain::AgentObservationId,
+    pub(crate) display_label: String,
+    pub(crate) family: crate::persistent_runtime::protocol::AgentFamilyV2,
+    pub(crate) source_class: crate::persistent_runtime::protocol::AgentObservationSourceV2,
+    pub(crate) freshness: crate::persistent_runtime::protocol::AgentObservationFreshnessV2,
+    pub(crate) multiplexer_workspace_id: crate::multiplexer::domain::MultiplexerWorkspaceId,
+    pub(crate) tab_id: crate::multiplexer::domain::TabId,
+    pub(crate) pane_id: crate::multiplexer::domain::PaneId,
+    pub(crate) runtime_namespace_id: Option<crate::persistent_runtime::domain::RuntimeNamespaceId>,
+    pub(crate) observed_unix_ms: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CanonicalAgentPaneViewTarget {
+    pub(crate) observation_id: crate::multiplexer::domain::AgentObservationId,
+    pub(crate) multiplexer_workspace_id: crate::multiplexer::domain::MultiplexerWorkspaceId,
+    pub(crate) tab_id: crate::multiplexer::domain::TabId,
+    pub(crate) pane_id: crate::multiplexer::domain::PaneId,
+    pub(crate) runtime_namespace_id: Option<crate::persistent_runtime::domain::RuntimeNamespaceId>,
+    pub(crate) owner_generation_id: crate::persistent_runtime::domain::OwnerGenerationId,
+    pub(crate) topology_generation: crate::multiplexer::domain::TopologyGeneration,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CanonicalAgentDockPresentation {
+    items: BTreeMap<crate::multiplexer::domain::AgentObservationId, CanonicalAgentDockItem>,
+    selected_observation_id: Option<crate::multiplexer::domain::AgentObservationId>,
+    focused_observation_id: Option<crate::multiplexer::domain::AgentObservationId>,
+}
+
+impl CanonicalAgentDockPresentation {
+    pub(crate) fn from_observations(
+        observations: Vec<crate::persistent_runtime::protocol::AgentObservationV2>,
+    ) -> std::result::Result<Self, String> {
+        let mut items = BTreeMap::new();
+        for observation in observations {
+            let observation_id = observation.observation_id;
+            if items
+                .insert(
+                    observation_id,
+                    CanonicalAgentDockItem {
+                        observation,
+                        display_alias: None,
+                    },
+                )
+                .is_some()
+            {
+                return Err(
+                    "T174 agent dock received a duplicate immutable observation id".to_owned(),
+                );
+            }
+        }
+        Ok(Self {
+            items,
+            selected_observation_id: None,
+            focused_observation_id: None,
+        })
+    }
+
+    pub(crate) fn from_client(
+        client: &crate::persistent_runtime::client::RustLocalControlClient,
+    ) -> Option<Self> {
+        Self::from_observations(client.trusted_agent_observations()?).ok()
+    }
+
+    pub(crate) fn list(
+        &self,
+        query: &str,
+        sort: CanonicalAgentDockSort,
+        group_by_workspace: bool,
+    ) -> Vec<CanonicalAgentDockListItem> {
+        let query = query.trim().to_ascii_lowercase();
+        let mut rows = self
+            .items
+            .values()
+            .filter(|item| t174_agent_item_matches(item, &query))
+            .map(t174_agent_list_item)
+            .collect::<Vec<_>>();
+        rows.sort_by(|left, right| {
+            let group_order = if group_by_workspace {
+                left.multiplexer_workspace_id
+                    .cmp(&right.multiplexer_workspace_id)
+            } else {
+                std::cmp::Ordering::Equal
+            };
+            if group_order != std::cmp::Ordering::Equal {
+                return group_order;
+            }
+            let primary = match sort {
+                CanonicalAgentDockSort::Family => {
+                    t174_agent_family_label(left.family).cmp(t174_agent_family_label(right.family))
+                }
+                CanonicalAgentDockSort::Recent => {
+                    right.observed_unix_ms.cmp(&left.observed_unix_ms)
+                }
+                CanonicalAgentDockSort::Source => t174_agent_source_label(left.source_class)
+                    .cmp(t174_agent_source_label(right.source_class)),
+            };
+            primary.then(left.observation_id.cmp(&right.observation_id))
+        });
+        rows
+    }
+
+    pub(crate) fn get(
+        &self,
+        observation_id: crate::multiplexer::domain::AgentObservationId,
+    ) -> Option<&CanonicalAgentDockItem> {
+        self.items.get(&observation_id)
+    }
+
+    pub(crate) fn read(
+        &self,
+        observation_id: crate::multiplexer::domain::AgentObservationId,
+    ) -> Option<&crate::persistent_runtime::protocol::AgentObservationV2> {
+        self.get(observation_id).map(|item| &item.observation)
+    }
+
+    pub(crate) fn explain(
+        &self,
+        observation_id: crate::multiplexer::domain::AgentObservationId,
+    ) -> Option<String> {
+        let observation = self.read(observation_id)?;
+        Some(format!(
+            "observation={}\nfamily={}\nsource={}\nconfidence={}\nfreshness={}\nworkspace={}\ntab={}\npane={}\nruntime={}\nowner_generation={}\nexecution={}\nevidence={}",
+            observation.observation_id,
+            t174_agent_family_label(observation.family),
+            t174_agent_source_label(observation.source_class),
+            t174_agent_confidence_label(observation.confidence_class),
+            t174_agent_freshness_label(observation.freshness),
+            observation.multiplexer_workspace_id,
+            observation.tab_id,
+            observation.pane_id,
+            observation
+                .runtime_namespace_id
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "UNBOUND".to_owned()),
+            observation.owner_generation_id,
+            T174_DETECTION_ONLY_NONCLAIM,
+            observation.structured_evidence_summary,
+        ))
+    }
+
+    pub(crate) fn view(
+        &mut self,
+        observation_id: crate::multiplexer::domain::AgentObservationId,
+    ) -> Option<CanonicalAgentDockItem> {
+        let item = self.items.get(&observation_id)?.clone();
+        self.selected_observation_id = Some(observation_id);
+        Some(item)
+    }
+
+    pub(crate) fn rename(
+        &mut self,
+        observation_id: crate::multiplexer::domain::AgentObservationId,
+        display_alias: Option<&str>,
+    ) -> std::result::Result<(), String> {
+        let item = self
+            .items
+            .get_mut(&observation_id)
+            .ok_or_else(|| "T174 agent rename target is absent".to_owned())?;
+        let alias = display_alias
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if alias.is_some_and(|value| value.len() > T174_MAX_DISPLAY_ALIAS_BYTES) {
+            return Err(format!(
+                "T174 display alias exceeds {T174_MAX_DISPLAY_ALIAS_BYTES} bytes"
+            ));
+        }
+        item.display_alias = alias.map(str::to_owned);
+        Ok(())
+    }
+
+    pub(crate) fn focus(
+        &mut self,
+        observation_id: crate::multiplexer::domain::AgentObservationId,
+        topology: &CanonicalTopologyPresentation,
+    ) -> Option<CanonicalAgentPaneViewTarget> {
+        let observation = &self.items.get(&observation_id)?.observation;
+        if observation.freshness
+            != crate::persistent_runtime::protocol::AgentObservationFreshnessV2::Current
+        {
+            return None;
+        }
+        let exact_pane_is_present = topology.search_bindings.iter().any(|binding| {
+            if binding.intent.expected_topology_generation != topology.topology_generation() {
+                return false;
+            }
+            matches!(
+                &binding.intent.operation,
+                crate::persistent_runtime::protocol::TopologyOperationV2::FocusPane {
+                    multiplexer_workspace_id,
+                    tab_id,
+                    pane_id,
+                } if *multiplexer_workspace_id == observation.multiplexer_workspace_id
+                    && *tab_id == observation.tab_id
+                    && *pane_id == observation.pane_id
+            )
+        });
+        if !exact_pane_is_present {
+            return None;
+        }
+        let target = CanonicalAgentPaneViewTarget {
+            observation_id,
+            multiplexer_workspace_id: observation.multiplexer_workspace_id,
+            tab_id: observation.tab_id,
+            pane_id: observation.pane_id,
+            runtime_namespace_id: observation.runtime_namespace_id,
+            owner_generation_id: observation.owner_generation_id,
+            topology_generation: topology.topology_generation(),
+        };
+        self.selected_observation_id = Some(observation_id);
+        self.focused_observation_id = Some(observation_id);
+        Some(target)
+    }
+
+    pub(crate) const fn focused_observation_id(
+        &self,
+    ) -> Option<crate::multiplexer::domain::AgentObservationId> {
+        self.focused_observation_id
+    }
+
+    pub(crate) fn text(&self) -> String {
+        let mut lines = vec![
+            "AGENT_DOCK=OWNER_AUTHORITATIVE_AGENT_OBSERVATIONS".to_owned(),
+            format!("execution={T174_DETECTION_ONLY_NONCLAIM}"),
+        ];
+        for row in self.list("", CanonicalAgentDockSort::Family, true) {
+            lines.push(format!(
+                "{} | family={} | source={} | freshness={} | workspace={} | tab={} | pane={} | observation={}",
+                row.display_label,
+                t174_agent_family_label(row.family),
+                t174_agent_source_label(row.source_class),
+                t174_agent_freshness_label(row.freshness),
+                row.multiplexer_workspace_id,
+                row.tab_id,
+                row.pane_id,
+                row.observation_id,
+            ));
+        }
+        lines.join("\n")
+    }
+}
+
+fn t174_agent_list_item(item: &CanonicalAgentDockItem) -> CanonicalAgentDockListItem {
+    let observation = &item.observation;
+    CanonicalAgentDockListItem {
+        observation_id: observation.observation_id,
+        display_label: item
+            .display_alias
+            .clone()
+            .unwrap_or_else(|| t174_agent_family_label(observation.family).to_owned()),
+        family: observation.family,
+        source_class: observation.source_class,
+        freshness: observation.freshness,
+        multiplexer_workspace_id: observation.multiplexer_workspace_id,
+        tab_id: observation.tab_id,
+        pane_id: observation.pane_id,
+        runtime_namespace_id: observation.runtime_namespace_id,
+        observed_unix_ms: observation.observed_unix_ms,
+    }
+}
+
+fn t174_agent_item_matches(item: &CanonicalAgentDockItem, query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    let observation = &item.observation;
+    [
+        item.display_alias.as_deref().unwrap_or_default().to_owned(),
+        t174_agent_family_label(observation.family).to_owned(),
+        t174_agent_source_label(observation.source_class).to_owned(),
+        t174_agent_freshness_label(observation.freshness).to_owned(),
+        observation.observation_id.to_string(),
+        observation.multiplexer_workspace_id.to_string(),
+        observation.tab_id.to_string(),
+        observation.pane_id.to_string(),
+        observation
+            .runtime_namespace_id
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        observation
+            .provider_native_session_id
+            .clone()
+            .unwrap_or_default(),
+        observation.structured_evidence_summary.clone(),
+    ]
+    .into_iter()
+    .any(|value| value.to_ascii_lowercase().contains(query))
+}
+
+fn t174_agent_family_label(
+    value: crate::persistent_runtime::protocol::AgentFamilyV2,
+) -> &'static str {
+    use crate::persistent_runtime::protocol::AgentFamilyV2;
+    match value {
+        AgentFamilyV2::Pi => "PI",
+        AgentFamilyV2::Claude => "CLAUDE",
+        AgentFamilyV2::Codex => "CODEX",
+        AgentFamilyV2::Gemini => "GEMINI",
+        AgentFamilyV2::Cursor => "CURSOR",
+        AgentFamilyV2::Devin => "DEVIN",
+        AgentFamilyV2::Antigravity => "ANTIGRAVITY",
+        AgentFamilyV2::Cline => "CLINE",
+        AgentFamilyV2::Omp => "OMP",
+        AgentFamilyV2::Mastracode => "MASTRACODE",
+        AgentFamilyV2::OpenCode => "OPEN_CODE",
+        AgentFamilyV2::GithubCopilot => "GITHUB_COPILOT",
+        AgentFamilyV2::Kimi => "KIMI",
+        AgentFamilyV2::Kiro => "KIRO",
+        AgentFamilyV2::Droid => "DROID",
+        AgentFamilyV2::Amp => "AMP",
+        AgentFamilyV2::Grok => "GROK",
+        AgentFamilyV2::Hermes => "HERMES",
+        AgentFamilyV2::Kilo => "KILO",
+        AgentFamilyV2::Qodercli => "QODERCLI",
+        AgentFamilyV2::Qwen => "QWEN",
+        AgentFamilyV2::Letta => "LETTA",
+        AgentFamilyV2::Maki => "MAKI",
+        AgentFamilyV2::Muse => "MUSE",
+    }
+}
+
+fn t174_agent_source_label(
+    value: crate::persistent_runtime::protocol::AgentObservationSourceV2,
+) -> &'static str {
+    use crate::persistent_runtime::protocol::AgentObservationSourceV2;
+    match value {
+        AgentObservationSourceV2::WindsLaunchMetadata => "WINDS_LAUNCH_METADATA",
+        AgentObservationSourceV2::OwnedProcessMetadata => "OWNED_PROCESS_METADATA",
+        AgentObservationSourceV2::ProviderStructuredMetadata => "PROVIDER_STRUCTURED_METADATA",
+        AgentObservationSourceV2::UserDeclaredPresentation => "USER_DECLARED_PRESENTATION",
+    }
+}
+
+fn t174_agent_confidence_label(
+    value: crate::persistent_runtime::protocol::AgentObservationConfidenceV2,
+) -> &'static str {
+    use crate::persistent_runtime::protocol::AgentObservationConfidenceV2;
+    match value {
+        AgentObservationConfidenceV2::Exact => "EXACT",
+        AgentObservationConfidenceV2::Strong => "STRONG",
+        AgentObservationConfidenceV2::UserDeclared => "USER_DECLARED",
+        AgentObservationConfidenceV2::Unknown => "UNKNOWN",
+    }
+}
+
+fn t174_agent_freshness_label(
+    value: crate::persistent_runtime::protocol::AgentObservationFreshnessV2,
+) -> &'static str {
+    use crate::persistent_runtime::protocol::AgentObservationFreshnessV2;
+    match value {
+        AgentObservationFreshnessV2::Current => "CURRENT",
+        AgentObservationFreshnessV2::Ambiguous => "AMBIGUOUS",
+        AgentObservationFreshnessV2::Stale => "STALE",
+        AgentObservationFreshnessV2::Unavailable => "UNAVAILABLE",
+        AgentObservationFreshnessV2::Unknown => "UNKNOWN",
+    }
+}
+
+#[cfg(test)]
+#[path = "t174_agent_dock_tests.rs"]
+mod t174_agent_dock_tests;
 
 #[cfg(test)]
 mod t168_workbench_topology_binding_tests {
