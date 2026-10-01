@@ -148,7 +148,7 @@ jobs:
           replace_once(
               'desktop/src/agentDock/AgentDock.tsx',
               'pane {compactId(observation.paneId)} · obs {compactId(observation.observationId)}',
-              'ws {compactId(observation.multiplexerWorkspaceId)} · pane {compactId(observation.paneId)} · obs {compactId(observation.observationId)}',
+              'ws {compactId(observation.multiplexerWorkspaceId)} · tab {compactId(observation.tabId)} · pane {compactId(observation.paneId)} · obs {compactId(observation.observationId)}',
           )
           PY
       - name: Format Rust
