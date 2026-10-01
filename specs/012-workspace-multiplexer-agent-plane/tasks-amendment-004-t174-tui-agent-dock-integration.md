@@ -1,6 +1,6 @@
 # Spec 012 Tasks Amendment 004 — T174 TUI Agent Dock Integration
 
-Status: IN_QUALIFICATION
+Status: CLOSED_CANONICAL
 
 Authority basis: canonical Spec 012 T174; canonical T168 TUI topology projection; canonical T169 Desktop topology projection; canonical T173 owner-authoritative agent observation projection; and Spec 012 Tasks Amendment 003 precedent for correcting an omitted production TUI integration path without expanding runtime authority.
 
@@ -60,12 +60,12 @@ Candidate movement invalidates stale candidate-bound evidence.
 ## Authority state
 
 ```text
-SPEC_012_TASKS_AMENDMENT_004=IN_QUALIFICATION
+SPEC_012_TASKS_AMENDMENT_004=CLOSED_CANONICAL
 T173=COMPLETE_CANONICAL
-T174=AUTHORIZED_BUT_TUI_WORKBENCH_RS_CHANGE_BLOCKED_PENDING_AMENDMENT_004
+T174=AUTHORIZED
 T175..T185=BLOCKED_BY_PREDECESSOR
 
-T174_WORKBENCH_RS_AUTHORITY=PROPOSED_NARROW_RENDER_INPUT_INTEGRATION_ONLY
+T174_WORKBENCH_RS_AUTHORITY=CANONICAL_NARROW_RENDER_INPUT_INTEGRATION_ONLY
 AGENT_START_AUTHORIZED=NO
 PROVIDER_LAUNCH_INSTALL_ACTION_AUTHORIZED=NO
 RUNTIME_CONTROLLER_AUTHORIZED=NO
@@ -76,3 +76,41 @@ VERIFICATION_AUTHORITY_AUTHORIZED=NO
 NEW_DEPENDENCY_AUTHORIZED=NO
 T175_PLUS_BEHAVIOR_AUTHORIZED=NO
 ```
+
+## Canonical closeout
+
+```text
+AMENDMENT_PR=277
+BASE_SHA=a3268f707cd09259212925e8c02815cb3f1bc7a4
+QUALIFIED_HEAD_SHA=453b2f5ad103177111930e12a687120f36839894
+MERGE_SHA=4cbe1fea59a6d9164d512c733f95b225a4fe1502
+MERGE_TREE=23209d53e43f8e20a497c94faaccd8352d34030e
+PRE_MERGE_QUALITY_RUN=36913845958 SUCCESS
+POST_MERGE_QUALITY_RUN=36929308847 SUCCESS
+
+JEV=TypeSafe jev-1.13.0 exact range a3268f707cd09259212925e8c02815cb3f1bc7a4..453b2f5ad103177111930e12a687120f36839894
+JEV_CLI=0.3.2
+JEV_PROVIDER=typesafe
+JEV_grants_unbounded_scope=no p=0.07
+JEV_claims_unproven_evidence=no p=0.10
+JEV_fabricates_platform_or_tooling_claim=no p=0.15
+JEV_permanent_self_authorization=no p=0.03
+JEV_modifies_code_or_tooling=no p=0.03
+JEV_authorizes_new_runtime_authority=no p=0.04
+JEV_governance_fit=narrow_correction confidence=1.0
+JEV_EXECUTION_NOTE=GitHub Actions lacked TYPESAFE_API_KEY; genuine local credential-backed execution on the exact range is the qualifying Jev evidence. The failed CI credential probe is not treated as PASS.
+
+ALIBABA_OCR=v1.12.9 exact-range accounting
+ALIBABA_OCR_REVIEWABLE_COUNT=0
+ALIBABA_OCR_EXCLUDED_COUNT=1
+ALIBABA_OCR_EXCLUSION=unsupported_ext
+ALIBABA_OCR_RULE=resolved
+MANUAL_MARKDOWN_REVIEW=CLEAN
+INDEPENDENT_EXACT_HEAD_REVIEW=CLEAN
+UNRESOLVED_MATERIAL_FINDINGS=0
+UNRESOLVED_REVIEW_THREADS=0
+ZERO_COST_CONSTRAINT=SATISFIED
+MERGE_METHOD=NORMAL_MERGE_COMMIT_WITH_EXPECTED_HEAD_GUARD
+```
+
+Amendment 004 is therefore closed canonical. It authorizes only the minimum `src/workbench.rs` TUI Agent Dock render/input integration described above; all broader runtime, process, provider, multiplexer-write, Git, verification, and T175+ authority remains explicitly denied.
