@@ -356,8 +356,7 @@ fn t173_runtime_replacement_invalidates_a_stale_observation() {
     // Prove the binding itself, rather than pane liveness, is part of freshness:
     // the same workspace/tab/pane identities resolving to a different runtime
     // must invalidate the observation recorded against runtime 0x25.
-    let (mut replacement_topology, replacement_workspace, replacement_tab) =
-        topology_with(pane_id);
+    let (mut replacement_topology, replacement_workspace, replacement_tab) = topology_with(pane_id);
     assert_eq!(replacement_workspace, workspace_id);
     assert_eq!(replacement_tab, tab_id);
     assert!(bind(
@@ -702,7 +701,10 @@ fn t173_snapshot_paging_is_bounded_and_complete() {
         .next_cursor
         .clone()
         .expect("144 observations require a continuation page");
-    assert_eq!(usize::from(stale_cursor.offset), MAX_V2_AGENT_OBSERVATIONS_PER_PAGE);
+    assert_eq!(
+        usize::from(stale_cursor.offset),
+        MAX_V2_AGENT_OBSERVATIONS_PER_PAGE
+    );
 
     // Move the revision after a client has received page one. The old cursor must
     // restart from offset zero, but the restarted snapshot must remain pageable.
@@ -736,7 +738,10 @@ fn t173_snapshot_paging_is_bounded_and_complete() {
         )
         .expect("a stale cursor restarts authoritatively");
     assert_eq!(restarted.page_offset, 0);
-    assert_eq!(restarted.observations.len(), MAX_V2_AGENT_OBSERVATIONS_PER_PAGE);
+    assert_eq!(
+        restarted.observations.len(),
+        MAX_V2_AGENT_OBSERVATIONS_PER_PAGE
+    );
     assert_eq!(restarted.snapshot_revision, store.snapshot_revision());
     let mut cursor = restarted
         .next_cursor
@@ -777,7 +782,11 @@ fn t173_snapshot_paging_is_bounded_and_complete() {
     assert_eq!(seen.len(), expected_total);
     seen.sort_unstable();
     seen.dedup();
-    assert_eq!(seen.len(), expected_total, "every observation appears exactly once");
+    assert_eq!(
+        seen.len(),
+        expected_total,
+        "every observation appears exactly once"
+    );
 }
 
 #[test]
