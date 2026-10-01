@@ -34,6 +34,7 @@ The correction does **not** authorize:
 - alias/label/ordinal/focus/geometry-based target resolution;
 - terminal/model prose as trusted observation, Needs You, verification, acceptance, or authority evidence;
 - changes to T173 detector/catalog/projection semantics except narrowly consumed presentation support already authorized by T174;
+- any change to the T168 canonical topology presentation, topology hit-region geometry, topology pointer-focus intent shape, or topology pointer-capture semantics;
 - any new dependency, network service, daemon, public RPC, migration, protocol schema, Git behavior, verification behavior, or T175+ implementation.
 
 If implementation proves that another production path or authority is required, T174 must stop and obtain a separate accepted amendment rather than widening this correction implicitly.
