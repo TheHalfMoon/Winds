@@ -37,6 +37,24 @@ jobs:
         with:
           toolchain: 1.97.1
           components: rustfmt, clippy
+      - name: Repair known T174 builder patch compile defects
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/t174_patch.py')
+          text = path.read_text(encoding='utf-8')
+          replacements = {
+              'use crate::multiplexer::protocol::{': 'use crate::persistent_runtime::protocol::{',
+              'Result<Self, String>': 'std::result::Result<Self, String>',
+              'Result<(), String>': 'std::result::Result<(), String>',
+          }
+          for old, new in replacements.items():
+              if old not in text:
+                  raise SystemExit(f'missing expected T174 repair target: {old}')
+              text = text.replace(old, new)
+          path.write_text(text, encoding='utf-8')
+          PY
       - name: Apply T174 bridge and TUI projection patch
         run: python .github/t174_patch.py
       - name: Format Rust
