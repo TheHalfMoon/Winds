@@ -45,6 +45,20 @@ test("T174 reuses the typed left-dock snapshot and adds no agent invoke command"
   assert.doesNotMatch(main, /agent_dock_|agent_observation_snapshot/);
 });
 
+test("T174 Desktop focus revalidates exact observation truth around topology binding", () => {
+  const component = read("src/agentDock/AgentDock.tsx");
+
+  assert.match(component, /leftDockBridge\(\)/);
+  assert.match(component, /observationBridge\.snapshot\(\)/);
+  assert.match(component, /current\.agentDock\.availability !== "CURRENT"/);
+  assert.match(component, /exact observation is absent from current owner truth/);
+  assert.match(component, /sameAgentBinding\(observation, before\)/);
+  assert.match(component, /sameAgentBinding\(before, after\)/);
+  assert.match(component, /ownerGenerationId/);
+  assert.match(component, /trailingTopology\.topologyGeneration/);
+  assert.match(component, /exact pane changed during focus validation/);
+});
+
 test("T174 aliasing is presentation-local and exact targeting ignores aliases", () => {
   const component = read("src/agentDock/AgentDock.tsx");
   const model = read("src/agentDock/model.ts");
