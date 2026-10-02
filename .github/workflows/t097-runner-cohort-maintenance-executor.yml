@@ -1,0 +1,84 @@
+name: T097 runner cohort maintenance executor
+
+on:
+  push:
+    branches:
+      - repair/t097-runner-cohort-20260927
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact maintenance target
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: maintenance/t097-runner-cohort-20260927
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify exact maintenance base
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "974ab64859e2468a558f9497f3d9bd10d7956e63"
+
+      - name: Patch only the pinned runner cohort
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/t097-performance.yml')
+          text = path.read_text()
+          replacements = [
+              (
+                  '      REFERENCE_IMAGE_VERSION_C: 20260920.314.1\n',
+                  '      REFERENCE_IMAGE_VERSION_C: 20260920.314.1\n'
+                  '      REFERENCE_IMAGE_VERSION_D: 20260927.320.1\n',
+              ),
+              (
+                  '            "$REFERENCE_IMAGE_VERSION_A"|"$REFERENCE_IMAGE_VERSION_B"|"$REFERENCE_IMAGE_VERSION_C") ;;\n',
+                  '            "$REFERENCE_IMAGE_VERSION_A"|"$REFERENCE_IMAGE_VERSION_B"|"$REFERENCE_IMAGE_VERSION_C"|"$REFERENCE_IMAGE_VERSION_D") ;;\n',
+              ),
+              (
+                  "              printf 'Pinned T097 runner image outside finite cohort: accepted=%s,%s,%s observed=%s\\n' \\\n",
+                  "              printf 'Pinned T097 runner image outside finite cohort: accepted=%s,%s,%s,%s observed=%s\\n' \\\n",
+              ),
+              (
+                  '                "$REFERENCE_IMAGE_VERSION_A" "$REFERENCE_IMAGE_VERSION_B" "$REFERENCE_IMAGE_VERSION_C" "${ImageVersion:-UNSET}" >&2\n',
+                  '                "$REFERENCE_IMAGE_VERSION_A" "$REFERENCE_IMAGE_VERSION_B" "$REFERENCE_IMAGE_VERSION_C" "$REFERENCE_IMAGE_VERSION_D" "${ImageVersion:-UNSET}" >&2\n',
+              ),
+          ]
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'expected exactly one guarded replacement, got {count}: {old!r}')
+              text = text.replace(old, new, 1)
+          path.write_text(text)
+          PY
+
+      - name: Verify maintenance scope and invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          test "$(git diff --name-only)" = ".github/workflows/t097-performance.yml"
+          grep -F 'REFERENCE_IMAGE_VERSION_D: 20260927.320.1' .github/workflows/t097-performance.yml
+          grep -F 'if result["p95_ms"] > 1500.0:' .github/workflows/t097-performance.yml
+          grep -F "'thresholds_relaxed': False" .github/workflows/t097-performance.yml
+          git diff -- .github/workflows/t097-performance.yml
+
+      - name: Commit product maintenance only
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "Winds qualification bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add .github/workflows/t097-performance.yml
+          git commit -m "ci: admit GitHub ubuntu-24.04 image 20260927.320.1 for T097"
+          git push origin HEAD:maintenance/t097-runner-cohort-20260927
