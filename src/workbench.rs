@@ -27,6 +27,533 @@ const EMPTY_WORKBENCH_MESSAGE: &str = "No terminal panes are active.";
 const COMPACT_WORKBENCH_MIN_WIDTH: u16 = 60;
 const COMPACT_WORKBENCH_MIN_HEIGHT: u16 = 10;
 
+const T174_TUI_AGENT_DOCK_MAX_ROWS: usize = 8;
+const T174_TUI_AGENT_DOCK_NONCLAIM: &str = "DETECTION_ONLY_UNPROVEN";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct T174TuiAgentHitRegion {
+    observation_id: crate::multiplexer::domain::AgentObservationId,
+    column: u16,
+    row: u16,
+    width: u16,
+    height: u16,
+}
+
+impl T174TuiAgentHitRegion {
+    fn contains(self, column: u16, row: u16) -> bool {
+        column >= self.column
+            && row >= self.row
+            && column < self.column.saturating_add(self.width)
+            && row < self.row.saturating_add(self.height)
+    }
+}
+
+#[derive(Debug, Default)]
+struct T174TuiAgentDockState {
+    open: bool,
+    selected_observation_id: Option<crate::multiplexer::domain::AgentObservationId>,
+    alias_input: Option<String>,
+    hit_regions: Vec<T174TuiAgentHitRegion>,
+    status: String,
+}
+
+impl T174TuiAgentDockState {
+    fn open_with(&mut self, dock: &mut ui::CanonicalAgentDockPresentation) {
+        self.open = true;
+        self.alias_input = None;
+        self.hit_regions.clear();
+        self.selected_observation_id = dock
+            .list("", ui::CanonicalAgentDockSort::Family, true)
+            .first()
+            .map(|row| row.observation_id);
+        if let Some(observation_id) = self.selected_observation_id {
+            let _ = dock.view(observation_id);
+        }
+        self.status = "CURRENT owner-authoritative observations loaded".to_owned();
+    }
+
+    fn open_unavailable(&mut self, reason: impl Into<String>) {
+        self.open = true;
+        self.selected_observation_id = None;
+        self.alias_input = None;
+        self.hit_regions.clear();
+        self.status = format!("UNAVAILABLE · {}", reason.into());
+    }
+
+    fn close(&mut self) {
+        self.open = false;
+        self.alias_input = None;
+        self.hit_regions.clear();
+    }
+
+    fn select_exact(
+        &mut self,
+        dock: &mut ui::CanonicalAgentDockPresentation,
+        observation_id: crate::multiplexer::domain::AgentObservationId,
+    ) {
+        if dock.view(observation_id).is_some() {
+            self.selected_observation_id = Some(observation_id);
+            self.status = format!("VIEW observation={observation_id}");
+        }
+    }
+
+    fn cycle_selection(&mut self, dock: &mut ui::CanonicalAgentDockPresentation, delta: isize) {
+        let rows = dock.list("", ui::CanonicalAgentDockSort::Family, true);
+        if rows.is_empty() {
+            self.selected_observation_id = None;
+            return;
+        }
+        let current = self
+            .selected_observation_id
+            .and_then(|selected| rows.iter().position(|row| row.observation_id == selected))
+            .unwrap_or(0);
+        let next = if delta < 0 {
+            current.checked_sub(1).unwrap_or(rows.len() - 1)
+        } else {
+            (current + 1) % rows.len()
+        };
+        self.select_exact(dock, rows[next].observation_id);
+    }
+
+    fn focus_selected(
+        &mut self,
+        dock: &mut ui::CanonicalAgentDockPresentation,
+        topology: Option<&ui::CanonicalTopologyPresentation>,
+    ) {
+        let Some(observation_id) = self.selected_observation_id else {
+            self.status = "FOCUS_UNAVAILABLE · no exact observation selected".to_owned();
+            return;
+        };
+        let Some(topology) = topology else {
+            self.status = "FOCUS_UNAVAILABLE · canonical topology unavailable".to_owned();
+            return;
+        };
+        match dock.focus(observation_id, topology) {
+            Some(target) => {
+                self.status = format!(
+                    "FOCUS_VALIDATED observation={} workspace={} tab={} pane={} topology_generation={:?} · READ_ONLY",
+                    target.observation_id,
+                    target.multiplexer_workspace_id,
+                    target.tab_id,
+                    target.pane_id,
+                    target.topology_generation,
+                );
+            }
+            None => {
+                self.status =
+                    "FOCUS_UNAVAILABLE · stale, absent, ambiguous, or substituted exact target"
+                        .to_owned();
+            }
+        }
+    }
+
+    fn focus_target_for_event(
+        &self,
+        event: &Event,
+    ) -> Option<crate::multiplexer::domain::AgentObservationId> {
+        if !self.open || self.alias_input.is_some() {
+            return None;
+        }
+        match event {
+            Event::Key(key) if key.kind != KeyEventKind::Release && key.code == KeyCode::Enter => {
+                self.selected_observation_id
+            }
+            Event::Mouse(mouse)
+                if mouse.kind
+                    == crossterm::event::MouseEventKind::Down(
+                        crossterm::event::MouseButton::Right,
+                    ) =>
+            {
+                self.hit_regions
+                    .iter()
+                    .copied()
+                    .find(|region| region.contains(mouse.column, mouse.row))
+                    .map(|region| region.observation_id)
+            }
+            _ => None,
+        }
+    }
+
+    fn handle_event(
+        &mut self,
+        mut dock: Option<&mut ui::CanonicalAgentDockPresentation>,
+        topology: Option<&ui::CanonicalTopologyPresentation>,
+        event: &Event,
+    ) -> bool {
+        if !self.open {
+            return false;
+        }
+        if matches!(event, Event::Key(key) if key.kind == KeyEventKind::Release) {
+            return true;
+        }
+        if matches!(event, Event::Key(key) if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('q'))
+        {
+            return false;
+        }
+
+        if self.alias_input.is_some() {
+            let Event::Key(key) = event else {
+                return true;
+            };
+            match key.code {
+                KeyCode::Esc => {
+                    self.alias_input = None;
+                    self.status = "ALIAS_CANCELLED · immutable identity unchanged".to_owned();
+                }
+                KeyCode::Backspace => {
+                    if let Some(alias) = &mut self.alias_input {
+                        alias.pop();
+                    }
+                }
+                KeyCode::Enter => {
+                    let alias = self.alias_input.take().unwrap_or_default();
+                    let Some(observation_id) = self.selected_observation_id else {
+                        self.status =
+                            "ALIAS_UNAVAILABLE · no exact observation selected".to_owned();
+                        return true;
+                    };
+                    let Some(dock) = dock.as_deref_mut() else {
+                        self.status =
+                            "ALIAS_UNAVAILABLE · observation truth unavailable".to_owned();
+                        return true;
+                    };
+                    match dock.rename(observation_id, Some(&alias)) {
+                        Ok(()) => {
+                            self.status = format!(
+                                "ALIAS_UPDATED observation={observation_id} · DISPLAY_ONLY · immutable identity unchanged"
+                            );
+                        }
+                        Err(error) => self.status = format!("ALIAS_REFUSED · {error}"),
+                    }
+                }
+                KeyCode::Char(character)
+                    if !key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !key.modifiers.contains(KeyModifiers::ALT) =>
+                {
+                    if let Some(alias) = &mut self.alias_input {
+                        alias.push(character);
+                    }
+                }
+                _ => {}
+            }
+            return true;
+        }
+
+        match event {
+            Event::Key(key) if key.code == KeyCode::Esc => {
+                self.close();
+                true
+            }
+            Event::Key(key) if key.code == KeyCode::Up => {
+                if let Some(dock) = dock.as_deref_mut() {
+                    self.cycle_selection(dock, -1);
+                }
+                true
+            }
+            Event::Key(key) if key.code == KeyCode::Down => {
+                if let Some(dock) = dock.as_deref_mut() {
+                    self.cycle_selection(dock, 1);
+                }
+                true
+            }
+            Event::Key(key) if key.code == KeyCode::Enter => {
+                if let Some(dock) = dock.as_deref_mut() {
+                    self.focus_selected(dock, topology);
+                } else {
+                    self.status = "FOCUS_UNAVAILABLE · observation truth unavailable".to_owned();
+                }
+                true
+            }
+            Event::Key(key) if key.code == KeyCode::Char('e') => {
+                if let (Some(observation_id), Some(dock)) =
+                    (self.selected_observation_id, dock.as_deref_mut())
+                {
+                    self.status = dock
+                        .explain(observation_id)
+                        .map(|explanation| format!("EXPLAIN\n{explanation}"))
+                        .unwrap_or_else(|| "EXPLAIN_UNAVAILABLE".to_owned());
+                }
+                true
+            }
+            Event::Key(key) if key.code == KeyCode::Char('r') => {
+                if let (Some(observation_id), Some(dock)) =
+                    (self.selected_observation_id, dock.as_deref_mut())
+                {
+                    self.alias_input = Some(
+                        dock.get(observation_id)
+                            .and_then(|item| item.display_alias.clone())
+                            .unwrap_or_default(),
+                    );
+                    self.status = format!(
+                        "ALIAS_EDIT observation={observation_id} · DISPLAY_ONLY · Enter saves · Esc cancels"
+                    );
+                }
+                true
+            }
+            Event::Mouse(mouse)
+                if matches!(
+                    mouse.kind,
+                    crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left)
+                        | crossterm::event::MouseEventKind::Down(
+                            crossterm::event::MouseButton::Right
+                        )
+                ) =>
+            {
+                let target = self
+                    .hit_regions
+                    .iter()
+                    .copied()
+                    .find(|region| region.contains(mouse.column, mouse.row))
+                    .map(|region| region.observation_id);
+                let Some(observation_id) = target else {
+                    return false;
+                };
+                let Some(dock) = dock else {
+                    self.status = "VIEW_UNAVAILABLE · observation truth unavailable".to_owned();
+                    return true;
+                };
+                self.select_exact(dock, observation_id);
+                if mouse.kind
+                    == crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Right)
+                {
+                    self.focus_selected(dock, topology);
+                }
+                true
+            }
+            _ => true,
+        }
+    }
+}
+
+fn t174_agent_dock_toggle_event(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Key(key)
+            if key.kind != KeyEventKind::Release
+                && key.modifiers.contains(KeyModifiers::CONTROL)
+                && key.code == KeyCode::Char('g')
+    )
+}
+
+fn load_t174_agent_dock(
+    store: &crate::store::Store,
+) -> Result<ui::CanonicalAgentDockPresentation, String> {
+    let owner_generation_id = store
+        .latest_persistent_runtime_owner_generation()
+        .map_err(|error| format!("owner generation record unavailable: {error}"))?
+        .ok_or_else(|| "owner generation unavailable".to_owned())?;
+    let mut client = crate::persistent_runtime::client::RustLocalControlClient::connect(
+        None,
+        Some(owner_generation_id),
+    )
+    .map_err(|error| format!("owner connection unavailable: {error}"))?;
+    let observations = client
+        .refresh_agent_observation_projection(None)
+        .map_err(|error| format!("agent observation refresh unavailable: {error}"))?;
+    ui::CanonicalAgentDockPresentation::from_observations(observations)
+}
+
+fn preserve_t174_display_aliases(
+    previous: &ui::CanonicalAgentDockPresentation,
+    refreshed: &mut ui::CanonicalAgentDockPresentation,
+) -> Result<(), String> {
+    for row in previous.list("", ui::CanonicalAgentDockSort::Family, false) {
+        let Some(alias) = previous
+            .get(row.observation_id)
+            .and_then(|item| item.display_alias.as_deref())
+        else {
+            continue;
+        };
+        if refreshed.get(row.observation_id).is_some() {
+            refreshed.rename(row.observation_id, Some(alias))?;
+        }
+    }
+    Ok(())
+}
+
+fn load_t174_agent_focus_context(
+    store: &crate::store::Store,
+    observation_id: crate::multiplexer::domain::AgentObservationId,
+) -> Result<
+    (
+        ui::CanonicalAgentDockPresentation,
+        ui::CanonicalTopologyPresentation,
+    ),
+    String,
+> {
+    let owner_generation_id = store
+        .latest_persistent_runtime_owner_generation()
+        .map_err(|error| format!("owner generation record unavailable: {error}"))?
+        .ok_or_else(|| "owner generation unavailable".to_owned())?;
+    let mut client = crate::persistent_runtime::client::RustLocalControlClient::connect(
+        None,
+        Some(owner_generation_id),
+    )
+    .map_err(|error| format!("owner connection unavailable: {error}"))?;
+
+    let first_observations = client
+        .refresh_agent_observation_projection(None)
+        .map_err(|error| format!("agent observation refresh unavailable: {error}"))?;
+    let first = first_observations
+        .iter()
+        .find(|observation| observation.observation_id == observation_id)
+        .ok_or_else(|| "focus observation is absent from current owner truth".to_owned())?;
+    if first.freshness != crate::persistent_runtime::protocol::AgentObservationFreshnessV2::Current
+    {
+        return Err(format!(
+            "focus observation is not current: {:?}",
+            first.freshness
+        ));
+    }
+    if first.owner_generation_id != owner_generation_id {
+        return Err("focus observation owner generation does not match current owner".to_owned());
+    }
+    let first_workspace_id = first.multiplexer_workspace_id;
+    let first_tab_id = first.tab_id;
+    let first_pane_id = first.pane_id;
+    let first_runtime_namespace_id = first.runtime_namespace_id;
+
+    client
+        .refresh_topology_projection(Some(first_workspace_id))
+        .map_err(|error| format!("focus topology refresh unavailable: {error}"))?;
+    let first_topology =
+        ui::CanonicalTopologyPresentation::from_client(&client, false, false, false)
+            .ok_or_else(|| "focus topology presentation unavailable".to_owned())?;
+    let first_topology_generation = first_topology.topology_generation();
+
+    let trailing_observations = client
+        .refresh_agent_observation_projection(None)
+        .map_err(|error| format!("trailing agent observation refresh unavailable: {error}"))?;
+    let trailing = trailing_observations
+        .iter()
+        .find(|observation| observation.observation_id == observation_id)
+        .ok_or_else(|| "focus observation disappeared during validation".to_owned())?;
+    if trailing.freshness
+        != crate::persistent_runtime::protocol::AgentObservationFreshnessV2::Current
+        || trailing.owner_generation_id != owner_generation_id
+        || trailing.multiplexer_workspace_id != first_workspace_id
+        || trailing.tab_id != first_tab_id
+        || trailing.pane_id != first_pane_id
+        || trailing.runtime_namespace_id != first_runtime_namespace_id
+    {
+        return Err("focus observation changed during validation".to_owned());
+    }
+
+    client
+        .refresh_topology_projection(Some(first_workspace_id))
+        .map_err(|error| format!("trailing focus topology refresh unavailable: {error}"))?;
+    let topology = ui::CanonicalTopologyPresentation::from_client(&client, false, false, false)
+        .ok_or_else(|| "trailing focus topology presentation unavailable".to_owned())?;
+    if topology.topology_generation() != first_topology_generation {
+        return Err("focus topology generation changed during validation".to_owned());
+    }
+
+    let mut dock = ui::CanonicalAgentDockPresentation::from_observations(trailing_observations)?;
+    dock.focus(observation_id, &topology)
+        .ok_or_else(|| "focus target is stale, absent, ambiguous, or substituted".to_owned())?;
+
+    let final_owner_generation_id = store
+        .latest_persistent_runtime_owner_generation()
+        .map_err(|error| format!("final owner generation record unavailable: {error}"))?
+        .ok_or_else(|| "owner generation unavailable after focus validation".to_owned())?;
+    if final_owner_generation_id != owner_generation_id {
+        return Err("focus owner generation changed during validation".to_owned());
+    }
+    Ok((dock, topology))
+}
+
+fn t174_agent_dock_text(
+    dock: Option<&ui::CanonicalAgentDockPresentation>,
+    state: &T174TuiAgentDockState,
+) -> String {
+    let mut lines = vec![
+        "T174_AGENT_DOCK=OWNER_AUTHORITATIVE_AGENT_OBSERVATIONS".to_owned(),
+        format!("execution={T174_TUI_AGENT_DOCK_NONCLAIM}"),
+        format!("status={}", state.status),
+        "keys=Up/Down view | Enter focus-validate | e explain | r rename-display-alias | Esc close | right-click focus-validate".to_owned(),
+    ];
+    if let Some(alias) = &state.alias_input {
+        lines.push(format!("alias_input={alias}"));
+    }
+    match dock {
+        Some(dock) => {
+            for row in dock
+                .list("", ui::CanonicalAgentDockSort::Family, true)
+                .into_iter()
+                .take(T174_TUI_AGENT_DOCK_MAX_ROWS)
+            {
+                let selected = if state.selected_observation_id == Some(row.observation_id) {
+                    ">"
+                } else {
+                    " "
+                };
+                lines.push(format!(
+                    "{selected} observation={} family={:?} freshness={:?}",
+                    row.observation_id, row.family, row.freshness
+                ));
+            }
+            if let Some(observation_id) = state.selected_observation_id
+                && let Some(explanation) = dock.explain(observation_id)
+            {
+                lines.push("SELECTED_EXACT_BINDING".to_owned());
+                lines.extend(explanation.lines().map(str::to_owned));
+            }
+        }
+        None => lines.push(
+            "UNAVAILABLE · no observation, provider, process, controller, write, Git, or verification authority inferred"
+                .to_owned(),
+        ),
+    }
+    lines.join("\n")
+}
+
+fn render_t174_agent_dock(
+    frame: &mut Frame<'_>,
+    area: ratatui::layout::Rect,
+    dock: Option<&ui::CanonicalAgentDockPresentation>,
+    state: &mut T174TuiAgentDockState,
+) {
+    state.hit_regions.clear();
+    if !state.open || area.width < 24 || area.height < 7 {
+        return;
+    }
+    let width = area.width.min(96);
+    let height = area.height.min(20);
+    let overlay = ratatui::layout::Rect::new(
+        area.x.saturating_add(area.width.saturating_sub(width)),
+        area.y,
+        width,
+        height,
+    );
+    frame.render_widget(
+        Paragraph::new(t174_agent_dock_text(dock, state))
+            .block(Block::bordered().title(" Agents · READ_ONLY · Ctrl+G ")),
+        overlay,
+    );
+    let Some(dock) = dock else {
+        return;
+    };
+    let first_row = overlay.y.saturating_add(5);
+    for (index, row) in dock
+        .list("", ui::CanonicalAgentDockSort::Family, true)
+        .into_iter()
+        .take(T174_TUI_AGENT_DOCK_MAX_ROWS)
+        .enumerate()
+    {
+        let row_y = first_row.saturating_add(index as u16);
+        if row_y >= overlay.y.saturating_add(overlay.height).saturating_sub(1) {
+            break;
+        }
+        state.hit_regions.push(T174TuiAgentHitRegion {
+            observation_id: row.observation_id,
+            column: overlay.x.saturating_add(1),
+            row: row_y,
+            width: overlay.width.saturating_sub(2),
+            height: 1,
+        });
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct WorkbenchAccessibilityState {
     verification_inspection_open: bool,
@@ -544,6 +1071,8 @@ fn render_workbench_accessible(
     candidate: (&str, &str),
     projected: Option<&context::WorkbenchCandidateContext>,
     canonical_topology: Option<&ui::CanonicalTopologyPresentation>,
+    agent_dock: Option<&ui::CanonicalAgentDockPresentation>,
+    agent_dock_ui: &mut T174TuiAgentDockState,
 ) {
     let area = frame.area();
     if use_compact_workbench_layout(area.width, area.height) {
@@ -559,6 +1088,12 @@ fn render_workbench_accessible(
             compact.push_str("\nCANONICAL_TOPOLOGY_BEGIN\n");
             compact.push_str(topology.text());
             compact.push_str("\nCANONICAL_TOPOLOGY_END");
+        }
+        if agent_dock_ui.open {
+            compact.push_str("\nT174_AGENT_DOCK_BEGIN\n");
+            compact.push_str(&t174_agent_dock_text(agent_dock, agent_dock_ui));
+            compact.push_str("\nT174_AGENT_DOCK_END");
+            agent_dock_ui.hit_regions.clear();
         }
         frame.render_widget(
             Paragraph::new(compact).block(Block::bordered().title(" Winds Workbench · compact ")),
@@ -623,6 +1158,8 @@ fn render_workbench_accessible(
         );
     }
 
+    render_t174_agent_dock(frame, body[1], agent_dock, agent_dock_ui);
+
     let input = editor.lines().join("\n");
     frame.render_widget(
         Paragraph::new(input).block(Block::bordered().title(" Shell input ")),
@@ -637,6 +1174,7 @@ fn render_workbench(
     editor: &terminal::input::WorkbenchShellEditor,
     output: &output::WorkbenchOutput,
 ) {
+    let mut agent_dock_ui = T174TuiAgentDockState::default();
     render_workbench_accessible(
         frame,
         state,
@@ -649,6 +1187,8 @@ fn render_workbench(
         ),
         None,
         None,
+        None,
+        &mut agent_dock_ui,
     );
 }
 
@@ -696,6 +1236,8 @@ pub(crate) fn run_cli(args: Vec<String>) -> crate::Result<()> {
     let mut navigation = ui::WorkbenchNavigation::new();
     let mut accessibility = WorkbenchAccessibilityState::default();
     let mut projected_context: Option<context::WorkbenchCandidateContext> = None;
+    let mut agent_dock: Option<ui::CanonicalAgentDockPresentation> = None;
+    let mut agent_dock_ui = T174TuiAgentDockState::default();
 
     let mut host_guard = HostTerminalGuard::enter()?;
     let backend = CrosstermBackend::new(io::stdout());
@@ -711,6 +1253,8 @@ pub(crate) fn run_cli(args: Vec<String>) -> crate::Result<()> {
             (&candidate_oid, &candidate_tree),
             projected_context.as_ref(),
             navigation.canonical_topology_presentation(),
+            agent_dock.as_ref(),
+            &mut agent_dock_ui,
         )
     })?;
 
@@ -749,6 +1293,8 @@ pub(crate) fn run_cli(args: Vec<String>) -> crate::Result<()> {
                     (&candidate_oid, &candidate_tree),
                     projected_context.as_ref(),
                     navigation.canonical_topology_presentation(),
+                    agent_dock.as_ref(),
+                    &mut agent_dock_ui,
                 )
             })?;
 
@@ -779,6 +1325,65 @@ pub(crate) fn run_cli(args: Vec<String>) -> crate::Result<()> {
                 }
                 continue;
             }
+            if t174_agent_dock_toggle_event(&event) {
+                if agent_dock_ui.open {
+                    agent_dock_ui.close();
+                    agent_dock = None;
+                } else {
+                    match load_t174_agent_dock(&store) {
+                        Ok(mut loaded) => {
+                            agent_dock_ui.open_with(&mut loaded);
+                            agent_dock = Some(loaded);
+                        }
+                        Err(error) => {
+                            agent_dock = None;
+                            agent_dock_ui.open_unavailable(error);
+                        }
+                    }
+                }
+                continue;
+            }
+            let mut exact_focus_topology = None;
+            if let Some(focus_observation_id) = agent_dock_ui.focus_target_for_event(&event) {
+                match load_t174_agent_focus_context(&store, focus_observation_id) {
+                    Ok((mut refreshed_dock, topology)) => {
+                        if let Some(previous_dock) = agent_dock.as_ref()
+                            && let Err(error) =
+                                preserve_t174_display_aliases(previous_dock, &mut refreshed_dock)
+                        {
+                            agent_dock = None;
+                            agent_dock_ui.open_unavailable(format!(
+                                "FOCUS_ALIAS_RECONCILIATION_FAILED · {error}"
+                            ));
+                            continue;
+                        }
+                        if refreshed_dock.view(focus_observation_id).is_none() {
+                            agent_dock = None;
+                            agent_dock_ui.open_unavailable(
+                                "FOCUS_REFRESH_FAILED · exact observation disappeared",
+                            );
+                            continue;
+                        }
+                        agent_dock_ui.selected_observation_id = Some(focus_observation_id);
+                        agent_dock = Some(refreshed_dock);
+                        exact_focus_topology = Some(topology);
+                    }
+                    Err(error) => {
+                        agent_dock = None;
+                        agent_dock_ui.open_unavailable(format!("FOCUS_REFRESH_FAILED · {error}"));
+                        continue;
+                    }
+                }
+            }
+            let agent_event_consumed = {
+                let topology = exact_focus_topology
+                    .as_ref()
+                    .or_else(|| navigation.canonical_topology_presentation());
+                agent_dock_ui.handle_event(agent_dock.as_mut(), topology, &event)
+            };
+            if agent_event_consumed {
+                continue;
+            }
             let effect = navigation.handle_event(
                 &mut state,
                 &mut terminals,
@@ -800,6 +1405,240 @@ pub(crate) fn run_cli(args: Vec<String>) -> crate::Result<()> {
     cleanup?;
     restore?;
     Ok(())
+}
+
+#[cfg(test)]
+mod t174_tui_agent_dock_integration_tests {
+    use super::*;
+    use crate::multiplexer::domain::{AgentObservationId, MultiplexerWorkspaceId, PaneId, TabId};
+    use crate::persistent_runtime::domain::{OwnerGenerationId, RuntimeNamespaceId};
+    use crate::persistent_runtime::protocol::{
+        AgentFamilyV2, AgentObservationConfidenceV2, AgentObservationFreshnessV2,
+        AgentObservationSourceV2, AgentObservationV2,
+    };
+
+    fn observation_id(byte: u8) -> AgentObservationId {
+        AgentObservationId::from_entropy_bytes([byte; 16]).expect("valid observation id")
+    }
+
+    fn observation(byte: u8, pane_byte: u8) -> AgentObservationV2 {
+        AgentObservationV2 {
+            observation_id: observation_id(byte),
+            family: AgentFamilyV2::Codex,
+            source_class: AgentObservationSourceV2::ProviderStructuredMetadata,
+            confidence_class: AgentObservationConfidenceV2::Strong,
+            freshness: AgentObservationFreshnessV2::Current,
+            multiplexer_workspace_id: MultiplexerWorkspaceId::from_entropy_bytes([0x21; 16])
+                .expect("valid workspace id"),
+            git_workspace_id: Some("git-workspace".to_owned()),
+            tab_id: TabId::from_entropy_bytes([0x31; 16]).expect("valid tab id"),
+            pane_id: PaneId::from_entropy_bytes([pane_byte; 16]).expect("valid pane id"),
+            runtime_namespace_id: Some(
+                RuntimeNamespaceId::from_entropy_bytes([0x51; 16]).expect("valid runtime id"),
+            ),
+            provider_native_session_id: Some(format!("provider-{byte}")),
+            owner_generation_id: OwnerGenerationId::from_entropy_bytes([0x61; 16])
+                .expect("valid owner generation"),
+            observed_unix_ms: i64::from(byte),
+            structured_evidence_summary: "structured evidence".to_owned(),
+        }
+    }
+
+    #[test]
+    fn t174_tui_render_exposes_detection_nonclaim_and_exact_selected_binding() {
+        let first = observation(0x11, 0x41);
+        let mut dock = ui::CanonicalAgentDockPresentation::from_observations(vec![first.clone()])
+            .expect("observation should project");
+        let mut state = T174TuiAgentDockState::default();
+        state.open_with(&mut dock);
+        let text = t174_agent_dock_text(Some(&dock), &state);
+        assert!(text.contains("DETECTION_ONLY_UNPROVEN"));
+        assert!(text.contains(&first.observation_id.to_string()));
+        assert!(text.contains(&first.multiplexer_workspace_id.to_string()));
+        assert!(text.contains(&first.tab_id.to_string()));
+        assert!(text.contains(&first.pane_id.to_string()));
+    }
+
+    #[test]
+    fn t174_tui_pointer_regions_select_exact_observation_not_duplicate_label() {
+        let first = observation(0x12, 0x42);
+        let second = observation(0x13, 0x43);
+        let mut dock = ui::CanonicalAgentDockPresentation::from_observations(vec![
+            first.clone(),
+            second.clone(),
+        ])
+        .expect("distinct observations should project");
+        let mut state = T174TuiAgentDockState::default();
+        state.open_with(&mut dock);
+        state.hit_regions = vec![
+            T174TuiAgentHitRegion {
+                observation_id: first.observation_id,
+                column: 10,
+                row: 4,
+                width: 20,
+                height: 1,
+            },
+            T174TuiAgentHitRegion {
+                observation_id: second.observation_id,
+                column: 10,
+                row: 5,
+                width: 20,
+                height: 1,
+            },
+        ];
+        let consumed = state.handle_event(
+            Some(&mut dock),
+            None,
+            &Event::Mouse(crossterm::event::MouseEvent {
+                kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                column: 12,
+                row: 5,
+                modifiers: KeyModifiers::NONE,
+            }),
+        );
+        assert!(consumed);
+        assert_eq!(state.selected_observation_id, Some(second.observation_id));
+        assert_eq!(dock.read(second.observation_id), Some(&second));
+        assert_eq!(dock.read(first.observation_id), Some(&first));
+    }
+
+    #[test]
+    fn t174_tui_focus_fails_closed_when_canonical_topology_is_unavailable() {
+        let first = observation(0x14, 0x44);
+        let mut dock = ui::CanonicalAgentDockPresentation::from_observations(vec![first.clone()])
+            .expect("observation should project");
+        let mut state = T174TuiAgentDockState::default();
+        state.open_with(&mut dock);
+        let consumed = state.handle_event(
+            Some(&mut dock),
+            None,
+            &Event::Key(crossterm::event::KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::NONE,
+            )),
+        );
+        assert!(consumed);
+        assert!(state.status.contains("canonical topology unavailable"));
+        assert_eq!(dock.focused_observation_id(), None);
+        assert_eq!(dock.read(first.observation_id), Some(&first));
+    }
+
+    #[test]
+    fn t174_tui_focus_event_resolves_exact_pointer_observation_before_refresh() {
+        let first = observation(0x16, 0x46);
+        let second = observation(0x17, 0x47);
+        let mut dock = ui::CanonicalAgentDockPresentation::from_observations(vec![
+            first.clone(),
+            second.clone(),
+        ])
+        .expect("distinct observations should project");
+        let mut state = T174TuiAgentDockState::default();
+        state.open_with(&mut dock);
+        state.hit_regions = vec![
+            T174TuiAgentHitRegion {
+                observation_id: first.observation_id,
+                column: 20,
+                row: 7,
+                width: 20,
+                height: 1,
+            },
+            T174TuiAgentHitRegion {
+                observation_id: second.observation_id,
+                column: 20,
+                row: 8,
+                width: 20,
+                height: 1,
+            },
+        ];
+        let event = Event::Mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Right),
+            column: 23,
+            row: 8,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(
+            state.focus_target_for_event(&event),
+            Some(second.observation_id)
+        );
+    }
+
+    #[test]
+    fn t174_tui_refresh_preserves_display_aliases_only_for_surviving_exact_ids() {
+        let first = observation(0x18, 0x48);
+        let removed = observation(0x19, 0x49);
+        let newcomer = observation(0x1a, 0x4a);
+        let mut previous = ui::CanonicalAgentDockPresentation::from_observations(vec![
+            first.clone(),
+            removed.clone(),
+        ])
+        .expect("previous observations should project");
+        previous
+            .rename(first.observation_id, Some("Primary"))
+            .expect("alias should be accepted");
+        previous
+            .rename(removed.observation_id, Some("Removed"))
+            .expect("alias should be accepted");
+        let mut refreshed = ui::CanonicalAgentDockPresentation::from_observations(vec![
+            first.clone(),
+            newcomer.clone(),
+        ])
+        .expect("refreshed observations should project");
+        preserve_t174_display_aliases(&previous, &mut refreshed)
+            .expect("valid aliases should reconcile");
+        assert_eq!(
+            refreshed
+                .get(first.observation_id)
+                .and_then(|item| item.display_alias.as_deref()),
+            Some("Primary")
+        );
+        assert!(refreshed.get(removed.observation_id).is_none());
+        assert_eq!(
+            refreshed
+                .get(newcomer.observation_id)
+                .and_then(|item| item.display_alias.as_deref()),
+            None
+        );
+    }
+
+    #[test]
+    fn t174_tui_alias_edit_changes_display_only_not_observation_truth() {
+        let first = observation(0x15, 0x45);
+        let mut dock = ui::CanonicalAgentDockPresentation::from_observations(vec![first.clone()])
+            .expect("observation should project");
+        let mut state = T174TuiAgentDockState::default();
+        state.open_with(&mut dock);
+        assert!(state.handle_event(
+            Some(&mut dock),
+            None,
+            &Event::Key(crossterm::event::KeyEvent::new(
+                KeyCode::Char('r'),
+                KeyModifiers::NONE
+            )),
+        ));
+        for character in "Reviewer".chars() {
+            assert!(state.handle_event(
+                Some(&mut dock),
+                None,
+                &Event::Key(crossterm::event::KeyEvent::new(
+                    KeyCode::Char(character),
+                    KeyModifiers::NONE,
+                )),
+            ));
+        }
+        assert!(state.handle_event(
+            Some(&mut dock),
+            None,
+            &Event::Key(crossterm::event::KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::NONE
+            )),
+        ));
+        let item = dock
+            .get(first.observation_id)
+            .expect("item should remain present");
+        assert_eq!(item.display_alias.as_deref(), Some("Reviewer"));
+        assert_eq!(dock.read(first.observation_id), Some(&first));
+    }
 }
 
 fn parse_workbench_args(args: &[String]) -> crate::Result<(Option<PathBuf>, bool)> {

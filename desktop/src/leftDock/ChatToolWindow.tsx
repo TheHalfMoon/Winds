@@ -4,9 +4,9 @@ import { sessionForSlot } from "../dualSession/model";
 import type { DualSessionSelection } from "../dualSession/DualSessionWorkspace";
 import { composerAvailability, eventSourceLabel, eventTrust } from "../sessionSurface/model";
 import { leftDockBridge } from "./bridge";
-import type { BridgeProject, BridgeSnapshot } from "./types";
+import { UNAVAILABLE_AGENT_DOCK_SNAPSHOT, type BridgeProject, type BridgeSnapshot } from "./types";
 
-const emptySnapshot: BridgeSnapshot = { projects: [] };
+const emptySnapshot: BridgeSnapshot = { projects: [], agentDock: UNAVAILABLE_AGENT_DOCK_SNAPSHOT };
 
 function resolveTarget(snapshot: BridgeSnapshot, selection: DualSessionSelection | null) {
   if (selection) {

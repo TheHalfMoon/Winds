@@ -85,8 +85,45 @@ export interface BridgeProject {
   readonly availableWorkstreams: readonly BridgeWorkstream[];
 }
 
+export type BridgeAgentDockAvailability = "CURRENT" | "UNAVAILABLE";
+
+export interface BridgeAgentObservation {
+  readonly observationId: string;
+  readonly family: string;
+  readonly sourceClass: string;
+  readonly confidenceClass: string;
+  readonly freshness: string;
+  readonly multiplexerWorkspaceId: string;
+  readonly gitWorkspaceId: string | null;
+  readonly tabId: string;
+  readonly paneId: string;
+  readonly runtimeNamespaceId: string | null;
+  readonly providerNativeSessionId: string | null;
+  readonly ownerGenerationId: string;
+  readonly observedUnixMs: number;
+  readonly structuredEvidenceSummary: string;
+  readonly executionAuthority: "DETECTION_ONLY_UNPROVEN";
+}
+
+export interface BridgeAgentDockSnapshot {
+  readonly authority: "OWNER_AUTHORITATIVE_AGENT_OBSERVATIONS";
+  readonly availability: BridgeAgentDockAvailability;
+  readonly observations: readonly BridgeAgentObservation[];
+  readonly detectionOnly: true;
+  readonly unavailableReason: string | null;
+}
+
+export const UNAVAILABLE_AGENT_DOCK_SNAPSHOT: BridgeAgentDockSnapshot = {
+  authority: "OWNER_AUTHORITATIVE_AGENT_OBSERVATIONS",
+  availability: "UNAVAILABLE",
+  observations: [],
+  detectionOnly: true,
+  unavailableReason: "SNAPSHOT_NOT_LOADED",
+};
+
 export interface BridgeSnapshot {
   readonly projects: readonly BridgeProject[];
+  readonly agentDock: BridgeAgentDockSnapshot;
 }
 
 export interface ProjectPresentationRequest {

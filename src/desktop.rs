@@ -6,7 +6,12 @@ use crate::domain::workflow::{
     RETRY_OUTCOME_NO_PROGRESS, StageLifecycleState, StageTransitionAuthority, TruthSource,
 };
 use crate::domain::{WindsSessionRecord, WorkspaceRecord};
+use crate::persistent_runtime::client::RustLocalControlClient;
 use crate::persistent_runtime::presentation::DesktopRuntimeTruthProjection as PersistentDesktopRuntimeTruthProjection;
+use crate::persistent_runtime::protocol::{
+    AgentFamilyV2, AgentObservationConfidenceV2, AgentObservationFreshnessV2,
+    AgentObservationSourceV2, AgentObservationV2,
+};
 use crate::store::{
     DesktopAttentionFact, DesktopLayoutPresentation, DesktopLayoutPresentationInput,
     DesktopProjectPresentationInput, DesktopSessionPresentationInput, NewWindsSession, Result,
@@ -947,8 +952,39 @@ pub struct DesktopBridgeProject {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DesktopBridgeAgentObservation {
+    pub observation_id: String,
+    pub family: String,
+    pub source_class: String,
+    pub confidence_class: String,
+    pub freshness: String,
+    pub multiplexer_workspace_id: String,
+    pub git_workspace_id: Option<String>,
+    pub tab_id: String,
+    pub pane_id: String,
+    pub runtime_namespace_id: Option<String>,
+    pub provider_native_session_id: Option<String>,
+    pub owner_generation_id: String,
+    pub observed_unix_ms: i64,
+    pub structured_evidence_summary: String,
+    pub execution_authority: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopBridgeAgentDockSnapshot {
+    pub authority: String,
+    pub availability: String,
+    pub observations: Vec<DesktopBridgeAgentObservation>,
+    pub detection_only: bool,
+    pub unavailable_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DesktopBridgeSnapshot {
     pub projects: Vec<DesktopBridgeProject>,
+    pub agent_dock: DesktopBridgeAgentDockSnapshot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -1066,6 +1102,125 @@ pub fn desktop_bridge_default_home() -> Result<std::path::PathBuf> {
     )
 }
 
+const DESKTOP_AGENT_DOCK_AUTHORITY: &str = "OWNER_AUTHORITATIVE_AGENT_OBSERVATIONS";
+const DESKTOP_AGENT_EXECUTION_NONCLAIM: &str = "DETECTION_ONLY_UNPROVEN";
+
+fn desktop_agent_family(value: AgentFamilyV2) -> &'static str {
+    match value {
+        AgentFamilyV2::Pi => "PI",
+        AgentFamilyV2::Claude => "CLAUDE",
+        AgentFamilyV2::Codex => "CODEX",
+        AgentFamilyV2::Gemini => "GEMINI",
+        AgentFamilyV2::Cursor => "CURSOR",
+        AgentFamilyV2::Devin => "DEVIN",
+        AgentFamilyV2::Antigravity => "ANTIGRAVITY",
+        AgentFamilyV2::Cline => "CLINE",
+        AgentFamilyV2::Omp => "OMP",
+        AgentFamilyV2::Mastracode => "MASTRACODE",
+        AgentFamilyV2::OpenCode => "OPEN_CODE",
+        AgentFamilyV2::GithubCopilot => "GITHUB_COPILOT",
+        AgentFamilyV2::Kimi => "KIMI",
+        AgentFamilyV2::Kiro => "KIRO",
+        AgentFamilyV2::Droid => "DROID",
+        AgentFamilyV2::Amp => "AMP",
+        AgentFamilyV2::Grok => "GROK",
+        AgentFamilyV2::Hermes => "HERMES",
+        AgentFamilyV2::Kilo => "KILO",
+        AgentFamilyV2::Qodercli => "QODERCLI",
+        AgentFamilyV2::Qwen => "QWEN",
+        AgentFamilyV2::Letta => "LETTA",
+        AgentFamilyV2::Maki => "MAKI",
+        AgentFamilyV2::Muse => "MUSE",
+    }
+}
+
+fn desktop_agent_source(value: AgentObservationSourceV2) -> &'static str {
+    match value {
+        AgentObservationSourceV2::WindsLaunchMetadata => "WINDS_LAUNCH_METADATA",
+        AgentObservationSourceV2::OwnedProcessMetadata => "OWNED_PROCESS_METADATA",
+        AgentObservationSourceV2::ProviderStructuredMetadata => "PROVIDER_STRUCTURED_METADATA",
+        AgentObservationSourceV2::UserDeclaredPresentation => "USER_DECLARED_PRESENTATION",
+    }
+}
+
+fn desktop_agent_confidence(value: AgentObservationConfidenceV2) -> &'static str {
+    match value {
+        AgentObservationConfidenceV2::Exact => "EXACT",
+        AgentObservationConfidenceV2::Strong => "STRONG",
+        AgentObservationConfidenceV2::UserDeclared => "USER_DECLARED",
+        AgentObservationConfidenceV2::Unknown => "UNKNOWN",
+    }
+}
+
+fn desktop_agent_freshness(value: AgentObservationFreshnessV2) -> &'static str {
+    match value {
+        AgentObservationFreshnessV2::Current => "CURRENT",
+        AgentObservationFreshnessV2::Ambiguous => "AMBIGUOUS",
+        AgentObservationFreshnessV2::Stale => "STALE",
+        AgentObservationFreshnessV2::Unavailable => "UNAVAILABLE",
+        AgentObservationFreshnessV2::Unknown => "UNKNOWN",
+    }
+}
+
+impl From<AgentObservationV2> for DesktopBridgeAgentObservation {
+    fn from(value: AgentObservationV2) -> Self {
+        Self {
+            observation_id: value.observation_id.to_string(),
+            family: desktop_agent_family(value.family).to_owned(),
+            source_class: desktop_agent_source(value.source_class).to_owned(),
+            confidence_class: desktop_agent_confidence(value.confidence_class).to_owned(),
+            freshness: desktop_agent_freshness(value.freshness).to_owned(),
+            multiplexer_workspace_id: value.multiplexer_workspace_id.to_string(),
+            git_workspace_id: value.git_workspace_id,
+            tab_id: value.tab_id.to_string(),
+            pane_id: value.pane_id.to_string(),
+            runtime_namespace_id: value.runtime_namespace_id.map(|id| id.to_string()),
+            provider_native_session_id: value.provider_native_session_id,
+            owner_generation_id: value.owner_generation_id.to_string(),
+            observed_unix_ms: value.observed_unix_ms,
+            structured_evidence_summary: value.structured_evidence_summary,
+            execution_authority: DESKTOP_AGENT_EXECUTION_NONCLAIM.to_owned(),
+        }
+    }
+}
+
+fn unavailable_desktop_agent_dock(reason: &str) -> DesktopBridgeAgentDockSnapshot {
+    DesktopBridgeAgentDockSnapshot {
+        authority: DESKTOP_AGENT_DOCK_AUTHORITY.to_owned(),
+        availability: "UNAVAILABLE".to_owned(),
+        observations: Vec::new(),
+        detection_only: true,
+        unavailable_reason: Some(reason.to_owned()),
+    }
+}
+
+fn desktop_bridge_agent_dock_snapshot(store: &Store) -> DesktopBridgeAgentDockSnapshot {
+    let owner_generation_id = match store.latest_persistent_runtime_owner_generation() {
+        Ok(Some(owner_generation_id)) => owner_generation_id,
+        Ok(None) => return unavailable_desktop_agent_dock("OWNER_GENERATION_UNAVAILABLE"),
+        Err(_) => return unavailable_desktop_agent_dock("OWNER_GENERATION_RECORD_UNAVAILABLE"),
+    };
+    let mut client = match RustLocalControlClient::connect(None, Some(owner_generation_id)) {
+        Ok(client) => client,
+        Err(_) => return unavailable_desktop_agent_dock("OWNER_CONNECTION_UNAVAILABLE"),
+    };
+    let mut observations = match client.refresh_agent_observation_projection(None) {
+        Ok(observations) => observations
+            .into_iter()
+            .map(DesktopBridgeAgentObservation::from)
+            .collect::<Vec<_>>(),
+        Err(_) => return unavailable_desktop_agent_dock("OBSERVATION_REFRESH_UNAVAILABLE"),
+    };
+    observations.sort_by(|left, right| left.observation_id.cmp(&right.observation_id));
+    DesktopBridgeAgentDockSnapshot {
+        authority: DESKTOP_AGENT_DOCK_AUTHORITY.to_owned(),
+        availability: "CURRENT".to_owned(),
+        observations,
+        detection_only: true,
+        unavailable_reason: None,
+    }
+}
+
 pub fn desktop_bridge_snapshot(home: &std::path::Path) -> Result<DesktopBridgeSnapshot> {
     let store = Store::open(home)?;
     let facade = DesktopFacade::new(&store);
@@ -1114,7 +1269,11 @@ pub fn desktop_bridge_snapshot(home: &std::path::Path) -> Result<DesktopBridgeSn
                     .cmp(&right.project.canonical_workspace_id),
             )
     });
-    Ok(DesktopBridgeSnapshot { projects })
+    let agent_dock = desktop_bridge_agent_dock_snapshot(&store);
+    Ok(DesktopBridgeSnapshot {
+        projects,
+        agent_dock,
+    })
 }
 
 pub fn desktop_bridge_attention_snapshot(
