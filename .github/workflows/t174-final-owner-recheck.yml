@@ -13,51 +13,26 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - name: Checkout exact T174 candidate
+      - name: Checkout repair executor
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
-          ref: impl/spec-012-t174-agent-dock
-          fetch-depth: 0
-          persist-credentials: true
+          fetch-depth: 1
+          persist-credentials: false
 
-      - name: Verify exact repair base
+      - name: Preserve patcher and checkout exact T174 candidate
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "4305904223df8510ff146a784c44c880804d3b6f"
+          cp .github/t174_final_owner_recheck.py "$RUNNER_TEMP/t174_final_owner_recheck.py"
+          git fetch --no-tags origin refs/heads/impl/spec-012-t174-agent-dock
+          test "$(git rev-parse FETCH_HEAD)" = "4305904223df8510ff146a784c44c880804d3b6f"
+          git checkout --detach FETCH_HEAD
 
       - name: Apply final owner-generation recheck
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('src/workbench.rs')
-          text = path.read_text()
-          old = '''    let mut dock = ui::CanonicalAgentDockPresentation::from_observations(trailing_observations)?;
-    dock.focus(observation_id, &topology)
-        .ok_or_else(|| "focus target is stale, absent, ambiguous, or substituted".to_owned())?;
-    Ok((dock, topology))
-'''
-          new = '''    let mut dock = ui::CanonicalAgentDockPresentation::from_observations(trailing_observations)?;
-    dock.focus(observation_id, &topology)
-        .ok_or_else(|| "focus target is stale, absent, ambiguous, or substituted".to_owned())?;
-
-    let final_owner_generation_id = store
-        .latest_persistent_runtime_owner_generation()
-        .map_err(|error| format!("final owner generation record unavailable: {error}"))?
-        .ok_or_else(|| "owner generation unavailable after focus validation".to_owned())?;
-    if final_owner_generation_id != owner_generation_id {
-        return Err("focus owner generation changed during validation".to_owned());
-    }
-    Ok((dock, topology))
-'''
-          count = text.count(old)
-          if count != 1:
-              raise SystemExit(f'expected one guarded focus-return block, found {count}')
-          path.write_text(text.replace(old, new, 1))
-          PY
+          python3 "$RUNNER_TEMP/t174_final_owner_recheck.py"
           git diff --check
           test "$(git diff --name-only)" = "src/workbench.rs"
 
@@ -80,6 +55,8 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
 
       - name: Commit product-only repair
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
@@ -88,4 +65,5 @@ jobs:
           git config user.email "actions@users.noreply.github.com"
           git add src/workbench.rs
           git commit -m "fix: reject T174 focus across owner rollover"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git push origin HEAD:impl/spec-012-t174-agent-dock
