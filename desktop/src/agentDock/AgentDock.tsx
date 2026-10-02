@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { leftDockBridge } from "../leftDock/bridge";
 import { topologyBridge } from "../multiplexer/bridge";
 import type { BridgeAgentDockSnapshot, BridgeAgentObservation } from "../leftDock/types";
 import {
@@ -19,6 +20,18 @@ function errorMessage(error: unknown): string {
 
 function compactId(value: string): string {
   return value.length <= 12 ? value : `${value.slice(0, 6)}…${value.slice(-6)}`;
+}
+
+function sameAgentBinding(
+  left: BridgeAgentObservation,
+  right: BridgeAgentObservation,
+): boolean {
+  return left.observationId === right.observationId
+    && left.multiplexerWorkspaceId === right.multiplexerWorkspaceId
+    && left.tabId === right.tabId
+    && left.paneId === right.paneId
+    && left.runtimeNamespaceId === right.runtimeNamespaceId
+    && left.ownerGenerationId === right.ownerGenerationId;
 }
 
 function AgentRow({
@@ -69,6 +82,7 @@ function AgentRow({
 }
 
 export function AgentDock({ snapshot }: { readonly snapshot: BridgeAgentDockSnapshot }) {
+  const observationBridge = useMemo(() => leftDockBridge(), []);
   const bridge = useMemo(() => topologyBridge(), []);
   const [aliases, setAliases] = useState<Record<string, string>>({});
   const [query, setQuery] = useState("");
@@ -101,15 +115,39 @@ export function AgentDock({ snapshot }: { readonly snapshot: BridgeAgentDockSnap
     }
   }, [focusedId, selectedId, snapshot.observations]);
 
+  async function currentObservation(observationId: string): Promise<BridgeAgentObservation> {
+    const current = await observationBridge.snapshot();
+    if (current.agentDock.availability !== "CURRENT") {
+      throw new Error(
+        `owner observation truth unavailable: ${current.agentDock.unavailableReason ?? "UNAVAILABLE"}`,
+      );
+    }
+    const observation = current.agentDock.observations.find(
+      (item) => item.observationId === observationId,
+    );
+    if (!observation) {
+      throw new Error("exact observation is absent from current owner truth");
+    }
+    if (observation.freshness !== "CURRENT") {
+      throw new Error(`exact observation is ${observation.freshness}`);
+    }
+    return observation;
+  }
+
   async function focusObservation(observation: BridgeAgentObservation) {
     if (observation.freshness !== "CURRENT") {
       setStatus(`Focus refused · observation is ${observation.freshness}`);
       return;
     }
-    setStatus("Resolving exact pane against current canonical topology…");
+    setStatus("Revalidating exact observation and pane against current owner truth…");
     try {
+      const before = await currentObservation(observation.observationId);
+      if (!sameAgentBinding(observation, before)) {
+        throw new Error("displayed observation binding is stale or substituted");
+      }
+
       const topology = await bridge.snapshot();
-      const target = exactAgentPaneTarget(observation);
+      const target = exactAgentPaneTarget(before);
       const bound = await bridge.bindTarget(topology.topologyGeneration, target);
       if (
         bound.multiplexerWorkspaceId !== target.multiplexerWorkspaceId
@@ -118,10 +156,28 @@ export function AgentDock({ snapshot }: { readonly snapshot: BridgeAgentDockSnap
       ) {
         throw new Error("trusted host returned a substituted pane identity");
       }
-      setFocusedId(observation.observationId);
-      setSelectedId(observation.observationId);
+
+      const after = await currentObservation(observation.observationId);
+      if (!sameAgentBinding(before, after)) {
+        throw new Error("exact observation changed during focus validation");
+      }
+      const trailingTopology = await bridge.snapshot();
+      const trailingBound = await bridge.bindTarget(
+        trailingTopology.topologyGeneration,
+        exactAgentPaneTarget(after),
+      );
+      if (
+        trailingBound.multiplexerWorkspaceId !== after.multiplexerWorkspaceId
+        || trailingBound.tabId !== after.tabId
+        || trailingBound.paneId !== after.paneId
+      ) {
+        throw new Error("exact pane changed during focus validation");
+      }
+
+      setFocusedId(after.observationId);
+      setSelectedId(after.observationId);
       setStatus(
-        `Visible focus bound to pane ${observation.paneId} · presentation only · no controller/write authority`,
+        `Visible focus validated for pane ${after.paneId} · presentation only · no controller/write authority`,
       );
     } catch (error) {
       setFocusedId(null);
