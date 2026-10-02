@@ -1,6 +1,6 @@
 # Spec 007 Tasks Amendment 012 — T097 Reference Image Cohort Refresh
 
-Status: CANDIDATE UNTIL GUARDED LANDING
+Status: CLOSED_CANONICAL
 
 Authority basis: Winds Constitution 1.1.0 governance deviation/amendment process, canonical Spec 007, canonical T097 Tasks, canonical Amendments 010/011, canonical T097 finite-cohort maintenance through PR #266, and live exact-head T174 qualification evidence showing a newly assigned GitHub-hosted `ubuntu-24.04` image outside the current canonical finite cohort.
 
@@ -162,3 +162,41 @@ T097_IMAGE_COHORT_REFRESH_20260927_MAINTENANCE=AUTHORIZED
 T097_IMAGE_COHORT_REFRESH_20260927_MAINTENANCE_LANDED=NO
 T174=OPEN_BLOCKED_BY_T097_REFERENCE_ENVIRONMENT_AND_ITS_OWN_ACCEPTANCE_GATES
 ```
+
+## Canonical closeout
+
+```text
+AMENDMENT_PR=279
+BASE_SHA=974ab64859e2468a558f9497f3d9bd10d7956e63
+QUALIFIED_HEAD_SHA=bfc75732134cad061acdab5177bf75d1e02e9eae
+MERGE_SHA=1bba46ab82fd5b6a682032897a2de776b3846915
+MERGE_TREE=7c16eb1d8f7d472ef236592350ca2c5a9dc6bb81
+MERGE_PARENT_1=974ab64859e2468a558f9497f3d9bd10d7956e63
+MERGE_PARENT_2=bfc75732134cad061acdab5177bf75d1e02e9eae
+MERGE_SIGNATURE=verified valid
+PRE_MERGE_QUALITY_RUN=36938844791 SUCCESS
+POST_MERGE_QUALITY_RUN=36991485912 SUCCESS
+
+JEV=TypeSafe local exact-range review 974ab64859e2468a558f9497f3d9bd10d7956e63..bfc75732134cad061acdab5177bf75d1e02e9eae
+JEV_STATUS=PASS
+JEV_COVERAGE=COMPLETE
+JEV_BLOCKING_FINDINGS=0
+JEV_TOOL_ERRORS=0
+JEV_RESULT_PATH=C:\Winds\.local\jev-amend012-bfc7573-result.json
+JEV_EXECUTION_NOTE=GitHub Actions lacked TYPESAFE_API_KEY; genuine local credential-backed exact-range execution is the qualifying Jev evidence. The CI credential blocker is not treated as PASS.
+
+ALIBABA_OCR=v1.12.9 exact-range accounting
+ALIBABA_OCR_RUN=36938895298
+ALIBABA_OCR_REVIEWABLE_COUNT=0
+ALIBABA_OCR_EXCLUDED_COUNT=1
+ALIBABA_OCR_EXCLUSION=unsupported_ext
+ALIBABA_OCR_RULE=resolved
+MANUAL_MARKDOWN_REVIEW=CLEAN
+INDEPENDENT_EXACT_HEAD_REVIEW=CLEAN
+UNRESOLVED_MATERIAL_FINDINGS=0
+UNRESOLVED_REVIEW_THREADS=0
+ZERO_COST_CONSTRAINT=SATISFIED
+MERGE_METHOD=NORMAL_MERGE_COMMIT_WITH_EXPECTED_HEAD_GUARD
+```
+
+Amendment 012 is therefore closed canonical. It authorizes only the separately qualified maintenance candidate that may add the literal fourth T097 runner image `20260927.320.1`; it does not itself land that maintenance change, does not relax benchmark semantics, and does not authorize T174/T175 landing or any product/runtime authority expansion.
