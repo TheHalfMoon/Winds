@@ -451,6 +451,14 @@ fn load_t174_agent_focus_context(
     let mut dock = ui::CanonicalAgentDockPresentation::from_observations(trailing_observations)?;
     dock.focus(observation_id, &topology)
         .ok_or_else(|| "focus target is stale, absent, ambiguous, or substituted".to_owned())?;
+
+    let final_owner_generation_id = store
+        .latest_persistent_runtime_owner_generation()
+        .map_err(|error| format!("final owner generation record unavailable: {error}"))?
+        .ok_or_else(|| "owner generation unavailable after focus validation".to_owned())?;
+    if final_owner_generation_id != owner_generation_id {
+        return Err("focus owner generation changed during validation".to_owned());
+    }
     Ok((dock, topology))
 }
 
