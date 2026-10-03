@@ -28,3 +28,17 @@ Pinned process reference: `DietrichGebert/ponytail` v4.9.0, commit `0a4dd63ad454
 
 ## Architecture guardrails
 For 0.1 do not introduce a daemon, IPC/public runtime protocol, terminal emulator, generic runtime abstraction, Graphify/code graph, Jujutsu dependency, plugin system, MCP/A2A, port broker, service orchestration, broad sandbox framework, or AI reviewer in product code unless the active spec is explicitly amended first.
+
+<!-- graft:start -->
+## Graft — repository context layer
+
+Use Graft (https://github.com/trailhq/Graft, `@nanonets/graft`) as developer/agent tooling for codebase context and navigation. This does not authorize Graft, MCP, a code graph, or any related mechanism as a Winds product/runtime dependency or feature.
+
+Use Graft only from a dedicated non-primary tooling worktree or isolated clone pinned to the exact revision being inspected. Never run mutating Graft setup/build operations in the primary verification/promotion checkout. If the graph is absent or stale, first run `graft init --dry-run --no-global` in that dedicated tooling checkout to inspect planned writes, then run `graft init --no-global` and `graft build` there as needed. Treat any Graft-generated `graft/`, `.gitignore`/`.ignore` edits, agent wiring, hooks, or other setup changes as local tooling artifacts; do not commit or merge them unless separately authorized.
+
+Before broad source exploration prefer `graft check`, `graft map`, `graft ask "<question>" --source`, `graft skeleton <file>`, and `graft callers <symbol>` from that tooling checkout. Use `graft grep "<regex>"` for regex search and `graft grep --fixed "<literal>"` for literal search. After material code changes, rebuild the tooling checkout graph against the exact revision being reviewed.
+
+Keep usage zero-cost: do not introduce paid model/API usage; any model-backed enrichment must use an already-authorized local or free provider.
+
+Graft is context/navigation, not correctness or qualification evidence. Continue all repository-required deterministic checks, independent review, Jev where applicable, Alibaba Open Code Review, CI, and security checks. Never fabricate Graft output, tool execution, CI, reviews, or evidence.
+<!-- graft:end -->
